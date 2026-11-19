@@ -43,9 +43,46 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("serializes only the independent wireframe geometry scope", () => {
+    const target = { id: "object:film", kind: "object" as const };
+
+    const override = visualizationStateOverrideFromTargetPatch(target, {
+      wireframeGeometryScope: "full",
+    });
+
+    expect(override).toEqual({
+      scope: "object",
+      scope_id: "film",
+      display: { wireframe_geometry_scope: "full" },
+    });
+  });
+
+  it("acknowledges an explicit wireframe mesh scope by visualization revision", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:film", kind: "object" as const };
+    controller.patchTargetPending(target, { wireframeGeometryScope: "full" }, 8, "wireframe-scope");
+
+    controller.acknowledgePendingTargetPatches({
+      revision: 9,
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "film",
+          display: { wireframe_geometry_scope: "full" },
+        },
+      ],
+    } as never);
+
+    expect(controller.getSnapshot().pendingOverrides).toEqual({});
+    expect(controller.getSnapshot().overrides?.["object:film"]).toMatchObject({
+      wireframeGeometryScope: "full",
+    });
+  });
+
   it("keeps production style defaults for object and airbox targets", () => {
     expect(DEFAULT_OBJECT_VISUALIZATION).toMatchObject({
       geometryScope: "surface",
+      wireframeGeometryScope: "surface",
       surfaceOpacityPercent: 100,
       pointColor: "var(--fm-border-strong)",
       primitiveVisible: false,
@@ -63,6 +100,10 @@ describe("ObjectVisualizationController", () => {
       wireframeColor: "var(--fm-border-strong)",
       wireframeOpacityPercent: 100,
       wireframeVisible: false,
+    });
+    expect(DEFAULT_AIRBOX_VISUALIZATION).toMatchObject({
+      geometryScope: "full",
+      wireframeGeometryScope: "full",
     });
     expect(DEFAULT_AIRBOX_VISUALIZATION).toMatchObject({
       activeQuantityId: "H_demag",
@@ -138,6 +179,7 @@ describe("ObjectVisualizationController", () => {
       primaryRenderModes: ["wireframe", "points"],
       showBoundsControl: true,
       showGeometryScopeControl: false,
+      showWireframeGeometryScopeControl: false,
       supportsFieldData: true,
       supportsPoints: true,
       supportsVectorSurfaceOffset: false,
@@ -147,6 +189,7 @@ describe("ObjectVisualizationController", () => {
       primaryRenderModes: ["surface", "surface+edges", "wireframe", "points"],
       showBoundsControl: true,
       showGeometryScopeControl: true,
+      showWireframeGeometryScopeControl: true,
       supportsFieldData: true,
       supportsPoints: true,
       supportsVectorSurfaceOffset: true,
@@ -220,6 +263,7 @@ describe("ObjectVisualizationController", () => {
     expect(visualizationTargetCapabilities(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET)).toMatchObject({
       primaryRenderModes: ["wireframe", "points"],
       supportsPoints: true,
+      showWireframeGeometryScopeControl: false,
       supportsVectorSurfaceOffset: false,
     });
   });
@@ -311,10 +355,12 @@ describe("ObjectVisualizationController", () => {
     expect(visualizationTargetCapabilities(target)).toMatchObject({
       supportsFieldData: true,
       supportsVectors: true,
+      showWireframeGeometryScopeControl: false,
     });
     expect(controller.getSettings(target)).toMatchObject({
       activeQuantityId: "H_demag",
       vectorsVisible: true,
+      wireframeGeometryScope: "full",
     });
   });
 
@@ -1578,6 +1624,112 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("defaults a legacy registry entry's independent wireframe scope to Surface", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "film", kind: "object" as const };
+
+    const resolved = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target,
+      visualizationState: {
+        revision: 16,
+        overrides: [],
+        targets: {
+          airbox: {} as never,
+          objects: [
+            {
+              label: "Film",
+              scope: "object",
+              scope_id: "film",
+              settings: {
+                active_quantity_id: "m",
+                geometry_scope: "full",
+                vector_budget: 37,
+                wireframe_visible: true,
+              },
+              source: "scene_object",
+            },
+          ],
+          parts: [],
+        },
+      } as never,
+    });
+
+    expect(resolved.settings).toMatchObject({
+      geometryScope: "full",
+      vectorBudget: 37,
+      wireframeGeometryScope: "surface",
+      wireframeVisible: true,
+    });
+  });
+
+  it("hydrates an explicit Full wireframe scope independently from vector geometry scope", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "film", kind: "object" as const };
+
+    const resolved = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target,
+      visualizationState: {
+        revision: 17,
+        overrides: [],
+        targets: {
+          airbox: {} as never,
+          objects: [
+            {
+              label: "Film",
+              scope: "object",
+              scope_id: "film",
+              settings: {
+                active_quantity_id: "m",
+                geometry_scope: "surface",
+                vector_budget: 37,
+                wireframe_geometry_scope: "full",
+                wireframe_visible: true,
+              },
+              source: "scene_object",
+            },
+          ],
+          parts: [],
+        },
+      } as never,
+    });
+
+    expect(resolved.settings).toMatchObject({
+      geometryScope: "surface",
+      vectorBudget: 37,
+      wireframeGeometryScope: "full",
+      wireframeVisible: true,
+    });
+  });
+
+  it("hydrates a persisted wireframe scope override without changing other display settings", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "film", kind: "object" as const };
+
+    const resolved = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target,
+      visualizationState: {
+        revision: 18,
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "film",
+            display: { wireframe_geometry_scope: "full" },
+          },
+        ],
+      } as never,
+    });
+
+    expect(resolved.settings).toMatchObject({
+      geometryScope: "surface",
+      vectorBudget: DEFAULT_OBJECT_VISUALIZATION.vectorBudget,
+      wireframeGeometryScope: "full",
+      wireframeVisible: DEFAULT_OBJECT_VISUALIZATION.wireframeVisible,
+    });
+  });
+
   it("normalizes scalar quantities from the effective target registry to colormap rendering", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "free-layer", kind: "object" as const };
@@ -2419,6 +2571,35 @@ describe("ObjectVisualizationController", () => {
     ]);
   });
 
+  it("removes only the wireframe mesh scope and preserves vector geometry scope", () => {
+    expect(
+      removeTargetOverrideField(
+        [
+          {
+            scope: "object",
+            scope_id: "film",
+            display: {
+              geometry_scope: "full",
+              wireframe_geometry_scope: "full",
+              wireframe: { visible: true },
+            },
+          },
+        ],
+        { id: "object:film", kind: "object" },
+        "wireframeGeometryScope",
+      ),
+    ).toEqual([
+      {
+        scope: "object",
+        scope_id: "film",
+        display: {
+          geometry_scope: "full",
+          wireframe: { visible: true },
+        },
+      },
+    ]);
+  });
+
   it("returns to the owner style after inherited deletion and a resource reload", () => {
     const target = { id: "region:free-layer:core", kind: "region" as const };
     const overrides = removeTargetOverrideField(
@@ -2709,52 +2890,53 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("prefers backend airbox target quantity over the global quantity", () => {
-    expect(
-      resolveAirboxVisualizationSettingsFromState({
-        active_quantity_id: "m",
-        quantity: { active_quantity_id: "m" },
-        targets: {
-          airbox: {
-            label: "Airbox",
-            scope: "airbox",
-            scope_id: "airbox",
-            settings: {
-              active_quantity_id: "H_demag",
-              bounds_opacity: 1,
-              bounds_visible: false,
-              geometry_scope: "full",
-              opacity: 0.28,
-              point_color: "var(--fm-info)",
-              point_opacity: 1,
-              points_visible: false,
-              render_mode: "surface",
-              scalar_color_palette: "viridis",
-              surface_color_source: "solid",
-              surface_projection_mode: "raw_nodal",
-              surface_mono_color: "var(--fm-airbox-fill)",
-              surface_opacity: 0.28,
-              surface_visible: true,
-              viewport_colorbar_visible: false,
-              vector_alpha: 1,
-              vector_budget: 1200,
-              vector_color_mode: "orientation",
-              vector_length_scale: 1,
-              vector_mono_color: "var(--fm-info)",
-              vector_thickness: 1,
-              vectors_visible: false,
-              visible: true,
-              wireframe_color: "var(--fm-airbox-wire)",
-              wireframe_opacity: 1,
-              wireframe_visible: false,
-            },
-            source: "airbox",
+  it("prefers backend Airbox quantity and palette over global presentation", () => {
+    const settings = resolveAirboxVisualizationSettingsFromState({
+      active_quantity_id: "m",
+      quantity: { active_quantity_id: "m", colormap: "magma" },
+      colormap: "jet",
+      targets: {
+        airbox: {
+          label: "Airbox",
+          scope: "airbox",
+          scope_id: "airbox",
+          settings: {
+            active_quantity_id: "H_demag",
+            bounds_opacity: 1,
+            bounds_visible: false,
+            geometry_scope: "full",
+            opacity: 0.28,
+            point_color: "var(--fm-info)",
+            point_opacity: 1,
+            points_visible: false,
+            render_mode: "surface",
+            scalar_color_palette: "plasma",
+            surface_color_source: "solid",
+            surface_projection_mode: "raw_nodal",
+            surface_mono_color: "var(--fm-airbox-fill)",
+            surface_opacity: 0.28,
+            surface_visible: true,
+            viewport_colorbar_visible: false,
+            vector_alpha: 1,
+            vector_budget: 1200,
+            vector_color_mode: "orientation",
+            vector_length_scale: 1,
+            vector_mono_color: "var(--fm-info)",
+            vector_thickness: 1,
+            vectors_visible: false,
+            visible: true,
+            wireframe_color: "var(--fm-airbox-wire)",
+            wireframe_opacity: 1,
+            wireframe_visible: false,
           },
-          objects: [],
-          parts: [],
+          source: "airbox",
         },
-      }).activeQuantityId,
-    ).toBe("H_demag");
+        objects: [],
+        parts: [],
+      },
+    });
+    expect(settings.activeQuantityId).toBe("H_demag");
+    expect(settings.scalarColorPalette).toBe("plasma");
   });
 
   it("falls back to canonical visualization quantity before compatibility quantity", () => {
@@ -3126,5 +3308,97 @@ describe("ObjectVisualizationController", () => {
         mono_color: "#00ffaa",
       },
     });
+  });
+});
+
+describe("authored object quantity context", () => {
+  type ContextObject = NonNullable<import("../api/apiTypes").SceneResource["objects"]>[number];
+  type Catalog = import("../api/apiTypes").QuantityCatalogResource;
+  const target = { kind: "object" as const, id: "object:source" };
+  const emptyObject: ContextObject = { id: "source", role: "antenna" };
+
+  function catalog(id = "m", domain = "magnetic_only"): Catalog {
+    return {
+      schema_version: "1.0",
+      quantities: [{
+        id, label: id, description: "", domain, shape: "vector_field", unit: "1",
+        n_comp: 3, location: "node", normalization_hint: "none",
+        interactive_preview: true, supports_preview_2d: true, supports_preview_3d: true,
+        supports_history: false, supports_export: true, capability_state: "supported",
+        solver_capability: "supported", requestable: true, renderable: true,
+        materializable: true, materialization_state: "complete", publication_state: "interactive",
+        resolved_capability: {
+          quantity_id: id, provider: "available", request: "field_vector",
+          materialization: "materialized", render: "renderable", publication: "interactive",
+          scope: "object", lane: "test", precision: "double", carriers: [],
+        },
+      }],
+    };
+  }
+
+  function resolve(object: ContextObject | null, quantities: Catalog | null, quantityId = "m") {
+    const controller = new ObjectVisualizationController();
+    controller.patchTarget(target, { activeQuantityId: quantityId, vectorsVisible: true });
+    return resolveTargetVisualization({
+      snapshot: controller.getSnapshot(), target,
+      objectContext: { object, quantityCatalog: quantities },
+    });
+  }
+
+  it("never substitutes a magnetic default for unknown objects or catalogs", () => {
+    expect(resolve(null, catalog()).settings.activeQuantityId).toBe("");
+    expect(resolve(emptyObject, null).settings.activeQuantityId).toBe("");
+  });
+
+  it("uses authored physics rather than the presentation role", () => {
+    expect(resolve(emptyObject, catalog()).settings.activeQuantityId).toBe("");
+    expect(resolve({ ...emptyObject, role: "magnet" }, catalog()).settings.activeQuantityId).toBe("");
+    expect(resolve({ ...emptyObject, magnetization_ref: "texture" }, catalog()).settings.activeQuantityId).toBe("m");
+  });
+
+  it("does not hide magnetic authoring supplied by regions or parameter assignments", () => {
+    const region: NonNullable<ContextObject["regions"]>[number] = {
+      region_id: "core", owner_object: "source", name: "core",
+      shape: { kind: "sphere", center: [0, 0, 0], radius: 1 },
+      material_overrides: [{
+        parameter: "ms",
+        value: { kind: "constant", value: 8e5 },
+      }],
+    };
+    expect(resolve({ ...emptyObject, regions: [region] }, catalog()).settings.activeQuantityId).toBe("m");
+    expect(resolve({
+      ...emptyObject,
+      material_parameter_fields: [{
+        assignment_id: "ms", owner_object: "source", parameter: "ms",
+        value: { kind: "constant", value: 8e5 },
+      }],
+    }, catalog()).settings.activeQuantityId).toBe("m");
+  });
+
+  it("requires canonical provider capability even with explicitly assigned magnetization", () => {
+    const unavailable = catalog();
+    unavailable.quantities[0].resolved_capability!.provider = "unavailable";
+    expect(resolve({ ...emptyObject, magnetization_ref: "texture" }, unavailable).settings.activeQuantityId).toBe("");
+  });
+
+  it("retains supported nonmagnetic fields without a role or field-ID allowlist", () => {
+    expect(resolve(emptyObject, catalog("test_source_field", "full_domain"), "test_source_field")
+      .settings.activeQuantityId).toBe("test_source_field");
+    const historical = catalog("H_ant", "full_domain");
+    historical.quantities[0].resolved_capability!.lane = "artifact_inspection_read_only";
+    historical.quantities[0].materializable = false;
+    expect(resolve(emptyObject, historical, "H_ant").settings.activeQuantityId).toBe("H_ant");
+  });
+
+  it("keeps geometry passes while refusing unselected field-dependent passes", () => {
+    const result = resolve(emptyObject, catalog());
+    expect(result.settings.vectorsVisible).toBe(true);
+    expect(result.effectiveSettings).toMatchObject({
+      activeQuantityId: "", shaderVisible: false, vectorsVisible: false,
+    });
+    expect(resolveEffectiveVisualizationSettings({
+      ...result.settings, surfaceColorSource: "solid", shaderVisible: true,
+      wireframeVisible: true, pointsVisible: true,
+    })).toMatchObject({ shaderVisible: true, wireframeVisible: true, pointsVisible: true, vectorsVisible: false });
   });
 });

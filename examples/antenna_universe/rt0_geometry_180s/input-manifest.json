@@ -1,0 +1,591 @@
+{
+  "schema": "antenna_frozen_geometry_diagnostic.v1",
+  "scope": "Diagnostyka 20 istniejących węzłów w 5 Tet4 Global; nie pełna mapa Universe ani kwalifikacja naukowa.",
+  "geometry_audit_sha256": "628aa18d64471935fc36fa78ac9cf6005ec82541911c75bb0e56bd2caf1039f6",
+  "reference_run_id": "run-c83f5ac8dfdb61c79eb80802915786b6c5cb40a59b16688a050e71aa71e0f310",
+  "selection": {
+    "selection_rule": "Zachowaj oryginalną komórkę Global 1726. Następnie wybieraj komórkę obejmującą najwięcej pozostałych prerejestrowanych węzłów; remis rozstrzyga najniższy oryginalny ordinal. Węzły nośnika to uporządkowana suma oryginalnych indeksów; współrzędne skopiowano dokładnie, bez generacji i przyciągania.",
+    "preregistered_target_global_nodes": [
+      22,
+      49,
+      62,
+      70,
+      144,
+      944,
+      961,
+      1060
+    ],
+    "original_global_cell_ordinals": [
+      1726,
+      58,
+      164,
+      2476,
+      5945
+    ],
+    "greedy_steps": [
+      {
+        "cell_ordinal": 58,
+        "new_selected_nodes_covered": [
+          70
+        ]
+      },
+      {
+        "cell_ordinal": 164,
+        "new_selected_nodes_covered": [
+          62
+        ]
+      },
+      {
+        "cell_ordinal": 2476,
+        "new_selected_nodes_covered": [
+          1060
+        ]
+      },
+      {
+        "cell_ordinal": 5945,
+        "new_selected_nodes_covered": [
+          49
+        ]
+      }
+    ],
+    "source_global_node_ordinals": [
+      22,
+      33,
+      49,
+      62,
+      70,
+      144,
+      216,
+      293,
+      294,
+      298,
+      303,
+      305,
+      317,
+      717,
+      741,
+      800,
+      944,
+      961,
+      980,
+      1060
+    ],
+    "source_to_candidate_node_map": {
+      "22": 0,
+      "33": 1,
+      "49": 2,
+      "62": 3,
+      "70": 4,
+      "144": 5,
+      "216": 6,
+      "293": 7,
+      "294": 8,
+      "298": 9,
+      "303": 10,
+      "305": 11,
+      "317": 12,
+      "717": 13,
+      "741": 14,
+      "800": 15,
+      "944": 16,
+      "961": 17,
+      "980": 18,
+      "1060": 19
+    },
+    "candidate_cells": [
+      [
+        0,
+        16,
+        5,
+        17
+      ],
+      [
+        8,
+        7,
+        4,
+        12
+      ],
+      [
+        10,
+        11,
+        3,
+        9
+      ],
+      [
+        1,
+        18,
+        6,
+        19
+      ],
+      [
+        2,
+        15,
+        13,
+        14
+      ]
+    ],
+    "candidate_node_coordinates_m": [
+      [
+        0.0,
+        -5e-07,
+        -5e-07
+      ],
+      [
+        -2e-07,
+        -2e-07,
+        -7e-07
+      ],
+      [
+        2.7e-06,
+        -1e-06,
+        5.999999999999999e-07
+      ],
+      [
+        1.4291717782228052e-07,
+        1.3570828221777194e-07,
+        -1e-07
+      ],
+      [
+        4.2863735151671056e-07,
+        -1.0713626484832894e-07,
+        -1e-07
+      ],
+      [
+        1.4275900503243965e-07,
+        -5e-07,
+        -5e-07
+      ],
+      [
+        -9.993498976987705e-08,
+        -2e-07,
+        -7e-07
+      ],
+      [
+        3.521237672713242e-07,
+        -1.078386467833513e-09,
+        -1.0000000000000001e-07
+      ],
+      [
+        4.942434688821092e-07,
+        -3.208563219068639e-10,
+        -1e-07
+      ],
+      [
+        1.034550403226917e-07,
+        -3.415941561899468e-08,
+        -1e-07
+      ],
+      [
+        1.9392767028766312e-07,
+        1.306072329712337e-07,
+        -4.26596077317265e-12
+      ],
+      [
+        7.740736571655704e-08,
+        1.422592634283443e-07,
+        -4.1265735201575285e-08
+      ],
+      [
+        5.000535795527379e-07,
+        -9.999464204472621e-08,
+        2.8419639308552293e-14
+      ],
+      [
+        2.3679089313426703e-06,
+        -1e-06,
+        2.7868401659662403e-07
+      ],
+      [
+        2.3491119329466522e-06,
+        -6.45055673637972e-07,
+        5.999999999999999e-07
+      ],
+      [
+        2.7e-06,
+        -6.656337934890411e-07,
+        2.81259770543379e-07
+      ],
+      [
+        2.141857431349173e-07,
+        -6.226009493164518e-07,
+        -2.690815017035986e-07
+      ],
+      [
+        -7.804741220100222e-08,
+        -4.250133708987016e-07,
+        -2.96802236536864e-07
+      ],
+      [
+        -1.5951151544524323e-07,
+        -4.249999999999999e-07,
+        -9.103747011586333e-07
+      ],
+      [
+        -1.3583283191248074e-07,
+        -3.310957121799644e-07,
+        -6.081436940095617e-07
+      ]
+    ],
+    "union_node_count": 20,
+    "cell_count": 5,
+    "all_positive_orientation": true,
+    "cell_determinants_m3": [
+      6.028432758439026e-21,
+      1.5130879675687832e-21,
+      1.659360658074803e-21,
+      4.8278255535181676e-21,
+      7.526956872247877e-20
+    ],
+    "geometry_classes": {
+      "boundary_exact": 5,
+      "outside_all_float_candidate_cells": 12,
+      "interior_strict_exact": 3
+    },
+    "node_records": [
+      {
+        "global_node": 22,
+        "point_m": [
+          0.0,
+          -5e-07,
+          -5e-07
+        ],
+        "source_node": 22,
+        "source_boundary_face": 168,
+        "distance_source_boundary_m": 0.0,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 4,
+        "exact_cell_class": "boundary_exact"
+      },
+      {
+        "global_node": 33,
+        "point_m": [
+          -2e-07,
+          -2e-07,
+          -7e-07
+        ],
+        "source_node": 32,
+        "source_boundary_face": 244,
+        "distance_source_boundary_m": 0.0,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 4,
+        "exact_cell_class": "boundary_exact"
+      },
+      {
+        "global_node": 49,
+        "point_m": [
+          2.7e-06,
+          -1e-06,
+          5.999999999999999e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 1.067707825203131e-06,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 0,
+        "exact_cell_class": "outside_all_float_candidate_cells"
+      },
+      {
+        "global_node": 62,
+        "point_m": [
+          1.4291717782228052e-07,
+          1.3570828221777194e-07,
+          -1e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 7.827988103507867e-40,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 1,
+        "exact_cell_class": "interior_strict_exact",
+        "exact_source_cell": 283,
+        "exact_distance_candidate_boundary_m": 7.827941627965629e-40,
+        "exact_distance_boundary_face": 355,
+        "exact_distance_candidate_boundary_squared_m2_ratio": [
+          "2616336788621364406834951256161",
+          "4269711103809972779858231097870962030790423765539949474909284774737203002562730658103348954295154898467028992"
+        ]
+      },
+      {
+        "global_node": 70,
+        "point_m": [
+          4.2863735151671056e-07,
+          -1.0713626484832894e-07,
+          -1e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 0.0,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 1,
+        "exact_cell_class": "outside_all_float_candidate_cells",
+        "exact_distance_candidate_boundary_m": 1.0530504391623401e-23,
+        "exact_distance_boundary_face": 388,
+        "exact_distance_candidate_boundary_squared_m2_ratio": [
+          "259586273769905892097208010026850279229746864797772277355281",
+          "2340902779140831253956091073129998619575231359354760181284044538856614366618621820628547935609260032917504"
+        ]
+      },
+      {
+        "global_node": 144,
+        "point_m": [
+          1.4275900503243965e-07,
+          -5e-07,
+          -5e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": 170,
+        "distance_source_boundary_m": 0.0,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 1,
+        "exact_cell_class": "boundary_exact"
+      },
+      {
+        "global_node": 216,
+        "point_m": [
+          -9.993498976987705e-08,
+          -2e-07,
+          -7e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": 100,
+        "distance_source_boundary_m": 0.0,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 1,
+        "exact_cell_class": "boundary_exact"
+      },
+      {
+        "global_node": 293,
+        "point_m": [
+          3.521237672713242e-07,
+          -1.078386467833513e-09,
+          -1.0000000000000001e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 2.6446931744310266e-23,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 1,
+        "exact_cell_class": "outside_all_float_candidate_cells"
+      },
+      {
+        "global_node": 294,
+        "point_m": [
+          4.942434688821092e-07,
+          -3.208563219068639e-10,
+          -1e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": 387,
+        "distance_source_boundary_m": 0.0,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 1,
+        "exact_cell_class": "boundary_exact"
+      },
+      {
+        "global_node": 298,
+        "point_m": [
+          1.034550403226917e-07,
+          -3.415941561899468e-08,
+          -1e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 3.133348524868383e-27,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 1,
+        "exact_cell_class": "interior_strict_exact",
+        "exact_source_cell": 215
+      },
+      {
+        "global_node": 303,
+        "point_m": [
+          1.9392767028766312e-07,
+          1.306072329712337e-07,
+          -4.26596077317265e-12
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 4.36343475492135e-24,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 1,
+        "exact_cell_class": "outside_all_float_candidate_cells"
+      },
+      {
+        "global_node": 305,
+        "point_m": [
+          7.740736571655704e-08,
+          1.422592634283443e-07,
+          -4.1265735201575285e-08
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 4.901601529968624e-24,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 1,
+        "exact_cell_class": "outside_all_float_candidate_cells"
+      },
+      {
+        "global_node": 317,
+        "point_m": [
+          5.000535795527379e-07,
+          -9.999464204472621e-08,
+          2.8419639308552293e-14
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 7.305472605815421e-24,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 1,
+        "exact_cell_class": "interior_strict_exact",
+        "exact_source_cell": 142
+      },
+      {
+        "global_node": 717,
+        "point_m": [
+          2.3679089313426703e-06,
+          -1e-06,
+          2.7868401659662403e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 8.367325660040608e-07,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 0,
+        "exact_cell_class": "outside_all_float_candidate_cells"
+      },
+      {
+        "global_node": 741,
+        "point_m": [
+          2.3491119329466522e-06,
+          -6.45055673637972e-07,
+          5.999999999999999e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 6.857907269600806e-07,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 0,
+        "exact_cell_class": "outside_all_float_candidate_cells"
+      },
+      {
+        "global_node": 800,
+        "point_m": [
+          2.7e-06,
+          -6.656337934890411e-07,
+          2.81259770543379e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 7.06873350789541e-07,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 0,
+        "exact_cell_class": "outside_all_float_candidate_cells"
+      },
+      {
+        "global_node": 944,
+        "point_m": [
+          2.141857431349173e-07,
+          -6.226009493164518e-07,
+          -2.690815017035986e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 2.614466401175588e-07,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 0,
+        "exact_cell_class": "outside_all_float_candidate_cells"
+      },
+      {
+        "global_node": 961,
+        "point_m": [
+          -7.804741220100222e-08,
+          -4.250133708987016e-07,
+          -2.96802236536864e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 2.1767115019610134e-07,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 0,
+        "exact_cell_class": "outside_all_float_candidate_cells"
+      },
+      {
+        "global_node": 980,
+        "point_m": [
+          -1.5951151544524323e-07,
+          -4.249999999999999e-07,
+          -9.103747011586333e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 2.640102998885126e-07,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 0,
+        "exact_cell_class": "outside_all_float_candidate_cells"
+      },
+      {
+        "global_node": 1060,
+        "point_m": [
+          -1.3583283191248074e-07,
+          -3.310957121799644e-07,
+          -6.081436940095617e-07
+        ],
+        "source_node": null,
+        "source_boundary_face": null,
+        "distance_source_boundary_m": 1.310957121799644e-07,
+        "strict_interior_source_cell_float": null,
+        "closed_source_cells_float": 0,
+        "exact_cell_class": "outside_all_float_candidate_cells"
+      }
+    ]
+  },
+  "sampling_presentation_bounds_m": {
+    "size": [
+      2.9e-06,
+      1.1422592634283443e-06,
+      1.5103747011586332e-06
+    ],
+    "center": [
+      1.2499999999999999e-06,
+      -4.2887036828582784e-07,
+      -1.5518735057931672e-07
+    ]
+  },
+  "source_mesh_nodes_cells": [
+    664,
+    1856
+  ],
+  "prepared_source_nodes_cells": [
+    677,
+    1856
+  ],
+  "global_nodes_cells": [
+    1145,
+    6428
+  ],
+  "sampling_nodes_cells": [
+    20,
+    5
+  ],
+  "field_total_seconds": 180,
+  "field_per_target_seconds": 90,
+  "policy_ast_identical_to_four_point": true,
+  "native_or_capture_executed_at_manifest_creation": false,
+  "uncovered": "Nie obejmuje 15 punktów leżących na wewnętrznych kontaktach komórek źródła ani całego Global.",
+  "assets": {
+    "assets/antenna-raw.npz": {
+      "bytes": 98553,
+      "sha256": "d11f6f81aad859673c5a37672e8bf86e9f4249db5ec3c0d8cae2f2a98caef374"
+    },
+    "assets/global.fullmag-mesh": {
+      "bytes": 72287,
+      "sha256": "ccee2a8e2c0bced293be055054fb574d9d30d5a1c28c34f657c2cadc3ee6ef84"
+    },
+    "assets/sampling.npz": {
+      "bytes": 5178,
+      "sha256": "1bdfdd78391253c9444582328ce40752cc6230371352327f1f5fdc68eb438c6a"
+    }
+  },
+  "script_sha256": "df0dd4fc21e76faf5d818ef7df5e94555b6bdeacd2752d2fc0fedacc4a3d33d8",
+  "capture_root": "Wszystkie wejścia znajdują się w katalogu skryptu; kopie raw i Global są identyczne bajtowo z poprzednią próbą."
+}

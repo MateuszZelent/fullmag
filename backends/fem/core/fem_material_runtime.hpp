@@ -30,6 +30,12 @@ public:
         const std::vector<double> &right_aos3_nodal_values) const;
     MsWeightedAos3AverageReduction ms_weighted_aos3_average_reduction(
         const std::vector<double> &aos3_nodal_values) const;
+    MsWeightedAos3AverageReduction ms_weighted_aos3_average_reduction_for_node_set(
+        const std::vector<double> &aos3_nodal_values,
+        const std::vector<std::uint8_t> &node_member_mask) const;
+    MsWeightedAos3AverageReduction ms_weighted_aos3_average_reduction_for_element_set(
+        const std::vector<double> &aos3_nodal_values,
+        std::vector<std::size_t> element_ordinals) const;
 
 private:
     P1TetrahedralMaterialRealization realization_;

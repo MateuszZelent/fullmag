@@ -1,6 +1,6 @@
 import type {
-  AuthoringTransactionRequest,
   JsonObject,
+  MagnetizationApplyTarget,
   ObjectPatchRequest,
   RegionListResource,
   SceneResource,
@@ -10,7 +10,7 @@ import {
   magnetizationTextureAssetId,
   presetMagnetizationAsset,
 } from "@/shared/domain/magnetization-texture/assetFactory";
-import { resolveMagnetizationTextureModel } from "@/shared/domain/magnetization-texture/draftModel";
+import { buildRegionTextureOverridePatch, resolveMagnetizationTextureModel } from "@/shared/domain/magnetization-texture/draftModel";
 import { resolveMagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/targetResolver";
 import type { MagnetizationTexturePresetId } from "@/shared/domain/magnetization-texture/texturePresets";
 import type { MagnetizationAssetDraft } from "@/shared/domain/magnetization-texture/types";
@@ -21,6 +21,8 @@ interface JsonRecord {
 
 export interface ObjectMagneticTexturePanelModel {
   assignment: string;
+  authoredRegion?: boolean;
+  regionTextureOverride?: Extract<MagnetizationApplyTarget, { kind: "region" }>["texture_override"];
   asset: MagnetizationAssetDraft | null;
   assetId: string;
   assetKind: string;
@@ -477,6 +479,8 @@ export function resolveObjectMagneticTexturePanelModel(
 
   return {
     assignment: textureModel.assignment,
+    authoredRegion: textureModel.authoredRegion,
+    regionTextureOverride: textureModel.regionTextureOverride,
     asset,
     assetId: assetId ?? "unassigned",
     assetKind,
@@ -713,21 +717,27 @@ export function buildMagnetizationAssignmentPatch(
   };
 }
 
-export function buildMagnetizationTransactionRequest(
+export function buildMagnetizationApplyTarget(
   model: ObjectMagneticTexturePanelModel,
-  asset: MagnetizationAssetDraft | null,
-  magnetizationRef: string | null,
-): Extract<AuthoringTransactionRequest, { kind: "patch_magnetization" }> {
-  const transaction = {
-    base_revision: model.baseRevision,
-    kind: "patch_magnetization" as const,
-    object_id: model.objectId,
-    magnetization_ref: magnetizationRef,
-    ...(asset ? { asset: asset as JsonObject } : {}),
-  };
-  return model.targetKind === "region" && model.regionId
-    ? { ...transaction, region_id: model.regionId }
-    : transaction;
+  draft: ObjectMagneticTextureDraft | null,
+): MagnetizationApplyTarget {
+  const unchanged = draft !== null &&
+    !objectMagneticTextureDraftDirty(draft, objectMagneticTextureDraftFromModel(model));
+  if (model.targetKind === "region") {
+    if (!model.regionId || !model.authoredRegion) {
+      throw new Error("Select an authored magnetic region to apply its texture.");
+    }
+    const texture = draft === null
+      ? null
+      : unchanged && (model.regionTextureOverride || model.assignment === "object-inherited")
+        ? model.regionTextureOverride ?? null
+        : buildRegionTextureOverridePatch(buildObjectMagneticTextureAssetDraft(model, draft)).texture_override ?? null;
+    return { kind: "region", object_id: model.objectId, region_id: model.regionId, texture_override: texture };
+  }
+  const asset = draft === null ? null : unchanged && model.asset
+    ? model.asset
+    : buildObjectMagneticTextureAssetDraft(model, draft);
+  return { kind: "object", object_id: model.objectId, asset: asset as JsonObject | null };
 }
 
 export function objectMagneticTexturePresetChangePatch(

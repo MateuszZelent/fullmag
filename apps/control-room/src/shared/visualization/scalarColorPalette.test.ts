@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  getScalarColorPaletteStops,
   isDivergingScalarPalette,
+  normalizeScalarColorPalette,
+  scalarColorPaletteGradientCss,
   scalarColorRgb,
   scalarColorSrgb,
+  SCALAR_COLOR_PALETTE_ITEMS,
 } from "./scalarColorPalette";
 
 describe("scalarColorRgb · S-02 linear-sRGB conversion", () => {
@@ -35,8 +39,7 @@ describe("scalarColorRgb · S-02 linear-sRGB conversion", () => {
   });
 
   it("stays within [0, 1] for every palette across the full t range", () => {
-    const palettes = ["coolwarm", "inferno", "jet", "magma", "viridis"] as const;
-    for (const palette of palettes) {
+    for (const { value: palette } of SCALAR_COLOR_PALETTE_ITEMS) {
       for (const t of [0, 0.25, 0.5, 0.75, 1]) {
         const [r, g, b] = scalarColorRgb(t, palette);
         for (const channel of [r, g, b]) {
@@ -54,6 +57,45 @@ describe("scalarColorSrgb display sampling", () => {
     expect([0, 0.5, 1].map((t) => scalarColorSrgb(t).map((c) => Math.round(c * 255))))
       .toEqual([[68, 1, 84], [51, 144, 132], [253, 231, 37]]);
   });
+
+  it("samples the added scalar palettes at their declared endpoints", () => {
+    const endpoints = {
+      plasma: [[13, 8, 135], [240, 249, 33]],
+      cividis: [[0, 32, 76], [254, 232, 56]],
+      turbo: [[48, 18, 59], [122, 4, 3]],
+      grayscale: [[0, 0, 0], [255, 255, 255]],
+      rdbu: [[103, 0, 31], [5, 48, 97]],
+    } as const;
+
+    for (const [palette, [start, end]] of Object.entries(endpoints)) {
+      expect(
+        [0, 1].map((t) =>
+          scalarColorSrgb(t, palette).map((c) => Math.round(c * 255)),
+        ),
+      ).toEqual([start, end]);
+    }
+  });
+
+  it("uses the shared catalog for normalization and sRGB colorbar stops", () => {
+    expect(SCALAR_COLOR_PALETTE_ITEMS.map(({ value }) => value)).toContain("plasma");
+    expect(SCALAR_COLOR_PALETTE_ITEMS.map(({ value }) => value)).toContain("cividis");
+    expect(SCALAR_COLOR_PALETTE_ITEMS.map(({ value }) => value)).toContain("turbo");
+    expect(SCALAR_COLOR_PALETTE_ITEMS.map(({ value }) => value)).toContain("grayscale");
+    expect(SCALAR_COLOR_PALETTE_ITEMS.map(({ value }) => value)).toContain("rdbu");
+    expect(normalizeScalarColorPalette("RdBu")).toBe("rdbu");
+    expect(normalizeScalarColorPalette("not-a-palette")).toBe("viridis");
+    expect(scalarColorPaletteGradientCss("grayscale", "to right")).toBe(
+      "linear-gradient(to right in srgb, rgb(0, 0, 0), rgb(255, 255, 255))",
+    );
+    expect(getScalarColorPaletteStops("rdbu")[5]).toEqual([
+      0xf7 / 255,
+      0xf7 / 255,
+      0xf7 / 255,
+    ]);
+    expect(getScalarColorPaletteStops("twilight")[0]).toEqual(
+      getScalarColorPaletteStops("twilight")[4],
+    );
+  });
 });
 
 describe("isDivergingScalarPalette · S-11", () => {
@@ -63,5 +105,6 @@ describe("isDivergingScalarPalette · S-11", () => {
     expect(isDivergingScalarPalette("inferno")).toBe(false);
     expect(isDivergingScalarPalette("jet")).toBe(false);
     expect(isDivergingScalarPalette("magma")).toBe(false);
+    expect(isDivergingScalarPalette("RdBu")).toBe(true);
   });
 });

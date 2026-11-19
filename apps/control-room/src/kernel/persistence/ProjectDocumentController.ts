@@ -151,6 +151,8 @@ export class ProjectDocumentController {
   private scheduledRunOutcomeCount = 0;
   private outcomeErrorSnapshot: ProjectDocumentSnapshot | null = null;
   private scriptImportNotice: ScriptImportNotice | null = null;
+  private activationGeneration = 0;
+  private unknownSessionCreateGeneration: number | null = null;
 
   constructor(private readonly api: ProjectDocumentApi | ControlRoomApi) {}
 
@@ -253,16 +255,25 @@ export class ProjectDocumentController {
    */
   async createFromScript(
     request: ProjectFromScriptRequest,
+    activate?: (response: ProjectFromScriptResource, beforeSessionCreate: () => void, sessionCreateKnown: () => void) => Promise<ProjectAuthoringSessionBinding>,
+    activationGuard?: { assertCurrent(): void; finalize(): void },
   ): Promise<ProjectFromScriptResource> {
     this.assertOperationAvailable();
+    if (activate && this.unknownSessionCreateGeneration !== null) {
+      throw new Error("A script workspace creation outcome is unknown. Reconcile that attempt before another import; it will not be retried.");
+    }
     if (request.consent?.executed_by_user !== true) {
       throw new Error("Creating a project from a script needs the person's consent to run it.");
     }
     this.beginOperation("create");
+    const generation = this.activationGeneration;
+    const assertOwner = () => {
+      if (this.activeOperation !== "create" || this.activationGeneration !== generation) throw new Error("The import operation changed.");
+    };
     try {
       this.setLoading();
       const response = await this.api.persistence.projects.fromScript(request);
-      const { script_import: scriptImport, ...project } = response;
+      const { script_import: scriptImport, scene_document: _sceneDocument, ...project } = response;
       this.pendingOutcomes = [];
       this.authoringSessionBinding = null;
       this.scriptImportNotice = {
@@ -274,6 +285,19 @@ export class ProjectDocumentController {
         fidelity: scriptImport.fidelity,
       };
       this.setReady(project, projectFileName(project.name));
+      if (activate) {
+        activationGuard?.assertCurrent();
+        const binding = await activate(response,
+          () => { assertOwner(); activationGuard?.assertCurrent(); this.unknownSessionCreateGeneration = generation; },
+          () => { assertOwner(); if (this.unknownSessionCreateGeneration === generation) this.unknownSessionCreateGeneration = null; });
+        assertOwner(); activationGuard?.assertCurrent();
+        await binding.verifyCurrent();
+        assertOwner(); activationGuard?.assertCurrent();
+        if (binding.projectId !== project.project_id) throw new Error("The activated workspace belongs to another project.");
+        // Finalization is synchronous; no later await may clear newly registered drafts.
+        activationGuard?.finalize();
+        this.authoringSessionBinding = Object.freeze(binding);
+      }
       return response;
     } catch (error) {
       this.setError(error);
@@ -283,19 +307,27 @@ export class ProjectDocumentController {
     }
   }
 
-  async open(source: ProjectArchiveSource): Promise<ProjectDocumentResource> {
+  async open(
+    source: ProjectArchiveSource,
+    activate?: (response: ProjectDocumentResource, beforeSessionCreate: () => void, sessionCreateKnown: () => void) => Promise<ProjectAuthoringSessionBinding>,
+    activationGuard?: { assertCurrent(): void; finalize(): void },
+  ): Promise<ProjectDocumentResource> {
     this.assertOperationAvailable();
     if (source.bytes.byteLength === 0) {
       throw new Error("The selected project archive is empty.");
     }
     this.beginOperation("open");
+    const generation = this.activationGeneration;
+    const assertOwner = () => {
+      if (this.activeOperation !== "open" || this.activationGeneration !== generation) throw new Error("The open operation changed.");
+    };
     try {
       this.setLoading(source.fileName, source.hostPath ?? null);
       const request: ProjectArchiveRequest = {
         archive_base64: bytesToBase64(source.bytes),
         display_name: source.fileName,
       };
-      const resource = await this.api.persistence.projects.open(request);
+      const resource = validateProjectDocumentResource(await this.api.persistence.projects.open(request));
       this.pendingOutcomes = [];
       this.authoringSessionBinding = null;
       this.scriptImportNotice = null;
@@ -304,6 +336,21 @@ export class ProjectDocumentController {
         projectFileName(source.fileName || resource.name),
         source.hostPath ?? null,
       );
+      if (activate && resource.authoring_scene_document) {
+        if (this.unknownSessionCreateGeneration !== null) {
+          throw new Error("A workspace creation outcome is unknown. Reconcile that attempt before another activation; it will not be retried.");
+        }
+        activationGuard?.assertCurrent();
+        const binding = await activate(resource,
+          () => { assertOwner(); activationGuard?.assertCurrent(); this.unknownSessionCreateGeneration = generation; },
+          () => { assertOwner(); if (this.unknownSessionCreateGeneration === generation) this.unknownSessionCreateGeneration = null; });
+        assertOwner(); activationGuard?.assertCurrent();
+        await binding.verifyCurrent();
+        assertOwner(); activationGuard?.assertCurrent();
+        if (binding.projectId !== resource.project_id) throw new Error("The activated workspace belongs to another project.");
+        activationGuard?.finalize();
+        this.authoringSessionBinding = Object.freeze(binding);
+      }
       return resource;
     } catch (error) {
       this.setError(error, source.fileName);
@@ -668,6 +715,7 @@ export class ProjectDocumentController {
 
   private beginOperation(operation: ProjectDocumentOperation): void {
     this.assertOperationAvailable();
+    this.activationGeneration += 1;
     this.activeOperation = operation;
   }
 

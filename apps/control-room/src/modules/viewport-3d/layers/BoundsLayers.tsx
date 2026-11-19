@@ -49,8 +49,12 @@ import { buildLineIndexGeometry } from "../viewport3dSurfaceEdges";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverseOverlay";
 import type { FdmMultilayerAirboxRenderView } from "../viewport3dDomainAdapter";
-import { resolveFdmMultilayerAirboxBoundsOverlay } from "../model/viewport3DFdmMultilayerAirboxOverlay";
+import {
+  resolveFdmMultilayerAirboxBoundsOverlay,
+  resolveFdmMultilayerAuthoredAirboxBoundsOverlay,
+} from "../model/viewport3DFdmMultilayerAirboxOverlay";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+import { ComplexGlyphPassLayer } from "./ComplexVectorGlyphLayer";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import {
@@ -524,6 +528,20 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
           )
         ) : null}
         {viewport3DVectorLayersEnabledFromBrowserConfig() &&
+        renderPlan.vectors.visible &&
+        vectorLayerInput.complexGlyphs ? (
+          <ComplexGlyphPassLayer
+            adoptionRegistry={adoptionRegistry}
+            carrierId={part.id}
+            fallbackColor={String(colors.field)}
+            fieldBufferId={requestedFieldBufferId}
+            opacity={renderPlan.vectors.opacity}
+            pass={vectorLayerInput.complexGlyphs}
+            sessionIdentity={sessionIdentity}
+            style={vectorStyleFromSettings(renderSettings, vectorStyle)}
+            tracker={tracker}
+          />
+        ) : viewport3DVectorLayersEnabledFromBrowserConfig() &&
         renderPlan.vectors.visible ? (
           <VectorFieldLayer
             adoptionRegistry={adoptionRegistry}
@@ -531,6 +549,8 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
             carrierId={part.id}
             colors={colors}
             colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
+            glyphColorsOverride={vectorLayerInput.glyphColors}
+            colorScale={vectorLayerInput.colorScale}
             materialProfile={materialProfile.glyphs}
             opacity={renderPlan.vectors.opacity}
             fieldBufferId={requestedFieldBufferId}
@@ -628,6 +648,8 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
           carrierId={part.id}
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
+          glyphColorsOverride={vectorLayerInput.glyphColors}
+          colorScale={vectorLayerInput.colorScale}
           materialProfile={materialProfile.glyphs}
           opacity={renderPlan.vectors.opacity}
           fieldBufferId={requestedFieldBufferId}
@@ -1191,24 +1213,34 @@ export const AirboxLayer = memo(AirboxLayerContent);
 /**
  * Target-only FDM multilayer Airbox extent.  This is deliberately separate
  * from the structured-universe overlay: both the bounds and the full hidden-
- * edge volume grid come exclusively from the published target carrier.
+ * edge volume grid come exclusively from the published target carrier, or,
+ * until one is published, from the authored Universe box.
  */
 export const FdmMultilayerAirboxBoundsLayer = memo(
   function FdmMultilayerAirboxBoundsLayer({
+    authoredUniverseBounds,
+    authoredSettings,
     colors,
     onSelect,
     tracker,
     view,
   }: {
+    authoredUniverseBounds: Viewport3DBounds | null;
+    authoredSettings: VisualizationTargetSettings;
     colors: Viewport3DColors;
     onSelect: () => void;
     tracker: Viewport3DResourceTracker;
     view: FdmMultilayerAirboxRenderView | null;
   }) {
-    const overlay = resolveFdmMultilayerAirboxBoundsOverlay(view);
+    const overlay =
+      resolveFdmMultilayerAirboxBoundsOverlay(view) ??
+      resolveFdmMultilayerAuthoredAirboxBoundsOverlay(
+        view,
+        authoredUniverseBounds,
+        authoredSettings,
+      );
     if (!overlay) return null;
-    const settings = view?.settings;
-    if (!settings) return null;
+    const settings = view?.settings ?? authoredSettings;
     const wireframeColor = wireframeColorFromSettings(settings, colors.accent);
     return (
       <group

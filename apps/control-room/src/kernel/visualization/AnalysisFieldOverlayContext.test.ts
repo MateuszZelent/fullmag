@@ -46,6 +46,22 @@ describe("AnalysisFieldOverlay result context", () => {
     expect(controller.getSnapshot()?.fieldId).toBe("mode-field");
   });
 
+  it("reads the live phase only for the matching renderable field revision", () => {
+    const controller = ownedOverlayController();
+    controller.setResultContext("run-1");
+    const displayedOverlay = controller.getRenderableSnapshot()!;
+    controller.update({ visualizationPhaseRad: 0.75 });
+    controller.phaseClock.setLivePhaseRad(1.5);
+    expect(controller.getDisplayedPhaseRadForOverlay(displayedOverlay)).toBe(1.5);
+
+    controller.set({
+      ...displayedOverlay,
+      provenance: { ...displayedOverlay.provenance, artifactRevision: 8 },
+    });
+    controller.phaseClock.setLivePhaseRad(2);
+    expect(controller.getDisplayedPhaseRadForOverlay(displayedOverlay)).toBe(0.25);
+  });
+
   it("treats missing required owner identity as unverified", () => {
     const controller = new AnalysisFieldOverlayController();
     controller.setResultContext("run-1");

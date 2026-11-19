@@ -743,7 +743,7 @@ describe("viewport visualization debug publisher", () => {
     const resolvers: Array<(value: VisualizationDebugNumericStats) => void> = [];
     const scanStatistics = vi.fn(
       (
-        _values: Float64Array,
+        _values: Float32Array | Float64Array,
         options?: { signal?: AbortSignal; yieldToMain?: () => Promise<void> },
       ) => {
         if (options?.signal) signals.push(options.signal);

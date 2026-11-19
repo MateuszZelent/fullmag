@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 static void check(bool condition, const char *msg) {
@@ -251,7 +252,23 @@ int main() {
         };
 
         run_tier(FULLMAG_FDM_BOUNDARY_VOLUME);
-        run_tier(FULLMAG_FDM_BOUNDARY_FULL);
+
+        // T1 is not qualified (note 0400, T1 consistency) and is rejected at creation.
+        fullmag_fdm_plan_desc t1_plan = {};
+        t1_plan.grid = {nx, 1, 1, dx, dx, dx};
+        t1_plan.material = {ms, exchange, 0.5, 2.211e5};
+        t1_plan.precision = FULLMAG_FDM_PRECISION_DOUBLE;
+        t1_plan.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
+        t1_plan.enable_exchange = 1;
+        t1_plan.boundary_correction = FULLMAG_FDM_BOUNDARY_FULL;
+        t1_plan.initial_magnetization_xyz = m0.data();
+        t1_plan.initial_magnetization_len = m0.size();
+        auto *t1_handle = fullmag_fdm_backend_create(&t1_plan);
+        const char *t1_error = t1_handle ? fullmag_fdm_backend_last_error(t1_handle) : nullptr;
+        check(t1_error != nullptr &&
+                  std::strstr(t1_error, "fdm_boundary_correction_t1_unqualified") != nullptr,
+              "T1 boundary correction must be rejected at creation");
+        if (t1_handle) fullmag_fdm_backend_destroy(t1_handle);
         std::printf("  PASS\n");
     }
 

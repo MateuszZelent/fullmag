@@ -53,8 +53,11 @@ export function meshFreshnessState(mesh: ModelTreeSnapshot["mesh"]): MeshFreshne
           status: mesh.latestBuildStatus,
         }
       : null,
-    manifest: mesh?.manifestSourceSceneRevision != null
-      ? { source_scene_revision: mesh.manifestSourceSceneRevision }
+    manifest: mesh?.manifestSourceSceneRevision != null || mesh?.manifestValidatedSceneRevision != null
+      ? {
+          source_scene_revision: mesh.manifestSourceSceneRevision,
+          validated_for_scene_revision: mesh.manifestValidatedSceneRevision,
+        }
       : null,
     sceneRevision: mesh?.sourceSceneRevision ?? null,
     statusMeshRevision: mesh?.meshRevision ?? null,

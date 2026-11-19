@@ -36,6 +36,8 @@ const DEFAULT_MAX_SLICE_ENTRIES: usize = 128;
 /// Maximum number of cached analysis resource entries.
 const DEFAULT_MAX_ANALYSIS_RESOURCE_ENTRIES: usize = 128;
 const DEFAULT_MAX_PLANAR_SAMPLE_ENTRIES: usize = 8;
+const DEFAULT_MAX_PLANAR_OPERATOR_ENTRIES: usize = 16;
+const DEFAULT_MAX_PLANAR_OPERATOR_BYTES: usize = 512 * 1024 * 1024;
 const DEFAULT_MAX_TOPOLOGY_ENTRIES: usize = 2;
 const DEFAULT_MAX_TOPOLOGY_BYTES: usize = 512 * 1024 * 1024;
 /// Default memory budget for each sub-cache in bytes (128 MiB).
@@ -579,6 +581,11 @@ pub(crate) struct QuantityDataPlaneStore {
     pub topological_charge_cache: Mutex<JsonResourceCache>,
     /// Bounded revision-keyed results shared by planar meta/binary resources.
     pub planar_sample_cache: Mutex<PlanarSampleCache>,
+    /// Per-key locks so concurrent meta/scalar/vector/mask requests of one
+    /// planar sample compute it once (single-flight).
+    planar_sample_in_flight: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Geometry-only plane operators reused across field revisions.
+    pub planar_operator_cache: Arc<crate::planar_sampling::PlanarOperatorCache>,
 }
 
 impl std::fmt::Debug for QuantityDataPlaneStore {
@@ -623,6 +630,11 @@ impl QuantityDataPlaneStore {
                 DEFAULT_MAX_PLANAR_SAMPLE_ENTRIES,
                 DEFAULT_MAX_BYTES,
             )),
+            planar_sample_in_flight: StdMutex::new(HashMap::new()),
+            planar_operator_cache: Arc::new(crate::planar_sampling::PlanarOperatorCache::new(
+                DEFAULT_MAX_PLANAR_OPERATOR_ENTRIES,
+                DEFAULT_MAX_PLANAR_OPERATOR_BYTES,
+            )),
         }
     }
 
@@ -638,13 +650,37 @@ impl QuantityDataPlaneStore {
         if let Some(cached) = self.planar_sample_cache.lock().await.get(key) {
             return Ok(cached);
         }
-        let sampled = sample().await?;
-        let mut cache = self.planar_sample_cache.lock().await;
-        if let Some(cached) = cache.get(key) {
-            return Ok(cached);
+        let flight = {
+            let mut in_flight = self
+                .planar_sample_in_flight
+                .lock()
+                .map_err(|_| crate::error::ApiError::internal("planar single-flight lock poisoned"))?;
+            Arc::clone(in_flight.entry(key.to_string()).or_default())
+        };
+        let result: Result<Arc<PlanarSampleResult>, crate::error::ApiError> = async {
+            let _guard = flight.lock().await;
+            // A concurrent request may have finished the same sample meanwhile.
+            if let Some(cached) = self.planar_sample_cache.lock().await.get(key) {
+                return Ok(cached);
+            }
+            let sampled = sample().await?;
+            let mut cache = self.planar_sample_cache.lock().await;
+            if let Some(cached) = cache.get(key) {
+                return Ok(cached);
+            }
+            cache.insert(key.to_string(), Arc::clone(&sampled));
+            Ok(sampled)
         }
-        cache.insert(key.to_string(), Arc::clone(&sampled));
-        Ok(sampled)
+        .await;
+        if let Ok(mut in_flight) = self.planar_sample_in_flight.lock() {
+            if in_flight
+                .get(key)
+                .is_some_and(|entry| Arc::ptr_eq(entry, &flight) && Arc::strong_count(entry) <= 2)
+            {
+                in_flight.remove(key);
+            }
+        }
+        result
     }
 }
 
@@ -683,6 +719,7 @@ mod tests {
             occupancy: vec![Occupancy::Occupied; value_count],
             source_entity_ids: vec![Some(0); value_count],
             overlay: None,
+            section_extent: None,
         })
     }
 

@@ -1,0 +1,31 @@
+{
+  "license": "SIL Open Font License 1.1",
+  "assets": [
+    {
+      "path": "InterVariable-v4.1.woff2",
+      "source": "https://github.com/rsms/inter/blob/v4.1/docs/font-files/InterVariable.woff2",
+      "sha256": "693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3",
+      "bytes": 352240
+    },
+    {
+      "path": "JetBrainsMono-Variable-v2.304.ttf",
+      "source": "https://github.com/JetBrains/JetBrainsMono/blob/v2.304/fonts/variable/JetBrainsMono%5Bwght%5D.ttf",
+      "sha256": "662a196d58f1183bf2d77428b6d5283fe3f45161ab021bea4036bc98e5cac016",
+      "bytes": 303144
+    },
+    {
+      "path": "LICENSE-Inter-OFL.txt",
+      "source": "https://github.com/rsms/inter/blob/v4.1/LICENSE.txt",
+      "sha256": "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a",
+      "bytes": 4380
+    },
+    {
+      "path": "LICENSE-JetBrainsMono-OFL.txt",
+      "source": "https://github.com/JetBrains/JetBrainsMono/blob/v2.304/OFL.txt",
+      "sha256": "60d55f23c6ce05a81099a762cb67ca2c9b6ea251c7912720998b4c89ebfd4faa",
+      "bytes": 4398,
+      "source_sha256": "30f0c136e3c88e422d0791acd97238870f9054a9729bc34cf2ff0d4ed8cac4ad",
+      "formatting": "Trailing whitespace removed; license text unchanged."
+    }
+  ]
+}

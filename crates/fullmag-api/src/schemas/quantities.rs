@@ -71,6 +71,22 @@ pub struct FieldCarrierDescriptor {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct QuantityProjectionCapability {
+    pub token: String,
+    pub components: u8,
+    pub output_shape: String,
+    pub render: QuantityRenderCapability,
+    pub publication: QuantityPublicationCapability,
+}
+
+impl From<fullmag_runner::QuantityProjectionCapability> for QuantityProjectionCapability {
+    fn from(value: fullmag_runner::QuantityProjectionCapability) -> Self {
+        Self { token: value.token, components: value.components, output_shape: value.output_shape,
+            render: value.render.into(), publication: value.publication.into() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct ResolvedQuantityCapability {
     pub quantity_id: String,
     pub provider: QuantityProviderCapability,
@@ -84,6 +100,8 @@ pub struct ResolvedQuantityCapability {
     pub lane: String,
     pub precision: String,
     pub carriers: Vec<FieldCarrierDescriptor>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projections: Vec<QuantityProjectionCapability>,
 }
 
 macro_rules! mirror_enum_from_runner {
@@ -148,6 +166,7 @@ impl From<fullmag_runner::ResolvedQuantityCapability> for ResolvedQuantityCapabi
             lane: value.lane,
             precision: value.precision,
             carriers: value.carriers.into_iter().map(Into::into).collect(),
+            projections: value.projections.into_iter().map(Into::into).collect(),
         }
     }
 }

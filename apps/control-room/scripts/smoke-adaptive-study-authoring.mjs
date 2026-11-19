@@ -334,6 +334,15 @@ async function openStudyInspector(browser, { id, stage, realtime = false }) {
         ],
       });
     }
+    if (method === "GET" && path === "/v2/platform/instances") {
+      return fulfillJson(route, {
+        first_port: 3197,
+        instances: [],
+        last_port: 3260,
+        schema_version: "1.0.0",
+        self_api_instance_id: "fixture-instance",
+      });
+    }
     if (method === "GET" && path === "/v2/platform/health") {
       return fulfillJson(route, {
         active_session: true,

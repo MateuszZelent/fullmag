@@ -98,9 +98,9 @@ def run_process(argv, *, cwd, env, log_path, timeout, evidence, checkpoint):
     return read_json(stdout, stdout.parent)
 
 
-def start_api(binary, runtime, env, destination, receipt, checkpoint):
+def start_api(binary, runtime, env, destination, receipt, checkpoint, *, port=None):
     with socket.socket() as reserve:
-        reserve.bind(('127.0.0.1', 0))
+        reserve.bind(('127.0.0.1', 0 if port is None else port))
         port = reserve.getsockname()[1]
     overflow, errors = threading.Event(), []
     record = {'command': [str(binary)], 'log': str(destination), 'state': 'launching', 'port': port}
@@ -294,6 +294,10 @@ def run(args):
     capsule = storage.validate_path(Path(args.source_capsule), root.parent, 'frozen source capsule')
     source = verify_source(capsule, evidence['managed_package']['source_digest'])
     require(repo == capsule / 'tree', 'Runtime sources must be the immutable package capsule')
+    frozen = getattr(args, "fixture", "closed-loop") == "frozen-overlap-m3"
+    if frozen:
+        import verify_accepted_frozen_overlap as fixture
+        fixture.verify_tools(repo, source, fixed_bytes)
     invocation = uuid.uuid4().hex
     worktree_id = 'b02-' + invocation
     runs = runtime_runs_root(repo, root, worktree_id)
@@ -331,8 +335,11 @@ def run(args):
     try:
         profile = json.loads(fixed_bytes(Path(args.execution_profile), args.profile_sha256, 1024 * 1024))
         budget = json.loads(fixed_bytes(Path(args.resources), args.resources_sha256, 64 * 1024))
-        require(profile.get('schema_version') == 'execution_profile.v1' and not profile.get('defaults'),
-                'B02 profile must preserve authored exact request without overrides')
+        if frozen:
+            fixture.validate_inputs(profile, budget, args.solve_timeout_seconds)
+        else:
+            require(profile.get('schema_version') == 'execution_profile.v1' and not profile.get('defaults'),
+                    'B02 profile must preserve authored exact request without overrides')
         validate_budget(budget, shutil.disk_usage(runs).free)
         receipt['bounded_resource_budget'] = budget
         inputs = {}
@@ -361,10 +368,10 @@ def run(args):
         core_record = next((item for item in build['artifacts'] if item['path'] == 'outputs/.fullmag/local/_fullmag_core.so'), None)
         require(core_record and core_record['size'] <= 128 * 1024**2, 'Missing managed native Python core')
         (python_parent / '_fullmag_core.so').write_bytes(fixed_bytes(core, core_record['sha256'], 128 * 1024**2))
-        example = next((entry for entry in source['files'] if entry['path'] == EXAMPLE), None)
+        example = next((entry for entry in source['files'] if entry['path'] == (fixture.EXAMPLE if frozen else EXAMPLE)), None)
         require(example is not None, 'Closed-loop example absent from package capsule')
-        script = output / 'full-loop.py'
-        script.write_bytes(fixed_bytes(repo / EXAMPLE, example['sha256'], 8 * 1024**2))
+        script = output / ('scenario_frozen_overlap_m3.py' if frozen else 'full-loop.py')
+        script.write_bytes(fixed_bytes(repo / example['path'], example['sha256'], 8 * 1024**2))
         receipt['inputs'] = inputs
         receipt['authoring_runtime'] = {'copied': copied, 'managed_pycore': core_record, 'example': example}
         env = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': str(output / 'home'), 'TMPDIR': str(output / 'tmp'),
@@ -377,6 +384,8 @@ def run(args):
                'FULLMAG_DISABLE_STATIC_CONTROL_ROOM': '1', 'FULLMAG_FEM_LIB_DIR': str(libraries), 'LD_LIBRARY_PATH': str(libraries),
                'FULLMAG_FORCE_LOCAL_FEM_CPU': '1', 'FULLMAG_FEM_EXECUTION': 'cpu', 'FULLMAG_FEM_MFEM_DEVICE': 'cpu',
                'FULLMAG_FEM_REQUIRE_GPU': '0', 'FULLMAG_FEM_REQUIRE_CEED': '0', 'FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME': '1'}
+        if frozen:
+            env['FULLMAG_ARTIFACT_FIELD_STORAGE'] = 'json'
         probe = "import sys,json,hashlib;sys.path.insert(0,sys.argv[1]);import numpy,_fullmag_core;print(json.dumps({'python':sys.version,'executable':sys.executable,'numpy_version':numpy.__version__,'numpy_path':numpy.__file__,'core_path':_fullmag_core.__file__,'core_sha256':hashlib.sha256(open(_fullmag_core.__file__,'rb').read()).hexdigest(),'python_sha256':hashlib.sha256(open(sys.executable,'rb').read()).hexdigest(),'numpy_init_sha256':hashlib.sha256(open(numpy.__file__,'rb').read()).hexdigest()}))"
         require(Path(args.python).is_absolute(), 'Explicit image interpreter required')
         args.python = str(Path(args.python).resolve(strict=True))
@@ -385,7 +394,7 @@ def run(args):
         require(abi['core_path'] == str(python_parent / '_fullmag_core.so') and abi['core_sha256'] == core_record['sha256'],
                 'Python imported another native core')
         receipt['python_abi'] = abi
-        api, log, base = start_api(binaries['fullmag-api'], runtime, env, output / 'api-submit.log', receipt, checkpoint)
+        api, log, base = start_api(binaries['fullmag-api'], runtime, env, output / 'api-submit.log', receipt, checkpoint, port=8087 if frozen else None)
         wait_for_health(base, api)
         _, openapi = json_request(base + '/v2/platform/openapi.json')
         receipt['build_identity'] = assert_build_identity(openapi, {'git_commit': args.expected_commit,
@@ -401,13 +410,17 @@ def run(args):
         submitted = command([str(binaries['fullmag']), 'run-script-accepted', str(script), '--project', str(output / 'project.fms'),
             '--execution-profile', str(output / 'profile.json'), '--resources', str(output / 'resources.json'),
             '--idempotency-key', key, '--api-url', base], 'public-submit', 90)
-        project, task = one_task(submitted, run_id)
+        project, task = fixture.accepted_tasks(submitted, run_id) if frozen else one_task(submitted, run_id)
         receipt['submit'] = submitted
         receipt['api_submit_exit_code'] = terminate_process(api)
         require(receipt['api_submit_exit_code'] is not None, 'Owned API did not exit')
         api = None
         close_api_log(log); log = None
         store = runs / 'session-store'
+        if frozen:
+            fixture.execute(args, binaries, runtime, env, output, receipt, checkpoint, command,
+                            store, project, run_id, task, budget, invocation)
+            return 0
         mesh_id = 'b02-mesh-' + invocation
         offer = json.dumps({'resource_id': mesh_id, 'budget': budget}, separators=(',', ':'))
         receipt['meshing_pool'] = command([str(binaries['fullmag-api-preparation-resource-pool']), '--store-root', str(store),
@@ -519,6 +532,7 @@ def main():
                  'project', 'project-sha256', 'execution-profile', 'profile-sha256', 'resources', 'resources-sha256', 'output-root', 'python'):
         parser.add_argument('--' + flag, required=True)
     parser.add_argument('--solve-timeout-seconds', type=int, required=True)
+    parser.add_argument("--fixture", choices=("closed-loop", "frozen-overlap-m3"), default="closed-loop")
     args = parser.parse_args()
     require(1 <= args.solve_timeout_seconds <= 3600, 'Bounded solve timeout required')
     return run(args)

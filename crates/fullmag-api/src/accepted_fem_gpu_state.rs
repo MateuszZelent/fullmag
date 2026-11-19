@@ -10,7 +10,7 @@ use fullmag_quantities::{
     accepted_state_digests, AcceptedPrimaryCarrier, AcceptedStateGeneration, AcceptedStateId,
     AcceptedStateRef, ObservationClock,
 };
-use fullmag_runner::FemGpuExecutionReceipt;
+use fullmag_runner::{FemGpuExecutionReceipt, FemGpuMinimizerExecutionReceipt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -104,24 +104,47 @@ impl FemGpuAcceptedStateSnapshotV1 {
             );
         }
 
-        let receipt: FemGpuExecutionReceipt = provenance
-            .get("fem_gpu_execution_receipt")
-            .ok_or_else(|| "accepted FEM GPU state has no native GPU execution receipt".to_string())
-            .and_then(|value| {
-                serde_json::from_value(value.clone()).map_err(|error| error.to_string())
-            })?;
-        if receipt.requested != "strict_device"
-            || receipt.precision != "double"
-            || receipt.device_ordinal != 0
-            || receipt.accepted_step_count == 0
+        let gpu_execution_receipt_sha256 = if let Some(value) = provenance
+            .get("fem_gpu_minimizer_execution_receipt")
+            .filter(|value| !value.is_null())
         {
-            return Err(
-                "accepted FEM GPU state requires strict_device double precision on device ordinal 0".into(),
-            );
-        }
-        receipt
-            .validate_strict_device()
-            .map_err(|error| format!("native FEM GPU receipt rejected: {error}"))?;
+            let receipt: FemGpuMinimizerExecutionReceipt =
+                serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
+            if provenance.get("requested_energy_minimizer").and_then(Value::as_str)
+                != Some(receipt.algorithm.as_str())
+                || provenance.get("resolved_energy_minimizer").and_then(Value::as_str)
+                    != Some(receipt.algorithm.as_str())
+                || provenance.get("fem_gpu_execution_receipt").is_some_and(|value| !value.is_null())
+            {
+                return Err("accepted FEM GPU minimizer receipt differs from its algorithm provenance".into());
+            }
+            receipt.validate_strict_device()
+                .map_err(|error| format!("native FEM GPU minimizer receipt rejected: {error}"))?;
+            canonical_receipt_sha256(&receipt)?
+        } else {
+            if matches!(
+                provenance.get("resolved_energy_minimizer").and_then(Value::as_str),
+                Some("projected_gradient_bb" | "nonlinear_cg")
+            ) {
+                return Err("accepted FEM GPU minimizer has no native minimizer execution receipt".into());
+            }
+            let receipt: FemGpuExecutionReceipt = provenance
+                .get("fem_gpu_execution_receipt")
+                .ok_or_else(|| "accepted FEM GPU state has no native GPU execution receipt".to_string())
+                .and_then(|value| {
+                    serde_json::from_value(value.clone()).map_err(|error| error.to_string())
+                })?;
+            if receipt.requested != "strict_device"
+                || receipt.precision != "double"
+                || receipt.device_ordinal != 0
+                || receipt.accepted_step_count == 0
+            {
+                return Err("accepted FEM GPU state requires strict_device double precision on device ordinal 0".into());
+            }
+            receipt.validate_strict_device()
+                .map_err(|error| format!("native FEM GPU receipt rejected: {error}"))?;
+            canonical_receipt_sha256(&receipt)?
+        };
 
         let native_snapshot = state
             .native_state_snapshot
@@ -146,35 +169,32 @@ impl FemGpuAcceptedStateSnapshotV1 {
             .native_indexed_geometry_sha256
             .as_deref()
             .ok_or_else(|| "native snapshot receipt has no indexed-geometry digest".to_string())?;
+        let dt_seconds = crate::accepted_fem_state::accepted_fem_clock_dt_seconds(state)?;
         if state.step == 0
             || !state.time_s.is_finite()
             || state.time_s < 0.0
-            || !state.solver_dt_s.is_finite()
-            || state.solver_dt_s <= 0.0
             || !native_snapshot.snapshot_time_s.is_finite()
             || native_snapshot.snapshot_time_s < 0.0
             || !native_snapshot.snapshot_solver_dt_s.is_finite()
-            || native_snapshot.snapshot_solver_dt_s <= 0.0
             || !fullmag_quantities::is_canonical_sha256(&native_snapshot.values_sha256)
             || !fullmag_quantities::is_canonical_sha256(native_node_map_sha256)
             || !fullmag_quantities::is_canonical_sha256(native_indexed_geometry_sha256)
         {
             return Err(
-                "accepted FEM GPU final state requires a positive native clock and canonical native digests".into(),
+                "accepted FEM GPU final state requires a valid native time and canonical native digests".into(),
             );
         }
         if map.content_sha256()? != native_node_map_sha256 {
             return Err("native node map differs from its snapshot receipt".into());
         }
 
-        let gpu_execution_receipt_sha256 = canonical_receipt_sha256(&receipt)?;
         let gpu_execution_identity =
             execution_identity_carrier_bytes(&gpu_execution_receipt_sha256, gpu_uuid);
         let gpu_execution_identity_sha256 = sha256_bytes(&gpu_execution_identity);
         let clock = ObservationClock {
             accepted_step: native_snapshot.snapshot_step,
             time_seconds: native_snapshot.snapshot_time_s,
-            dt_seconds: Some(native_snapshot.snapshot_solver_dt_s),
+            dt_seconds,
         };
         let digests = accepted_state_digests(
             clock,
@@ -331,7 +351,7 @@ fn validate_gpu_uuid(gpu_uuid: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn canonical_receipt_sha256(receipt: &FemGpuExecutionReceipt) -> Result<String, String> {
+fn canonical_receipt_sha256(receipt: &impl Serialize) -> Result<String, String> {
     let value = serde_json::to_value(receipt).map_err(|error| error.to_string())?;
     Ok(format!(
         "sha256:{}",

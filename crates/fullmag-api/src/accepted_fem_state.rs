@@ -28,6 +28,59 @@ const FEM_CPU_PRIMARY_CARRIERS: [&str; 3] = [
     FEM_CPU_NATIVE_INDEXED_GEOMETRY_CARRIER,
 ];
 
+/// Preserve native solver time steps, while representing direct minimization
+/// as having no physical time increment. Callers must first validate the
+/// native snapshot receipt against the artifact's exact raw clock bits.
+pub(crate) fn accepted_fem_clock_dt_seconds(
+    state: &MagnetizationStateArtifact,
+) -> Result<Option<f64>, String> {
+    if state.step == 0
+        || !state.time_s.is_finite()
+        || state.time_s < 0.0
+        || !state.solver_dt_s.is_finite()
+        || state.solver_dt_s < 0.0
+    {
+        return Err("accepted FEM state has an invalid native clock".into());
+    }
+
+    if state.solver_dt_s > 0.0 {
+        return Ok(Some(state.solver_dt_s));
+    }
+    if state.solver_dt_s.to_bits() != 0 {
+        return Err("accepted FEM state has a non-canonical zero solver dt".into());
+    }
+
+    let provenance = &state.provenance;
+    let requested = provenance
+        .get("requested_energy_minimizer")
+        .and_then(Value::as_str);
+    let resolved = provenance
+        .get("resolved_energy_minimizer")
+        .and_then(Value::as_str);
+    let realization = provenance
+        .get("energy_minimizer_realization")
+        .and_then(Value::as_str);
+    let execution_engine = provenance
+        .get("execution_engine")
+        .and_then(Value::as_str);
+    let expected_realization = match (execution_engine, requested) {
+        (Some("fem_cpu_native"), Some("projected_gradient_bb")) => Some("native_mfem_pgbb"),
+        (Some("fem_cpu_native"), Some("nonlinear_cg")) => Some("native_mfem_nonlinear_cg"),
+        (Some("fem_native_gpu"), Some("projected_gradient_bb")) => Some("native_cuda_pgbb"),
+        (Some("fem_native_gpu"), Some("nonlinear_cg")) => Some("native_cuda_nonlinear_cg"),
+        _ => None,
+    };
+    if requested != resolved
+        || expected_realization.is_none()
+        || realization != expected_realization
+    {
+        return Err(
+            "accepted FEM state with zero solver dt requires matching native direct-minimizer provenance".into(),
+        );
+    }
+    Ok(None)
+}
+
 /// Accepted-state identity for one completed native FEM CPU endpoint.
 ///
 /// The three payload fields are digests of producer-owned bytes. Keeping the
@@ -112,17 +165,17 @@ impl FemCpuAcceptedStateSnapshotV1 {
             .native_indexed_geometry_sha256
             .as_deref()
             .ok_or_else(|| "native snapshot receipt has no indexed-geometry digest".to_string())?;
+        let dt_seconds = accepted_fem_clock_dt_seconds(state)?;
         if state.step == 0
             || !state.time_s.is_finite()
             || state.time_s < 0.0
             || !receipt.snapshot_solver_dt_s.is_finite()
-            || receipt.snapshot_solver_dt_s <= 0.0
             || !fullmag_quantities::is_canonical_sha256(&receipt.values_sha256)
             || !fullmag_quantities::is_canonical_sha256(native_node_map_sha256)
             || !fullmag_quantities::is_canonical_sha256(native_indexed_geometry_sha256)
         {
             return Err(
-                "accepted FEM CPU final state requires a positive native clock and canonical native digests".into(),
+                "accepted FEM CPU final state requires a valid native time and canonical native digests".into(),
             );
         }
         if map.content_sha256()? != native_node_map_sha256 {
@@ -132,7 +185,7 @@ impl FemCpuAcceptedStateSnapshotV1 {
         let clock = ObservationClock {
             accepted_step: receipt.snapshot_step,
             time_seconds: receipt.snapshot_time_s,
-            dt_seconds: Some(receipt.snapshot_solver_dt_s),
+            dt_seconds,
         };
         let digests = accepted_state_digests(
             clock,

@@ -100,21 +100,25 @@ A uniform preset is an initial condition, not a persistent magnetization constra
 
 No independent interaction is introduced.
 
-(python-api-magnets-and-textures-uniform-texture-source-code-index)=
+## Control Room support
 
-## Control Room crosswalk
-
-Status: The exposed texture families are partial; unlisted presets remain Python-only.
+Status: Uniform initial magnetization (`uniform`) is editable in `ObjectMagneticTexturePanel` (`partial` relative to the full transform/version surface); unlisted preset arguments remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft; authored object state is revised |
-| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `not implemented` | Python-only until implemented |
+| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft via `commitMagneticTextureApply`; authored object state is revised |
+| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `Python-only` | Authored in Python |
 
-frontend support is not implemented for texture presets and arguments not exposed by ObjectMagneticTexturePanel.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx (ObjectMagneticTexturePanel)`.
+Transform arguments outside `ObjectMagneticTexturePanel` remain Python-only.
+See {doc}`/frontend/inspectors/objects-and-materials` and [Control Room capability register](/frontend/capability-register) for the UI support matrix.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx` (`ObjectMagneticTexturePanel`).
 
+```{image} /_static/images/ui/inspector-magnetic-texture.png
+:alt: Semantic Inspector Magnetic Texture panel configuring uniform magnetization vector
+:width: 92%
+```
+
+(python-api-magnets-and-textures-uniform-texture-source-code-index)=
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |

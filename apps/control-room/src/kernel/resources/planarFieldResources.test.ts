@@ -24,6 +24,9 @@ import {
   loadCachedPlanarBinary,
   loadCachedPlanarScalar,
   planarFieldQueryFromMeta,
+  planarProbeRequestQuery,
+  planarWindowFromQuery,
+  planarWindowParams,
   resolvePlanarFieldResourceKey,
 } from "./planarFieldResources";
 
@@ -31,6 +34,15 @@ describe("planar field resources", () => {
   const monitorSource = (monitorId: string) => ({
     kind: "monitor" as const,
     monitorId,
+  });
+
+  it("gives each default slice its own resource identity without changing the request path", () => {
+    const query = { component: "magnitude", resolution_x: 64, resolution_y: 64 };
+    const first = planarFieldResourceKey("m", { kind: "default", sliceKey: "xy:0.25" }, query);
+    const second = planarFieldResourceKey("m", { kind: "default", sliceKey: "xy:0.75" }, query);
+    expect(first).not.toBe(second);
+    expect(first.split("#")[0]).toBe(second.split("#")[0]);
+    expect(planarFieldResourceKey("m", { kind: "default" }, query)).toBe(first.split("#")[0]);
   });
 
   it("keeps default and monitor source families distinct even for a monitor id named default", () => {
@@ -135,6 +147,110 @@ describe("planar field resources", () => {
     };
   };
 
+  it("preserves exact physical position and object identity in every canonical replay link", () => {
+    const meta = defaultMetaIdentity();
+    for (const key of Object.keys(meta.links) as (keyof typeof meta.links)[]) {
+      meta.links[key] = meta.links[key].replace("scope_kind=monitor_target", "scope_kind=object&scope_id=upper-cylinder") + "&position_m=-8.75e-9";
+    }
+    const parsed = planarFieldQueryFromMeta("m", { kind: "default" }, meta);
+    expect(parsed).toMatchObject({ ok: true, query: { position_m: -8.75e-9, scope_kind: "object", scope_id: "upper-cylinder" } });
+    const first = planarFieldResourceKey("m", { kind: "default" }, { position_m: -8.75e-9 });
+    const second = planarFieldResourceKey("m", { kind: "default" }, { position_m: -1.25e-9 });
+    expect(first).not.toBe(second);
+  });
+
+  it.each(["", "NaN", "Infinity", "-Infinity"])("rejects invalid absolute position %j in metadata links", (value) => {
+    const meta = defaultMetaIdentity();
+    for (const key of Object.keys(meta.links) as (keyof typeof meta.links)[]) meta.links[key] += `&position_m=${value}`;
+    expect(planarFieldQueryFromMeta("m", { kind: "default" }, meta)).toMatchObject({ ok: false });
+  });
+
+  it("turns a crop into four window parameters and nothing into none", () => {
+    expect(planarWindowParams(null)).toEqual({});
+    expect(planarWindowParams({ u_min_m: -2.5e-8, u_max_m: 2.5e-8, v_min_m: 0, v_max_m: 1e-8 })).toEqual({
+      window_u_min_m: "-2.5e-8",
+      window_u_max_m: "2.5e-8",
+      window_v_min_m: "0",
+      window_v_max_m: "1e-8",
+    });
+    expect(planarWindowParams({ u_min_m: Number.NaN, u_max_m: 1, v_min_m: 0, v_max_m: 1 })).toEqual({});
+    expect(planarWindowFromQuery({ window_u_min_m: "0" })).toEqual({});
+  });
+
+  it("replays the sampling window of the metadata links and refuses a partial one", () => {
+    const meta = defaultMetaIdentity();
+    for (const key of Object.keys(meta.links) as (keyof typeof meta.links)[]) {
+      meta.links[key] += "&window_u_min_m=-0.000000025&window_u_max_m=0.000000025&window_v_min_m=0&window_v_max_m=0.00000001";
+    }
+    expect(planarFieldQueryFromMeta("m", { kind: "default" }, meta)).toMatchObject({
+      ok: true,
+      query: {
+        window_u_min_m: "-0.000000025",
+        window_u_max_m: "0.000000025",
+        window_v_min_m: "0",
+        window_v_max_m: "0.00000001",
+      },
+    });
+    const partial = defaultMetaIdentity();
+    for (const key of Object.keys(partial.links) as (keyof typeof partial.links)[]) partial.links[key] += "&window_u_min_m=0";
+    expect(planarFieldQueryFromMeta("m", { kind: "default" }, partial)).toMatchObject({ ok: false });
+  });
+
+  it("keeps a cropped sample apart from the full frame in the resource cache", () => {
+    const query = { component: "normal", resolution_x: 64, resolution_y: 64 };
+    const window = planarWindowParams({ u_min_m: 0, u_max_m: 1e-8, v_min_m: 0, v_max_m: 1e-8 });
+    const full = resolvePlanarFieldResourceKey("m", { kind: "default" }, query);
+    const cropped = resolvePlanarFieldResourceKey("m", { kind: "default" }, { ...query, ...window });
+    expect(cropped).not.toBe(full);
+    // The window is part of the canonical query, not a client-side suffix.
+    expect(cropped).not.toContain("#window=");
+    expect(cropped.split("#")[0]).toContain(
+      "&window_u_min_m=0&window_u_max_m=1e-8&window_v_min_m=0&window_v_max_m=1e-8",
+    );
+  });
+
+  it("keeps the canonical key of an unwindowed query and drops a partial window", () => {
+    const query = { component: "normal", resolution_x: 64, resolution_y: 64 };
+    const full = planarFieldResourceKey("m", { kind: "default" }, query);
+    // Same canonical query string as before windows were part of the identity.
+    expect(full.split("?")[1]).toBe(
+      "component=normal&include_mesh=false&quality=interactive&resolution_x=64&resolution_y=64&scope_kind=monitor_target&vector_budget=0",
+    );
+    expect(planarFieldResourceKey("m", { kind: "default" }, { ...query, window_u_min_m: "0" })).toBe(full);
+  });
+
+
+  it("sends the window, the exact position and nearest=node with a probe", () => {
+    const query = planarProbeRequestQuery({
+      component: "normal",
+      nearest: "node",
+      position_m: -1e-9,
+      sample_token: "planar-sample-v3:exact",
+      u_m: 1e-9,
+      v_m: 2e-9,
+      ...planarWindowParams({ u_min_m: 0, u_max_m: 1e-8, v_min_m: 0, v_max_m: 1e-8 }),
+    });
+    expect(query).toEqual({
+      component: "normal",
+      nearest: "node",
+      position_m: -1e-9,
+      sample_token: "planar-sample-v3:exact",
+      u_m: 1e-9,
+      v_m: 2e-9,
+      window_u_max_m: "1e-8",
+      window_u_min_m: "0",
+      window_v_max_m: "1e-8",
+      window_v_min_m: "0",
+    });
+    expect(planarProbeRequestQuery({ u_m: 0, v_m: 0, window_u_min_m: "0" })).toEqual({ u_m: 0, v_m: 0 });
+  });
+
+  it("rejects metadata links with two competing plane positions", () => {
+    const meta = defaultMetaIdentity();
+    for (const key of Object.keys(meta.links) as (keyof typeof meta.links)[]) meta.links[key] += "&position_m=1e-9&position_fraction=0.5";
+    expect(planarFieldQueryFromMeta("m", { kind: "default" }, meta)).toMatchObject({ ok: false });
+  });
+
   it("derives default identity from default-family links and rejects a monitor-family request", () => {
     const meta = defaultMetaIdentity();
     const result = planarFieldQueryFromMeta("m", { kind: "default" }, meta);
@@ -170,10 +286,9 @@ describe("planar field resources", () => {
         "m",
         monitorSource("plane/a"),
         { component: "z" },
-        '"etag"',
         DATA_PLANAR_FIELD_SCALAR_PATH,
       ),
-    ).toContain("#revision=%22etag%22");
+    ).not.toContain("#revision=");
   });
 
   it("keeps immutable sample tokens and exact revisions in binary cache identity", () => {
@@ -447,14 +562,12 @@ describe("planar field resources", () => {
       "m",
       source,
       { component: "x" },
-      '"field-revision"',
       DATA_PLANAR_FIELD_SCALAR_PATH,
     );
     const yKey = resolvePlanarFieldResourceKey(
       "m",
       source,
       { component: "y" },
-      '"field-revision"',
       DATA_PLANAR_FIELD_SCALAR_PATH,
     );
     const xPayload = new Uint8Array([1]).buffer;

@@ -11,7 +11,8 @@
 .fm-code-changelog .fm-changelog-date {
   margin: 1.65rem 0 0.15rem;
   padding-bottom: 0.38rem;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-bottom: 1px solid var(--fm-docs-border-subtle, color-mix(in srgb, currentColor 18%, transparent));
+  color: var(--fm-docs-text-primary, inherit);
   font-size: 1rem;
   font-weight: 750;
   letter-spacing: 0.025em;
@@ -25,26 +26,27 @@
 .fm-changelog-entry {
   min-width: 0;
   padding: 0.72rem 0.85rem;
-  border-inline-start: 0.22rem solid color-mix(in srgb, currentColor 32%, transparent);
+  border: 1px solid var(--fm-docs-border-subtle, transparent);
+  border-inline-start: 0.22rem solid var(--fm-docs-border-default, color-mix(in srgb, currentColor 32%, transparent));
   border-radius: 0 0.45rem 0.45rem 0;
-  background: color-mix(in srgb, currentColor 3.5%, transparent);
+  background: var(--fm-docs-bg-surface, color-mix(in srgb, currentColor 3.5%, transparent));
 }
 
 .fm-changelog-entry--fixed {
-  border-inline-start-color: color-mix(in srgb, #15803d 72%, currentColor);
+  border-inline-start-color: var(--fm-docs-success, #40a02b);
 }
 
 .fm-changelog-entry--added {
-  border-inline-start-color: color-mix(in srgb, #2563eb 72%, currentColor);
+  border-inline-start-color: var(--fm-docs-accent, #1e66f5);
 }
 
 .fm-changelog-entry--docs,
 .fm-changelog-entry--documentation {
-  border-inline-start-color: color-mix(in srgb, #7c3aed 72%, currentColor);
+  border-inline-start-color: var(--fm-docs-mauve, #8839ef);
 }
 
 .fm-changelog-entry--breaking {
-  border-inline-start-color: color-mix(in srgb, #b91c1c 78%, currentColor);
+  border-inline-start-color: var(--fm-docs-danger, #d20f39);
 }
 
 .fm-changelog-heading,
@@ -65,8 +67,10 @@
 .fm-changelog-scope {
   display: inline-block;
   padding: 0.12rem 0.38rem;
-  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border: 1px solid var(--fm-docs-border-default, color-mix(in srgb, currentColor 22%, transparent));
   border-radius: 999px;
+  background: var(--fm-docs-bg-elevated, transparent);
+  color: var(--fm-docs-text-primary, inherit);
   font-size: 0.72rem;
   font-weight: 750;
   letter-spacing: 0.035em;
@@ -75,13 +79,14 @@
 }
 
 .fm-changelog-scope {
+  color: var(--fm-docs-text-muted, inherit);
   font-weight: 600;
   text-transform: none;
-  opacity: 0.74;
 }
 
 .fm-changelog-subject {
   min-width: 0;
+  color: var(--fm-docs-text-primary, inherit);
   overflow-wrap: anywhere;
   font-weight: 650;
 }
@@ -91,7 +96,7 @@
   flex-wrap: wrap;
   gap: 0.6rem;
   margin-top: 0.28rem;
-  color: color-mix(in srgb, currentColor 66%, transparent);
+  color: var(--fm-docs-text-muted, color-mix(in srgb, currentColor 66%, transparent));
   font-size: 0.78rem;
 }
 
@@ -102,7 +107,7 @@
 
 .fm-changelog-paths {
   margin-top: 0.38rem;
-  color: color-mix(in srgb, currentColor 70%, transparent);
+  color: var(--fm-docs-text-secondary, color-mix(in srgb, currentColor 70%, transparent));
   font-size: 0.76rem;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -114,9 +119,9 @@
 
 .fm-changelog-summary {
   padding: 0.8rem 0.9rem;
-  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border: 1px solid var(--fm-docs-border-subtle, color-mix(in srgb, currentColor 18%, transparent));
   border-radius: 0.55rem;
-  background: color-mix(in srgb, currentColor 5%, transparent);
+  background: var(--fm-docs-bg-surface, color-mix(in srgb, currentColor 5%, transparent));
 }
 
 .fm-changelog-summary__line {
@@ -129,6 +134,7 @@
 }
 
 .fm-changelog-summary__time {
+  color: var(--fm-docs-text-primary, inherit);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
@@ -160,43 +166,49 @@
 .fm-changelog-tab-label {
   grid-row: 1;
   padding: 0.72rem 0.85rem;
-  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border: 1px solid var(--fm-docs-border-default, color-mix(in srgb, currentColor 24%, transparent));
   border-radius: 0.5rem;
+  background: var(--fm-docs-bg-surface, transparent);
+  color: var(--fm-docs-text-secondary, inherit);
   cursor: pointer;
   font-weight: 750;
   text-align: center;
-  transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease;
 }
 
 .fm-changelog-tab-label:hover {
+  background: var(--fm-docs-bg-elevated, transparent);
+  color: var(--fm-docs-text-primary, inherit);
   transform: translateY(-1px);
 }
 
 .fm-changelog-tab-label--documentation {
-  border-color: color-mix(in srgb, #0f766e 42%, currentColor);
+  border-color: color-mix(in srgb, var(--fm-docs-teal, #179299) 45%, var(--fm-docs-border-default, currentColor));
 }
 
 .fm-changelog-tab-label--code {
-  border-color: color-mix(in srgb, #b45309 42%, currentColor);
+  border-color: color-mix(in srgb, var(--fm-docs-peach, #fe640b) 45%, var(--fm-docs-border-default, currentColor));
 }
 
 .fm-changelog-tab-input:focus-visible + .fm-changelog-tab-label {
-  outline: 3px solid color-mix(in srgb, #0f766e 58%, transparent);
+  outline: 3px solid color-mix(in srgb, var(--fm-docs-accent, #1e66f5) 58%, transparent);
   outline-offset: 2px;
 }
 
 .fm-changelog-tab-input:checked + .fm-changelog-tab-label {
-  color: #fff;
+  color: var(--fm-docs-text-primary, #fff);
 }
 
 #fm-changelog-tab-documentation:checked + .fm-changelog-tab-label--documentation {
-  border-color: #0f766e;
-  background: #0f766e;
+  border-color: var(--fm-docs-teal, #179299);
+  background: color-mix(in srgb, var(--fm-docs-teal, #179299) 22%, var(--fm-docs-bg-surface, #1e1e2e));
+  color: var(--fm-docs-teal-text, inherit);
 }
 
 #fm-changelog-tab-code:checked + .fm-changelog-tab-label--code {
-  border-color: #b45309;
-  background: #b45309;
+  border-color: var(--fm-docs-peach, #fe640b);
+  background: color-mix(in srgb, var(--fm-docs-peach, #fe640b) 22%, var(--fm-docs-bg-surface, #1e1e2e));
+  color: var(--fm-docs-degraded-text, inherit);
 }
 
 .fm-changelog-tab-panel {
@@ -220,8 +232,9 @@
 .fm-changelog-page-link {
   display: inline-block;
   padding: 0.48rem 0.68rem;
-  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border: 1px solid var(--fm-docs-border-default, color-mix(in srgb, currentColor 25%, transparent));
   border-radius: 0.38rem;
+  background: var(--fm-docs-bg-surface, transparent);
   text-decoration: none;
 }
 

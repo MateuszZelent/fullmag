@@ -229,6 +229,7 @@ function ExplorerPhysicsReportingView() {
           moduleId="explorer"
           nodes={nodes}
           sceneResourceData={scene}
+          sharedCommandResources={{}}
           tabId="model"
         />
       </section>

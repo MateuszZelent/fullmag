@@ -2,7 +2,7 @@
 
 - Status: proposed canonical physics and numerics contract
 - Owners: Fullmag core
-- Last updated: 2026-09-08
+- Last updated: 2026-10-27
 - Related ADRs:
   - `docs/adr/0004-backend-canonical-quantities.md`
   - `docs/adr/0011-resource-first-api.md`
@@ -1949,6 +1949,132 @@ signature records the interpolation realization and mapping digest. Direct
 RT0 reevaluation and native MFEM transfer remain separate, not silently
 substituted by this stored-basis projection.
 
+(antenna-universe-inspection-carrier)=
+#### 6.3.1. Niemagnetyczny Universe jako nośnik mapy pola
+
+Przykład `examples/antenna_universe/fem_antenna_closed_loop_universe.py` zachowuje pełny obwód
+3D, materiały i źródło z przykładu `fem_antenna_closed_loop_nonmagnetic.py`.
+Zastępuje lokalny obiekt `sampling` domeną Universe. Nie dodaje materiału
+magnetycznego, magnetyzacji ani dynamiki LLG. „Obieg pola” oznacza tutaj
+przestrzenny kierunek statycznego $\mathbf H$, a nie precesję w czasie.
+
+| Parametr Python | Typ | Wartość domyślna | Jednostka SI | Walidacja | Znaczenie | Zakres realizacji | Pole ProblemIR |
+|---|---|---|---|---|---|---|---|
+| study.universe.mode | str \| None | None; początkowo auto | $1$ | auto/manual; manual wymaga size | sposób określenia granic | inspekcja FEM CPU/double; wykonanie H w Universe niezweryfikowane | problem_meta.runtime_metadata.study_universe.mode |
+| study.universe.padding | Sequence[float] \| None | None; początkowo (0,0,0) | $\mathrm m$ | trzy skończone nieujemne składowe | dwustronny margines domeny | inspekcja FEM CPU/double; wykonanie H w Universe niezweryfikowane | problem_meta.runtime_metadata.study_universe.padding |
+| study.universe.mesh.minimum_element_size | float \| None | None | $\mathrm m$ | skończone dodatnie minimum nie większe od maksimum | minimalny rozmiar elementu otoczenia | inspekcja FEM CPU/double; wykonanie H w Universe niezweryfikowane | problem_meta.runtime_metadata.study_universe.airbox_hmin |
+| study.universe.mesh.maximum_element_size | float \| None | None | $\mathrm m$ | skończone dodatnie maksimum nie mniejsze od minimum | maksymalny rozmiar elementu otoczenia | inspekcja FEM CPU/double; wykonanie H w Universe niezweryfikowane | problem_meta.runtime_metadata.study_universe.airbox_hmax |
+| study.universe.mesh.growth_rate | float \| None | None | $1$ | skończona wartość większa od jeden | współczynnik stopniowania | inspekcja FEM CPU/double; wykonanie H w Universe niezweryfikowane | problem_meta.runtime_metadata.study_universe.airbox_growth_rate |
+| study.universe.mesh.grading | str \| None | None | $1$ | auto/geometric/linear | rodzaj stopniowania | inspekcja FEM CPU/double; wykonanie H w Universe niezweryfikowane | problem_meta.runtime_metadata.study_universe.airbox_grading |
+| study.build_domain_mesh | method | jawne wywołanie | $1$ | wymaga geometrii i konfiguracji siatki FEM | jawna materializacja domeny | inspekcja FEM CPU/double; wykonanie H w Universe niezweryfikowane | problem_meta.runtime_metadata.mesh_workflow; geometry_assets.fem_domain_mesh_asset |
+| fm.AntennaFieldSolveStage.solver_policy | str | production_default; przykład jawnie volume_inspection_v1 | $1$ | Python wymaga niepustego tokenu; materializator pętli dopuszcza dokładnie production_default lub volume_inspection_v1, pozostałe odrzuca | jawny wybór ograniczonego budżetu, bez zmiany fizyki i tolerancji | preparowana pełna pętla FEM CPU/double/P1/strict; external-lead odrzuca volume_inspection_v1 | antenna_field_solve_stages[].solver_policy; ResolvedAntennaClosedLoopCurrentInputIR.direct_field_policy.policy_version |
+
+Wartości przykładu: margines po każdej stronie $0.5\times10^{-6}\,\mathrm m$, minimum $150\times10^{-9}\,\mathrm m$, maksimum $500\times10^{-9}\,\mathrm m$, wzrost $1.6$, grading `geometric`. Sampling i jeden `target_ref` korzystają z `fm.FieldTarget.global_domain()`.
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $p_x,p_y,p_z$ | nieujemne marginesy domeny obserwacji po obu stronach geometrii | $\mathrm m$ |
+| $h_{\min},h_{\max}$ | dodatnie ograniczenia rozmiaru elementu w otoczeniu anteny | $\mathrm m$ |
+| $g$ | skończony współczynnik stopniowania rozmiaru siatki większy od jeden | $1$ |
+
+Interpretacja wykonania pozostaje FEM CPU/double; nie zadeklarowano tu
+wykonania pola na GPU ani nowej realizacji FDM. Siatka przewodnika zachowuje
+maksymalny i minimalny rozmiar $150\times10^{-9}\,\mathrm m$ oraz rząd jeden.
+Pole jest obliczane na węzłach domeny, z jej własną topologią; nie wolno
+rozciągać wcześniejszych czternastu próbek na większą objętość.
+
+Diagnostyczna materializacja tego wariantu na pakiecie
+`28ed0603a2c803caae9476a01fee5608c322a106` dała 1154 węzły i 6487 elementów
+Tet4, bez fallbacku meshera, w 12,44 s. To dowód generacji siatki,
+**nie wykonania pola H ani kwalifikacji zbieżności**. Dowód i pełny log
+pozostają w wolumenie kontrolnym grupy, pod
+`backend/verification/universe-mesh-preflight-20261023/`.
+
+Domyślny profil `production_default` nadal ogranicza pełne zapytanie do
+miliona par źródło–punkt. Dla dotychczasowego źródła o 1867 komórkach i tej
+domeny daje to 2 154 518 par; jest to oszacowanie z poprzedniej siatki źródła,
+a nie pomiar przygotowania nowego zaakceptowanego runu. Przykład wybiera
+jawnie zatwierdzony `volume_inspection_v1`. Nie jest to automatyczna zmiana
+domyślnego profilu ani obietnica zbieżności większej domeny.
+
+(antenna-universe-volume-budget)=
+##### Jawny wersjonowany budżet inspekcji objętości
+
+| Parametr wykonania | Typ | production_default (domyślny) | volume_inspection_v1 (jawny wybór) | Jednostka SI | Walidacja / znaczenie |
+|---|---|---|---|---|---|
+| resolved policy_version | str | closed_loop_direct_defaults.unqualified.v2 | closed_loop_direct_volume.unqualified.v1 | $1$ | dokładny identyfikator resolvera; nieznany token jest odrzucany |
+| maximum_source_target_pairs | u64 | 1 000 000 | 4 000 000 | $1$ | dodatni iloczyn liczby źródeł i targetów, kontrolowane mnożenie; overflow lub przekroczenie odmawia przygotowania |
+| maximum_kernel_evaluations | u64 | 100 000 000 | 500 000 000 | $1$ | wspólny licznik wywołań kernela dla całego natywnego zapytania |
+| maximum_ledger_leaf_visits | u64 | 100 000 000 | 500 000 000 | $1$ | wspólny licznik odwiedzin liści dla całego natywnego zapytania |
+| maximum_final_leaves_per_target | u64 | 1 000 000 | 1 000 000 | $1$ | limit finalnych liści pojedynczego targetu bez zmian |
+| base_quadrature_order | u32 | 4 | 4 | $1$ | niezmieniony rząd bazowy reguły low/high |
+| maximum_subdivision_depth | u32 | 6 | 6 | $1$ | niezmieniona maksymalna głębokość adaptacji |
+| absolute_tolerance_apm | f64 | 1e-9 | 1e-9 | $\mathrm{A\,m^{-1}}$ | niezmieniona tolerancja absolutna estymatora H |
+| relative_tolerance | f64 | 1e-5 | 1e-5 | $1$ | niezmieniona tolerancja względna estymatora H |
+| relative_scale_floor_apm | f64 | 0 | 0 | $\mathrm{A\,m^{-1}}$ | brak dodatkowej skali maskującej małe pole |
+
+Zmiana dotyczy wyłącznie dopuszczalnej pracy istniejącego operatora Biota–Savarta
+i estymatora błędu {eq}`antenna-global-target-quadrature-budget`, z całkowaniem
+Duffy {eq}`antenna-duffy-regular-field`. Nie zmienia równań, jednostek V/J/H,
+siatki, reguł low/high, głębokości, tolerancji ani kryterium akceptacji. Liczniki
+pracy należą do całego wywołania obejmującego wszystkie targety, w tym adaptację
+i Duffy; dzielenie zapytania z resetowaniem liczników jest niedopuszczalne.
+Przekroczenie limitu lub brak zbieżności kończy próbę jawną odmową, bez
+automatycznego ponawiania Solve lub redukcji jakości.
+
+Python zachowuje token bez zamiany na limit liczbowy w
+`AntennaFieldSolveStage.to_ir`. Planner rozwiązuje go przez
+`antenna_closed_loop_direct_budget`, a `closed_loop_direct_field_policy`
+zapisuje resolved policy, rzeczywistą liczbę par oraz niezmienione tolerancje
+w `ResolvedAntennaClosedLoopCurrentInputIR.direct_field_policy`. Round-trip
+zachowuje requested `solver_policy`; zgodność wymaga spójnego nowego pakietu.
+W cold evidence v1 pozostaje wyłącznie stary profil, natomiast v2 rozpoznaje
+dokładne zestawy limitów obu profili. Zestaw mieszany lub nieznany jest
+odrzucany, a wcześniejszy wynik nie jest przepisywany. Layout C ABI nie
+otrzymuje nowego pola: istniejący limit par rozróżnia zakres legacy 1..1M
+od dokładnego selektora 4M; inne większe selektory są niedopuszczalne.
+
+| Solver / backend | Zakres tego profilu | Stan dowodu |
+|---|---|---|
+| FEM CPU/double | preparowana pełna pętla 3D, P1, strict, raw inspection_only V/J/H w Universe | implementacja źródłowa; nowe wykonanie i zbieżność H oczekują na weryfikację |
+| FEM GPU | profil niedostępny: precompute tego pola jest realizacją CPU | brak deklaracji wykonania GPU |
+| FDM CPU | profil niedostępny: nie jest metodą FDM ani zakwalifikowaną bazą dla LLG | nie dotyczy wykonania tej inspekcji |
+| FDM GPU | profil niedostępny: nie jest metodą FDM ani zakwalifikowaną bazą dla LLG | nie dotyczy wykonania tej inspekcji |
+
+Regresje źródłowe obejmują zachowanie dokładnego defaultu, dopuszczenie
+2 154 518 par tylko przy opt-in, granicę 4M, overflow, puste wejście, nieznany
+token oraz odmowę rozszerzenia external-lead. Nie są dowodem wykonania
+natywnego ani kwalifikacji. Wymagane pozostają testy CI, sprawdzenie ciągłości
+liczników i cold evidence, jeden jawnie zatwierdzony przebieg Universe oraz
+odczyt skończonych H z kompletną topologią i provenance. Do tego czasu
+**pełny wynik H w Universe pozostaje niezweryfikowany**. Zwiększenie budżetu
+nie usuwa obowiązku niezależnej oceny zbieżności siatki i kwadratury.
+
+Źródła implementacji: `packages/fullmag-py/src/fullmag/world.py` —
+`StudyUniverseHandle`, `StudyUniverseConfig.to_ir`, `build_domain_mesh`;
+`packages/fullmag-py/src/fullmag/model/problem.py` —
+`build_geometry_assets_for_request`; `crates/fullmag-plan/src/antenna_field_solve.rs`
+— `resolve_field_sampling`; `crates/fullmag-plan/src/antenna_current_source.rs`
+— `materialize_antenna_closed_loop_current_input`.
+
+| Ścieżka | Stabilny symbol | Odpowiedzialność | Dowód |
+|---|---|---|---|
+| packages/fullmag-py/src/fullmag/world.py | class StudyUniverseHandle | Publiczne rozdzielenie granic Universe i jego siatki; jawne minimum, maksimum, wzrost i grading. | source_only |
+| packages/fullmag-py/src/fullmag/world.py | class StudyUniverseConfig | Walidacja i serializacja pierwotnej konfiguracji Universe, bez magnetycznego stanu. | source_only |
+| packages/fullmag-py/src/fullmag/world.py | _build_explicit_mesh_assets | Żądanie budowy wspólnej domeny; capture zachowuje odrębność deklaracji i topologii. | source_only |
+| examples/antenna_universe/fem_antenna_closed_loop_universe.py | study | Niemagnetyczny Universe i jawny volume_inspection_v1; diagnostyczna siatka 1154 węzły/6487 Tet4; wykonanie H nadal oczekuje na weryfikację. | source_only |
+| crates/fullmag-runner/src/native_fem/steady_transport.rs | solve_native_fem_prepared_closed_loop | Sprawdza requested/resolved policy oraz rzeczywistą liczbę par przed wywołaniem natywnym. | source_only |
+| crates/fullmag-runner/src/antenna_field_solution/direct_quadrature_v2.rs | verify_policy_binding | Cold v2 wiąże dokładny tuple budżetu ze snapshotem i requested/resolved provenance; legacy bez nowych pól wymaga starego profilu. | source_only |
+| backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp | DirectTetraQuadrature::ResolveWorkLimits | Zamknięty selektor legacy 1..1M lub dokładnie 4M; wyznacza globalne limity kernel i ledger bez zmiany ABI. | source_only |
+| backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp | WorkBudget | Wspólny licznik kernel/ledger całego zapytania, obejmujący wszystkie targety i adaptację. | source_only |
+| crates/fullmag-ir/src/antenna.rs | AntennaClosedLoopDirectBudgetIR | Wspólny typ dokładnego wersjonowanego zestawu limitów pętli; bez nowego modelu fizycznego. | source_only |
+| crates/fullmag-ir/src/antenna.rs | antenna_closed_loop_direct_budget | Dokładne mapowanie production_default i volume_inspection_v1; nieznany token odrzucony. | source_only |
+| crates/fullmag-plan/src/antenna_current_source.rs | closed_loop_direct_field_policy | Kontrolowany dodatni iloczyn par, wybrany limit i niezmienione tolerancje. | source_only |
+| crates/fullmag-ir/src/antenna.rs | closed_loop_direct_budget_requires_exact_opt_in_and_preserves_legacy_defaults | Regresja obu dokładnych profili i odmowy nieznanych tokenów; test przygotowany do CI. | source_only |
+| crates/fullmag-plan/src/antenna_current_source.rs | closed_loop_volume_budget_is_explicit_and_preserves_legacy_accuracy_options | Regresja 2 154 518 par oraz niezmienionych opcji dokładności; test przygotowany do CI. | source_only |
+| crates/fullmag-plan/src/antenna_current_source.rs | closed_loop_volume_budget_rejects_over_cap_overflow_empty_and_unknown_policy | Regresja granicy 4M, overflow, pustego wejścia i nieznanego profilu; test przygotowany do CI. | source_only |
+| crates/fullmag-plan/src/antenna_current_source.rs | external_lead_does_not_inherit_closed_loop_volume_budget | Regresja zachowania odmowy nowego profilu dla external-lead; test przygotowany do CI. | source_only |
+
 (antenna-fdm-interpretation)=
 ### 6.4 FDM consumption
 
@@ -2701,6 +2827,261 @@ Ucięte doprowadzenia pozostają inspection-only także w niemagnetycznej scenie
 nie odblokowuje to per-A basis, FFT ani LLG. Stan kontraktu: plan wdrożenia,
 jeszcze nie dowód wykonania E4B.
 
+(antenna-terminal-form-preparation)=
+### 8.2.2 Formularz terminali istniejącej preparacji
+
+Dedykowany węzeł `object.antenna.terminals` edytuje istniejący kontrakt
+`ExternalLeadPreparation` dla autorskich endcapów microstrip/CPW. Formularz
+podaje jawne signed outward currents w amperach, długości w metrach,
+przewodność w S/m, jednostkowe kierunki świata oraz liczbę warstw. Nie wylicza
+zewnętrznych prądów actuatorów z wag portu. Początkowe prądy i kierunki są puste;
+zero jest dozwolonym jawnym control, lecz nie prądem normalizacji bazy.
+
+Apply używa istniejącej revision-driven transakcji authoringu i zachowuje
+geometrię oraz wagi portu. Semantyczne markery końców są zgodne z obecnym
+Python/Rust kontraktem; actual mesh materialization weryfikuje powierzchnię
+oraz normalną. Nie zamienia się obcego markera na najbliższą ścianę. Zmiana
+geometrii lub rewizji sceny podczas draftu blokuje Apply; konflikt portu,
+expert source, closure lub dodatkowych actuatorów wymaga jawnego rebindingu.
+ACK zachowuje edycje wykonane podczas pending. Formularz nie kwalifikuje
+geometrii pominiętego obwodu i nie promuje straight stubs do pełnego obwodu 3D.
+
+Interpretowana regresja rzeczywistych funkcji modelu obejmuje 24 sprawdzenia,
+w tym stały marker, independent currents, round-trip preparacji, revision/
+geometry conflict oraz zachowanie obcych markerów. Nie jest to dowód działania
+TSX, wyboru/podświetlania mesh faces, trwałego geometry-binding po zapisie,
+publicznego solve ani stabilności Object/Airbox w przeglądarce.
+
+(antenna-resource-editors-contract)=
+### 8.2.3 Edycja istniejących portów, projekcji i source FFT
+
+Port, Projection i Spectrum mają własne formularze istniejących zasobów,
+przez ten sam canonical scene transaction/history owner. Edycja wag portu
+nie zmienia actuation ani nie uruchamia solve. Normalizacja `antenna_port_mode.v2`
+pozostaje zgodna z kontraktem 1 A; wagi są jawne i walidowane. Istniejąca
+preparacja terminali blokuje ciche przemianowanie jej obserwacji.
+
+Zmiana targetu projekcji zachowuje exact asset/digest source. Jawny rebind
+zastępuje referencję przez pending `stage_output` dla zgodnego portu i jednego
+output bazy; nie jest publikacją bazy ani ponownym solve. Zależny drive o innym
+porcie wymaga osobnego rebindingu. Usuwanie odmawia przy wskazanych dependents,
+bez cascade ani automatycznej aktywacji.
+
+Formularz Spectrum edytuje istniejący structured source spatial FFT na object
+sampling target: origin/extents w metrach, jednostkowe osie, sample counts,
+window, normalization, component i outside policy. Zachowuje request/output
+IDs, interpolation oraz exact source pins, chyba że autor jawnie wybierze
+rebind. Nonuniform/modal/transverse request pozostaje poza tym edytorem i nie
+otrzymuje implicit equilibrium ani qualified source. Kontrakt outside policy
+nie zamienia brakujących próbek wewnątrz domeny na zerowe pole.
+
+34 interpretowane sprawdzenia modelu i hygiene gates przeszły; typecheck,
+browser, runtime oraz stabilność transakcji Object/Airbox pozostają
+NOT VERIFIED. Saving nie odblokowuje istniejących bramek basis/FFT/LLG.
+
+(antenna-legacy-mixed-owner-refusal)=
+### 8.2.4 Odmowa legacy publikacji dwóch zaakceptowanych stanów
+
+Standardowy legacy charge workflow posiada niezależnych właścicieli solve
+H1 oraz RT0/Oersted. Wspólna etykieta nie łączy ich potencjałów, reakcji
+terminalowych ani normalizacji. Preflight całej partii odrzuca obecnie
+`conservative_current_view`, powiązany Oersted lub request bazy anteny przed
+pierwszym native solve. Czysty charge-only i osobny owned inspection zachowują
+swoje ścieżki. Także sam certyfikat RT0 drugiego ownera nie może poświadczać
+pierwszego V/J.
+
+Ta odmowa chroni przed publikacją mieszanego wyniku; nie realizuje migracji
+legacy do jednego ownera. Wykonywalna baza wymaga wersjonowanego nośnika
+cell-local J, owned V/reakcji/requested i measured currents, wspólnej geometrii,
+materiału i digestu oraz H z tego samego RT0. Prąd normalizacji musi być
+zmierzony w tym ownerze. Istniejący manifest nodal J nie może być wypełniony
+wygładzonym RT0. Owned external-lead bundle pozostaje inspection-only do
+kwalifikacji pełnego obwodu. Dwie źródłowe regresje Rust obejmują charge-only
+oraz siedem kombinacji odmowy; nie były kompilowane ani uruchamiane.
+
+
+### E4: jawne źródło siatki przypisane do właściciela (kandydat, bez kwalifikacji wykonania)
+
+Ten kontrakt dodaje wejściową siatkę do istniejącego namespace
+`study.objects.mesh.by_id(object_id)(source="assets/antenna-raw.npz")`.
+Nie dodaje modelu fizycznego ani nie aktywuje transportu przez nazwę lub typ obiektu.
+AUTO z jawną konfiguracją FEM zachowuje source jako asset, bez wybierania runtime; FDM-only lub brak konfiguracji FEM odmawia źródła zamiast je ignorować. Właściciel musi istnieć w jawnej kolekcji geometrii; nieznany lub niejednoznaczny
+owner oraz sprzeczne źródła tego samego ownera są błędem. Osobne jawne siatki
+przewodnika i nośnika próbkowania pozostają dostępne obok wspólnej siatki Global.
+
+| Parametr Python | Typ | Default | SI | Walidacja i odmowa | Znaczenie | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `GeometryMeshHandle.configure.source` | `str \| None` | `None` | $1$ | niepusta ścieżka MeshData NPZ; P1/Tet4; dodatnia orientacja; istniejący owner; brak fallbacku przy błędzie odczytu | jawny, niezmieniany plik wejściowy ownera | FEM CPU: kandydat authoring; FEM GPU/FDM CPU/FDM GPU: brak kwalifikacji tego przekazania | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].source oraz geometry_assets.fem_mesh_assets[]` |
+
+Przykład stanowi wykonywalny fragment konfiguracji istniejącego badania z jawnie
+utworzonymi ownerami `antenna` i `sampling`. Nie jest osobnym kompletnym badaniem:
+
+```python
+# %% Explicit owner-bound inputs in the existing study
+study.objects.mesh.by_id("antenna")(source="assets/antenna-raw.npz", order=1)
+study.objects.mesh.by_id("sampling")(source="assets/sampling.npz", order=1)
+```
+
+Nowy importer źródła obejmuje wyłącznie P1/Tet4. Nie zmienia istniejących ścieżek bez `source`, w tym ich dopuszczonych topologii mieszanych. MeshData NPZ jest wejściem użytkownika, nie wpisem wygenerowanego cache.
+Importer czyta go przy każdym obniżeniu, bez podstawiania klucza snapshotu,
+remeshingu, optymalizacji, odwracania orientacji lub naprawiania topologii.
+Dodatnia orientacja jest wymagana przed `to_ir`; niezgodność kończy operację.
+Współrzędne pozostają w metrach, indeksy/markery i retained vertex identity
+pozostają nienaruszone. Dla coincident source dotychczasowy
+`prepare_antenna_coincident_loop(raw_mesh=...)` nadal sprawdza rzeczywiste IDs,
+manifold seam, płaszczyznę autora, dodatnie Tet4 i rozszczepienie topologiczne.
+Nie wolno przekazać już przeciętej siatki jako surowej.
+
+Zamrożony przykład diagnostyczny ma raw source 664 węzły / 1856 Tet4,
+po istniejącym cięciu 677 / 1856, Global 1145 / 6428 i niezależny sampling 4 / 1.
+To prerejestrowane oczekiwania kontroli, nie dowód wykonania H ani reprodukcji
+publikacji. Nowa ścieżka wejściowa zmienia authored provenance i jego digesty;
+nie należy przywracać dawnych hashy dla pozoru zgodności. requested intent
+zachowuje plik i ownera, resolved execution musi powstać dopiero z normalnego
+planowania i admission. validation errors nie uruchamiają meshera zastępczego.
+unsupported combinations, m.in. źródło inne niż MeshData NPZ lub order != 1,
+kończą się jawną odmową. Wersja v4 Submit nadal wymaga prawdziwego compiler
+source capture i archiwum wszystkich wejść; ten kontrakt nie modyfikuje tej bramki.
+
+Bezpieczny przyszły capture zaczyna się od nowego skryptu i nowych jawnych
+assetów pod jego katalogiem `assets/`, kopiowanych bajtowo z zachowanych wejść
+z jawnymi SHA256. Istniejący `accepted_source_capture.inventory` obejmuje te
+pliki; nie przemianowuje się generated cache ani nie fabrykuje captured identity.
+Pełny capture i Submit pozostają NOT VERIFIED w tym podetapie. Kontrole
+interpretowane obejmują realny setter, importer, eksport oraz przygotowanie
+cięcia z mesherem odmawiającym każdego wywołania. Nie zastępują managed runtime,
+Rust validation, kwalifikacji fizyki ani dowodu czterech backend lanes.
+
+| Twierdzenie | Ścieżka | Symbol | Odpowiedzialność / dowód |
+|---|---|---|---|
+| Jawny setter | `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | metoda configure: typ, zapis source; kandydat |
+| Owner binding | `packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py` | `_scope_per_geometry_entries` | nieznany i niejednoznaczny owner odrzucany |
+| Inline mesh | `packages/fullmag-py/src/fullmag/model/problem.py` | `build_geometry_assets_for_request` | odczyt jawnego NPZ poza generated cache |
+| Cut | `packages/fullmag-py/src/fullmag/meshing/_antenna_coincident_cut.py` | `prepare_antenna_coincident_loop` | istniejące geometry/IDs/seam validation bez zmian |
+| Eksport | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_object_id_mesh_workflow` | istniejący namespace i source bez nowego frameworka |
+| Capture | `packages/fullmag-py/src/fullmag/runtime/accepted_source_capture.py` | `inventory` | istniejący spis regularnych plików; pełna ścieżka NOT VERIFIED |
+
+
+### Zgodność jawnego snapshotu etapu antenowego — 27.10.2026
+
+Rzeczywisty capture skryptu czteropunktowego przeszedł po pominięciu
+opcjonalnej pustej tabeli `object_region_markers` w `study.domain_mesh`.
+Kompilator odmówił następnie podwójnej reprezentacji etapów, ponieważ jego
+kontrola pokrycia obejmowała wyłącznie Relax/Run. Nie jest to błąd obliczeń H:
+Submit i Solve nie zostały uruchomione.
+
+Naprawa zachowuje jednego materializera fizyki. Kontrola pokrycia dopuszcza
+jawne `antenna_field_solve` tylko wtedy, gdy snapshot zawiera tę samą typowaną
+akcję i dokładnie ten sam selektor definicji oraz portu co authored primitive.
+Obie reprezentacje korzystają z istniejącego wspólnego parsera selektora;
+nie ma alternatywnego parsera polityki pola. Liczba, kolejność, unikalność,
+stan enabled i tożsamość authored etapów pozostają obowiązkowe. Unknown
+payload, brak akcji, inny port lub inna definicja kończą kompilację odmową.
+
+| Pole | Typ / domyślnie | SI | Walidacja i znaczenie | Destination |
+|---|---|---|---|---|
+| `active_stage_id` | `str` / wymagane w snapshot | $1$ | dokładne ID authored primitive; nie musi równać się ID definicji rozwiązania | `ProblemIR.problem_meta.runtime_metadata.active_stage_id` |
+| `stage_id` | `str` / wymagane | $1$ | niepuste ID definicji, zgodne w akcji i authored payload | istniejący `ScriptExecutionStageAction::AntennaFieldSolve` oraz selektor materializowanego `StudyIR` |
+| `port_mode_id`, `port_mode_ids` | opcjonalny `str` lub lista `str` / brak i pusta lista | $1$ | istniejący parser wymaga jednego niepustego portu; sprzeczne singular/plural są błędem | ten sam istniejący selektor portu; brak nowego pola IR |
+
+Snapshot przed wykonaniem akcji może mieć jeszcze `StudyIR::TimeEvolution`.
+Nie wolno dodać fikcyjnego magnetu albo Relax/Run, aby ominąć tę różnicę.
+Istniejący `resolve_explicit_stage_action` wybiera rzeczywistą definicję,
+sprawdza inventory i dla obiektu bez magnetów ustawia `AntennaFieldSolve`.
+Następnie kanoniczny planner ustala zamknięty obwód i wykonanie FEM CPU.
+Pełny captured source i assety nadal są wymagane przez v4 Submit; capture,
+kompilacja, Submit i wykonanie pozostają osobnymi dowodami.
+
+Nie zmieniają się równania, jednostki V/J/H, topologia, tolerancje ani
+wymagania kwalifikacji. Ta poprawka kompilatora nie dodaje realizacji FEM GPU,
+FDM CPU ani FDM GPU; ich status w macierzy rozdziału pozostaje bez zmian.
+W FEM CPU naprawia przekazanie jawnego etapu do istniejącego planera, a nie
+kwalifikację wyniku. Regresje Rust są źródłowe, bez ich kompilowania.
+Zarządzany build, rzeczywisty capture z kompilacją i próba 4 punktów po tej
+poprawce pozostają NOT VERIFIED do zapisania odpowiednich receiptów.
+Próba 4 punktów, nawet poprawna, nie jest pełną mapą Universe.
+
+| Twierdzenie | Ścieżka + symbol | Status dowodu |
+|---|---|---|
+| Jeden parser selektora | `crates/fullmag-application/src/script_stage_materialization.rs` + `parse_antenna_solve_selection` | poprawka źródłowa; nie nowa fizyka |
+| Dokładne pokrycie snapshotów | `crates/fullmag-application/src/script_pipeline_compilation.rs` + `validate_physical_snapshot_coverage` | rzeczywisty RED na skrypcie; GREEN po buildzie do wykonania |
+| Kanoniczny lowering accepted | `crates/fullmag-application/src/script_pipeline_acceptance.rs` + `compile_accepted_closed_loop_pipeline` | istniejący właściciel profilu, ProblemIR i provenance |
+
+
+### Zachowanie authoringu wykonania przy profilu accepted — 27.10.2026
+
+Po buildzie poprawki snapshotów prawdziwy producer przeszedł ich kontrolę,
+ale odmówił planowania anteny: `requested_backend` zmienił się z jawnego `fem`
+na `auto`. CLI przekazywało pustą listę warstw do wiązania pustego profilu.
+ProblemIR miał historyczne jawne backend/device/precision/mode, lecz kontrola
+carried intent chroniła tylko profil i warstwy deklarowane strukturalnie.
+Nie wolno zmienić pustego profilu we współdzielonym katalogu ani wymusić FEM
+na podstawie typu obiektu, aby ukryć ten błąd producenta.
+
+Adapter producenta ma zachować zadeklarowany wybór przed wiązaniem profilu:
+dla historycznych pól używa istniejącego `RequestedExecution::for_problem`
+i `migrate_legacy_live_execution` z pochodzeniem `Script`; dla typowanych
+deklaracji zachowuje ich profil i uporządkowane warstwy przez istniejące
+`bind_declared_execution`. Inny dostarczony profil albo niezgodne deklaracje
+są konfliktem. Brak odczytu stanu hosta i brak automatycznego wyboru urządzenia.
+
+Obecny compiler v4 przypina wspólne warstwy wykonania do wszystkich jawnych
+snapshotów. Producent musi więc przed kompilacją odmówić snapshotów o innej
+zadeklarowanej intencji lub zasobach, zamiast nadpisać je ustawieniami końcowego
+modelu. Obsługa rzeczywiście różnych warstw per etap pozostaje osobnym zakresem;
+nie jest dodawana do diagnostyki pola. Ustawienia jawnego FEM CPU double strict
+mają zostać zachowane w warstwie authoringu i w późniejszym katalogu, a resolved
+wykonanie powstaje dopiero przez dotychczasowy planner/admission.
+
+| Wejście | Typ / domyślnie | SI | Zachowanie i destination |
+|---|---|---|---|
+| jawne backend/device/precision/mode skryptu | istniejące enumy / według authoringu | $1$ | bez podmiany; istniejąca warstwa `ExecutionRequestLayerIR` z pochodzeniem Script oraz `execution_materialization` |
+| profil przekazany producerowi | `ExecutionProfileIR` / wymagany plik | $1$ | zwalidowany i zgodny z carried profile; bez publikacji nowej polityki |
+| zasoby autora | istniejący `ComputeResourcesIR` / opcjonalne | $1$ dla identyfikatorów, $\mathrm{byte}$ dla pamięci | zachowany typed patch przez dotychczasowy adapter; ta poprawka nie podnosi limitów kontenera |
+
+Nie zmieniają się równania ani macierz realizacji fizyki. Dotyczy to kontraktu
+producenta accepted; nie kwalifikuje FDM CPU/GPU ani FEM GPU. Build snapshotów
+`faaeaabb66b444e1a7c406bab942d5d2` przeszedł, ale nie obejmował tej późniejszej
+poprawki authoringu. Nowy build, pełne przygotowanie i Solve nadal wymagają
+osobnych dowodów. Źródła: `crates/fullmag-cli/src/accepted_script_run.rs` +
+`submit_script`; `crates/fullmag-application/src/task_execution.rs` + `for_problem`;
+`crates/fullmag-application/src/legacy_live_execution.rs` +
+`migrate_legacy_live_execution`; `crates/fullmag-application/src/declared_execution.rs`
++ `bind_declared_execution`.
+
+
+### Ograniczenie Auto/null i jawny budżet diagnostyki — 27.10.2026
+
+Dokładne odtworzenie istniejącego preimage v2 potwierdziło, że binding usuwa
+`runtime_selection.cpu_threads: null` dla Auto. Zmienia to podpis przygotowanego
+źródła pomimo identycznej geometrii i fizycznej intencji FEM CPU double strict.
+Ogólna kolejność przygotowania dla Auto pozostaje nierozwiązana. Nie wolno
+przepisywać digestu, usuwać klucza z hashowania ani wyłączać walidacji v2.
+
+Diagnostyka ma od początku jawny budżet jednego CPU, odpowiadający minimum
+1000 millicpu w jej żądaniu. Istniejące publiczne `study.threads(1)` oraz
+`study.resources(fm.ComputeResources(cpu=fm.CpuResources(threads=1)))` poprzedzają
+przygotowanie źródła. Każdy parametr threads ma dodatni typ całkowity i jednostkę
+$1$; zapis trafia odpowiednio do `runtime_selection.cpu_threads` oraz
+`compute_resources.cpu.threads`, a potem do istniejącej warstwy wykonania.
+Polityki native_threads, blas_threads i affinity pozostają Auto; jawne ich
+przypięcie wymaga adaptera przydziału i jest na tym etapie planowania odrzucane.
+Nie zwiększa to CPU/RAM kontenera ani budżetu czasu pola.
+
+Prawdziwy guarded capture i canonical prepare-only izolowanego wariantu
+przeszły w 36.437 s, bez Submit i Solve. Odtworzenie preimage po bindingu
+odpowiadało dokładnie wygenerowanemu podpisowi źródła. Siatki: antena 677/1856,
+Global 1145/6428, sampling 4/1. Dowód: control volume,
+`verification/rt0-public-capture-20261027/explicit-thread-authoring-v2/evidence/`.
+To dowód wspieranej konfiguracji wejścia, nie ogólna naprawa Auto/null ani wynik H.
+Źródła: `packages/fullmag-py/src/fullmag/world.py` + `class StudyBuilder`,
+`packages/fullmag-py/src/fullmag/runtime/antenna_coincident_materialization.py` +
+`materialize_antenna_coincident_loops`,
+`crates/fullmag-application/src/execution_profile_binding.rs` +
+`bind_materialized_execution`, `crates/fullmag-plan/src/antenna_current_source.rs`
++ `materialize_antenna_closed_loop_current_input`.
+
+
 ### 8.3 Validation and normalization
 
 Validation requires:
@@ -3029,10 +3410,10 @@ pozostaje **NOT VERIFIED** do odrębnego uruchomienia właściwych bramek.
 | `AntennaPortBranch.signed_weight` | `float` | required | `$1$` | finite; one mode requires positive weights summing to one, negative return and total zero within 1e-12 | signed current share relative to the common positive orientation | backend-neutral contract | `antenna_port_modes[].branches[].signed_weight` |
 | `SolvedAntennaDrive.peak_current_a` | `float` | required | `$\mathrm A$` | finite; zero disables the drive without invalidating the spatial basis | signed peak multiplying the immutable per-ampere field basis | lane-specific artifact consumer | `solved_antenna_drives[].peak_current_a` |
 | `AntennaSpectrumRequest.sampling_plane` | `AntennaSpectrumSamplingPlane` | required | m for origin/extents; 1 for counts and frame | orthonormal in-plane axes, positive extents, at least two samples per axis; current executable lane requires valid tet4 P1 topology or unique identity-coordinate carrier matches and fails closed for unsupported interpolation | centred physical lattice on which the per-ampere source field is sampled before the spatial Fourier transform | immutable FEM antenna asset with tet4 P1 or legacy identity sampling; FDM trilinear, direct RT0 evaluation, mixed topology, and native MFEM transfer remain explicitly unsupported | `antenna_spectrum_requests[].sampling_plane` |
-| `AntennaSpectrumRequest.port_mode_id` | `str | None` | `None` | `$1$` | when present, nonempty and bound to the solve stage; omission is valid only when the solve has exactly one port | selects the immutable per-ampere field basis used by source-spectrum analysis | immutable FEM antenna asset; multi-port assets require explicit selection | `antenna_spectrum_requests[].port_mode_id` |
+| `AntennaSpectrumRequest.port_mode_id` | `str \| None` | `None` | `$1$` | when present, nonempty and bound to the solve stage; omission is valid only when the solve has exactly one port | selects the immutable per-ampere field basis used by source-spectrum analysis | immutable FEM antenna asset; multi-port assets require explicit selection | `antenna_spectrum_requests[].port_mode_id` |
 | `AntennaSpectrumRequest.component` | `str` | required | `$1$` | one of `x`, `y`, `z`, `u`, `v`, `normal`, `vector_power`, `transverse`; transverse requires an explicit valid equilibrium reference; runtime requires canonical verified owner context | selects the analysed field component or vector power | Cartesian/local-frame source spectra supported for certified FEM carrier; transverse source-only FEM CPU Tet4/double; native qualification NOT VERIFIED | `antenna_spectrum_requests[].component` |
 | `AntennaSpectrumRequest.equilibrium_ref` | `EquilibriumStageOutputRef \| EquilibriumArtifactRef \| str \| None` | `None` | `$1$` | valid only for `component="transverse"`; typed stage_output/artifact or immutable legacy identity; v7 runtime refuses without canonical owner context | identifies the equilibrium needed for the pointwise transverse source-field projection | source-only FEM CPU Tet4/double; other lanes unsupported | `antenna_spectrum_requests[].equilibrium_ref` |
-| `AntennaSpectrumRequest.mode_basis_ref` | `str | None` | `None` | `$1$` | any nonempty value is rejected by Python and ProblemIR until verified modal analysis exists | reserved identity of a future modal basis, not a source-field spectrum coefficient | unsupported in executable spectrum lane | `antenna_spectrum_requests[].mode_basis_ref` |
+| `AntennaSpectrumRequest.mode_basis_ref` | `str \| None` | `None` | `$1$` | any nonempty value is rejected by Python and ProblemIR until verified modal analysis exists | reserved identity of a future modal basis, not a source-field spectrum coefficient | unsupported in executable spectrum lane | `antenna_spectrum_requests[].mode_basis_ref` |
 
 (The optional `AntennaSpectrumRequest.port_mode_id` selects the immutable
 per-ampere basis used by the source-spectrum transform. It may be omitted only
@@ -5131,7 +5512,7 @@ w authoringu nie jest dowodem gotowości takiego wyniku do LLG.
 | `CurrentSourceDrive.id` | `str` | required | $1$ | niepusty UTF-8 bez NUL, maksymalnie 4096 bytes | tożsamość autorskiego drive | authoring ekspercki | `current_modules[].definition.conservative_current_source.drives[].id` |
 | `CurrentSourceDrive.port_mode_ref` | `str` | required | $1$ | unique exact referencja autorskiego port mode | wybór mode bez fallbacku do pierwszego drive | authoring ekspercki | `current_modules[].definition.conservative_current_source.drives[].port_mode_ref` |
 | `CurrentSourceDrive.outer_terminal_currents_a` | `Mapping[str,float]` | required | $\mathrm A$ | exact terminal ID coverage; finite signed w tym zero; bilans fizycznych komponentów | zewnętrzne actuation, nie wywnioskowane wagi gałęzi | authoring ekspercki; current solve niezakwalifikowany | `current_modules[].definition.conservative_current_source.drives[].outer_terminal_currents_a` |
-| `AntennaFieldSolveStage.solver_policy` | `str` | production_default | $1$ | niepusty token; materializator nowego source obsługuje wyłącznie production_default, inne odrzuca | requested policy zachowana osobno od resolved unqualified preset | FEM CPU/double input; public source execution niedostępne | `antenna_field_solve_stages[].solver_policy` |
+| AntennaFieldSolveStage.solver_policy | str | production_default | $1$ | niepusty token Python; preparowana pętla dopuszcza dokładnie production_default lub volume_inspection_v1, pozostałe odrzuca; external-lead wyłącznie production_default | requested policy zachowana oddzielnie od resolved unqualified preset; jawny opt-in bez zmiany tolerancji | inspekcja preparowanej pełnej pętli FEM CPU/double/P1/strict; Universe H runtime pending | antenna_field_solve_stages[].solver_policy |
 | `AntennaFieldSolveStage.conductor_mesh_policy` | `str` | authored_shared_domain | $1$ | nowy source wymaga authored_shared_domain i rzeczywistej pełnej siatki 3D Tet4 | istniejąca polityka autorskiej siatki, nie dowód jakości lub zbieżności | FEM CPU/double input; inne source mesh policies niedostępne | `antenna_field_solve_stages[].conductor_mesh_policy` |
 
 Gauge usuwa wyłącznie nullspace potencjału. Native wybiera w każdej
@@ -5188,8 +5569,9 @@ Te dowody dotyczą authoringu i odmowy nieobsługiwanej ścieżki, nie pola H.
 
 Publiczny kontrakt `ExternalLeadPreparation` przechowuje intencję,
 nie gotową siatkę: `revision`, `extensions` i `drives`. `TerminalLeadExtension`
-ma parametry i ograniczenia opisane w tabeli poniżej; wybór rzeczywistych
-markerów nie może zostać zastąpiony nazwą terminala. Serializacja używa
+ma parametry i ograniczenia opisane w tabeli poniżej; semantyczna fabryka
+terminala wyprowadza te same markery, których istnienie sprawdza rzeczywista
+siatka. Serializacja używa
 `schema_version='antenna_external_lead_preparation.v1'` oraz
 `kind='isolated_branch_straight_stubs'`. Pole
 `CurrentTransport.external_lead_preparation` jest wyłączne względem
@@ -5231,6 +5613,114 @@ Po przygotowaniu transport musi zostać jawnie skonstruowany z
 `conservative_current_source=prepared.source` zamiast deklaracji. Docelowy
 execution-only materializer wykonuje tę zmianę w kopii wykonawczej, nie scenie;
 native runtime tego przyrostu pozostaje NOT VERIFIED.
+
+(antenna-semantic-terminal-extension)=
+##### Semantyczny wybór końca przewodnika anteny
+
+`fullmag.TerminalLeadExtension.from_antenna_terminal(...)` przyjmuje wyłącznie
+argumenty nazwane. Zwraca istniejący `TerminalLeadExtension`: nie dodaje rodzaju
+źródła, pól sceny, endpointu API ani wersji `ProblemIR`. Identyfikatory obiektu
+oraz części przewodnika są zachowane dosłownie (łącznie ze spacjami);
+`selector` jest normalizowany przez `strip().lower()` do `local_u_min` albo
+`local_u_max`. Wszystkie pięć tekstowych argumentów jest sprawdzane przed
+wyliczeniem markera; naruszenie ich domeny lub ograniczeń liczbowych zgłasza
+`ValueError`. Fabryka nie wnioskuje fizyki z typu obiektu.
+
+| Parametr publiczny | Typ | Domyślnie | SI | Walidacja | Znaczenie | Obsługa backendów | Python → ProblemIR |
+|---|---|---|---|---|---|---|---|
+| TerminalLeadExtension.from_antenna_terminal.id | str | wymagany; tylko nazwany | $1$ | niepusty UTF-8 bez NUL, do 4096 bajtów | ID elektrody | authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED | current_modules[].external_lead_preparation.extensions[].id |
+| TerminalLeadExtension.from_antenna_terminal.observation_id | str | wymagany; tylko nazwany | $1$ | niepusty UTF-8 bez NUL, do 4096 bajtów | ID pasywnej obserwacji | authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED | current_modules[].external_lead_preparation.extensions[].observation_id |
+| TerminalLeadExtension.from_antenna_terminal.object_id | str | wymagany; tylko nazwany | $1$ | niepusty UTF-8 bez NUL, do 4096 bajtów; rzeczywisty właściciel sprawdzany po siatce | niezmienny właściciel i wejście markera | authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED | current_modules[].external_lead_preparation.extensions[].object_id |
+| TerminalLeadExtension.from_antenna_terminal.conductor_part_id | str | wymagany; tylko nazwany | $1$ | niepusty UTF-8 bez NUL, do 4096 bajtów; istnienie markera sprawdzane po siatce | ID części przewodnika; bez geometrycznego fallbacku | authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED | current_modules[].external_lead_preparation.extensions[].boundary_markers[0] |
+| TerminalLeadExtension.from_antenna_terminal.selector | str | wymagany; tylko nazwany | $1$ | niepusty UTF-8 bez NUL, do 4096 bajtów; po strip/lower tylko local_u_min lub local_u_max | semantyczny koniec części przewodnika | authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED | current_modules[].external_lead_preparation.extensions[].boundary_markers[0] |
+| TerminalLeadExtension.from_antenna_terminal.length_m | float | wymagany; tylko nazwany | $\mathrm m$ | skończony dodatni, bez bool | długość doprowadzenia | authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED | current_modules[].external_lead_preparation.extensions[].length_m |
+| TerminalLeadExtension.from_antenna_terminal.outward_direction_xyz | tuple[float,float,float] | wymagany; tylko nazwany | $1$ | trzy skończone liczby bez bool; tolerancja normy 1e-12; bez automatycznej normalizacji | jawny jednostkowy kierunek na zewnątrz | authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED | current_modules[].external_lead_preparation.extensions[].outward_direction_xyz |
+| TerminalLeadExtension.from_antenna_terminal.conductivity_spm | float | wymagany; tylko nazwany | $\mathrm{S\,m^{-1}}$ | skończona dodatnia, bez bool | jawna przewodność doprowadzenia | authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED | current_modules[].external_lead_preparation.extensions[].conductivity_spm |
+| TerminalLeadExtension.from_antenna_terminal.layers | int | 2; tylko nazwany | $1$ | dokładny int bez bool, 2–1048576; budżet łączny sprawdzany po siatce | liczba przedziałów ekstrudowania | authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED | current_modules[].external_lead_preparation.extensions[].layers |
+
+Obsługa wszystkich argumentów jest backend-neutral na etapie authoringu.
+Materializacja pozostaje istniejącą ścieżką FEM CPU/double; fabryka nie daje
+nowej obsługi FEM GPU, FDM CPU ani FDM GPU i nie kwalifikuje wykonania.
+Tabela podaje pełne ścieżki płaskiego `current_modules[]` w kanonicznym IR.
+`conductor_part_id` i `selector` nie tworzą dodatkowych pól IR.
+
+Jedynym właścicielem bajtowego kontraktu `fullmag.antenna-terminal-marker.v1`
+jest `packages/fullmag-py/src/fullmag/model/_antenna_terminal.py::antenna_terminal_marker`;
+mesher importuje tę samą funkcję z zachowaniem starej ścieżki importu.
+Fabryka oblicza dokładnie dotychczasowy marker, nie wyszukuje najbliższej ściany.
+Nieznana część może być zadeklarowana przed siatką, lecz brak jej markera
+powoduje odmowę podczas przygotowania. Sprawdzenie pełnego rzeczywistego capu,
+jego normalnych, właściciela i topologii nadal należy do
+`packages/fullmag-py/src/fullmag/meshing/_antenna_external_lead_preparation.py::_cap`.
+Kierunek zewnętrzny pozostaje jawny także dla obróconej anteny.
+
+Eksport sceny do Python zachowuje równoważny konstruktor z `boundary_markers`,
+nie odtwarza utraconych z hasha `conductor_part_id` i `selector`. Dekoder odczytuje
+niezmienioną deklarację markerową. Regresje w
+`packages/fullmag-py/tests/test_antenna_terminal_authoring.py::AntennaTerminalAuthoringTests`
+obejmują znany marker 117762299, wspólnego właściciela z mesherem, odmowę
+niepoprawnych argumentów przed hashowaniem, brak fallbacku oraz round-trip
+renderera i dekodera. Sześć testów interpretowanych przeszło w istniejącym
+backendzie Docker (unittest, 0.059 s, exit 0); receipt
+`verification/sushruth-2020-reference/terminal-authoring-checks.json` przypina
+hashe kodu. Nie kompilowano testów Rust ani kodu native; ten wynik nie jest
+kwalifikacją meshingu, solvera ani walidacją całej noty.
+
+(antenna-sushruth-2020-gsg-source-contract)=
+##### Prerejestracja źródła GSG z pracy Sushruth i in. (2020)
+
+Przykład `examples/fem_antenna_sushruth_2020_gsg.py` deklaruje
+inspekcję źródła GSG według nominalnych wymiarów z sekcji IV i rysunku 6
+pracy [Sushruth i in., Physical Review Research 2, 043203 (2020)](https://doi.org/10.1103/PhysRevResearch.2.043203).
+Ten etap dotyczy rozkładu prądu i pola anteny. Nie odtwarza jeszcze warstwy
+Co/Ni, wzbudzenia fal spinowych ani eksperymentalnej transmisji.
+
+| Parametr przykładu | Typ i wartość | SI | Pochodzenie / ograniczenia | Docelowe mapowanie |
+|---|---|---|---|---|
+| Szerokość przewodników GSG (`conductor_width_m`) | float, 200 nm | $\mathrm m$ | nominalna szerokość $L$ z pracy; dodatnia | geometria `CPWAntennaLayout`, signal/return widths |
+| Szczelina signal–ground (`gap_m`) | float, 250 nm | $\mathrm m$ | nominalna szczelina z pracy; dodatnia | geometria `CPWAntennaLayout` |
+| Grubość metalu Al (`metal_thickness_m`) | float, 90 nm | $\mathrm m$ | nominalna grubość z pracy; dodatnia | wysokość brył przewodzących |
+| Separacja przez SiO2 (`insulator_thickness_m`) | float, 30 nm | $\mathrm m$ | nominalna separacja z pracy; spodnia powierzchnia metalu przy $z=30$ nm | położenie brył przewodzących |
+| Amplituda normalizacyjna $I$ (`signal_current_a`) | float, 1 mA | $\mathrm A$ | nasze wejście obliczeń; nie odczyt prądu eksperymentalnego | `CurrentSourceDrive.outer_terminal_currents_a` |
+| Prądy gałęzi signal, ground-left, ground-right | tuple[float,float,float], $(I,-I/2,-I/2)$ | $\mathrm A$ | jawne przeciwne kierunki powrotu; każda gałąź ma bilans terminali | pary zewnętrznych elektrod w `ExternalLeadPreparation` |
+| Długość przewodników (`source_length_m`) | float, 20 µm | $\mathrm m$ | nasze skończone okno źródła; podane w pracy 20 µm oznacza szerokość falowodu, nie ustaloną długość przewodników | geometria 3D anteny |
+| Długość każdego doprowadzenia (`lead_length_m`) | float, 2 µm | $\mathrm m$ | nasze jawne rozszerzenie terminala; nie zamknięcie obwodu | `TerminalLeadExtension.length_m` |
+| Liczba przedziałów doprowadzenia (`lead_layers`) | int, 20 | $1$ | nasze wejście; 2 µm / 20 = 100 nm na przedział, bez kwalifikacji zbieżności | `TerminalLeadExtension.layers` |
+| Przewodność jednorodnego metalu (`conductivity_s_per_m`) | float, $3.5\mathbin{\cdot}10^7$ | $\mathrm{S\,m^{-1}}$ | nasze założenie; brak dopasowania do pomiaru | materiał transportu i `TerminalLeadExtension.conductivity_spm` |
+| Obrót geometrii | jawna transformacja | $1$ | local $u$ w world $+y$, local $v$ w world $-x$; kierunki doprowadzeń zgodne z transformacją | transformacja obiektu i `outward_direction_xyz` |
+| Nośnik próbek pola (`sampling_length_m`, `sampling_width_m`, `sampling_depth_m`) | Box, 4 µm × 100 nm × 10 nm; środek (0,0,−5 nm) | $\mathrm m$ | niemagnetyczny nośnik $H$; nie model warstwy Co/Ni | geometria sampling target |
+| Rozmiar siatki wejściowej (`mesh_size_m`) | float, 100 nm | $\mathrm m$ | zgrubny preflight wejść; wymagane zagęszczanie i zbieżność | żądany rozmiar siatki FEM |
+
+Współrzędna $z=0$ oznacza górną powierzchnię nominalnej warstwy magnetycznej;
+środek 90-nanometrowego metalu leży przy $z=75$ nm. SiO2 określa tu wyłącznie
+odstęp; elektrostatyczny lub pełnofalowy model dielektryka nie jest aktywowany.
+Przewodzące doprowadzenia kończą się na zewnętrznych terminalach. Ten przykład
+nie określa pełnego powrotu poza nimi i nie dostarcza ograniczenia wkładu
+pominiętego obwodu do pola. Dlatego dopuszczalny status wyników to wyłącznie
+`inspection_only`: bez kwalifikowanej bazy do ponownego użycia, FFT wzbudzenia,
+LLG ani transmisji. Jest to oddzielny model od wcześniej zatwierdzonej pełnej
+pętli mikrostripowej i nie zastępuje jej geometrii ani źródła.
+
+Żądany backend przykładu to FEM CPU/double. Przed rzeczywistym wykonaniem
+zarówno wynik, jak i kwalifikacja tego przypadku pozostają NOT VERIFIED.
+FEM GPU, FDM CPU i FDM GPU nie są realizacjami tego prerejestrowanego etapu.
+Warunki przyjęcia wejścia obejmują rzeczywiste capy wszystkich sześciu
+terminali, jawne materiały, zachowanie kierunków i bilans prądów. Przyjęcie
+siatki nie dowodzi obliczenia $J$ lub $H$. Porównanie z pracą wymaga później
+oddzielnego uzgodnienia pola próbkowania, normalizacji, siatki i wpływu
+skończonego okna źródła; sam rysunek analityczny nie kwalifikuje tego modelu 3D.
+
+Kontrola wejścia 20.10.2026 przeszła przez publiczny loader oraz rzeczywisty
+Gmsh w istniejącym backendzie Docker: 4848 węzłów / 11357 Tet4 urządzenia,
+1008 węzłów / 2880 Tet4 doprowadzeń i 252 węzły / 520 Tet4 nośnika pola.
+Każdy z sześciu terminali ma osiem rzeczywistych ścian interfejsu; sprawdzono
+ich współrzędne, zbieżność wierzchołków po obu stronach i bilans zadanych
+prądów każdej gałęzi. Dwa interpretowane testy przykładu potwierdziły również
+zachowanie authoringu przy eksporcie Python/sceny, bez dodania magnetyzmu.
+Receipt `verification/sushruth-2020-reference/gsg-input-mesh-observation.json`
+i `gsg-example-checks.json` zapisano w wolumenie kontrolnym grupy.
+To wynik `input-mesh-prepared-not-solved`, nie rozwiązanie prądu ani pola;
+solver, zbieżność oraz porównanie z publikacją pozostają NOT VERIFIED.
 
 (antenna-execution-lead-materialization)=
 #### Materializacja kopii wykonawczej
@@ -7234,6 +7724,216 @@ nie dowodzi interior/face/edge RT0. Surface/fan i wariacja power są własnymi
 wyprowadzeniami powyżej. SOURCE PLANNED wymaga independent implementation,
 review i executed evidence; prereg nie jest rigorous error certificate.
 
+(antenna-common-artifact-sample-carrier-contract)=
+#### Prerejestracja wspólnego carriera verified artifact samples
+
+**Stan: `planned_contract`, common carrier/API realizacja `NOT VERIFIED`.**
+Istniejące `crates/fullmag-api/src/router_v2/handlers/data/resolved_spatial_field.rs::ResolvedSpatialField`
+i `SpatialFieldCarrier` nie wyrażają jeszcze niezależnych punktów H ani czterech
+lokalnych śladów RT0 J w każdej Tet4. ArtifactLinear/count-only i FemNodes nie są
+uprawnieniem do interpretowania tych danych jako globalnego pola nodalnego.
+Przed implementacją prerejestrujemy wariant **proposed** `ArtifactSamples` oraz
+typy **proposed** `ArtifactFieldOwnerBinding`, `ArtifactSampleIndexing` i
+`ArtifactFieldLocatorResource`. Nazwy są planowane; mapa wskazuje istniejące
+punkty rozszerzenia, nie deklaracje nieistniejącego kodu.
+
+Nie zmieniają się równania charge, RT0 ani direct Oersted z tej noty. V pozostaje
+owned charge potential na węzłach źródła; H zachowuje actual independently sampled
+carrier. Podstawowa inspekcja J zachowuje wszystkie cztery cell-local ślady RT0
+na Tet4: współrzędne mogą się pokrywać, lecz dwie próbki są różnymi śladami,
+jeśli mają innych właścicieli cell/local. Nie wolno scalać ich według xyz,
+uśredniać do globalnych węzłów ani dopasować liczby próbek do magnetic mesh.
+Explicit view `cell_centers` udostępnia retained wartości w barycentrach
+bez zastępowania podstawowego carriera. Canonical IDs `V_electric`, `J_charge`,
+`H_ant` pozostają w `crates/fullmag-quantities/src/catalog.rs::quantity_spec`.
+Dotychczasowe catalog location Node jest historycznym defaultem; actual descriptor
+indexing musi jawnie opisywać rzeczywisty carrier, nie udawać nodal count.
+
+| Parametr / generated pole, typ | Default / pełny zakres i walidacja | SI / znaczenie / destination |
+|---|---|---|
+| owner / proposed ArtifactFieldOwnerBinding | obowiązkowy provider-owned binding: session_id, session_epoch, request_scope_epoch, run_id, runtime_stage_id, authored_stage_id, module_id, object_id, output_id, source_digest, content_digest; observation_mesh_revision i observation_topology_revision są numeric API observation counters, native_mesh_identity i native_topology_identity są exact immutable producer hash strings; historical_inspection=true | $1$; owning runtime record i request fence są oddzielone od immutable native identity; observation counters nie poświadczają świeżości źródła; native stable u64 IDs są wyłącznie w binary mapping |
+| carrier_scope_kind / required object or full; carrier_scope_id / string or null | V/J: object oraz source owner.object_id; H: retained FieldTargetIR Object daje actual sampling object_id, Global daje full/null; Region pozostaje unsupported i odmawia, bez scope fallback; oba pola w immutable carrier digest | $1$; actual spatial carrier scope w locator/capability/query, oddzielny od owner.object_id oznaczającego źródło anteny; scope=full może odczytać exact wskazany carrier, scope=object wymaga jego właściwego object_id |
+| indexing / proposed ArtifactSampleIndexing | obowiązkowy exact wariant SourceNodes, SampleNodes, PointSamples, Tet4CellLocalNodes albo CellCenters; bez count-only fallback | $1$; descriptor, FMVP mapping i geometry locator muszą zgadzać się co do kolejności |
+| positions_xyz_m / ordered Vec of triple f64 | finite, dokładnie sample_count; actual world xyz, zachowana kolejność i wartości; nie current session mesh proxy | $\mathrm{m}$; binary geometry, coordinate_frame=world, coordinate_unit=m |
+| sample_identity / typed ordered records | SourceNodes: native stable_vertex_id:u64; SampleNodes/PointSamples: jawny sample ordinal:u64; CellCenters: source_element_ordinal:u64; Tet4CellLocalNodes: source_element_ordinal:u64, local_vertex_index=0..3, native stable_vertex_id:u64; count równe xyz i values | $1$; exact identity, żadnego cast do float/global node u32 |
+| topology / optional owned FemMeshPayload | brak dla point cloud; obecny tylko z actual verified owned connectivity i tym samym owner/digest; duplicate local xyz J nie podlegają merge | xyz $\mathrm{m}$, connectivity $1$; existing binary geometry resource |
+| carrier_digest / string | obowiązkowy full SHA-256 wyłącznie immutable artifact binding, actual geometry i ordered indexing; live observation counters oraz request/session epochs nie należą do preimage; pełny hash pozostaje obowiązkowym collision guard | $1$; immutable geometry identity niezależna od bieżących observation counters; source/run/stage/epoch fence i cache binding pozostają osobnym obowiązkiem |
+| carrier_revision / generated u64; locator JSON decimal string | deterministic LE u64 z pierwszych ośmiu bajtów decoded full carrier SHA-256; zero odmawia; nowy locator serializuje exact kanoniczny tekst dziesiętny bez leading zeros, binary FMVP/FMMI zachowuje u64; zgodność skrótu nigdy nie zastępuje exact full-hash collision guard | $1$; binary geometry/vector selector, nie native mesh revision ani science qualification; bez konwersji przez JavaScript Number i bez zmiany dotychczasowych numeric API observation counters |
+| numerical values / ordered finite f64 | V: 1 component/source node; J: 3 components/local trace albo explicit center; H: 3 components/actual sample; checked count products i bounds, brak normalization/averaging w providerze | V $\mathrm{V}$, J $\mathrm{A}\,\mathrm{m}^{-2}$, H $\mathrm{A}\,\mathrm{m}^{-1}$; existing common fields binary resource |
+| carrier_id / optional query string | default None wyłącznie gdy istnieje jeden jednoznaczny owner/carrier; przy wielu odmowa; wskazany ID musi odpowiadać owning stage/quantity/digest | $1$; proposed optional FieldVectorQuery.carrier_id i nowy optional ArtifactCarrierGeometryQuery przy istniejącym domain topology handler, bez nowego endpoint |
+| expected_carrier_revision / optional exact decimal string selector | request i response muszą wskazywać ten sam verified u64 revision; parsowanie kanonicznego tekstu dziesiętnego z kontrolą zakresu u64; mismatch odmawia, bez silent replacement | $1$; proposed geometry selector; pełne u64 zachowane w typed query bez utraty identity, zaokrąglona liczba binary64 nie jest źródłem selektora |
+| stage_id / existing optional selector | istniejąca selekcja źródłowego etapu; source/runtime/authored IDs mają jawne role; brak zgadywania z aktywnego m | $1$; common field source selection i provider ownership |
+| view=cell_centers / explicit selector | tylko retained J centers; podstawowy J pozostaje Tet4CellLocalNodes, każda próbka center ma owning source_element_ordinal | position $\mathrm{m}$, J $\mathrm{A}\,\mathrm{m}^{-2}$; istniejąca powierzchnia query, dla inspection dopuszcza full/cell_centers; rozszerzenie semantyki planowane |
+| thin locator / proposed ArtifactFieldLocatorResource | optional dla istniejących FieldDescriptor/FieldMeta/publication carrier; source binding, indexing, bounded counts/digest, world/m i existing topology-resource selector; metadata nie zawiera numeric arrays | $1$; thin control plane, planned bounded metadata do istniejącego limitu 64 KiB |
+
+Nowa reprezentacja musi używać existing resource-first paths common fields/meta/vector
+oraz `/data/domain/topology`; nie tworzy drugiego katalogu, endpointu ani klienta.
+`crates/fullmag-api/src/router_v2/handlers/data/fields.rs::get_field_meta` i
+`get_field_vector`, `domain.rs::get_domain_topology` oraz
+`crates/fullmag-api/src/schemas/fields.rs::FieldDescriptor`, `FieldMeta`,
+`FieldVectorQuery` są istniejącymi granicami. Opaque owner, heavy xyz, topology
+oraz ordered indexing są rozdzielone: metadata tylko lokalizuje, binary resource
+przenosi pełne dane i binds exact carrier revision. Optional owned mesh nie oznacza
+active magnetic domain. Generic planned PointSamples carrier ma zero cells, bez fabricated topology;
+nie jest fallbackiem current closed-v2 H, które wymaga owned SampleNodes Tet4.
+J local geometry zachowuje dokładne cell-local xyz i actual local connectivity:
+disconnected cztery geometry nodes per Tet4 z actual source ordinal/local index
+w FMVP v6, bez averaging. Zero-cell point cloud ma empty cell types i offsets=[0].
+U32 connectivity FMMT jest wyłącznie lokalnym indeksem geometry buffer; stable u64
+identity pozostaje niezależną typed mapping, nie jest do niego zwężana.
+
+#### Planned binary mapping: artifact FMVP v6, bez zmiany v2/v3/v4 i generic v5
+
+Istniejące `crates/fullmag-api/src/field_store.rs::FieldVectorBinaryMetadataV4`
+i `FieldVectorIndexing` przenoszą u32 node_indices, niewystarczające dla pełnego
+stable u64 i pary cell/local. Oddzielny artifact FMVP **version 6** zachowuje
+48-byte fixed FMVP header z version=6 i dotychczasowymi quantity/components,
+valuecount/grid/metadataLength. Numerical payload pozostaje f64 LE. Wariant
+wyznaczają `field_store.rs::FieldVectorBinaryMetadataV6` i
+`serialize_field_vector_binary_v6`; runtime oraz zgodność wymagają weryfikacji.
+Generic `field_store.rs::serialize_field_vector_binary_v5` zachowuje format pełnych
+quantity IDs z mastera. Dekoder wybiera schemat według zewnętrznej wersji FMVP;
+sama inner version FMMI=4 nie rozróżnia tych dwóch układów. Dla artifact FMVPv6
+FMMI metadata version=4 ma fixed 88 bytes
+według poniższej prerejestrowanej tabeli; offsety liczą bajty od początku FMMI,
+nie od początku FMVP. Wszystkie pola wielobajtowe są LE. Starszych wersji nie
+wolno reinterpretować jako ten format.
+
+| Planned FMMI v4 pole | Offset / typ / exact validation | SI |
+|---|---|---|
+| magic | 0, 4 bytes FMMI | $1$ |
+| metadata version / flags | 4/6, u16/u16; version=4, flags=0 | $1$ |
+| generation/source_kind/source_id/field_generation UTF8 lengths | 8/10/12/14, cztery u16; bounded UTF8 bytes, brak truncation | $1$ |
+| carrier_revision | 16, u64; deterministic nonzero LE first eight bytes of full immutable carrier SHA-256, full-hash collision guard required | $1$ |
+| carrier_digest | 24, raw decoded 32 bytes exact SHA256 | $1$ |
+| indexing_code / sample_mapping_count | 56/60, u32/u32; exact kind i actual sample count | $1$ |
+| scope_kind/scope_id UTF8 lengths | 64/66, dwa u16; exact source scope strings | $1$ |
+| source_revision | 68, u64; actual API observation revision, nie science qualification | $1$ |
+| mapping_stride / mapping_kind | 76/80, u32/u32; stride=8 poza code7 stride=24; mapping_kind=indexing_code | $1$ |
+| reserved | 84, u32 dokładnie 0 | $1$ |
+
+Po fixed metadata występują UTF8 strings w exact order: scope_kind, scope_id,
+generation, source_kind=`artifact_inspection`, source_id=exact native source digest,
+field_generation=exact content digest; następnie mapping bytes i zero padding do
+8-byte alignment. Ordered f64 LE values pozostają za metadata w FMVP payload.
+Indexing/mapping codes są prerejestrowane: 4 source_nodes, 5 sample_nodes,
+6 point_samples, 7 tet4_cell_local_nodes, 8 cell_centers. Nie są kodami starego
+node_indices. Full owner binding pozostaje w providerze i bounded locatorze;
+metadata source/carrier/frame digests nie zastępują jego sprawdzenia. Samples
+mieszczą się w u32 count, lecz stable vertex i source element identities mają
+pełne u64 w mapping records. Decoder musi odmówić nieznanej wersji/kind,
+niezgodnego count/byte length, niezerowego reserved i foreign carrier binding.
+
+| Planned indexing | Ordered binary mapping record | Validation / SI |
+|---|---|---|
+| SourceNodes | 8 bytes u64 LE native stable_vertex_id | exact full-width unique native identity, kolejność źródłowych węzłów; $1$ |
+| SampleNodes / PointSamples | 8 bytes u64 LE actual sample ordinal | jawny ordinal przypięty do actual xyz/sample carrier, nie stable vertex ID; $1$ |
+| CellCenters | 8 bytes u64 LE source_element_ordinal | actual element owner i retained center xyz/current; $1$ |
+| Tet4CellLocalNodes | 24 bytes: source_element_ordinal u64 LE, local_vertex_index u8, 7 zero reserved bytes, stable_vertex_id u64 LE | local 0..3, pełne cztery rekordy per owning Tet4 w original local order, zgodność vertex ID/xyz z owned cell; $1$ |
+
+Existing `field_store.rs::serialize_fem_mesh_topology_binary_v2` / FMMT v2
+przenosi actual xyz i actual owned connectivity, a `/data/domain/topology`
+wybiera carrier_id + expected_carrier_revision. Geometry/vector responses muszą
+mieć ten sam source/epoch/revision/digest. Max-samples/subset zachowuje explicit
+identity i geometry mapping; nie zmienia rodzaju carriera. Size arithmetic,
+allocation i response budgets są checked przed encode/decode. Obowiązują
+wcześniejsze source bounds 1 048 576 Tet4 i bounded vertices, maksymalnie cztery
+local samples na Tet4 oraz 1 000 000 niezależnych H targetów, bez redukcji jakości
+na potrzeby zmieszczenia count. Existing verified bundle closure bound 512 MiB
+jest resource guard, nie peak-RAM ani science claim.
+
+#### Planner, runtime, common availability i evidence gate
+
+Planner/runtime nie zmieniają solver physics ani BackendCaps. Provider common
+quantity availability/compute_fields jest read-only materializacją niezależnie
+verified published artifact i jego complete owned closure. Pending/failed/foreign
+record, brak payloadów lub owner mismatch nie daje available. Weryfikacja używa
+`crates/fullmag-runner/src/antenna_field_solution/closed_loop_public_inspection.rs::load_published_antenna_closed_loop_inspection`
+i tego samego v2 neutral verifier; nie fake latest_fields, magnetization ani
+backend capability. Przywrócenie wyniku nie oznacza Resume lub nowego solve.
+
+Wcześniejsza propozycja dodatkowego artifact `compute_fields` journal branch jest
+odroczona i nieaktywna: kontrola uprawnień odrzuciła omijanie istniejących bramek
+terminal/imported. Odczyt już utrwalonych, verified pól używa GET i lazy cache,
+bez nowego solve albo mutacji journal/readiness.
+`apps/control-room/src/kernel/api/ControlRoomApi.ts::requestFieldVectorOnDemand`
+zwraca udany GET bez materialize command; existing
+`livePublisherOwnsFieldMaterialization` traktuje `stale_complete` jako wynik
+należący do publishera. To source contract, nie dowód wykonanego HTTP.
+`crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs::enqueue_session_command_impl_with_context`
+i `crates/fullmag-api/src/live_command_journal.rs::mutate` zachowują dotychczasowe
+admission oraz durable lifecycle. Błąd odczytu nie uruchamia zastępczego solve,
+nie daje zerowego pola ani fabricated BackendCaps. Planned
+`ArtifactCarrierGeometryQuery` rozszerza obecnie bezparametrowy topology handler
+opcjonalnym carrier_id/expected_carrier_revision, z dotychczasowym defaultem
+ordinary resources. Optional locator fields mają serde default/skip None.
+
+Historyczny provider ma jawny `historical_inspection=true`: odczytuje własny
+verified immutable carrier i nie nadaje current Ready względem aktywnej geometrii
+lub materiałów. Bieżące numeric observation counters opisują wyłącznie obserwację
+API; ich zmiana nie może zmienić immutable carrier digest ani odnowić dawnego
+source solve. Off-lock read wymaga ponownego exact request/owner fence przed
+publikacją. Active compute materialization wymaga osobnej zgodności published
+source/native binding z actual owning plan; historyczny odczyt nie jest jej dowodem.
+Brak nowych source freshness, basis, FFT lub LLG qualification claims.
+Planned canonical payload state `FieldPayloadState::Historical` rozszerza existing
+`crates/fullmag-runner/src/capabilities.rs::FieldPayloadState` oraz API mapping
+`crates/fullmag-api/src/schemas/quantities.rs::FieldPayloadState`.
+Descriptor/FieldMeta oznaczają historyczne dane jako `StaleComplete`, target
+availability jako `Stale`, reason=`historical_inspection_read_only`; nie Ready
+względem current geometry. Historyczne pole pozostaje requestable z exact własnym
+carrier/full hash. Wrapper ponownie porównuje observation mesh/topology oraz
+state_version po off-lock read i przed odpowiedzią, oddzielnie od immutable
+native binding; stale observation odmawia publikacji w nowej ramce.
+
+Plan reuse istniejącego cache infrastructure: key zawiera session/epoch/run/stage,
+record digest i manifest digest; owner change unieważnia cached owner. Proposed
+bounded retained verified bundle Arc cache ma najwyżej 2 entries i 128 MiB total;
+większy bundle musi przejść verify-on-read. To plan resource bound, nie
+potwierdzony peak RAM, cache PASS ani limit fizyki; brak idle workers i dodatkowej
+niezależnej cache authority. Garbage data lub cold mismatch zawsze kończy się
+odmową zamiast rekonstrukcji brakujących pins.
+
+| Lane | Zakres planowanego common provider | Status i odmowa |
+|---|---|---|
+| FEM CPU double | tylko existing owned inspection V/J/H pełnej pętli; same scientific owner | planned carrier integration; runtime/native/common HTTP/browser NOT VERIFIED |
+| FEM GPU | brak nowego source solve ani domniemanej parity | forced GPU source solve odmowa; carrier presence nie zmienia BackendCaps |
+| FDM CPU | brak nowego charge solve/projection z tej zmiany | nowy provider nie nadaje FDM source/basis authority |
+| FDM GPU | brak nowego source solve/projection lub CPU fallback | nieweryfikowane; forced lane bez qualification odmawia |
+
+Przed zmianą tej sekcji na source implemented wymagane są actual symbols oraz
+source checks count/identity/finite/unknown-kind/version/refusal. Przed twierdzeniem
+o runtime wymagane są immutable managed native package i public stage → canonical
+compute_fields → metadata/vector/geometry readback z identycznym owner binding,
+foreign stage/epoch/mesh/carrier refusals i cold reopen. Browser smoke musi wykazać
+actual visible geometry/carrier, brak fałszywego nodal J oraz spójne jednostki.
+Żaden z tych planned data-plane kontraktów nie daje qualified basis, source FFT,
+LLG ani antenna_completion; `inspection_only` i `NOT VERIFIED` pozostają w mocy.
+
+(antenna-solved-analysis-dispatch)=
+### Dispatch rzeczywistej odpowiedzi solved antenna: stan source-only E9c
+
+Aktualny `time_events.rs::resolved_solved_antenna_drive_is_active` sprawdza
+semantyczną activation względem rodzaju study i active stage. Aktualny
+`spin_wave_sampling.rs::requested_finite_k_artifacts` uwzględnia sumę aktywnych
+ordinary field drives i accepted solved antenna bases. FEM finite-k wymaga
+rzeczywistych zapisanych snapshotów m oraz H_drive; nie tworzy odpowiedzi
+magnetyzacji ze source FFT. FDM finite-k pozostaje nieobsługiwane.
+
+`native_fem.rs::pack_native_regional_field_drives` pakuje accepted basis do
+natywnej regional drive; `zeeman_regional_field.cpp::materialize_regional_field_drive`
+materializuje H_drive odczytywane przez native observables. H_drive jest polem
+wymuszającym, nie całkowitym H_eff. Sumaryczny H_drive przy wielu źródłach nie
+jest automatycznie indywidualnym wkładem jednej anteny. Rozdzielenie źródeł
+wymaga zapisanej semantyki/proweniencji i osobnego kwalifikowanego pomiaru.
+
+`spin_wave_response.rs::append_requested_spin_wave_artifacts` jawnie odmawia
+Gamma dla aktywnej solved antenna przed empty-return: lokalne źródło nie
+może zniknąć przez brak ordinary field_drives ani udawać jednorodnego Gamma.
+Te trzy zmiany dispatchu mają wyłącznie parser/source proof; finite-k readback,
+production runtime i naukowa kwalifikacja pozostają **NOT VERIFIED**. Nie
+odblokowują basis, źródłowego FFT, LLG ani nowego v2 coincident operatora.
+
 ### 12.2 Rozszerzenia przyszłe
 
 1. Harmonic complex MQS bases and multi-frequency interpolation.
@@ -7247,6 +7947,847 @@ review i executed evidence; prereg nie jest rigorous error certificate.
    evaluations.
 8. Validated mode-overlap analysis and inductive detector-voltage prediction.
 
+(antenna-closed-loop-independent-qualification-prereg-v2)=
+## 12A. Prerejestracja v2: analityczny triangle oracle retained RT0/H
+
+**Prerejestrowano 2026-10-11 przed implementacją i V/J/H. SOURCE PLANNED / NOT VERIFIED.** Identyfikator metody `antenna-closed-loop-triangle-analytic-v2`. Kanoniczny appendix publikuje zamrożony storage prereg `e2/analytic-triangle-oracle-v2-prereg.md`, SHA256 `99542b067f51776d3994781bc77c36d2d94cf5be39bcca4f6b3296e90619fd3b`. Nie aktywuje public API ani scientific receipt; `require_qualified` nadal odmawia. V1 i frozen geometry v2/v3 zachowują odmowę; istniejące bytes i historia pozostają bez zmian. Independent E10 review zamknął mathematical sign/branch concerns na synthetic scalar potential/solid-angle checks; to algorithm research, nie wykonanie pełnego corpus ani native qualification. Żadnego V/J/H w ramach tej prereg jeszcze nie wykonano.
+
+### 1. Zamrożone wejścia i granica zmiany
+
+| Wejście | SHA256 exact bytes |
+|---|---|
+| `e2/analytic-triangle-oracle-v2-proposal.md` | `2b8f5e1a1468f8db61572ef30a57917310997187541df21a3fff1d9b72901e22` |
+| canonical 0950 `.md` | `e0c47d22e7dca5d6ba5255071c7708373bd181435ba2995442be134a977744d9` |
+| canonical 0950 `.source-map.json` | `3ed8e063d8233273107714a155eb83dce94818b76684a18d2f677105a56ff548` |
+| `examples/fem_antenna_closed_loop_nonmagnetic.py::study` | `16904540d169037480b563ec05e4cdb786c772caefba8c3e5a9b66365aa22a62` |
+| `e2/geometry-preflight-v2/preflight.json` | `0e2835b1d5bc795b602310dd34b55c5d81c776396347797766f55bfdcadf06f2` |
+| `e2/geometry-preflight-v3/preflight.json` | `0e2b5ce71c740b54275fa2bf439281adcb9aa2b4c57d582016c919c1ec4e3ace` |
+
+V1 i v2/v3 geometry receipts pozostają **REFUSED**, immutable; zachowane źródła v2 w `e2/geometry-preflight-v2-source-freeze/`. Zamieniamy wyłącznie metodę obliczenia scalar face potential w oracle A oraz jego algorytmiczne convergence/work checks. Fizyczne budgets, current/projection B/C, native policy, meshe, geometry, public carrier i 18 probes nie zmieniają się. Zamknięty wzór nie naprawia drift i brakującego ledgeru CAD. Geometry-only mathematical tests mogą badać synthetic exact triangles; nie dopuszczają aktualnego antenowego mesh do solve.
+
+### 2. Własne wyprowadzenie i orientacja
+
+Nie korzystamy z native kernel/Duffy ani implementacji literaturowej. Dla dodatnio zorientowanego Tet4 $T$, retained RT0 ma $\mathbf J_T(\mathbf x)=\mathbf a_T+b_T\mathbf x$, ze **skalarnym** $b_T$. Zatem $\mathbf J_T(\mathbf x)\times(\mathbf r-\mathbf x)=\mathbf J_T(\mathbf r)\times(\mathbf r-\mathbf x)$, a $\nabla_{\mathbf x}R^{-1}=(\mathbf r-\mathbf x)/R^3$. Twierdzenie Gaussa daje:
+
+```{math}
+:label: analytic-v2-rt0-reduction
+\mathbf H_T(\mathbf r)=\frac{1}{4\pi}\mathbf J_T(\mathbf r)\times\sum_{F\subset\partial T}\mathbf n_F I_F(\mathbf r),\qquad
+I_F=\int_F\frac{dS}{|\mathbf r-\mathbf x|}.
+```
+
+Ordered triangle $F=(\mathbf v_0,\mathbf v_1,\mathbf v_2)$ jest CCW względem jednostkowej outward normal $\mathbf n$. Dla cyklicznych directed edges $i\to j$ definiujemy $L=|\mathbf v_j-\mathbf v_i|$, $\mathbf t=(\mathbf v_j-\mathbf v_i)/L$, outward conormal $\mathbf m=\mathbf t\times\mathbf n$, $h=\mathbf n\cdot(\mathbf r-\mathbf v_0)$, $\mathbf q=\mathbf r-h\mathbf n$, $d=(\mathbf v_i-\mathbf r)\cdot\mathbf m$, $R_i=|\mathbf r-\mathbf v_i|$. Dla interior projection $d>0$. W płaszczyźnie $\mathbf s=\mathbf x-\mathbf q$ zachodzi $\nabla_F\cdot(\mathbf s/R)=1/R+h^2/R^3$. Boundary integral ma constant $\mathbf s\cdot\mathbf m=d$, więc:
+
+```{math}
+:label: analytic-v2-whole-face
+I_F=\sum_{ij}d_{ij}\Lambda_{ij}-h\Omega_F,\qquad
+\Lambda_{ij}=\log\frac{R_i+R_j+L_{ij}}{R_i+R_j-L_{ij}},\qquad
+\Omega_F=\int_F\frac{h}{R^3}\,dS.
+```
+
+Dla $\mathbf w_i=\mathbf r-\mathbf v_i$, własna orientacja determinant/atan2 jest:
+
+```{math}
+:label: analytic-v2-solid-angle
+\Omega_F=2\operatorname{atan2}\!\left(
+\mathbf w_0\cdot(\mathbf w_1\times\mathbf w_2),
+R_0R_1R_2+R_0\mathbf w_1\cdot\mathbf w_2+
+R_1\mathbf w_2\cdot\mathbf w_0+R_2\mathbf w_0\cdot\mathbf w_1\right).
+```
+
+Numerator ma znak $h$ dla CCW face. Ta zgodność znaku jest sprawdzalna przez $h\,\mathbf n\cdot((\mathbf v_1-\mathbf v_0)\times(\mathbf v_2-\mathbf v_0))$; nie wolno zastąpić atan2 przez atan, abs lub reversed source-relative vectors. Dla $h\ne0$ atan2 zwraca signed angle z właściwym quadrant; wynik $I_F$ jest dodatni i niezależny od reversal całej orientacji face. Reversal musi zmienić jednocześnie ordered edges oraz $\mathbf n$; wtedy $\mathbf m$ i $d$ pozostają niezmienione, $h$ i $\Omega$ zmieniają znak, a $h\Omega$ i signedfan potential są invariant. Cache przechowuje positive **physical scalar** $I_F$, nie oriented signedface integral. W H każdego cell owner używamy jego outward $\mathbf n_F$ osobno; nie zastępować tej normalnej arbitralną cache winding ani abs.
+
+Primary evaluation to **signed fans** $(\mathbf q,\mathbf v_i,\mathbf v_j)$ z normal reference $\mathbf n$ całej face. $A_{ij}=\mathbf n\cdot((\mathbf v_i-\mathbf q)\times(\mathbf v_j-\mathbf q))$ i $A_{ij}/L_{ij}=d_{ij}$. Dwie radialne edges mają zero conormal coefficient. Użycie tego samego determinant/atan2 na ordered fan vertices zachowuje znak $A_{ij}$ także przy projection poza face:
+
+```{math}
+:label: analytic-v2-signed-fan
+I_{ij}=\frac{A_{ij}}{L_{ij}}\Lambda_{ij}-h\Omega_{ij},\qquad
+I_F=\sum_{ij}I_{ij}.
+```
+
+Whole-face equation jest obowiązkowym algebraic crosscheck każdego pair/pass; dzieli tylko scalar edge logs, nie fan solid-angle implementation. Sumy $\Omega_{ij}$ muszą zgadzać się z $\Omega_F$ dla exact $h\ne0$, bez niejawnego modulo $4\pi$. Dla exact $h=0$ sprawdzamy wyłącznie sumę $I_{ij}=I_F$ i branch $h\Omega=0$ bez atan2; samo $\Omega$ nie ma jednoznacznej wartości na edge/corner. Angle crosscheck nie oznacza exact equality rounded binary64 angles: na120digits $|\sum\Omega_{ij}-\Omega_F|\le10^{-55}(1+|\Omega_F|)$, na80digits porównanie do120 ma próg $10^{-45}(1+|\Omega_{F,120}|)$. Binary64 kontrolujemy przez weighted potential contribution $|h(\sum\Omega_{ij}-\Omega_F)|\le4096\epsilon(\ell+|I_{120}|)$, nie unscaled angle floor; failure uruchamia120digits/refusal. Pozostałe fullface/fan local/H budgets obowiązują równocześnie. Disagreement na120 albo niepositive physical $I_F$ po highprecision nie jest clampowany: odmawia. Potencjał wspólnej physical face można policzyć raz na target/pass, ale outward signs, odrębne local RT0 coefficients i weighted local error contributions pozostają przy każdym cell owner. Coincident sourcecut DOFs nie są scalane; wymagane przeciwne exact apex sides i outward winding.
+
+### Dokładne branches i stabilność
+
+1. Original face area=0, edge length=0, niepositive Tet4, nieprawidłowe ownership/winding: **REFUSE**, nigdy zeroarea skip oryginalnej face.
+2. Exact $h=0$: term $h\Omega$ ustawić zero **przed atan2**, również na corner/edge. Wycięty dysk osobliwości ma boundary contribution $O(\varepsilon)$, więc skończony potential ma ten limit; nie używamy epsilon w danych.
+3. Exact $d=0$: edge term pominąć **przed log**, również gdy log sam byłby nieskończony; $0\cdot\infty$ nie jest wykonywane. Fan $A=0$ pomijamy przed division/atan2; jest to tylko degenerate signed fan.
+4. Zero predicates wynikają z dokładnych rational determinant/triple-product na retained binary64 inputs, przed normalization. $h$ numerator to $\mathbf N\cdot(\mathbf r-\mathbf v_0)$, $\mathbf N=(\mathbf v_1-\mathbf v_0)\times(\mathbf v_2-\mathbf v_0)$; $d$ numerator to $(\mathbf v_i-\mathbf r)\cdot((\mathbf v_j-\mathbf v_i)\times\mathbf N)$. Zero nie jest ustalane przez underflow rounded intermediate. Dla fan nie tworzyć exact predicate z zaokrąglonego $\mathbf q$: tożsamość $A=Ld$ daje ten sam exact zero/sign numerator.
+5. Wczytać exact input bytes osobno do binary64/80/120 digits, następnie subtract. Centering w target frame i wspólny power-of-two scale $\ell$ dla norm/determinant; scale dokładnie reprezentowalny, dobrany z exponent wejść, nie fitted do H. $I$ rescale przez $\ell$, normal pozostaje dimensionless. Nie dopuszczać overflow/underflow jako false zero. Unresolvable range odmawia albo używa obligatoryjnego 120digits wyniku, z jawnym statusem binary64 refusal.
+
+Dla $x_i=(\mathbf v_i-\mathbf r)\cdot\mathbf t$, $x_j=x_i+L$, $\rho^2=h^2+d^2$:
+
+```{math}
+:label: analytic-v2-stable-log
+D=(R_i+x_i)+(R_j-x_j),\qquad \Lambda=\log1p(2L/D).
+```
+
+Gdy $x_i<0$, obliczamy $R_i+x_i=\rho^2/(R_i-x_i)$; gdy $x_j>0$, $R_j-x_j=\rho^2/(R_j+x_j)$. Pozostałe sumy nie wymagają subtraction. Exact $\rho=0$ implikuje $h=d=0$ i już pominięty edge. Przy niezerowym $d$ exact denominator jest dodatni; rounded $D\le0$, nonfinite log, ambiguous angle lub niezgodny sign dają refusal, bez clamp. Jeśli $2L/D$ nie mieści się w wybranej arytmetyce, użyć jawnej równoważnej `log(D+2L)-log(D)` tylko na 120digits; dodatkowe log calls liczyć. Nie używać bezpośredniego subtraction $R_i+R_j-L$. Rounded $\rho^2=0$ przy exact nonzero nie jest physical singularity: mandatory 120digits fallback albo refusal. Binary64 farfield cancellation może dać false zero/ujemny potential mimo finite terms; nie clampować, obowiązuje precision/error/cancellation gate. Explicit negative/range test używa target$(2^{54},-2^{54},0)$ oraz niezerowych subnormal normal offsets; highprecision sprawdza exact input, binary64 może wyłącznie jawnie odmówić.
+
+### 3. Symbole i SI
+
+| Token | Znaczenie | SI |
+|---|---|---|
+| $T,F,i,j$ | tetrahedron, physical triangle, cykliczne vertex indices | $1$ |
+| $\mathbf x,\mathbf r,\mathbf v_i,\mathbf q,\mathbf s,\mathbf w_i,\ell,L,R_i,h,d,x_i,x_j$ | pozycje, displacement, skala, długości, signed distances | $\mathrm m$ |
+| $\mathbf n,\mathbf t,\mathbf m$ | unit normal/tangent/conormal | $1$ |
+| $\mathbf N,A_{ij}$ | unnormalized face normal, signed doubled fan area | $\mathrm{m^2}$ |
+| $D,\rho^2,I_F,I_{ij}$ | stable denominator; squared transverse distance; face/fan potentials | $\mathrm m,\ \mathrm{m^2},\ \mathrm m,\ \mathrm m$ |
+| $\Omega,\Lambda$ | signed solid angle; edge logarithm | $1$ |
+| $\mathbf J,\mathbf a,b,\mathbf H$ | current density, affine intercept/slope, magnetic field | $\mathrm{A\,m^{-2}},\ \mathrm{A\,m^{-2}},\ \mathrm{A\,m^{-3}},\ \mathrm{A\,m^{-1}}$ |
+| $\epsilon,\kappa$ | binary64 machine epsilon, cancellation condition | $1$ |
+| $\sigma,V,\Delta V,I_c,P_h,\mathcal D_h$ | conductivity, potential/jump, signed current, dissipated power, half-power variational functional | $\mathrm{S\,m^{-1}},\ \mathrm V,\ \mathrm V,\ \mathrm A,\ \mathrm W,\ \mathrm W$ |
+| $dS,\nabla_F,\nabla_{\mathbf x}$ | surface measure, plane and spatial gradient | $\mathrm{m^2},\ \mathrm{m^{-1}},\ \mathrm{m^{-1}}$ |
+
+### 4. Fixed precision, accuracy i cancellation
+
+Parameter choices są zamrożone przed implementacją. Primary signed-fan oraz whole-face zawsze binary64, 80 i 120 decimal digits; fixed precision reruns nie są opcjonalnym success-only subset. Brak highprecision dependency → NOT VERIFIED, bez instalacji w tej fazie. Rekonstrukcja retained RT0 pozostaje własnym centered/scaled Householder QR 12×4 (3 intercepts +scalar slope), rank4 oraz affine residual gate $256\epsilon\max(\max_i\|J_i\|,\|\alpha\|,|\beta|)$, exact zero residual dla zero field; ponownie na120 digits. Nie dopasowywać gradientu3×3.
+
+Zastąpienie dawnego oracle order64→128 gate jest jawne: (i) signed-fan vs whole-face120 delta oraz (ii)80→120 delta, każde zarówno full target norm, jak **suma local weighted fan/cell error norms**, muszą być ≤$10^{-6}\,\mathrm{A\,m^{-1}}+10^{-6}\|H_{120}\|$. Niezależna mathematical quadrature w sekcji5 jest dodatkowym pre-implementation gate. Native order study4/6/8 pozostaje unchanged; brak kwadratury analytic nie usuwa native checks. Empiryczne precision/formula agreement nie jest rigorous error certificate.
+
+Binary64 compensated component sums; $\kappa=\sum\|H_{fan}\|/\max(\|H\|,10^{-6}\,\mathrm{A\,m^{-1}})$. $\kappa>10^8$ lub $64\epsilon\sum\|H_{fan}\|$ poza oracle budget wymagają wyniku120digits. Highprecision $\kappa>10^{40}$ odmawia. W każdym face dodatkowy cancellation ratio $\sum|d\Lambda|+|h\Omega|$ przez $|I_F|$ raportowany, bez clamp i global cancellation acceptance. Primary/local norm weights obejmują wszystkie distinct cell-local $\mathbf J_T(\mathbf r)\times\mathbf n$; cached potential error jest naliczany przy każdym owner. Jeśli precision differences nie mogą rozstrzygnąć błędu lokalnego, odmawiamy.
+
+### 5. Mathematical corpus przed V/J/H
+
+Synthetic coordinates poniżej w metrach to **dokładne binary64**, wybrane bez danych current/H. Base triangle $((0,0,0),(1,0,0),(0,1,0))$. Ordered target corpus:
+
+| ID | Target $\mathbf r$ | Wymagany branch/scope |
+|---|---|---|
+| M01–M03 | trzy vertices base triangle | corner, $h=0$, dwa $d=0$ |
+| M04–M06 | $(.5,0,0),(0,.5,0),(.5,.5,0)$ | edge, exact $h=d=0$ dla jednej edge |
+| M07 | $(.25,.25,0)$ | coplanar inside, positive fans |
+| M08–M09 | $(2,2,0),(-1,.25,0)$ | coplanar outside, signed fans/cancellation |
+| M10–M11 | $(.25,.25,.5),(.25,.25,-.5)$ | noncoplanar po obu stronach |
+| M12–M13 | $(2,2,.5),(-1,.25,-.5)$ | noncoplanar outside projection |
+| M14–M15 | $(.5,0,2^{-12}),(.25,.25,-2^{-12})$ | near edge/face, bezepsilon |
+| M16–M17 | $(.5,0,2^{-40}),(.25,.25,-2^{-40})$ | adversarial near singular, refusal dozwolona lecz bez PASS corpus |
+| M18 | $(2^{20},-2^{20},2^{20})$ | far cancellation |
+
+Dla każdego M01–M18 dodatkowo dwa non-axis triangles: przekształcenie wszystkiego przez exact shear $(x,y,z)\mapsto(x,y,z+x/2-y/4)$ (nie jest rigid invariance test; oddzielna quadrature), oraz rigid90° wokółz. Trójkąt degenerate collinear i zeroedge są negative tests. OneULP offplane od M07 oraz oneULP od M04 w kierunku normal są **nowymi points**, nie snapowanymi boundary; exact predicates muszą rozróżnić je.
+
+Obowiązkowe identities: vertex M01 potential $\sqrt2\log(1+\sqrt2)$; cyclic vertex permutations/reversal dają ten sam positive $I_F$ i opposite $\Omega$ po odwróceniu normal; fan sum=wholeface; $\Omega$ sign matches $h$; reflection target $h\to-h$ daje ten sam $I_F$. Geometry scaling $2^{-20},1,2^{20}$ daje $I\to\lambda I$ i unchanged $\Omega$; translation $(3,-2,1)$ applied przed odjęciem oraz rigid90° zachowują $I$. Nie sprawdzać nieexact large translation jako identity na pierwotnych bytes, jeśli authored float addition utraciła dane: najpierw exact rational transform i odmowa gdy nie jest representable.
+
+Progi identities: 120digits delta ≤$10^{-55}\ell+10^{-55}|I_{120}|$; 80→120 ≤$10^{-45}\ell+10^{-45}|I_{120}|$; binary64 ≤$4096\epsilon(\ell+|I_{120}|)$ poza jawnym binary64 cancellation refusal, który nie jest counted jako binary64 PASS. Exact zero/sign branches nie mają numeric tolerance. Niefitować tych progów po testach.
+
+**Independent reference**: direct 2D barycentric/Duffy quadrature surface $u/R$ bez wykonywania analitycznej radial primitive, edge-log lub solidangle. Dla coplanar inside/edge/vertex split original face na dodatnio zorientowane triangles wokół exact singular point; boundary vertex/zeroarea subtriangles pomijać exact przeddivision. Reference integrał musi pokryć oryginalny positive physical triangle, nie signed outside fan extension. Noncoplanar/offface target używa original triangle z geometry-only subdivision; split logic nie współdzieli analytic kernel. Dla $h=0,u=0$ użyć własnego limitu $u/R$ z Duffy, bez point displacement.
+
+Reference160 i200digits, tanh-sinh fixed degrees8/10/12, independent nodes/weights, wszystkie passes liczone. Delta10→12 oraz160→200 ≤$10^{-30}\ell+10^{-30}|I_{ref}|$; suma local panel absolute deltas też ten limit. Analytic120 vs reference200 ≤ten sam limit, wholeface i fan oddzielnie. Limit10m attempted integrand eval/test i100m cały corpus;60min/test,8h corpus,2GiB actual peak. Failure convergence/budget nawet M16/M17 → mathematical corpus NOT VERIFIED, nie usunięcie adversarial targets. Degree failure nie pozwala dostroić subdivisions/order; revision przed dalszymi wynikami. Nie twierdzimy z góry, że tak ścisły reference zmieści się w budżecie.
+
+
+(analytic-v2-reference-comparison-contract)=
+### 5a. Referencja: budżet dokładnych porównań i tożsamość testu v2
+
+**Prerejestracja przed kolejną quadrature, 2026-10-11. SOURCE IMPLEMENTED / NOT QUALIFIED.**
+Root zatwierdził addendum o SHA256
+`27780e798891c31a9f7f9f6dac29f9c5cc1f3fb82f7d38ba596535375ad6e328`.
+Poniższy kontrakt dodaje osobną kategorię referencji; nie zmienia analitycznych
+unique-geometry predicates $\le12$, tolerancji, precision/order, limitów
+10m/100m eval, 60min/8h ani 2GiB RAM. Historyczny M01 pozostaje przypięty do
+swoich dawnych źródeł; nie jest nowym dowodem tego kontraktu.
+
+```{math}
+:label: analytic-v2-reference-comparison-bound
+C_{\mathrm{part}}\le1+3+3+3+3+3=16,\qquad
+C_{\mathrm{ref}}\le C_{\mathrm{init}}+
+6(C_{\mathrm{part}}+C_{\mathrm{vertex}})+C_{\mathrm{scale}}
+\le16+6(16+9)+8=174,\qquad
+C_{\mathrm{corpus}}\le N_{\mathrm{ref}}\,174=9396
+\quad(N_{\mathrm{ref}}=54).
+```
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $C_{\mathrm{part}},C_{\mathrm{init}}$ | porównania jednej dodatniej partycji oraz pierwszej partycji przed sześcioma passami | $1$ |
+| $C_{\mathrm{vertex}}$ | dokładne coordinate equalities target–panel origin podczas jednego passu | $1$ |
+| $C_{\mathrm{scale}}$ | dokładne porównania wybierające gate scale z dziewięciu kandydatów | $1$ |
+| $C_{\mathrm{ref}},C_{\mathrm{corpus}},N_{\mathrm{ref}}$ | attempted comparisons jednego face–target testu, suma corpus oraz liczba testów | $1$ |
+
+`positive_reference_panels` wykonuje: NN-positive 1, trzy denominator-nonzero
+guards q 3, barycentric 3, fan-zero 3, retained orientation 3 i area-vector
+identity 3. Wszystkie porównania są jawne; `all` zachowuje short circuit.
+Inside ma do trzech paneli; outside jeden. `reference_triangle` zachowuje
+pierwszą partycję, a każdy z sześciu `reference_pass` powtarza własną partycję
+i do dziewięciu coordinate equalities `r == panel origin`.
+`reference_scale` liczy dziewięć exact subtractions, dziewięć
+`reference_integer_abs` i osiem strict-greater comparisons zamiast
+nieinstrumentowanego Fraction `max`; tie policy i wybrana skala pozostają te
+same. Dodatkowy initial call oraz scale-max są wliczone, więc dawne propozycje
+150 i 166 nie są bound całego reference testu.
+
+| Parametr wewnętrznej referencji | Typ / stała | Jednostka | Walidacja i odmowa |
+|---|---|---|---|
+| exact-domain comparisons/test | int 174 | $1$ | charge attempted call przed porównaniem; 175 odmawia |
+| exact-domain comparisons/54-case corpus | int 9396 | $1$ | wspólny aggregate, także failures/retries; 9397 odmawia |
+| raw/reduced rational bits | int 8192 | $1$ | input, każdy numerator/denominator intermediate, crossproducts, abs i reduced output; overflow daje INCONCLUSIVE |
+| reference test identity | SHA256, `triangle-reference-test.v2\0` + `<12d` | $1$ | ordered 3 vertex xyz i target xyz w oryginalnym binary64; finite/shape validation przed framing |
+| corpus scope | 54 frozen base/shear/rotate pairs | $1$ | nie jest pełnym identity/extreme/RT0 corpus; większy scope wymaga jawnego przedwykonaniem bound |
+
+Tożsamość jest SHA256 dokładnych little-endian binary64 bytes dziewięciu
+ordered vertex coordinates oraz trzech target coordinates, z prefiksem
+schematu. Ten sam target na innej face lub innym ordered transform ma oddzielny
+per-test key. Ponowne wykonanie identycznej ordered face–target pary kumuluje
+liczniki i czas pod tym samym kluczem; aggregate corpus nie jest resetowany.
+Signed-zero bytes zachowują tożsamość wejścia. Jest to korekta accounting,
+nie przesunięcie punktu ani scalanie physical faces/current DOFs.
+
+Kategoria obejmuje exact-domain decyzje face validity, denominator, projection,
+zero area, orientation, area identity, vertex identity i gate-scale.
+Shape/type/finite-input validation oraz counter/bit guards są oddzielnymi
+kontrolami. Floating mpmath `R>0`, diagnostic inner-error maxima, sześć
+convergence comparisons i library adaptation nie są udawane jako część 174.
+Internal CPython/libmp/gcd branches i cały koszt primitive arithmetic nie
+otrzymują fikcyjnego exhaustive counter. Każdy jawny reference rational
+`+/-/*/div`, integer abs i comparison crossproduct ma raw oraz reduced
+8192-bit watch; gcd remainders/quotients nie przewyższają bounded operands.
+
+| Lane | Status tej zmiany | Znaczenie |
+|---|---|---|
+| FEM CPU | interpreted scalar guards wykonane; field oracle NOT VERIFIED | nie jest native H1/RT0/H qualification |
+| FEM GPU | unsupported tutaj | brak device reference ani nowego field-solve support |
+| FDM CPU | nie dotyczy reference helpera | brak zmiany public discretization/support |
+| FDM GPU | nie dotyczy reference helpera | brak urządzeniowego dowodu lub promocji |
+
+Python DSL, canonical `ProblemIR`, planner i scientific receipt activation
+pozostają bez zmian. Istniejący mapping w `analytic-v2-python-ir-mapping`
+nadal obowiązuje. Wynik research zapisuje source/test/doc hashes, exact
+face–target identity, attempted counters, raw/reduced bits, elapsed time,
+last measured peak RAM i terminal reason; zapis odmowy nie powtarza admission
+guard. `require_qualified` nadal odmawia.
+
+Wykonane interpreted regresje obejmują raw intermediate, który później
+cancelowałby do zera; refusal przed 175/9397; exact gate-scale equivalence dla
+54 par; identyczny target na różnych faces; repeated identical-pair
+accounting; actual entrypoint terminal receipt i geometry-only harmonogram
+174. Stub/direct callback driver nie wykonuje library quadrature.
+**Nie wykonano nowej quadrature ani V/J/H w tej rewizji.** Pełny reference
+corpus, weighted RT0/volume regression i runtime budget pozostają NOT VERIFIED.
+Counter correctness nie jest mathematical error certificate.
+
+| Claim / source | Path + symbol | Evidence |
+|---|---|---|
+| attempted comparison caps i terminal snapshot | `scripts/antenna_triangle_surface_oracle.py::class Budget` | interpreted guard regressions; nie full reference execution |
+| raw/reduced arithmetic i comparison sites | `scripts/antenna_triangle_surface_oracle.py::class ReferenceExactArithmetic` | cancellation refusal, primitive histograms |
+| pełny ordered binary64 pair key | `scripts/antenna_triangle_surface_oracle.py::reference_test_identity` | same-xyz/different-face i retry regression |
+| literal positive partition | `scripts/antenna_triangle_surface_oracle.py::positive_reference_panels` | 54 exact outputs zachowują wcześniejszą partycję |
+| scale subtraction/abs/max | `scripts/antenna_triangle_surface_oracle.py::reference_scale` | exact original Fraction max equivalence |
+| initial + six passes + scale | `scripts/antenna_triangle_surface_oracle.py::reference_triangle` | geometry-only schedule; bez quadrature |
+| 174/9396 guard | `scripts/test_antenna_triangle_surface_oracle.py::test_reference_comparison_guards_before_175_and_9397` | executed interpreted |
+| scope/identity | `scripts/test_antenna_triangle_surface_oracle.py::test_reference_pair_identity_separates_same_xyz_and_accumulates_retries` | executed interpreted |
+| scale i 174 schedule | `scripts/test_antenna_triangle_surface_oracle.py::test_reference_scale_is_exact_original_max_with_nine_abs_eight_comparisons`, `test_literal_reference_geometry_schedule_is_174_without_quadrature` | executed interpreted; bez qualification |
+
+Rachunek bound i klasyfikacja call sites są własnym wyprowadzeniem z kodu;
+bibliografia triangle potential/solid angle w końcu strony nie jest dowodem
+liczników ani runtime tego helpera.
+
+
+(analytic-v2-reference-vertex-lifecycle)=
+### 5b. Rewizja reference: dokładna stała radialna i prywatny lifecycle
+
+**SOURCE IMPLEMENTED / NOT QUALIFIED; prerejestracja przed nowym wykonaniem.**
+Prereg SHA256 acafaa0cb2a736393f11216f6d06fb2ceae5c00d3d7cc167fd832aeb0d89e278
+rejestruje wyłącznie opcje1+4. Wcześniejsza direct2D metoda i actual54 receipt
+pozostają niezmienne: trzy scalar pairs ukończone, M04/base odmowa10m/test,
+M05/base odmowa peakRAM,49 niewykonanych. Receipt SHA256
+82afc375e2fd6e9ac25ad458ecc7d61af6d012f9926a99a7f00766558ad819d2
+nie jest dowodem poniższej realizacji. Nowa actualquad **NIEURUCHOMIONA**
+do końcowego rootreview. Poniższa własna tożsamość jest wąską rewizją
+wcześniejszej literal direct2D reference, bez przepinania jej dowodów.
+
+```{math}
+:label: analytic-v2-reference-vertex-constant
+\mathbf e_{r,1}=\mathbf b_r-\mathbf a_r,\qquad
+\mathbf e_{r,2}=\mathbf c_r-\mathbf a_r,\qquad
+A_r=|\mathbf e_{r,1}\times\mathbf e_{r,2}|>0,\qquad
+\mathbf w_r(v_r)=(1-v_r)\mathbf e_{r,1}+v_r\mathbf e_{r,2},
+\qquad \mathbf r_r=\mathbf a_r,
+\\
+I_r=\int_0^1\int_0^1
+\frac{u_r A_r}{|u_r\mathbf w_r(v_r)|}\,dv_r\,du_r
+=\int_0^1\frac{A_r}{|\mathbf w_r(v_r)|}\,dv_r,
+\qquad \int_0^1du_r=1.
+```
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $\mathbf a_r,\mathbf b_r,\mathbf c_r,\mathbf r_r,\mathbf e_{r,1},\mathbf e_{r,2},\mathbf w_r$ | wierzchołki panelu, target, krawędzie i promień Duffy | $\mathrm{m}$ |
+| $u_r,v_r$ | współrzędne radialna i kątowa kwadratu jednostkowego | $1$ |
+| $A_r$ | dodatnia długość wektora podwojonego pola zachowanego panelu | $\mathrm{m^2}$ |
+| $I_r$ | potencjał skalarny zachowanego dodatniego panelu | $\mathrm{m}$ |
+
+Warunek target=panel origin pochodzi z istniejących instrumentowanych
+exact rational vertex_identity comparisons oryginalnej binary64 geometrii.
+Nie dodajemy predykatu, epsilon ani przesunięcia. Exact-zero area skip nadal
+poprzedza quad; niekolinearność zachowanego panelu daje niezerowy promień
+na przedziale. Punkt radialny zero ma miarę zero; skrócenie jest dokładne.
+To obejmuje także obecne coplanar inside/edge panels o origin=target.
+Pomijamy redundant outerquad tylko w tej gałęzi. **Nonvertex direct2D
+integrand, dodatnia literalpartition i initialpartition pozostają bez zmian.**
+Nie wdrażamy projected radial primitive, nowego subdivision ani reuse nodes.
+
+| Parametr / marker | Typ i wartość | SI | Walidacja / provenance |
+|---|---|---|---|
+| exact radial branch | istniejący bool vertex_identity | $1$ | original rational equalities; bez nowego predicate |
+| radial_integration | enum exact_constant_unit_interval / numerical_2d per panel | $1$ | faktycznie wykonana metoda |
+| radial_error_exact | string zero / null per panel | $1$ | algebraiczny exact constant; nie libraryestimate |
+| outer_error_estimates | null exactbranch; actualestimate dla2D | $\mathrm{m}$ | brak fikcyjnego outerestimate |
+| inner_error_max_diagnostic | actual libraryestimate | $\mathrm{m}$ | tylko diagnostyczny; nie gate |
+| context/cache lifetime | fresh160/200digits, six8/10/12passes | $1$ | privatefinally przy return/refusal |
+| GC | gc.collect po privatedetach | $1$ | defaultthresholds; czas w oneBudget |
+
+reference_pass tworzy freshctx; _reference_pass_context zwraca strings i metadata.
+Finally Arithmetic.close_reference czyści wyłącznie prywatne tanh-sinh
+i Gauss–Legendre caches, przywraca originalinstrumentedfunctions, usuwa
+privatewrapperrefs, detach i wykonuje GC. Żywy exceptiontraceback może chwilowo
+zachować ctx, lecz cache i własny wrappercycle są rozłączone; test sprawdza
+collectability po zwolnieniu wyjątku. Globalctx pozostaje nietknięty.
+Cleanup nie zeruje counters, identities, starttimes ani lifetimepeak.
+Normalreturn sprawdza admission po cleanup, obejmując jego czas i peak.
+Refusal zachowuje powód; terminalsnapshot nie powtarza admission.
+
+Sześć freshpasses, wszystkie54 IDs, jeden Budget, precision/order/gate
+$10^{-30}(\ell+|I_{ref}|)$, sumlocaldeltas, analyticcomparison,174/9396,
+raw/reduced8192bits,10m/100mevals,3600s/28800s i2GiB pozostają niezmienione.
+Ten sam vertexpredicate zachowuje proof174. Każdy realkernel jest naliczany
+przed pracą. Nie obiecujemy wykonalności całego reference.
+
+| Lane | Status | Wpływ |
+|---|---|---|
+| FEM CPU | interpretedresearch source/regressions; fulloracle NOT VERIFIED | brak nativeH1/RT0/H qualification |
+| FEM GPU | unsupported tutaj | brak deviceproof/implementacji |
+| FDM CPU | nie dotyczy | brak zmiany discretization/support |
+| FDM GPU | nie dotyczy | brak zmiany urządzeniowej |
+
+Mapping Python→ProblemIR w analytic-v2-python-ir-mapping nadal obowiązuje.
+Nie ma nowych parametrów DSL/IR, planner/session zmian ani scientificreceipt
+activation. require_qualified nadal odmawia. Nowy researchreceipt wiąże
+preregSHA/sourcehashes/radialmarkers/counters/reasons. Historyczne bytes
+pozostają immutable. Actual54, pełny identity/extreme i weightedRT0volume
+pozostają deferred/NOT VERIFIED.
+
+| Claim | Path + symbol | Evidence |
+|---|---|---|
+| freshpass/finally/admission | scripts/antenna_triangle_surface_oracle.py::reference_pass | interpretedmock, bez actualquad |
+| exactconstant/unchanged2D | scripts/antenna_triangle_surface_oracle.py::_reference_pass_context | własna tożsamość; mockedcallbacks |
+| privatecache/wrappers | scripts/antenna_triangle_surface_oracle.py::class Arithmetic (close_reference) | nonemptycache/weakrefs |
+| vertexmarkers | scripts/test_antenna_triangle_surface_oracle.py::test_reference_vertex_collapses_only_exact_radial_constant | corner/edge/inside onequad/panel; nonvertexnested |
+| guardbeforekernel | scripts/test_antenna_triangle_surface_oracle.py::test_reference_both_branches_guard_before_third_kernel | attempted3, dwa admittedcallbacks |
+| lifecycle | scripts/test_antenna_triangle_surface_oracle.py::test_private_context_nonempty_cache_cleanup_normal_and_refusal | return/refusal/privateclear/restore/globalisolation |
+| fixedsix/sharedbudget | scripts/test_antenna_triangle_surface_oracle.py::test_reference_six_passes_keep_fresh_contexts_and_shared_budget | sixdistinctctx i aggregatecounts |
+
+Mechanika: [tagged mpmath1.3.0source](https://github.com/mpmath/mpmath/blob/1.3.0/mpmath/calculus/quadrature.py)
+QuadratureRule.clear/get_nodes oraz TanhSinh.sum_next wyjaśniają privatecache;
+[Python3.12GC](https://docs.python.org/3.12/library/gc.html) opisuje collectability.
+Nie dowodzą budgetfeasibility. Constantdu jest własnym wyprowadzeniem,
+a nieprzeczytany erratum2015 nadal nie jest jego podstawą.
+
+Po tych tests osobna exact Tet4 reduction regression: synthetic positive $((0,0,0),(1,0,0),(0,1,0),(0,0,1))$, analytic RT0 $\mathbf a=(1,-2,3)\,\mathrm{A/m^2}$, $b=0$ oraz $b=1\,\mathrm{A/m^3}$; targets outside$(2,2,2)$, inside$(.125,.125,.125)$, face$(.25,.25,0)$, edge$(.5,0,0)$, vertex$(0,0,0)$. Independent direct3D volume quadrature subdivided around singular target, bez surface/log primitive; signed reversal/scaling $\mathbf J\to-\mathbf J,.5\mathbf J$ oraz rigid covariance. Reference120→160digits i order/convergence panel checks z budżetem jak wyżej; deltaH≤$10^{-10}\,\mathrm{A/m}+10^{-10}\|H_{ref}\|$, suma local errors też gate. To syntetyczny algebraic gate, nie solve anteny ani native qualification.
+
+
+(analytic-v2-general-radial-1d-prereg)=
+### 5c. GENERAL_RADIAL_1D: prerejestracja pełnych 54 par przed implementacją
+
+**SOURCE IMPLEMENTED / NOT QUALIFIED.** Root zatwierdził wyłącznie implementację
+po doc/prereg review SHA ca07e4f1131d3fbd4ca32c026da2927d51d7dcc792f5740d0d66bc57f20fa2c2.
+Prereg b85ac657bac1ff765ee83ac9168e9403891e2f46993dae31b0197b4ef65439a4
+pozostaje immutable; rzeczywiste full54/direct2D24 wykonanie niezatwierdzone. Ta rewizja dotyczy wyłącznie referencji scalar, nie primary
+signedfan/wholeface, native RT0/current/projection ani antenowego V/J/H.
+Historyczna rewizja5b i jej receipts pozostają immutable. Jej późniejsze actual54
+zakończyło się REFUSED: M01–M09/base scalar comparison PASS, M10/base odmowa
+target reference evaluation limit, M11/base odmowa actual peak RAM exhausted,
+43 niewykonane. Te nazwy odmów oznaczają attempted **2D/vertex** kernels starej
+metody; nowy licznik angular nie przepina historycznych receipts.
+
+#### Problem, własne równania i niezależność
+
+Dla każdego niezerowego dodatniego panelu istniejącej literalpartition
+$\mathbf a_g,\mathbf b_g,\mathbf c_g$ oraz original target $\mathbf r_g$:
+
+```{math}
+:label: analytic-v2-general-radial-map
+\mathbf e_{g,1}=\mathbf b_g-\mathbf a_g,\quad
+\mathbf e_{g,2}=\mathbf c_g-\mathbf a_g,\quad
+\mathbf w_g(v_g)=(1-v_g)\mathbf e_{g,1}+v_g\mathbf e_{g,2},\quad
+\mathbf p_g=\mathbf r_g-\mathbf a_g,\quad
+K_g=|\mathbf e_{g,1}\times\mathbf e_{g,2}|>0,
+\\
+\mathbf x_g=\mathbf a_g+u_g\mathbf w_g(v_g),\quad
+dS_g=u_gK_g\,du_g\,dv_g,\quad
+I_g=K_g\int_0^1 F_g(v_g)\,dv_g,\quad
+F_g=\int_0^1\frac{u_g\,du_g}
+{\sqrt{A_gu_g^2-2B_gu_g+C_g}},
+\\
+A_g=\mathbf w_g\cdot\mathbf w_g=s_g^2,\quad
+B_g=\mathbf p_g\cdot\mathbf w_g,\quad
+C_g=\mathbf p_g\cdot\mathbf p_g,\quad
+\beta_g=B_g/s_g,\quad
+\delta_g^2=|\mathbf p_g\times\mathbf w_g|^2/A_g,\quad
+R_{g,0}=|\mathbf p_g|,\quad R_{g,1}=|\mathbf p_g-\mathbf w_g|.
+```
+
+Niezerowe pole i niekolinearne krawędzie dają $A_g>0$ dla całego przedziału.
+Długość $R_g=|\mathbf p_g-u_g\mathbf w_g|$. Podstawienie $t_g=s_gu_g-\beta_g$ daje własny primitive:
+
+```{math}
+:label: analytic-v2-general-radial-primitive
+F_g=\frac{R_{g,1}-R_{g,0}+\beta_gL_g}{s_g^2},\qquad
+L_g=\int_{-\beta_g}^{s_g-\beta_g}
+\frac{dt_g}{\sqrt{t_g^2+\delta_g^2}}
+=\log1p\frac{2s_g}{D_g},\qquad
+D_g=R_{g,0}+R_{g,1}-s_g>0\quad(\delta_g>0).
+```
+
+Pochodna $(\sqrt{t_g^2+\delta_g^2}+
+\beta_g\operatorname{asinh}(t_g/\delta_g))/s_g^2$ względem $u_g$
+wynosi $u_g/R_g$. Nie wywołujemy tego asinh w realizacji; używamy log1p.
+Primitive radialny jest algebraicznie niezależny od primary edge-log/solid-angle
+formula, lecz **nie jest czysto numeryczną niezależną kwadraturą2D**.
+Współdzieli kernel $1/R$, original inputs, dodatnią partition i neutralny Budget.
+Nie woła analytic_pass, primary geometry, signedfan kernel, wholeface ani ich
+gotowych wyników. Nie wolno przedstawiać pokrewieństwa wzorów jako pełnej
+niezależności; konieczne są osobne direct2D regressions i review.
+
+#### Stabilność, exactscope i wszystkie 54 wejścia
+
+```{math}
+:label: analytic-v2-general-radial-stability
+t_{g,0}=-\beta_g,\quad t_{g,1}=s_g-\beta_g,\quad
+D_g=\frac{\delta_g^2}{R_{g,0}+|t_{g,0}|}
++\frac{\delta_g^2}{R_{g,1}+|t_{g,1}|}+E_g,
+\\
+E_g=\begin{cases}
+2t_{g,0}&t_{g,0}\ge0,\\
+-2t_{g,1}&t_{g,1}\le0,\\
+0&t_{g,0}<0<t_{g,1},
+\end{cases}
+\qquad
+R_{g,1}-R_{g,0}=\frac{A_g-2B_g}{R_{g,1}+R_{g,0}},
+\\
+F_g=\begin{cases}
+1/s_g&C_g=0,\\
+1/(R_{g,1}+R_{g,0})&B_g\equiv0,\\
+1/s_g+\beta_g\log1p(s_g/(-\beta_g))/s_g^2&
+\delta_g=0,\ \beta_g<0,\\
+-1/s_g+\beta_g\log1p(s_g/(\beta_g-s_g))/s_g^2&
+\delta_g=0,\ \beta_g>s_g.
+\end{cases}
+```
+
+Exact-zero panel skip poprzedza division/sqrt/transcendentals. Original
+binary64→Fraction predicates, nie rounded q, rozstrzygają physical area,
+inside/outside, existing vertex_identity i retained panel role. $C_g=0$
+oznacza dokładny target=origin. Gdy origin jest dokładnym rzutem q, dowód
+$\mathbf p_g\perp\mathbf e_{g,1},\mathbf e_{g,2}$ daje $B_g(v_g)\equiv0$;
+ten role przenosi już wyliczony inside bool, bez ponownego exact predicate.
+W h0 przypadku także $C_g=0$, a branch daje skończone $1/s_g$.
+Nie dzielić przez $\delta_g$, nie przesuwać celu i nie wykonywać epsilon snap.
+
+Dla $\delta_g>0$ wszystkie składniki D są nieujemne; oba denominatory dodatnie.
+W dynamicznym angular kernel norma cross, nie odejmowanie $C_g-B_g^2/A_g$,
+zapobiega sztucznemu ujemnemu squared distance. Dynamiczne mp porównania
+$\delta_g,t_{g,0},t_{g,1}$ nie są original exactgeometry predicates.
+Zero z zaokrąglonego cross nie dowodzi fizycznego zero: branch dopuszczalny
+wyłącznie przy uprzednio dowiedzionej geometrycznej collinearity, inaczej REFUSED.
+Nie dodawać cyfr, fit threshold ani omijać problematycznego węzła.
+
+$D_g=0$ przy nonvertex oznacza unresolved singular radial segment i REFUSED.
+Przy $\delta_g=0$, $0<\beta_g\le s_g$ radialny primitive jest divergent;
+nie stosować offsegment branch. Remaining cancellation w numerator
+$R_{g,1}-R_{g,0}+\beta_gL_g$ raportować jako sumabs/abs numerator,
+a unchanged total/local pass gate oraz analytic-vs-reference gate muszą
+wykrywać błąd. Nie wprowadzać nowego dobieranego cancellation cutoff.
+Finite positive result, finite denominators i nieujemna crossnorm są mandatory;
+brak dowodu branch oznacza odmowę, nie zero.
+
+Dokładna lista18targets dla vertices (0,0,0),(1,0,0),(0,1,0):
+
+| ID | Target | Original geometry branch |
+|---|---|---|
+| M01 | (0,0,0) | vertex,1panel |
+| M02 | (1,0,0) | vertex,1panel |
+| M03 | (0,1,0) | vertex,1panel |
+| M04 | (.5,0,0) | edge,2panels |
+| M05 | (0,.5,0) | edge,2panels |
+| M06 | (.5,.5,0) | edge,2panels |
+| M07 | (.25,.25,0) | inside,3panels |
+| M08 | (2,2,0) | outside originalpanel,1panel |
+| M09 | (-1,.25,0) | outside originalpanel,1panel |
+| M10 | (.25,.25,.5) | offplane,at most3panels |
+| M11 | (.25,.25,-.5) | offplane,at most3panels |
+| M12 | (2,2,.5) | outside,1panel |
+| M13 | (-1,.25,-.5) | outside,1panel |
+| M14 | (.5,0,2^-12) | offplane,at most3panels |
+| M15 | (.25,.25,-2^-12) | offplane,at most3panels |
+| M16 | (.5,0,2^-40) | offplane,at most3panels |
+| M17 | (.25,.25,-2^-40) | offplane,at most3panels |
+| M18 | (2^20,-2^20,2^20) | outside,1panel |
+
+Zachować ordered vertices i target binary64, wszystkie powyższe IDs i trzy
+frozen transforms: base(x,y,z)=(x,y,z), shear=(x,y,z+x/2-y/4),
+rotate90=(-y,x,z). Transform jest zastosowany do obu vertices/target;
+shear nie jest izometrią, nie zakładać równych wartości. Dla shear płaszczyzna
+ma normalną proporcjonalną do (-1/2,1/4,1), kwadrat normy21/16.
+Rzut target o authored z=w ma współrzędne qx=x+8w/21,qy=y-4w/21.
+Stąd M12 qx>2, M13 qx<-1, M18 qy<0: pozostają outside;
+rotate zachowuje barycentric classification, coplanar shear także.
+M01–M09 zachowują razem14panels/transform. Pozostałe trzy outside mają3,
+sześć offplane co najwyżej18: ≤35/transform,≤105/corpus.
+
+Coplanar outside M08 ma p=2(e1+e2): przy v=.5 dokładnie
+p=4w, więc $\delta_g=0$, $\beta_g=4s_g>s_g$; offsegment branch dodatni.
+Wszystkie transforms zachowują tę zależność. M09 ma p=-e1+.25e2,
+nigdy collinear z w w dodatnim cone, więc $\delta_g>0$ na [0,1].
+Każdy inny outside M12/M13/M18 jest noncoplanar, więc $\delta_g>0$.
+Inside-origin q ma B identyczniezero. To pokrywa wszystkie54cases i daje
+geometry-authorized δ0 branch wyłącznie M08 midpoint; dyadic midpoint
+v=.5 może być rozpoznany dokładnym mp equality jako dynamic coordinate,
+nie nowym Fraction predicate. Przy każdej innej dynamiczero: REFUSED.
+General beta<0 δ0 branch pozostaje testem algebraicznym, nie nowym corpus target.
+
+#### Symbole, parametry, counters i static feasibility
+
+| Token | Znaczenie | SI |
+|---|---|---|
+| $\mathbf a_g,\mathbf b_g,\mathbf c_g,\mathbf r_g,\mathbf e_{g,1},\mathbf e_{g,2},\mathbf w_g,\mathbf p_g,\mathbf x_g$ | punkty/wektory panelu i target | $\mathrm m$ |
+| $u_g,v_g$ | Duffy radial/angular coordinates | $1$ |
+| $dS_g,K_g,A_g,B_g,C_g,\delta_g^2$ | miara/pole, iloczyny i squared distance | $\mathrm{m^2}$ |
+| $s_g,\beta_g,\delta_g,R_g,R_{g,0},R_{g,1},D_g,E_g,t_g,t_{g,0},t_{g,1},\ell_g$ | długości, bound denominator i gate scale | $\mathrm m$ |
+| $F_g$ | radial primitive | $\mathrm{m^{-1}}$ |
+| $I_g,I_{\mathrm{ref},g}$ | scalar panel/total reference potential | $\mathrm m$ |
+| $L_g$ | dimensionless logratio | $1$ |
+| $m_g,d_g,j_g,N_g,S_g,P_g,W_g,W_{\mathrm{test},g},W_{\mathrm{corpus},g}$ | maxdegree, currentdegree, index, count/bound | $1$ |
+| $M_g,M_g^{\mathrm{estimated}},H_g,Q_g$ | estimated memory, allocated headroom, RAM cap | $\mathrm{byte}$ |
+| $\partial_{u_g},\int,\cdot,\times,\lVert\cdot\rVert$ | pochodna, całka, dot/cross i norma | operator: jednostki zgodnie z argumentem; $u_g$ ma $1$ |
+
+| Parametr | Typ/default lub required | SI | Zakres i failure | Python→IR/backend |
+|---|---|---|---|---|
+| method | fixed enum GENERAL_RADIAL_1D | $1$ | source implemented, noCLIoverrides | research only; brak DSL/IR |
+| inputs | required54frozen orderedbinary64pairs | $\mathrm m$ | finite, exactFractionoriginal, no targetdrop | mathematical_corpus; FEMCPUresearch |
+| partition | fixed existingpositivepartition | $1$ | exactzero skip; origin role carried once | helperinternal; IRunchanged |
+| precisions | tuple(160,200) | $1$ | sixfreshctx, no adaptive digits | reference_pass |
+| maxdegree | tuple(8,10,12), tanh-sinh | $1$ | oneangularquad/panel/pass | interpretedCPU, noGPU |
+| convergence | fixed1e-30(ell+absIref) | $\mathrm m$ | total+sumlocal differences10→12 bothdigits and160→200 | reference_triangle unchangedgate |
+| comparison | fan120+whole120 vs ref200 | $\mathrm m$ | samegate; no primaryvalue in referencekernel | mainunchangedcomparison |
+| attempted evals |10m/test,100m/corpus | $1$ | beforeangularkernel; blockedattemptrecorded | oneBudget, no reset/split54 |
+| exact comparisons |174/test,9396/corpus | $1$ | literal16+6*(16+9)+8 callsitebound | original exactguard |
+| exact intermediates |8192bits raw/reduced | $1$ | everywrapperop; refusalbeforelargeintwork | ReferenceExactArithmetic |
+| runtime |3600s/test,28800s/case | $\mathrm s$ | setup/math/cleanup counted | oneownedprocess |
+| RAM |2147483648 | $\mathrm{byte}$ | actuallifetimepeak, noreset | guard+terminalsnapshot |
+| radial marker | exact_vertex / exact_projected / general_radial_primitive | $1$ | actualperpanel method, not 2D | newresearchreceipt only |
+| radial error marker | exact_algebraic_reduction | $1$ | not numericalzeroerror proof | separateangularlibraryestimatediagnostic |
+| library estimator | actualquad diagnostic | $\mathrm m$ | neverreplaces convergencegate | retainactualmaxdegree/digits |
+| refusal metadata | reason/IDs/counters | $1$ | terminalwriteswithoutnewadmission | noactivation of scientificreceipt |
+
+Callsite taxonomy źródłowo wdrożona; małe interpreted regressions, nie full runtime proof:
+
+* positive_reference_panels once initial ≤16, eachsixpass ≤16;
+  existingvertex equality perpanel with shortcircuit ≤9/pass; scale8.
+  Total≤174/test,9396/54. Carry inside/role does not compare again.
+* original finite inputs/shape and integerloop bounds are validation/control
+  checks, not hidden geometrypredicates. Existing raw/reduced guards cover
+  referencegeometry arithmetic incl9scale subtractions/9integer_abs.
+* one reference_evals charged before each scalar angularkernel; all sixpasses,
+  allpanels aggregate under originalpairidentity containing orderedvertices+target.
+  Fixed orders are maxima, not guaranteednodes. Repeatedsamepair attempts
+  retain counters/starttime.
+* angular A/s/cross/R0/R1/dynamicδ0/time/classification uses mp arithmetic.
+  Count individual reference_sqrt/reference_log1p/reference_divisions and
+  named dynamic_zero/dynamic_sign/finite checks; they are explicitly
+  floating checks, not charged as originalexact comparisons.
+  No claim of exhaustive CPython/libmp/gcd branches.
+* projected branch geometry proof gives Bzero without cross/sqrtδ kernel.
+  Generalbranch uses nonnegativecrossnorm and countedtransc/functions;
+  exactδ0 allowed only originalM08 role + dynamicv=.5. Any additional
+  originalgeometry predicate requires prior callsiteproof within174,
+  otherwise failclosed before implementation.
+* reference_pass keeps privatefinally; Arithmetic.close_reference still restores
+  wrappers/clearsprivatecaches/GC without resetting lifetimepeak/counters.
+  report remains terminalsnapshot; admission neverrecheckedwhilewriting.
+
+Static node bound from pinned mpmath1.3.0::TanhSinh.calc_nodes:
+loop j=0..20*2^d inclusive; eachiteration appends at most two nodes;
+degree1 adds one center. TanhSinh.sum_next reuses previouslevel sum and
+evaluates only returnednewnodes once. For one uninterrupted [0,1] quad,
+regardless libraryerror estimator stop:
+```{math}
+:label: analytic-v2-general-radial-work
+N_g(m_g)\le\sum_{d_g=1}^{m_g}(40\,2^{d_g}+2)+1
+=40(2^{m_g+1}-2)+2m_g+1,
+\\
+N_g(8)\le20417,\quad N_g(10)\le81861,\quad
+N_g(12)\le327625,\quad
+S_g=2(20417+81861+327625)=859806,
+\\
+W_{\mathrm{test},g}\le3S_g=2579418<10^7,\qquad
+P_g\le105,\qquad W_{\mathrm{corpus},g}\le105S_g=90279630<10^8.
+```
+
+Noexperimentalnode generation needed. This bound assumes exactlyonequad per
+retainedpanel, no angularsubdivision/retry/extraquadrature; tests must prove
+calls. Actual blockedattempt is counted: implementationmistake mayrefuse,
+not loosenbound. Geometryproof panelcount and staticloop proof are independent
+of observed PASS. Full corpus100m leaves9,720,370 calls reserve, not additional
+adaptive method permission. Time/RAM/convergence remain independentgates.
+
+RAMestimate, **not actualpeak proof**: at degree12 alllevelnodes≤327625,
+standard+transformed tables≤655250 nodepairs. Planningallocation pernodepair:
+64Btuple+2*512Bmpfreserve+8Blistpointer=1096B. Largest fdot level
+≤163842products, reserve1024B/product; base/exact/allocatorheadroom
+$H_g=256\,\mathrm{MiB}$:
+```{math}
+:label: analytic-v2-general-radial-memory
+M_g^{\mathrm{estimated}}\le655250\cdot1096+
+163842\cdot1024+268435456
+=1154363664\ \mathrm{byte}<Q_g=2147483648\ \mathrm{byte}.
+```
+Assumedbytecosts are estimates, not guaranteed Pythonobject bounds.
+Freshpass stillallocates floats/ints/dictionaries; fragmentation/runtimeglobal
+cache canexceedreserve. No officialmemoryPASS from this formula. Only real
+lifetimepeak guard canadmit. Nested2D livefdot lists are removed algebraically,
+not via changing fdot summation or crosspassreuse. No childprocesses perpair.
+
+#### Frozen proof/regression plan before any new reference
+
+Independent proof required: differentiateprimitive; stableD via
+R−abs t=δ²/(R+abs t), E triangleinequality; originalgeometry roles and105bound;
+δ0singular/offsegment and C0/h0 exactbranch; scientificreviewnotvalidatorproof.
+Do not call primaryedges/logkernel to construct referencevalues.
+
+Mandatory direct2D comparison fixtures fixed **before execution**:
+M01–M18/base (all18), plus M08/shear, M10/shear, M16/shear,
+M08/rotate90, M10/rotate90, M16/rotate90 (six), total24fixturepairs.
+These are a separate independent-method validation experiment, not a
+replacement/split admission of full54corpus. It must have oneBudget for its24,
+same160/200digits and maxdegree8/10/12, originaldirect2D kernel uK/R and
+positivepartition, same total/local convergence and radial-vs-direct2D
+gate1e-30(ell+absI2D). Same10m/test/100m/case/time/RAM and exactcaps
+174/test; 9396/case remains maximum, neverfitnewlimit.
+No lowerprecision comparator, case deletion, afterfailuretargetreplacement
+or promotion of partialfixtures. Near2^-40 direct2D mayrefuse; then mandatory
+independencevalidation NOT VERIFIED and no qualified fullreference claim.
+Separate scientificexperiments have separate receipts, method IDs and counters;
+no resetting Budget inside54run or rebinding itspartialresults.
+
+Planned interpreted sourceclosure tests (noquad authorization at present):
+negativephysicalarea/zeroedge/nonfinite; exactC0/h0/oneULPdistinction;
+M08midpointδ0 and ±perturbation, impossibleδ0insidesegmentrefusal,
+unprovenroundedzero refusal; stableDpositivebranches/tinyδ/noepsilon;
+generaloutside βnegative/positive cancellation handling;
+vertex/projected/general onequad callback + sixfreshcontexts;
+before10m+1/before100m+1 andbefore175/9397 comparisons refusal;
+rawintermediate cancellation-over8192 refusal, samexyz-differentfaces identity;
+cacheweakrefnormal/exception, terminalmainreceipt ontime/RAM;
+staticcalc_nodes loop/nodecounts proof and literal105panelcount.
+Algebraic fixtures not alreadyin54 remain regressions, no targetmutation.
+
+Futurefull54 authorization requires source/doc review, all interpretedtests,
+independentproofreview, mandatorydirect2Dvalidationstatus reported,
+newimmutablecapsule/methodpreregSHA/source/test/doc/map/wheelpins,
+oneBudget+singleprocess+ownedPIDreceipt/terminalguard, before/afterhashes.
+A full54radial scalar comparison PASS, if obtained, is explicitly a
+radial-reference scalar result; if mandatorydirect2D regressions refuse,
+full scientificindependence qualification remains NOT VERIFIED.
+No fullidentity/extreme or RT0/H claims. Source code ukończony po implementation-only review. Nadal brak zgody na actualquad.
+
+#### API→IR→native, four lanes, impact and source index
+
+Existing publicstudy/load/lowering in analytic-v2-python-ir-mapping unchanged:
+all geometry/currentconductivity/sourcecut/18physicalprobes/current/projection
+physicsgates remain frozen. No new PythonDSL arguments, no ProblemIRfield,
+no planner/session/native changes or publicreceiptactivation. This helper
+consumes syntheticvertices/targets; actualnative retainedcurrent carriers
+and Hsamplecells are not used here. require_qualified stillrejects.
+
+| Lane | Status / reason |
+|---|---|
+| FEM CPU | scalar interpreted reference SOURCE IMPLEMENTED / NOT QUALIFIED; nativecurrent/RT0/H NOT VERIFIED |
+| FEM GPU | no implementation/deviceevidence; no promotedbasis |
+| FDM CPU | no discretization/API/supportchange; not a FDM reference |
+| FDM GPU | no device/runtimechange or parityclaim |
+
+| Claim | Stable path + symbol/anchor | Evidence |
+|---|---|---|
+| newradial equations/branches/counters | docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md::DOC-ANCHOR:analytic-v2-general-radial-1d-prereg | planned_contract, independentrootalgebrareview; noexecution |
+| positivepanels/dataidentity | scripts/antenna_triangle_surface_oracle.py::positive_reference_panels, reference_test_identity | existingexactsource, existing inside bool carried without new predicates |
+| oldnonvertex2D location | scripts/antenna_triangle_surface_oracle.py::_reference_pass_context | currentsource; GENERAL_RADIAL_1D implemented; direct2D24 reference driver NOT IMPLEMENTED |
+| sixpasses/gates | scripts/antenna_triangle_surface_oracle.py::reference_triangle | existingschedule; sourcekernel, no actualreference |
+| exactcounters/peak/terminal | scripts/antenna_triangle_surface_oracle.py::class Budget, class ReferenceExactArithmetic | existingguard; dynamicangular taxonomy source-only |
+| lifecycle | scripts/antenna_triangle_surface_oracle.py::class Arithmetic | existingprivateclose_reference; no budgetreset |
+| fixedcorpus | scripts/antenna_triangle_surface_oracle.py::mathematical_corpus | existing54 data;105boundownproof |
+| meaningfulschedulefixture | scripts/test_antenna_triangle_surface_oracle.py::test_reference_six_passes_keep_fresh_contexts_and_shared_budget | existingmocktest, not newradialproof |
+
+Nowy scripts/antenna_triangle_surface_oracle.py::reference_radial_value realizuje
+vertex/projected/general angular kernel. positive_reference_panels zwraca istniejący
+inside bool, bez dodatkowych Fraction comparisons; M08 role jest sprawdzany przez
+ordered originalbinary64 identity membership trzech zamrożonych M08 variants,
+nie przez rounded cross. Istniejący return tuple zmienia się wyłącznie w helperze
+badawczym i jego testach; nie ma nowego public API. Runtime statuses pozostają
+NOT VERIFIED, a docanchor/source-only markers nie są dowodem kwalifikacji.
+Expected artifacts: radialmethodmarkers, actualangularcounters, finitebranch
+evidence, direct2Dvalidationreceipt, full54unexecutedIDs and terminalreason;
+archiveallpriorreceipts unchanged. Sourceguard timing limitation in previous
+actual54 remains recorded; no retroactivehash/proof revision.
+
+Primary bibliography, limitations of attribution:
+[Duffy1982](https://epubs.siam.org/doi/abs/10.1137/0719090)
+introduces singularity transformation (abstractread, not prooftheseformulas);
+[Reid–Johnson–White](https://arxiv.org/abs/1312.1703) describes dimensional
+reduction for triangleproducts (differentintegrals, abstractread);
+[taggedmpmathquad](https://github.com/mpmath/mpmath/blob/1.3.0/mpmath/calculus/quadrature.py)
+owns exactloopbound/cache/summation;
+[taggedfdot](https://github.com/mpmath/mpmath/blob/1.3.0/mpmath/ctx_mp_python.py)
+materializesproducts; [PythonGC](https://docs.python.org/3.12/library/gc.html)
+does not guaranteelifetimepeak reduction.
+The radialderivation and105count are ours, not copiedpaper/code.
+Erratum2015 remains unread; no assumedcorrection used.
+Completeness: governing/symbols/params/lanes/mapping/source/bib/prereg included;
+actualRAM/time, direct2Dregressions,
+full54 and RT0/H evidence deferred. StructuralvalidatorPASS doesnotclosethese.
+
+
+Źródłowe interpreted30tests PASS obejmują małe primitive/asinh derivative checks,
+height sign/vertex, M08midpoint positive/negative offsegment algebra, unprovenzero
+or singularsegment refusal, oneULP offplane positivebranch, mocked onequad/
+chargebeforethird, exact174/sourceidentity/rawguards, lifecycle i staticnode/105panel
+geometry proof. Żaden test nie wykonał realnej quad; ctx.diff jest ograniczoną
+weryfikacją pochodnej, nie pełną referenceconvergence. Existing monkeypatched
+schedule nie jest PASS full54. ActualRAM/time, independent24 i RT0/H pozostają
+NOT VERIFIED. Finalization zawiera hashes/counters/testscope/limitations.
+
+| Actual claim | Stable source/test | Evidence |
+|---|---|---|
+| radialprimitive/branches/dynamiccounts | scripts/antenna_triangle_surface_oracle.py::reference_radial_value | implemented source; small algebra only |
+| independentasinh primitive derivative | scripts/test_antenna_triangle_surface_oracle.py::test_general_radial_matches_independent_asinh_antiderivative | PASS, noquad/edgekernel |
+| exactzero versus physicalpermission | scripts/test_antenna_triangle_surface_oracle.py::test_radial_zero_is_geometry_certified_or_refused | PASS, midpoint/negative/singular/unproven |
+| fixedwork proof and positivepanels | scripts/test_antenna_triangle_surface_oracle.py::test_static_node_bound_and_frozen_panel_count_without_quad | PASS, geometry only |
+
+### 6. Nowe units of work, bez podmiany v1 liczników
+
+V1 limit100m 1D eval/target i2b/case pozostaje w historii i nie może być przeliczony1:1 na transcendental call. V2 ma odrębne fixed admission units:
+
+| Counter | per target | per case | Znaczenie |
+|---|---:|---:|---|
+| attempted analytic face–target–precision pairs |100000|5000000| wszystkie binary64/80/120 i failures; mandatory3passes |
+| attempted `sqrt`, `log`/`log1p`, `atan2` łącznie |2000000|100000000| osobne histogramy function×precision, zarówno main jak crosscheck |
+| exact determinant/triple-product predicates |500000|20000000| unique pair geometry predicates raz, binary64 rational sign; nie per precision duplicate |
+| runtime peakRAM |2GiB|2GiB| pomiar actual process tree; estimate nieproof |
+| wall time |60min|8h| includes input/reconstruction/summation/counters, nie tylko kernel |
+
+Fixed conservative prediction na pair/pass:≤3edge logs+4atan2+12sqrt=19transc calls; wszystkie skips liczone w preflight jako pełny koszt. Geometry normal/edge scale precomputation i QR sqrt policzyć dodatkowo; conservative reserve jest resztą limitu, nie założeniem convergence. Exceptional log fallback dodatkowe calls i odmowy także liczone. Zero retries ponad120digits; ewentualna inna precision wymaga revision. Exact predicates≤12 na unique face-target pair, algebraic count uzasadnić call-site instrumentacją przed field solve. Dodatkowo raportować divisions/primitive operations i max numerator/denominator bit lengths; rational bit length>8192 → INCONCLUSIVE. Calls nie są jednakowymi costs; liczniki nie dowodzą czasu/RAM.
+
+Dla immutable finest geometry22000faces×63targets=1386000unique pairs:3passes=4158000pairs; conservative79,002,000transc calls plus precomputation/QR; pertarget66000pairs i1,254,000transc calls; predicates≤16,632,000case i264,000target. To geometry-only count, nie executed benchmark ani admission wszystkich gates. Pozostałe20,998,000transc calls są upper reserve, nie obietnicą runtime. Native9875×63=622125source-targetpairs pozostaje pod1m. Geometry ledger/drift refusal nadal blokują solve. Każda cut/jump/mesh/transform konfiguracja to oddzielny case z full public carrier+18probes; nie usuwać sampling nodes ani cicho splitować case.
+
+Benchmark przed fields tylko geometry: deterministic pierwsze/środkowe/ostatnie physical face sorted key oraz full18probes,3precisions; record exact selection/hash, elapsed,peakRAM,counters. **Benchmark nie kwalifikuje** accuracy/fullcase runtime. Próba full geometry-only admission musi objąć wszystkie targets i faces; można refuse na predicted bound przed evaluation. Estimated RAM8×JSON jest diagnostic-only, actual allocator i highprecision arithmetic wymagają pomiaru. Brak peakRAM provenance → NOT VERIFIED, nie inference z małego JSON.
+
+### 7. Zachowane gates oraz Python/IR/backend contract
+
+Źródło publiczne pozostaje flat `examples/fem_antenna_closed_loop_nonmagnetic.py::study`, geometry3D, sourcecut coincident z=-.3µm/+0.25V, conductivity5.8e7/3e7S/m, gauge zero_mean, CPU/double/P1. Meshe .15/.10/.075µm i actual sampling carrier14/14/45nodes pozostają frozen. 18fixed scientific points oraz exact bytes/expression/classification są w v3receipt. Źródło-only meshing/carrier override nie jest tu dopisywany.
+
+| Lane | Stan v2 | Kontrakt |
+|---|---|---|
+| FEM CPU | SOURCE PLANNED / NOT VERIFIED | independent interpreted analytic A, independent H1 B i weightedRT0 C; native managed runtime nadal wymagany |
+| FEM GPU | NOT VERIFIED | brak device evidence/qualified closedloop; oracleCPU niepromujeGPU |
+| FDM CPU | unsupported ten scope | retained3DconformingH1/RT0 contract nie jest FDM discretization |
+| FDM GPU | unsupported ten scope | brak FDM realization tej closedloop qualification |
+
+Bez nowych Python parameters/IR fields/planner capabilities/receipt activation. `load_problem_from_script`→publicProblem→`Problem.to_ir(include_geometry_assets=True)` pozostaje canonical materialization. Prepared native geometryσ/cutpairs/gauge są danymi oracle B, nie reuse native solve. Native3preimages/hashes/actual source+sample carriers, exact methods/tolerances/source hashes, runtime/software/precision i failed attempts mają trafić do późniejszego naukowego receipt bez circular digest dependency. `require_qualified` nadal odmawia.
+
+A: native–oracle≤1e-3A/m+1e-3normH; oracle≤1e-6A/m+1e-6normH. Baseline nativequadorder4/depth6/atol1e-9A/m/rtol1e-5, zero unconverged; osobno order6/8 depth6 atol1e-10/1e-11 rtol1e-6/1e-7, delta6→8≤1e-5A/m+1e-4normHo, delta4→6≥delta6→8 poza1e-5floor.
+
+B: własne stiffness/barycentric gradients/symmetric elimination/volumeweightedgauge, PCGmax100000freeDOF/100000iterations/residual≤1e-13. $I_{H1}=d\mathcal D_h/d\Delta V=P_h/\Delta V$ jest signed weak sourcecut reaction z własnego originalK; $I_{RT0}$ conservative minus_outward flux. RawP1faceflux nie jest weakreaction. $|I_{RT0}-I_{H1}|≤1e-18A+1e-8|I_{H1}|$; samegauge Vdelta≤1e-10V+1e-8max|Vo|.
+
+C: własna constrainedweightedRT0assembly/solve max400000fluxDOF/100000iterations/KKT≤1e-11; relativeweightedL2delta≤1e-7. Fine–mediumI≤.01|Ifine|+1e-18A, H≤5e-4A/m+5e-4normHfine, normalizedH/I stricter same relative/floor divided|Ifine|; contraction pozafloor. Finesteta≤.05 i eta_fine≤.8eta_medium≤.64eta_coarse, wyjątek oba≤1e-6. To fixedfixture heuristic scope, nie uniwersalne prawo zbieżności.
+
+Existing H1residual≤1e-12, jump/gauge≤1e-12V+128epsilon appropriate scale, localflux≤1e-18A+1e-10sumabsflux, signed|Ic|>100×cutfluxgate; geometry/volume/facepairquality unchanged. Wszystkie reversal -.25V, scale+.125V, orientationreversal, sourcecutrelocation-.25/-.35µm,90°zrotation i translation(3,-2,1)µm pozostają z canonical v1 thresholds; nie reinterpretować failures jako scientificPASS. Kompletny frozen anchor jest normatywnym źródłem wszystkich tych porównań, nie skrót tej tabeli.
+
+### 8. Zależność do przyszłego wykonania
+
+Mpmath i SciPy nie są obecne w sprawdzonym bundledPython ani Dvenv; ten prereg nie instaluje dependencies. Wybrany przyszły dependency to **mpmath1.3.0**, purePython wheel `mpmath-1.3.0-py3-none-any.whl`, SHA256 `a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c`, rozmiar536.2kB wg [PyPI release files](https://pypi.org/project/mpmath/1.3.0/#files). Pin świadomy, nie claim latestversion. Root może autoryzować mały download/install `--no-deps --only-binary=:all: --require-hashes` w istniejącym `D:/git/fullmag/storage/builds/antenna-transport-e2e-20261011-5e7f0d529ca256ef/windows-source-contracts/python`; cache iwheelpod `.../windows-source-contracts/mpmath-wheel/`, TEMP/TMP pod jego `tmp/`. Zweryfikować downloaded bytesHash przedinstall, zapisać wheel/import/version/runtime identity; nie używać Cstorage, sourcebuild/SciPy/nativebuild. Importtest oraz matematyczny corpus następują dopiero po prereg freeze. Installation failure niezmienia algorytmu/progów; bezdependency NOT VERIFIED. Mpmath nie gwarantuje rigorous errorbounds; trójpasscomparison oraz independentreference nie znikają.
+
+### 9. Implementation mapping, literatura i ograniczenia
+
+| Claim | Actual path + symbol albo planned docanchor | Evidence |
+|---|---|---|
+| Public physical input | `examples/fem_antenna_closed_loop_nonmagnetic.py::study` | source/frozen hashes, żadnego solve |
+| Canonical IR materialization | `packages/fullmag-py/src/fullmag/model/problem.py::Problem.to_ir` | actual v3payloads, geometry-only |
+| Exactgeometry/counts/refusals | `scripts/preflight_antenna_closed_loop_qualification.py::preflight`, `cut_pairs`, `semantic_owner_admission` | v3REFUSED; noCADledger |
+| Independent H1/RT0 contracts | 0950 `DOC-ANCHOR:antenna-closed-loop-independent-qualification-prereg-v1` | SOURCE PLANNED |
+| Plannedanalytic/mathcorpus | ten dokument `DOC-ANCHOR:analytic-v2-signed-fan`, `analytic-v2-stable-log`, sekcje4–6 | brak oraclefunction, brak executedtests |
+| Native3retainedpreimages | `crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs::ClosedLoopAcceptedSourceInputV2.prepared_execution_preimage`, `ClosedLoopAcceptedSourceInputV2.accepted_charge_field_preimage`, `ClosedLoopAcceptedSourceInputV2.accepted_source_state_preimage` | referencja provenance, nieindependentalgorithm |
+| Nativeidentityparse/verify | `crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs::Fields` | actual source symbol potwierdzony read-only; brak nowego runtimeclaim |
+
+Bibliografia kandydacka: van Oosterom, *Closed-form analytical expressions for the potential fields generated by triangular monolayers with linearly distributed source strength*, DOI https://doi.org/10.1007/s11517-011-0837-9; van Oosterom/Strackee, *The solid angle of a plane triangle* (1983), DOI https://doi.org/10.1109/TBME.1983.325207. W tym kroku DOI endpoints nie były dostępne w browser tool; nie przyjmujemy pełnego tekstu jako sprawdzonego dowodu. Własne surface-div derivation i explicit orientation są podstawą projektu, a independentquadrature/review podstawą przyszłego sprawdzenia.
+
+Erratum2015 DOI https://doi.org/10.1007/s11517-015-1300-0 **nieprzeczytane**. Nie przypisujemy mu żadnej korekty, zakresu ani niewpływania na wzór. Bez dostępu nie twierdzimy zgodności z całym paper/erratum; nie kopiowano kodu ani equations jako implementationtruth.
+
+Warunki freeze: UTF8bezBOM/LF; wszystkie math labels/symbole,18fixedcorpusIDs,hashrefs i sourceanchors sprawdzić przed canonicalpublication. Przed implementation/rootreview skorygować każdy niepotwierdzony sourcepath zamiast tworzyć fictional symbol. FinalSHA tego pliku jest external freeze record; nie wpisać selfhash do treści. Plan nie dostarcza scientificPASS, actualaccuracy, performance ani implementationready dla refusedgeometry. Wszelkie zmiany corpus/precision/algorithm/counters/progów po freeze tworzą nową preregrevision; stare bytes/results zachować.
+
+
+(analytic-v2-parameters)=
+### 10. Pełna tabela nowych parametrów metody
+
+To stałe planowanego interpreted oracle, **nie nowe parametry public Python ani ProblemIR**. Typy, defaults i walidacja dotyczą wyłącznie prerejestrowanej metody. Wszystkie są SOURCE PLANNED FEM CPU; pozostałe lane jak tabela powyżej. Provenance przyszłego scientific receipt wiąże requested method i resolved precision/counters; nie zmienia authored physics IR.
+
+| Parametr metody | Typ i fixed default | SI | Walidacja/odmowa | Destination |
+|---|---|---|---|---|
+| algorithm | enum `signed_fan_analytic` +mandatory `whole_face_crosscheck` | $1$ | oba variants wymagane, zerocopy nativekernel forbidden | planned scientific method record, nie ProblemIR |
+| precision passes | tuple `(binary64,80,120)` decimaldigits | $1$ | wszystkiepasses, brakhighprecision odmawia | planned method/runtime record |
+| solid-angle120/80delta | float `1e-55`/`1e-45` | $1$ | scale $(1+|\Omega|)$, tylkoexact $h\ne0$ | planned perpair diagnostic |
+| binary64 potentialdelta | float `4096epsilon` | $1$ | scale $(\ell+|I_{120}|)$, weightedangle; fail→120/refuse | planned perpair diagnostic |
+| oracleatol/rtol | floats `1e-6 A/m`,`1e-6` | $\mathrm{A\,m^{-1}},1$ | targetdelta oraz suma localnorms; bezcancellationaccept | existing preregscientificA budget |
+| cancellation gates | floats `1e8`binary64,`1e40`highprecision | $1$ | first→120digits,second→refuse | planned condition counters |
+| mathematicalidentity120/80 | floats `1e-55`,`1e-45` | $1$ | scale $(\ell+|I|)$, fixedcorpus; niefitować | planned mathematical evidence |
+| referenceprecision/degrees | tuples `(160,200)`digits,`(8,10,12)`tanh-sinh | $1$ | independent direct2D; brakconvergence odmawia | planned reference record |
+| referenceatol/rtol scale | float `1e-30` | $1$ | potentialgate $10^{-30}(\ell+|I_{ref}|)$ i suma localdeltas | planned mathematical evidence |
+| analyticpairs | int `100000`target /`5000000`case | $1$ | attemptedprecisionpairs, failuresliczone | planned work counters |
+| transcendcalls | int `2000000`target /`100000000`case | $1$ | histogramfunctions/precision, no1:1v1evalconversion | planned work counters |
+| exactpredicates/bitlength | int `500000`target /`20000000`case /`8192`bits | $1$ | allattempts; overflowbudget INCONCLUSIVE | planned work counters |
+| referenceevals | int `10000000`test /`100000000`corpus | $1$ | allprecision/order attempts | planned reference counters |
+| time/RAM | `3600`target/test,`28800`case/corpus,`2147483648`bytes | $\mathrm s,\mathrm s,\mathrm{byte}$ (byte rozmiar storage, nie SI physics) | actual process-tree peak, estimate nieproof; exhaustionrefuse | runtimeprovenance |
+| geometryidentity/zero | exact binary64/rational | $1$ jako predykat | noepsilon/snap/nearest; CADledger missing INCONCLUSIVE | actualmesh +planned ownershipreceipt |
+
+(analytic-v2-python-ir-mapping)=
+### 11. Public Python → actual ProblemIR: unchanged exhaustive mapping użytego przykładu
+
+Executable stage-first example pozostaje `examples/fem_antenna_closed_loop_nonmagnetic.py::study`; nie duplikujemy scriptu ani nie dodajemy low-level API. `fullmag.runtime.loader.load_problem_from_script` wykonuje authoring bez stage solve, a `fullmag.model.problem.Problem.to_ir(include_geometry_assets=True)` materializuje actual execution geometry. Geometry-only v3 zarchiwizował authored i executionIR na wszystkich trzech poziomach. Poniższe paths są z **odczytanego actual mesh-1 authored/executionIR**, nie hand-shaped schema. Public constructor types/defaults/validation są istniejącym rozdziałem Python API tej noty; fixed values v1 i publicsource pozostają unchanged. Wariant v2 nie wystawia żadnego nowego public parameter.
+
+| Public element/parameter użyty w `study` | Actual destination i normalization |
+|---|---|
+| `fm.study(name)`; `.engine("fem")`; `.device("cpu",precision="double")`; `.mode("strict")` | `problem_meta.name`; `backend_policy.requested_backend`; `backend_policy.execution_precision`; `problem_meta.runtime_metadata.runtime_selection.{backend,device,execution_precision,execution_mode}`; requested/resolved osobno |
+| `.objects.mesh.defaults(maximum_element_size,minimum_element_size,order)` | `backend_policy.discretization_hints.fem.{hmax,order}`, `problem_meta.runtime_metadata.mesh_workflow.{fem,default_mesh,mesh_options}`; canonical SI, auxiliary sampling dziedziczy defaults |
+| `.antenna_object(geometry,name,object_id)` | `geometry.entries[0]`, `physics_objects[].{geometry_id,name,object_id,type}`; type antenna nieaktywuje physics |
+| `MicrostripAntennaLayout(name,length_m,thickness_m,conductivity_s_per_m)` | `geometry.entries[0].{name,length_m,thickness_m,conductivity_s_per_m}`; meters/Spermetre, positivefinite |
+| `.stations=[MicrostripWidthStation(s,signal_width_m),...]` | `geometry.entries[0].stations[].{s,signal_width_m}`; s ordered0→1 i positivewidth |
+| `.return_width_m,.return_offset_m,.signal_part_id,.return_part_id` | `geometry.entries[0].{return_width_m,return_offset_m,conductors[].id}`; offset to clearance, returncenter $-(t+offset)$ |
+| `.closed_loop` | `geometry.entries[0].loop.enabled`; both bridges authored, no fictitious epsilon seam |
+| `.inlet_connection_length_m,.inlet_connection_width_m,.inlet_connection_offset_v_m,.inlet_connection_part_id,.inlet_connection_conductivity_s_per_m` | corresponding exact fieldnames pod `geometry.entries[0].loop`; no materialactivation inference |
+| `.outlet_connection_length_m,.outlet_connection_width_m,.outlet_connection_offset_v_m,.outlet_connection_part_id,.outlet_connection_conductivity_s_per_m` | corresponding exact fieldnames pod `geometry.entries[0].loop` |
+| Default layouttransform | `geometry.entries[0].transform.{rotation_matrix,translation_m}` actualidentity; authoredintention unchanged |
+| `.geometry_object(Box(size_x,size_y,size_z,name).translate(by),name,object_id,type="geometry")` | `geometry.entries[1].{kind="translate",name,by,base.{kind="box",name,size}}`, `physics_objects[]`; brak magnetic state/material |
+| `.current_transport(name,model,coupling,domain,materials,boundaries,gauge,solver,structured_current_closure)` | `current_modules[0].{kind,name,model,coupling,domain,materials,gauge,solver,structured_current_closure}`; empty boundaries pominięte wactualIR |
+| `RegionRef(object_id,region_id)` i `ChargeTransportMaterialAssignment(region,ChargeTransportMaterial(sigma))` | `current_modules[0].domain[].object_id`, `.materials[].{region.{object_id,region_id},material.sigma_Spm}`; fourpartmaterials ownedexplicitly |
+| `ChargePotentialGauge("zero_mean")` | `current_modules[0].gauge="zero_mean"` |
+| `ChargeSolverPolicy(relative_tolerance,absolute_tolerance,max_iterations,operator_version)` | `current_modules[0].solver.linear.{relative_tolerance,absolute_tolerance,max_iterations}`, `.solver.operator_version`; resolvedenginecg/physicalresidualversion explicit |
+| `StructuredCurrentClosure(closure_id,source_cuts,schema_version)` | `.structured_current_closure.{kind="closed_geometry",closure_id,source_cuts,schema_version}` |
+| `StructuredCurrentSourceCut(source_cut_id,circuit_id,region,plane,drive)` | `.structured_current_closure.source_cuts[].{source_cut_id,circuit_id,region,plane,drive}` |
+| `StructuredCutPlane(axis,offset_m,coordinate_frame)` | `.source_cuts[].plane.{axis,offset_m,coordinate_frame,normal="positive_axis"}`; objectframe, no translation |
+| `ImpressedPotentialJump(drive_id,potential_jump_v)` | `.source_cuts[].drive.{kind="impressed_potential_jump",drive_id,potential_jump_V,schema_version}`; signedplus-minus |
+| `.add_antenna_port_mode(port_mode=AntennaPortMode(id,source_object_id,current_transport_id,schema_version,normalization,branches))` | `antenna_port_modes[].{id,source_object_id,current_transport_id,schema_version,normalization,branches,normalization_current_a}`; v3cutnormalization, legacy1Adefault nie measuredI |
+| `AntennaSourceCutRt0(source_cut_ref,orientation)` | `.normalization.{kind="source_cut_rt0",source_cut_ref,orientation="minus_outward"}` |
+| `AntennaPortBranch(id,inlet_terminal_ref,outlet_terminal_ref,signed_weight)` | `.branches[].{id,inlet_terminal_ref,outlet_terminal_ref,signed_weight}`; +1signal/-1return |
+| `.stages.add_antenna_field_solve(id,definition=AntennaFieldSolveStage(id,source_object_id,current_transport_id,port_mode_ids,field_sampling_domain,target_refs,outputs))` | `antenna_field_solve_stages[].{id,source_object_id,current_transport_id,port_mode_ids,field_sampling_domain,target_refs,outputs}`; model/meshpolicy/realization/policy explicitresolved existingfields |
+| `FieldTarget.object("sampling")`, `AntennaNamedOutput(id,quantity)` | `.field_sampling_domain/.target_refs[].{kind="object",object_id}`; `.outputs[].{id,quantity="H_ant_basis"}`; selector istnieje, publicationinspection_only |
+| `Problem.to_ir(include_geometry_assets=True)` | `geometry_assets.fem_mesh_assets[].{geometry_name,mesh}`, `current_modules[0].conservative_current_source.{stable_vertex_ids,material_parts,closure,mesh_digest,materials_digest,authored_input_digest,...}`; actualcoincident split/sourcepair identity |
+| Analytic oracle/corpus/precision/counters | **brak nowego ProblemIR destination**; plannedscientificreceiptmethod+runtime+datahash, nie publicsolverpolicy i nie hiddenphysics |
+
+Round-trip wykorzystuje ten sam publicscript/model, stableobjectIDs oddzielne odname/type. Authoring intent i executiongeometry zostają niezależnie retained. Geometry-only reader `scripts/preflight_antenna_closed_loop_qualification.py::preflight` porównuje hashes, counts, exactprobes; `semantic_owner_admission` odmawia brakCADledger. Normaldominance/extrema rows sąDIAGNOSTIC_ONLY, nie semanticproof. Missingowners/drift/topology/counterfailure niezgodne zqualification; `require_qualified` nie może być promowane przez tę publikację.
+
+(analytic-v2-canonical-boundary-direction)=
+### 12. Planned canonical boundary realization: identity-transform i ledger
+
+Storage-only read-only proposal `e2/canonical-boundary-integration-proposal.md`, SHA256 `71870f338a0dfdbe10a80f50a3e6b7be399aeada38a1b8de54b95bee70e88c97`, wykazał w Gmsh4.15.2 konwersję bridge/cutPlane doBSpline przez dokładnieidentity `occ.affineTransform`. Planowana wąska poprawka w `packages/fullmag-py/src/fullmag/meshing/_gmsh_waveguides.py::add_antenna_layout_parts_to_occ` pomija **wyłącznie** exact identity matrix trzy existingbridgecalls; to algebraiczny no-op physicaltransform, niezmienia authoredgeometry/current/materiałów. Przedwdrożeniem testproof musi wykazać unchanged call/results dla wszystkich nonidentity transforms, bez tolerantidentitypredicate.
+
+Geometry-only A/B bezidentityaffine dajecutPlane exact authoredz, ale aktualnytaper nadal ma4BSpline top/bottom surfaces. Nie jest kwalifikowany. Prosty proof23seednodes/44TRI3/48Tet4 import→fill potwierdza tylko prosty two-box case; nie pełnytaper ani rotated/translatedloop. Plannedfreshboundary recipe/semanticpointcurvefaceowner ledger musi powstać **przed Tet4fill** z authoredchart/ancestry/contact arrangements; brak dowodu fullcoverage odmawia. Nie snapować exportednodes ani znajdować owners przez restoredxyz/nearest/projection/normaldominance. Existingcoincident sourcecutduplication dopiero na acceptedfinalmesh, bez zmiany physicalbytes. Direction SOURCE PLANNED, nieCADledgerready; v3reader nadalREFUSED. To minimalgeometryrealizationplan, nie zmiana v1fixedphysicalscope.
+
+
 (antenna-implementation-mapping)=
 ## 13. Implementation mapping
 
@@ -7257,14 +8798,19 @@ evidence and cannot promote a capability lane.
 (antenna-accepted-equilibrium-transverse-contract)=
 ### E9b: publiczny accepted Relax → transverse source spectrum — implementacja źródłowa
 
-**Stan bieżący: implementacja zintegrowana; kompilacja pakietu Windows i 50
-kontroli integracji API VERIFIED. Publiczny native FEM Relax→source→transverse,
+**Stan dowodów bazowych: implementacja zintegrowana; kompilacja pakietu Windows i 50
+kontroli integracji API VERIFIED dla `origin/master`, przed integracją WIP. Scalony
+worktree nie ma jeszcze powtórzonego build/API check. Publiczny native FEM Relax→source→transverse,
 połączenie przeglądarki z rzeczywistym wynikiem, cold reopen oraz scientific
 qualification NOT VERIFIED.** Typed Python references, IR, canonical accepted
 Relax wrapper/context, projekcja P1, manifest v3 i API readers mają implementacje
 źródłowe w wydzielonym pakiecie. Build Windows API/CLI/desktop potwierdza
 kompilację tego pakietu, nie build ani wykonanie natywnego solvera FEM.
-Archive inventory nie jest częścią tego pakietu. Nie wykonano publicznego
+Archive inventory nie jest częścią zweryfikowanego pakietu Windows/API. WIP dodaje
+osobne źródłowe powiązanie session-owner/archive: `EquilibriumOwnedManifest` i
+`equilibrium_owned_inputs`, pełny zamknięty inventory wszystkich czterech `InputRef`,
+SHA i byte-count payloadów (w tym `accepted_fields.json`), ścisły schemat i limity
+budżetu. Te zmiany nie były objęte build/API check ani cold reopen. Nie wykonano publicznego
 native FEM Relax→source→transverse benchmarku ani kwalifikacji wydania. Istniejący source_not_qualified gate nadal odmawia niekwalifikowanej
 bazie; samo poprawne autorstwo reference nie odblokowuje basis ani LLG.
 
@@ -7402,7 +8948,7 @@ nie zostaje po eksporcie przypadkowo przywiązany do innego ostatniego m0.
 Requested intent i resolved execution są zapisane osobno. Wymuszony GPU
 nie powoduje cichego CPU fallbacku; niedostępna lane jest jawnie odrzucana.
 
-Python→IR→script export→eval→IR wymaga dowodu przypiętego do wydzielonego pakietu; wcześniejsze wyniki szerokiego WIP nie są dowodem jego kwalifikacji. Nie zastępuje to prawdziwego
+Python→IR→script export→eval→IR wymaga dowodu przypiętego do wydzielonego pakietu; wcześniejsze wyniki szerokiego WIP nie są dowodem jego kwalifikacji. Zapis WIP podaje 13 testów/34 subtests authoringu oraz 15 Rust syntax-parser checks i scoped diff; nie powtórzono ich po integracji z masterem i nie stanowią typechecku ani dowodu runtime. Nie zastępuje to prawdziwego
 publicznego stage-first Relax → qualified source solve →
 `add_antenna_spectrum_request` z actual native runtime. Ten benchmark,
 canonical generated OpenAPI/TypeScript, browser readback i cold archive reopen
@@ -7570,6 +9116,1046 @@ GPU FFT, mixed-cell interpolation, mode overlap i magnetic response; żadna z
 tych funkcji nie uzyskuje capability przez niniejszy kontrakt.
 
 
+
+(analytic-v2-fixed-ctypes-abi-prereg)=
+## Referencja skalarna: prerejestracja stałego ABI pomiaru RAM
+
+**SOURCE-ONLY IMPLEMENTED; bez nowego actual run i bez kwalifikacji 24/54, RT0 lub H.**
+Zmiana realizacji pomiarowej zachowuje równania i bramki
+[GENERAL_RADIAL_1D](#analytic-v2-general-radial-1d-prereg), historię odmów oraz
+[reference comparison contract](#analytic-v2-reference-comparison-contract).
+Storage proposal direct2d24-ram-lifecycle-proposal-v1/prereg-proposal-pl.md
+SHA 8b7d2b6f1f8d295d206257b4cf72d7c1aed6077d2945abcf74d5e7ef594a63fc
+oraz root direction review
+SHA ae5647919a67af2659ead911cb91e75ff236d59f582ed5301ec73d8f95fb8c22
+stanowią preimplementation contract; nie autoryzują nowego actual run.
+
+### Przyczyna i zakres dowodów
+
+Dotychczasowe scripts/antenna_triangle_surface_oracle.py::peak_ram_bytes
+definiuje nową klasę MemoryCounters i ctypes.POINTER(MemoryCounters) przy
+każdym pomiarze. Cache CPython pointer types utrzymuje klasę po powrocie.
+Bounded diagnostic po warmup, bez kwadratury: 128 odczytów zmieniło liczbę
+kluczy z 21 na 149; dokładnie 128 nowych typów pozostało po GC. Model
+jednej stałej klasy/signature: 150 kluczy przed i po 128 odczytach.
+Tracemalloc wskazał odpowiednio 975308 B oraz 248 B wzrostu. To dowód
+retencji instrumentacji, nie jej dokładnego udziału w historycznych 2 GiB.
+
+Oba archiwalne helpery SHA1773228878904962b31e1cdc45eb358f319b294fc1f6d5c3016e689f3d223619
+oraz SHA9daaaf011c905837cc91ce107bd37c6cae93f680fc14659b5650c93738d32b84
+mają ten sam segment peak_ram_bytes,
+SHA8372029c2aeb7fef3bba0c2e5a670086f0208c70121b7d17e88131bfdc03dd0b.
+Archiwa i historyczny REFUSED pozostają bez zmian. Małe weakref models
+nie wykazały retencji kontekstów po obecnym cleanup; nie wykluczają
+transient cache/allocator cost rzeczywistej kwadratury.
+
+### Niezmieniony kontrakt pomiarowy
+
+```{math}
+:label: analytic-v2-fixed-ctypes-peak
+M_{\mathrm{read}}(t)=
+\max\!\left(M_{\mathrm{ws,peak}}(t),M_{\mathrm{commit,peak}}(t)\right),
+\qquad
+M_{\mathrm{budget}}\leftarrow
+\max\!\left(M_{\mathrm{budget}},M_{\mathrm{read}}(t)\right)
+\le Q_{\mathrm{RAM}}.
+```
+
+| Symbol | Znaczenie | Jednostka |
+|---|---|---|
+| $M_{\mathrm{read}}$ | max obu peak OS, nie bieżący working set | $\mathrm{byte}$ |
+| $M_{\mathrm{ws,peak}}$ | PeakWorkingSetSize bieżącego procesu | $\mathrm{byte}$ |
+| $M_{\mathrm{commit,peak}}$ | PeakPagefileUsage, lifetime peak commit charge | $\mathrm{byte}$ |
+| $M_{\mathrm{budget}}$ | monotonically retained peak jedynego Budget | $\mathrm{byte}$ |
+| $Q_{\mathrm{RAM}}$ | zamrożony limit 2147483648 B | $\mathrm{byte}$ |
+| $t$ | monotonic elapsed; setup/pomiar/cleanup wliczone | $\mathrm{s}$ |
+
+Byte jest jednostką danych spoza SI. Typ PROCESS_MEMORY_COUNTERS,
+pointer type, WinDLL oraz function ABI powstają raz na załadowany moduł/proces.
+Każdy odczyt ma osobną lokalną instancję buffer. HANDLE, dwa DWORD,
+osiem SIZE_T, cb=sizeof(struct), GetCurrentProcess.restype=HANDLE,
+GetProcessMemoryInfo.argtypes=(HANDLE,POINTER(struct),DWORD) i restype=BOOL
+zachowują ABI WinAPI. Zero return/nieudostępniony pomiar odmawia,
+bez podstawienia peak=0.
+
+| Parametr | Wartość prerejestrowana | Walidacja |
+|---|---|---|
+| Fixtures | M01–M18/base oraz M08/M10/M16 shear i rotate90 | dokładnie 24, kolejność bez zmian |
+| Passes/fixture | 160/200 cyfr × 8/10/12 × direct2D/radial1D | 12 osobnych ctx tworzonych kolejno, nie naraz |
+| Eval attempts | 10m/test i 100m/case, obie metody w jednym Budget | charge-before-guard, bez reset |
+| Exact comparisons | 174/test, 9396/case | shared geometry 16+6×25+8 |
+| Exact raw/reduced | 8192 bits | istniejące intermediate gates |
+| Time | 3600 s/test, 28800 s/case | pomiar/cleanup w elapsed |
+| RAM | lifetime 2 GiB w tym samym procesie | brak child reset, peak nie maleje |
+| Numerical gates | wszystkie total/local/cross-method gates bez zmian | AST/math body invariants |
+| Guard cadence | dotychczasowe sum(counts.values()) modulo256 oraz jawne guards | brak nowego count wpływającego na cadence |
+
+Arithmetic.close_reference nadal w finally czyści wyłącznie własne cache
+obu reguł, odwraca wrappers, odłącza ctx i wykonuje GC. Integrand order,
+kernel branches, node method, digits, panele i wyniki pozostają bez zmian.
+Nie czyścimy globalnego ctypes cache, nie reuse'ujemy wyników/nodes między
+passami i nie zmniejszamy częstotliwości guard. OS peak nie spada po GC.
+
+### Osiem prerejestrowanych grup testów
+
+1. Helper math/driver calculus AST, historyczne archives i limity unchanged.
+2. Windows ABI layout/signature/cb i failclosed zero return.
+3. 128 pomiarów po warmup bez nowych własnych pointer-cache keys.
+4. Mock rosnący peak/malejący current, odmowa >2GiB bez resetu
+   eval/exact/time/cadence.
+5. Nonempty private caches i weakrefs po normalnym/exception cleanup.
+6. Mock 24×12 kolejnych freshctx ze wspólnym Budget i exact taxonomy.
+7. Actual-main injected RAM/time retains terminal partial/remaining/pins.
+8. Root source review/sourcefreeze i brak automatycznej autoryzacji actual
+   run nowej capsule. Tracemalloc/RSS tylko diagnostyka, bez fitted threshold.
+
+### Python, IR, realizacje i provenance
+
+Public Python → ProblemIR → planner → native zachowuje każde pole/default,
+requested/resolved intent i observable. Nie dodajemy publicznego parametru
+cache/RAM ani scientific receipt activation. Nowa capsule zmienia jedynie
+jawne sourcepin/admission bindings; stary execution review jej nie autoryzuje.
+
+| Lane | Stan |
+|---|---|
+| FDM CPU | brak solver/API change; reference research, nie qualification |
+| FDM GPU | brak urządzenia/wykonania; fixed Windows ABI poza lane |
+| FEM CPU | brak V/J/H/native; scientific qualification NOT VERIFIED |
+| FEM GPU | brak urządzenia/wykonania; scientific qualification NOT VERIFIED |
+
+### Bibliografia i source index tego zakresu
+
+[CPython ctypes](https://docs.python.org/3.12/library/ctypes.html#ctypes.POINTER)
+opisuje pointer cache; [GC](https://docs.python.org/3.12/library/gc.html)
+nie usuwa rooted cache;
+[tracemalloc](https://docs.python.org/3.12/library/tracemalloc.html) nie jest OS peak.
+[Microsoft PROCESS_MEMORY_COUNTERS](https://learn.microsoft.com/en-us/windows/win32/api/psapi/ns-psapi-process_memory_counters)
+i [GetProcessMemoryInfo](https://learn.microsoft.com/en-us/windows/win32/api/psapi/nf-psapi-getprocessmemoryinfo)
+określają ABI i byte fields. Claims mpmath/cache wynikają z przypiętego
+wheel1.3.0, nie z domniemanej strony web403.
+
+| Claim | Path + symbol | Stan |
+|---|---|---|
+| Stały measurement ABI | ten dokument::DOC-ANCHOR:analytic-v2-fixed-ctypes-abi-prereg | planned_contract |
+| Pomiar/guard | scripts/antenna_triangle_surface_oracle.py::peak_ram_bytes, class Budget | source_only; fixed ABI z interpretowanymi regresjami |
+| Cleanup | scripts/antenna_triangle_surface_oracle.py::Arithmetic.close_reference | istniejący, bez zmiany |
+| Terminal refusal | scripts/test_antenna_triangle_surface_oracle.py::test_main_persists_terminal_time_and_ram_refusal | interpreted source evidence |
+| Actual fixed ABI regressions | scripts/test_antenna_triangle_surface_oracle.py::class FixedCtypesLifecycleTests | ABI/cache128/peak/cadence/mathAST; source-only |
+
+34 interpretowane testy helpera i 10 storage-driver tests przeszly; wszystkie callbacki kwadratury referencji w tych testach sa mocked. Mock 24x12 nie jest actual24 i nie promuje numerical qualification. Driver calculus AST pozostaje identyczne; nowa capsule wymaga lifecycle prereg hash i nie przyjmuje starego execution review.
+
+Odroczone: root full source review,
+odrębna nowa actual24, actual54 i weighted RT0/H. Historia immutable.
+
+
+(analytic-v2-direct2d-gl-prereg)=
+## Prerejestracja jednej reguły Gauss–Legendre dla niezależnych 24 fixture
+
+**PLANNED / PROPOSAL-ONLY. Nie zaimplementowano, nie wykonano i nie autoryzowano actual.** Root wybrał jedną regułę Gauss–Legendre we wszystkich numerycznych wywołaniach bezpośredniej referencji24. Dotyczy obu zagnieżdżonych całek oraz istniejącego exact-vertex branch z jednostkową całką radialną. Porównywana GENERAL_RADIAL_1D zachowuje tanh–sinh i własną radial primitive. Nie mieszać wyboru reguł po wynikach, nie dopasowywać parametrów do częściowych M10 i nie zastępować numerycznej2D primary triangle edge formula.
+
+Baseline obejmuje fixed-ctypes capsule driver SHA3f338d27e5add56b0c45b7405ab22e8592488f4bbfafc45f86940aed4ef24b1b, helper db3d43cf2c3ef51cee7a798799e88abf932787c681e4c70ae8d8f358985ebd11 i frozen old kernel 9daaaf011c905837cc91ce107bd37c6cae93f680fc14659b5650c93738d32b84. Pełne pins/docs/corpus w zewnętrznym source-index prerejestracji; historia actual-fixed-ctypes-20261012-1106 REFUSED pozostaje nienaruszona. M10 odmówił przy 10 000 001 attempted evaluations, nie przy RAM; zmiana reguły jest hipotezą kosztową, nie dowodem wykonalności24.
+
+### Matematyka i zakres niezależności
+
+Dla istniejącego dodatniego panelu o wierzchołkach $\mathbf a,\mathbf b,\mathbf c$, target $\mathbf r$ i $\mathbf e_1=\mathbf b-\mathbf a$, $\mathbf e_2=\mathbf c-\mathbf a$, bez zmiany dokładnej partycji:
+
+```{math}
+:label: analytic-v2-direct2d-gl-kernel
+\mathbf d(v)=(1-v)\mathbf e_1+v\mathbf e_2,
+\quad J=\lVert\mathbf e_1\times\mathbf e_2\rVert,
+\quad R(u,v)=\lVert\mathbf r-\mathbf a-u\mathbf d(v)\rVert,
+\quad I=\int_0^1\int_0^1\frac{uJ}{R(u,v)}\,\mathrm dv\,\mathrm du.
+```
+
+Gdy exact original-binary64 predicate stwierdza $\mathbf r=\mathbf a$, zachować istniejące $u$ cancellation i exact $\int_0^1\mathrm du=1$: wyłącznie numeryczna całka po $v$ z $J/\lVert\mathbf d(v)\rVert$. Żadnego epsilon, przesunięcia, nowego branch lub zmiany zero-area skip. Originalgeometry Fraction raw/reduced guards i wspólna przygotowana partycja pozostają identyczne dla obu metod.
+
+```{math}
+:label: analytic-v2-direct2d-gl-rule
+Q_m[f]=\frac12\sum_{j=1}^{n_m}w_{m,j}f\!\left(\frac{x_{m,j}+1}{2}\right),
+\quad P_{n_m}(x_{m,j})=0,
+\quad w_{m,j}=\frac{2}{(1-x_{m,j}^2)[P'_{n_m}(x_{m,j})]^2},
+\quad n_1=3,\quad n_m=3\,2^{m-1}\ (m\ge2).
+```
+
+To mapping **kodu pinned wheel**, nie tekstowego docstringu sugerującego $3\,2^m$. `GaussLegendre.calc_nodes` special-case1 ma3nodes, dalej ustawia `n=3*2**(degree-1)`. Stopnie8/10/12 mają384/1536/6144nodes. Newton generuje korzenie przy zwiększonej precyzji; nie implementujemy własnego root finder. `QuadratureRule.sum_next` ocenia całą aktualną siatkę; GL nie ma tanh–sinh reuse poprzedniej sumy. `summation` przechodzi stopnie1…maxdegree, ocenia error i kończy wcześniej tylko gdy error<=epsilon.
+
+`QuadratureMethods.quad` zachowuje epsilon=`ctx.eps/8`, +20bits przy całkowaniu i restore w finally; wewnętrzny quad dostaje precyzję już zwiększoną przez zewnętrzny. Nie obniżać digits, nie podmieniać epsilon, estimate_error lub maxdegree. `error=True` zachowuje zwracane value/error i istniejącą diagnostykę max_inner. Library estimates nie są naukowym PASS. Sześć numerycznych passów direct oraz sześć radial mają kolejno odrębne świeże ctx, 160/200×8/10/12.
+
+```{math}
+:label: analytic-v2-direct2d-gl-gate
+ g=10^{-30}(\ell+|I_{\mathrm D,200,12}|),\qquad
+ |\Delta I|\le g,\qquad\sum_i|\Delta I_i|\le g.
+```
+
+D oznacza numeryczną direct; R w subscript oznacza osobną radial1D. Dla każdej metody istniejący check_gates używa jej własnego finalnego $I$ i porównuje160:10→12,200:10→12 oraz160/12→200/12; cross-method przy200/12 używa finalnego direct. Zapisać bez zmian oba total/local conditions. $\ell$ jest istniejącym exact reference_scale, nie fitted length. M10 częściowe160/8 nie definiuje nowego gate.
+
+| Symbol | Znaczenie | Jednostka |
+|---|---|---|
+| $\mathbf a,\mathbf b,\mathbf c,\mathbf r,\mathbf e_1,\mathbf e_2,\mathbf d$ | punkty/wektory panelu | $\mathrm m$ |
+| $u,v,x_{m,j},w_{m,j},P_{n_m},P'_{n_m}$ | parametry, węzły, wagi, polynomial i derivative w bezwymiarowym argumencie | $1$ |
+| $J$ | moduł cross krawędzi, dwukrotne pole | $\mathrm{m^2}$ |
+| $R$ | odległość target od punktu Duffy | $\mathrm m$ |
+| $I,I_i,I_{\mathrm D,200,12},\Delta I,\Delta I_i,\ell,g$ | całki panel/total, różnice, exact scale i gate | $\mathrm m$ |
+| $Q_m[f],f$ | reguła i integrand; jednostka wynika z argumentu, tutaj $J/R$ | $\mathrm m$ |
+| $m,j,n_m,S_M,M,N_p,W$ | stopień, indeks, liczba nodes/sum, maxdegree, panele i work | $1$ |
+| $\int,\times,\lVert\cdot\rVert,\Delta$ | operator całki, cross, normy i różnicy; jednostki zgodnie z operandami | $1$ |
+
+Niezależność obejmuje odmienną bezpośrednią numeryczną2D ocenę tego samego kernelu wobec primary edge/log closed formula oraz radial primitive. Geometry partition/identity/Budget są świadomie współdzielone, a biblioteka mpmath wspólna; nie nazywać tego niezależnym stosiem arytmetycznym. Exact-vertex direct i radial oba mają jednostkową całkę radialną: ten branch nie jest niezależnym testem radial primitive. Bez V/J/H, transportu, projekcjiRT0 ani H qualification.
+
+### Nieruchome parametry i odmowa
+
+| Parametr (typ) | Wartość/default | Jednostka | Walidacja/znaczenie | Lane/IR |
+|---|---|---|---|---|
+| method direct (str) | gauss-legendre, required | $1$ | jedna reguła we wszystkich direct quad; brak fallback | scalar research; brak IR |
+| method radial (str) | tanh-sinh, unchanged | $1$ | istniejący GENERAL_RADIAL_1D | scalar research; brak IR |
+| fixtures (tuple) | M01…M18/base;M08/M10/M16 shear;M08/M10/M16 rotate90 | $1$ | dokładnie24 w tej kolejności, exact binary64 z baseline fixtures-before; zero drop | brak API/IR |
+| digits (int) | 160,200 | $1$ |12pass/fixture, kolejny freshctx | bez GPU claim |
+| maxdegree (int) |8,10,12 | $1$ | cap adaptacji; n8=384,n10=1536,n12=6144 | brak IR |
+| eval attempts (int) |10 000 000/test;100 000 000/case | $1$ |jednoBudget obie metody, charge przed guard | REFUSED po przekroczeniu |
+| exact comparisons (int) |174/test;9396/case | $1$ |16+6×25+8; unchanged sharedgeometry | brak nowych geometry predicates |
+| exact intermediate bits (int) |8192 raw i reduced | $1$ | każda istniejąca exact operacja | unchanged |
+| elapsed (float) |3600/test;28800/case | $\mathrm s$ |setup/node generation/cleanup w elapsed | single process |
+| RAM cap (int) |2147483648 | $\mathrm{byte}$ |lifetime OSpeak, fixed ABI i errorfailclosed | bez resetu |
+| guard cadence | existing sum(counts.values())mod256+explicitguards | $1$ |zero złagodzenia, guard przed/poquad i cleanup | unchanged |
+| scientific gate | existing10^-30 total/local/cross | $\mathrm m$ | dokładne powyższe porównania | nie libraryestimate |
+
+Byte/cyfra/bit to wielkości danych, nie jednostki SI. Wszystkie pozostałe physics/probes/current/gates/method lanes0950 bez zmian. Driver musi przyjąć nowy pinned prereg/manifest/review i odmówić starego execution review; approval implementation nie uprawnia do actual. terminal zachowuje częściowe passy, remaining24 i pełne before/after pins.
+
+### Statyczny work i ograniczenia preflight
+
+```{math}
+:label: analytic-v2-direct2d-gl-work
+ S_M=\sum_{m=1}^{M}n_m=3(2^M-1),\qquad
+ W_{\mathrm{2D},M}\le N_p S_M^2,\qquad
+ W_{\mathrm{vertex},M}\le N_p S_M.
+```
+
+| M | nM | SM | SM²/panel |
+|---|---:|---:|---:|
+|8|384|765|585225|
+|10|1536|3069|9418761|
+|12|6144|12285|150921225|
+
+To worst-case **integrand** evaluations, gdy obie adaptacje osiągną każdy poziom, bez hidden reset. Panele<=3; sześćpassów direct daje bound $2N_p(S_8^2+S_{10}^2+S_{12}^2)$, przekraczający10m/test i100m/case. Nie deklarować worst-case feasibility; actual adaptacja może odmówić wcześniej. Cap10m/test jest twardą granicą attempted kernel evaluations, nie zobowiązaniem dojścia do stopnia12. Newton root/node generation nie mieści się w tym counterze: jego arytmetyka/libmp nie jest exhaustive counted. Existing time/RAM guards są sampled, nie przerwaniem każdej iteracjiNewton. Przed actual root musi przyjąć tę ograniczoną semantykę budżetowania i ownedmonitor/terminalfailure; nie przedstawiać bound evaluations jako dowodu bounded nodegen latency. Bez zmiany guardcadence/limitów w tej prerejestracji.
+
+RAM: GL węzły są cached per świeży ctx; standard/transformed cache i fdot temporaries tworzą narzut. Finite node-count bound istnieje per cap, ale root iteration work i Python object size nie są stałą liczbą byte wynikającą z nodes. Brak nowego liczbowego RAMestimate/PASS; rzeczywisty lifetime guard2GiB, finally own-cache disposal i peak bez resetu obowiązują. Żaden pass nie dzieli nodes/results z innym ctx ani metodą.
+
+### Walidacja, właściciele i impact
+
+Przed actual: source-only test callerów potwierdza direct wszystkie quad=GL i radial=tanh–sinh; mocked node/methodtest oraz AST normalization wykazuje, że jedyną zmianą frozen integrand/outer jest nazwa reguły plus jawna instrumentation, nie kolejność działań. Geometry snapshots/identities/174counter i kernel body/branch niezmienione. Meaningful negative tests odmów10m/100m/raw8192/time/RAM i terminal partial/remaining; cache/weakref normal/exception;12fresh sequentialctx; known corner, sign/winding/scaling/translation i exact plane/edge/oneULP. Przyszłe actual musi wykonać wszystkie24 albo zachować REFUSED; późniejsze54 to osobny nierozwiązany zakres.
+
+Owner E3: docpatch/map i nowa storage capsule driver/test z method-only adaptation, po osobnej sourceapproval. Repo helper/testmath bez zmiany; root niezależny source/mathreview i osobna actual approval. Nie powstaje teraz kod, fixture harness lub proces. Nie dodajemy publicznego parametru quadrature ani drugiego publicznego modelu. Python→ProblemIR exhaustive mapping w tej samej0950 pozostaje bajtowo bez zmian; requested/resolved intent, planner/native/session/artifactschemas/qualified receipt activation niezmienione. Przyszłe scientific receipt musi osobno wiązać nowąmethod/source/runtime; stare REFUSED nie może zostać rebindingiem PASS.
+
+| Lane | Status i przyczyna |
+|---|---|
+|FDM CPU|bez zmiany solvera; GL skalarna research, brak qualification|
+|FDM GPU|bez execution/device evidence; brak parytetu|
+|FEM CPU|planned scalar direct2D poza native; current/projection/RT0/H NOT VERIFIED|
+|FEM GPU|bez fieldsolve/device execution; brak qualification|
+
+### Bibliografia i source index planowanej reguły
+
+Primary source: pinowany mpmath1.3.0 wheel SHAa0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c, module quadrature.py SHA9fe6afb52f04e377e857ee6daf99687e03816a2314604f0026341c588f5070a9. Publiczny [kod autorów, tag1.3.0](https://raw.githubusercontent.com/mpmath/mpmath/1.3.0/mpmath/calculus/quadrature.py) jest źródłem dokumentacji; runtime wiąże wheel, nie założoną byteidentity tagu. Strona integration zwróciła403, brak twierdzeń na jej podstawie. RównanieDuffy jest własnym przepisaniem zachowanego integrandu, nie skopiowanym solverem. GL kernel/rule nie używa Carley/Werner edgeformula; ich bibliografia i ograniczenia pozostają w nadrzędnej0950.
+
+| Claim | Path + symbol | Evidence |
+|---|---|---|
+| PlanneddirectGLkernel/gates/work | ten dokument::DOC-ANCHOR:analytic-v2-direct2d-gl-prereg | planned_contract; bez implementation |
+| Kernelbaseline | frozen oldhelper::_reference_pass_context.integrand/outer | actualbaselineAST pins; futuremethodadaptationplanned |
+| Existingexactgeometry/identity | scripts/antenna_triangle_surface_oracle.py::positive_reference_panels/reference_test_identity | source_only, bez zmiany |
+| Existinglifecycle/RAM | scripts/antenna_triangle_surface_oracle.py::Arithmetic.close_reference/peak_ram_bytes | source_only, unchanged |
+| AdaptiveGL/rule/stop | pinnedwheel::GaussLegendre.calc_nodes/QuadratureRule.summation/QuadratureMethods.quad | read-onlyprimarysource; exactmodulehash |
+
+Deferred: canonicalpublicationapproval, sourceimplementationreview, actual24, actual54 i weightedRT0/H. Niezmieniony requirequalified nadalodmawia. Prerejestracja nie jest scientificPASS ani automatyczną zgodą na wykonanie.
+
+
+(analytic-v2-direct2d-general-map-prereg)=
+### Prerejestracja general-map direct2D24: geometryczna mapa radialna sinh i zagęszczenie kątowe
+
+**SOURCE_IMPLEMENTED / INTERPRETED_TESTS_PASS / NOT_EXECUTED / NOT_QUALIFIED.**
+Root przejrzał odwracalną implementację źródłową 24.10.2026; rzeczywista
+kwadratura tego kandydata pozostaje niewykonana w chwili zamknięcia review.
+Przerejestracja nie uruchamia nowej próby. Jedna reguła obejmuje wszystkie
+24 uporządkowane przypadki, bez wyboru na podstawie wyników, zastępczej metody
+po odmowie ani nowego publicznego solvera. Pełny korpus 54 oraz ważone RT0/V/J/H
+pozostają otwartymi bramkami.
+
+**Zakres zastąpienia starszego kontraktu dotyczy wyłącznie przyszłego
+kandydata:** nowe mapy i kolejność całek zastępują ograniczenie starej poprawki
+GL do samej nazwy metody w AST. Jednorazowy, niezmienny plan neutralnych danych
+Fraction zastępuje przygotowanie początkowe i sześć powtórzeń geometrii.
+Nie deklarujemy zachowania starego AST ani historycznej kolejności 174
+porównań. Nadal obowiązują limity 174/test i 9396/case, 8192 bitów przed i po
+redukcji, 12 świeżych kontekstów bez współdzielenia danych numerycznych,
+160/200 cyfr, stopnie maksymalne 8/10/12, naukowa bramka 1e-30, wspólne limity
+10M/test i 100M/case, 3600 s/test i 28800 s/case oraz 2 GiB szczytowej pamięci
+całego życia procesu. Wcześniejsze źródła, zatwierdzenia i terminal
+GL 13/24 REFUSED pozostają niezmienne; nie przypisuje się im nowego wyniku.
+
+(analytic-v2-general-map-routing)=
+#### Dokładny wybór gałęzi i dziedziny
+
+Dla oryginalnego dodatniego panelu i punktu obserwacji definiujemy:
+
+```{math}
+:label: analytic-v2-general-map-geometry
+\mathbf e_1=\mathbf b-\mathbf a,\quad \mathbf e_2=\mathbf c-\mathbf a,\quad
+\mathbf p=\mathbf r-\mathbf a,\quad \mathbf d(v)=(1-v)\mathbf e_1+v\mathbf e_2,
+\quad J=\|\mathbf e_1\times\mathbf e_2\|>0,
+\quad F(u,v)=\frac{Ju}{\|\mathbf p-u\mathbf d(v)\|},\quad (u,v)\in[0,1]^2.
+```
+
+Dokładna gałąź wierzchołkowa zachowuje wcześniejszą jednostkową całkę radialną
+i numeryczną całkę kątową 1D. Ten znany wyjątek nie dowodzi niezależności
+analitycznej funkcji radialnej. Każdy pozostały panel zachowuje dwuwymiarową
+numeryczną ocenę kernela. Oryginalne dodatnie
+panele i ich uporządkowane tożsamości nie zmieniają się.
+
+```{math}
+:label: analytic-v2-general-map-minimum
+A=\mathbf d\cdot\mathbf d>0,\quad B=\mathbf p\cdot\mathbf d,\quad
+C=\|\mathbf p\times\mathbf d\|^2=c_2v^2+c_1v+c_0,\qquad
+c_2=\|\mathbf p\times(\mathbf e_2-\mathbf e_1)\|^2,
+\quad c_1=2(\mathbf p\times\mathbf e_1)\cdot(\mathbf p\times(\mathbf e_2-\mathbf e_1)),
+\quad c_0=\|\mathbf p\times\mathbf e_1\|^2,
+\quad v_*=-\frac{c_1}{2c_2},\quad
+v_0=\operatorname{clip}_{[0,1]}v_*,\quad C_{\min}=C(v_0).
+```
+
+Ostatnie trzy definicje stosuje się tylko przy $c_2>0$. Wszystkie predykaty
+wyboru gałęzi są dokładne: Fraction na oryginalnych binary64, z kontrolą
+wartości przed i po redukcji.
+Przy $c_2=0$ po obsłużeniu wierzchołka mamy stałe $C=c_0>0$ i tożsamościową mapę kątową.
+Przy $c_2>0$ minimum spełnia $C_{\min}\ge0$. Clip dotyczy wyłącznie położenia
+minimum parametru, nigdy punktu obserwacji lub fizycznej geometrii. Naruszenie
+niezmiennika powoduje odmowę. Dodatnie odcinki od $v_0$ do 0/1 tworzą osobne
+przedziały parametryczne; pominięcie odcinka o dokładnie zerowej długości
+nie usuwa żadnego fizycznego panelu.
+
+Dla $C_{\min}>0$, na każdym dodatnim odcinku:
+
+```{math}
+:label: analytic-v2-general-map-angular
+\varepsilon=\sqrt{C_{\min}/c_2},\quad L_j=|\operatorname{endpoint}_j-v_0|,
+\quad \sigma_j\in\{-1,1\},\quad K_j=\operatorname{asinh}(L_j/\varepsilon),
+\quad v_j(z)=v_0+\sigma_j\varepsilon\sinh(K_jz),
+\quad j_v=|\partial_zv_j|=\varepsilon K_j\cosh(K_jz),\quad z\in[0,1].
+```
+
+Zapis $C=C_{\min}+\lambda_j|v-v_0|+c_2|v-v_0|^2$ ma nieujemne
+$\lambda_j=\sigma_j(c_1+2c_2v_0)$ i jest stabilną formą dynamicznej oceny.
+Skala jest niezmiennicza względem translacji, obrotu i wspólnego skalowania
+wektorów. Przy $C_{\min}=0$ nie dzielimy przez zero: zachowujemy dokładny podział
+w $v_0$, lecz stosujemy $v_j=v_0+\sigma_jL_jz$, $j_v=L_j$. W dokładnym pierwiastku
+potwierdzamy $B<0$ albo $B>A$; rzeczywisty osobliwy odcinek daje odmowę.
+W rzeczywistych 24 przypadkach dotyczy to trzech wariantów M08 z $v_0=1/2$ i punktem obserwacji poza odcinkiem radialnym.
+Zaokrąglone zero bez dokładnego poświadczenia pierwiastka lub końca przedziału
+powoduje odmowę; nie przesuwa się punktu.
+
+(analytic-v2-general-map-radial)=
+#### Ogólna mapa radialna, Jacobian i stabilne granice
+
+```{math}
+:label: analytic-v2-general-map-radial
+s=\sqrt A,\quad \beta=B/s,\quad \delta=\sqrt{C/A},\quad
+R^2=(su-\beta)^2+\delta^2,\quad
+\tau_0=\operatorname{asinh}(-\beta/\delta),\quad
+\tau_1=\operatorname{asinh}((s-\beta)/\delta),\quad L=\tau_1-\tau_0>0,
+\quad u=\frac{\beta+\delta\sinh(\tau_0+Lw)}s,
+\quad j_u=\frac{\delta L\cosh(\tau_0+Lw)}s,\quad w\in[0,1].
+```
+
+Formuły hiperboliczne powyżej dotyczą $\delta>0$. Mapy zachowują końce 0/1;
+pełny bezwzględny Jacobian jest $j_uj_v$, gdyż mapa jest trójkątna. W lewym przedziale
+używamy dodatniego $j_v$. Po skróceniu odległości z Jacobianem:
+
+```{math}
+:label: analytic-v2-general-map-integrand
+\widetilde F_j(w,z)=\frac{JL}{s}u(w,v_j(z))j_v(z),\qquad
+I_i=\sum_j\int_0^1\!\int_0^1\widetilde F_j(w,z)\,\mathrm dw\,\mathrm dz,
+\qquad I=\sum_i I_i.
+```
+
+Całki zewnętrzna po z i wewnętrzna po w pozostają **obie numeryczne GL**, z niezmienionymi limitami stopni i epsilon;
+nie całkujemy sinh analitycznie. Nie wywołuje się osobnej referencji radialnej ani nie używa jej wyniku
+ani pierwotnego wzoru krawędziowego trójkąta. Osobna metoda radialna TS z analityczną funkcją zachowuje własny
+świeży kontekst i oryginalne panele. Niezależność dotyczy realizacji 2D, nie odrębnej
+biblioteki MP: neutralna geometria, mpmath i wspólny budżet są świadomie wspólne.
+
+Gdy granice radialne mają ten sam znak, nie odejmujemy wielkich asinh.
+Dla $0\le a<b=a+s$, $R_a=\sqrt{a^2+\delta^2}$,
+$R_b=\sqrt{b^2+\delta^2}$:
+
+```{math}
+:label: analytic-v2-general-map-stable-span
+L=\operatorname{log1p}\!\left(\frac{s[1+(a+b)/(R_a+R_b)]}{a+R_a}\right).
+```
+
+Dla $-\beta\ge0$ wybieramy $a=-\beta,b=s-\beta$; dla $s-\beta\le0$
+odbicie $a=\beta-s,b=\beta$. Przy granicach po obu stronach zera sumujemy dodatnie asinh.
+Normy $R_0=\|\mathbf p\|$, $R_1=\|\mathbf p-\mathbf d\|$ unikają odejmowania
+w $\|\mathbf p\|^2-2B+A$. Dodatnią asinh realizujemy przez jawnie liczony
+sqrt/log1p: $\operatorname{asinh}x=\operatorname{log1p}(x+x^2/(1+\sqrt{1+x^2}))$.
+Dla $t_0=-\beta$, $x=Lw/2$, $D_\pm=R_0\pm t_0$:
+
+```{math}
+:label: analytic-v2-general-map-stable-u
+u=\frac{(D_+e^x+D_-e^{-x})\sinh x}{s},\qquad
+\min(D_+,D_-)=\frac{\delta^2}{R_0+|t_0|},\quad
+\max(D_+,D_-)=R_0+|t_0|.
+```
+
+To dodatnie składniki, bez odejmowania bliskich wielkich wartości w pierwotnym liczniku. Niepewność skończoności, dodatniości, monotoniczności lub końców przedziału
+powoduje odmowę, bez przycinania wartości lub tolerancji w geometrii. Przy poświadczonej $\delta=0$ używamy granicy ciągłej:
+
+```{math}
+:label: analytic-v2-general-map-zero-limit
+\begin{aligned}
+\beta<0:&\quad L=\operatorname{log1p}\!\frac{s}{-\beta},\quad
+u=\frac{-\beta}{s}\operatorname{expm1}(Lw),\\
+\beta>s:&\quad L=\operatorname{log1p}\!\frac{s}{\beta-s},\quad
+u=\frac{\beta}{s}[-\operatorname{expm1}(-Lw)].
+\end{aligned}
+```
+
+Kernel nadal $JLu\,j_v/s$, bez analitycznej całki radialnej. Expm1 wymaga własnego
+licznika lub jawnie liczonych exp/sinh przez tożsamość
+$\operatorname{expm1}y=2e^{y/2}\sinh(y/2)$. Przypadek
+$\beta\in[0,s]$ przy poświadczonej wartości zerowej powoduje odmowę. Nie ma zastępczej gałęzi
+wybieranej po niepowodzeniu.
+
+Rzeczywisty M16/shear zachowuje swój jeden oryginalny panel i rzut poza panelem.
+Jego dokładne, wyprowadzone wektorowo $C$ i $v_0=0$ są w przypiętym wykazie
+routing-algebra;
+$c_1>0$, $C_{\min}>0$ dają jedno prawe zagęszczenie z
+$\varepsilon=\sqrt{C_{\min}/c_2}$. To bezwymiarowa skala wyprowadzona z geometrii,
+a nie dopasowany pionowy parametr zadany przez autora $\epsilon_z=2^{-40}\,\mathrm m$.
+M14 ma rzut wewnątrz panelu oraz $\mathbf p\perp\mathbf d$ i daje szczególny przypadek
+wcześniejszej algebry. Przypadki z zerowym C, rzutem poza panelem, wierzchołkiem i odległością bliską
+2^-40 pozostają w zbiorze 24.
+
+#### Symbole, SI i stałe parametrów badania
+
+Poniższe wielkości opisują skalarną metodę badawczą; nie dodają publicznego API.
+
+| id | LaTeX | Znaczenie | Jednostka SI |
+|---|---|---|---|
+| `gm_points` | $\mathbf a,\mathbf b,\mathbf c,\mathbf r$ | Uporządkowane punkty panelu i punkt obserwacji | $\mathrm m$ |
+| `gm_vectors` | $\mathbf e_1,\mathbf e_2,\mathbf p,\mathbf d$ | Krawędzie i wektory Duffy | $\mathrm m$ |
+| `gm_J` | $J$ | Dwukrotne dodatnie pole panelu | $\mathrm{m^2}$ |
+| `gm_AB` | $A,B$ | Norma promienia do kwadratu i iloczyn p z promieniem | $\mathrm{m^2}$ |
+| `gm_C` | $C,c_0,c_1,c_2,C_{\min}$ | Kwadrat normy iloczynu wektorowego, jego dokładne współczynniki i minimum | $\mathrm{m^4}$ |
+| `gm_parameters` | $u,v,w,z$ | Parametry starych i nowych całek na odcinku jednostkowym | $1$ |
+| `gm_vmin` | $v_*,v_0$ | Minimum parametru bez ograniczeń i minimum w dziedzinie | $1$ |
+| `gm_grade` | $\varepsilon,L_j,K_j,\sigma_j$ | Skala parametryczna, długość przedziału, parametr zagęszczenia i znak | $1$ |
+| `gm_slope` | $\lambda_j$ | Nieujemna pochodna C od minimum w kierunku spanu | $\mathrm{m^4}$ |
+| `gm_distance` | $s,\beta,\delta,R,R_0,R_1,R_a,R_b$ | Długości w radialnej zmianie zmiennych | $\mathrm m$ |
+| `gm_radial` | $\tau_0,\tau_1,L,x$ | Granice hiperboliczne, dodatnia długość radialna i połowa argumentu | $1$ |
+| `gm_positive` | $t_0,D_+,D_-,a,b$ | Podpisana odległość radialna i dodatnie składniki stabilnych wzorów | $\mathrm m$ |
+| `gm_jac` | $j_u,j_v$ | Bezwymiarowe Jacobiany obu zmian współrzędnych | $1$ |
+| `gm_potential` | $I,I_i,F,\widetilde F_j,g$ | Całka całkowita i panelu, skalarny integrand oraz istniejąca bramka naukowa | $\mathrm m$ |
+| `gm_scale` | $\ell$ | Dokładna skala długości z reference_scale | $\mathrm m$ |
+| `gm_offset` | $\epsilon_z$ | Pionowe przesunięcie zadane w rzeczywistym M16/shear | $\mathrm m$ |
+| `gm_index` | $i,j,k,m,n,N_p,P,S_m,n_m$ | Indeksy, stopnie i liczby paneli, części oraz węzłów | $1$ |
+| `gm_error` | $E_{\mathrm{outer}},E_{\mathrm{inner}}$ | Błędy kątowy i radialny wymagające osobnego oszacowania | $\mathrm m$ |
+| `gm_weight` | $W_j,Q_z,Q_w$ | Dodatnia waga oraz operatory numerycznej kwadratury | $1$ |
+| `gm_work` | $W$ | Liczba prób ocen numerycznego integranda | $1$ |
+| `gm_ops` | $\int,\times,\cdot,\partial,\operatorname{clip},\operatorname{asinh}$ | Operatory całki, iloczynów, pochodnej, ograniczenia dziedziny i funkcji elementarnych; jednostki wynikają z operandów | $1$ |
+
+| Parametr (typ) | Wartość lub domyślna polityka | Jednostka | Walidacja i odmowa | Realizacja i ProblemIR |
+|---|---|---|---|---|
+| Przypadki (uporządkowana krotka) | M01–M18/base; M08/M10/M16 shear; M08/M10/M16 rotate90; wymagane | $1$ | Dokładne 24 binary64 z przypiętego fixtures-before; bez wyboru podzbioru | Diagnostyka CPU; brak pola IR |
+| Mapa (stała reguła) | Ogólna mapa radialna i dokładne minimum kątowe | $1$ | Dokładny wybór gałęzi przed kwadraturą; naruszenie niezmienników odmawia | Planowana diagnostyka; brak publicznej opcji |
+| Wierzchołek i zerowe C (dokładne bool) | Z Fraction, bez epsilon | $1$ | Gałęzie powyżej; bez zmiany punktu obserwacji | Bez zmian Python/IR |
+| Precyzja (int) | 160 i 200, wymagane | Cyfry, nie SI | Świeży kontekst każdej metody i passu; nie obniżać | Diagnostyka CPython/MP |
+| Maksymalne stopnie (krotka int) | 8, 10, 12, wymagane | $1$ | Istniejące GL/TS i epsilon; bez nowego kryterium zatrzymania | Bez pól polityki solvera w IR |
+| Bramka naukowa (stały wzór) | 1e-30, total/local/cross, bez zmian | $\mathrm m$ | Oryginalne panele i dokładna skala; estymator biblioteki nie zastępuje bramki | Nie kwalifikuje natywnego H |
+| Próby ocen referencji (int) | 10M/test, 100M/case | $1$ | Jeden Budget obu metod; naliczenie przed callbackiem | Bez resetu |
+| Predykaty geometryczne (int) | 174/test, 9396/case | $1$ | Jednorazowy dokładny plan i nowe predykaty w tych samych limitach | Nowy harmonogram wymaga przeglądu źródeł |
+| Dokładne wartości pośrednie (int) | 8192 przed i po redukcji | Bity, nie SI | Kontrola każdej dokładnej operacji | Bez twierdzenia o pełnym zliczaniu libmp |
+| Limity czasu (float) | 3600/test, 28800/case | $\mathrm s$ | Przygotowanie mapy, węzły i porządkowanie w czasie całkowitym | Istniejący właściciel monitora |
+| Szczyt pamięci procesu (int) | 2147483648 | Bajty, nie SI | Rzeczywisty szczyt OS, bez zerowania | Proces CPU; bez ponowienia w procesie potomnym |
+| Konteksty (int) | 12 sekwencyjnych na przypadek | $1$ | Porządkowanie cache w finally; bez współdzielenia wyników numerycznych | Neutralny dokładny plan Fraction |
+
+(analytic-v2-general-map-accounting)=
+#### Rozliczanie pracy, oryginalne panele i zakres dowodów
+
+Jednorazowy podział ≤16, kontrola wierzchołków ≤9 i skala ≤8 dają 33 predykaty. Nowy dokładny
+wybór gałęzi ma w diagnostyce maksymalnie 30/fixture, razem 63; konserwatywne ograniczenie 72
+(33+13 na każdy z 3 paneli) nadal ≤174. Rzeczywista instrumentacja musi potwierdzić
+każdą nową operację i predykat przed wykonaniem; nie wolno łączyć obu
+harmonogramów ani wyłączyć dokładnej geometrii z limitu. Diagnostyczne 2146 operacji Fraction
+ma maksymalnie 169 bitów surowych i 85 po redukcji; to dowód źródłowej algebry, nie wykonania natywnego lub arytmetyki MP.
+Niezmienny dokładny plan ≤3 paneli/≤6 części parametrycznych istnieje tylko w obrębie przypadku.
+Dane MP mapy są lokalne do jednego wywołania zewnętrznego i jego wewnętrznej kwadratury. Nie dzielimy
+numerycznych wyników/węzłów między wywołaniami zewnętrznymi, passami lub metodami.
+
+Nowe jawne liczniki źródłowej implementacji: map_exact_operations,map_exact_predicates
+(podzbiór reference_comparisons, nie obejście),map_angular_pieces,
+map_outer_evaluations,map_radial_evaluations,map_limit_evaluations,
+map_transcendental_calls według funkcji elementarnej oraz map_roundoff_refusals.
+Każdy rzeczywisty callback 2D nalicza reference_evals/direct2d_evals przed mapą i kernelem;
+przygotowanie wywołania zewnętrznego i wywołania funkcji elementarnych mają osobny koszt i te same kontrole czasu i pamięci.
+Brak twierdzenia o pełnym zliczaniu operacji CPython/libmp. Sumy nowych części parametrycznych
+agregujemy do **pierwotnego** panelu przed panels_m/check_gates; istniejąca lokalna bramka
+porównuje te same uporządkowane fizyczne panele, nie nową listę podziałów parametrycznych.
+
+```{math}
+:label: analytic-v2-general-map-conditional-work
+n_m=3\,2^{m-1},\quad S_m=3(2^m-1),\qquad
+W\le3P(S_7S_6+S_8S_7)
+\quad\text{jeśli 160: zewnętrzny stopień}\le7,\ \text{wewnętrzny}\le6;
+\quad\text{200: zewnętrzny}\le8,\ \text{wewnętrzny}\le7.
+```
+
+To warunkowa koperta wszystkich wcześniejszych poziomów GL, nie twierdzenie o zatrzymaniu.
+Dla rzeczywistych 24 przypadków daje maksymalnie 6 542 532 ocen direct/test i 64 721 754 direct/case z zachowaniem
+starego kosztu gałęzi wierzchołkowej. Rezerwa dla metody radialnej oraz realizacja tych poziomów zatrzymania pozostają
+niewykazane. Pełny wykaz 24 przypadków, współczynników C, minimum, v0, kwadratu skali i części jest przypięty poniżej;
+żaden przypadek nie jest pominięty. Górne ograniczenie najgorszej pracy większe od limitu nie dowodzi
+niemożliwości; warunkowe ograniczenie mniejsze od limitu nie dowodzi wykonania.
+
+```{math}
+:label: analytic-v2-general-map-error-decomposition
+|I-Q_zQ_w\widetilde F|\le
+E_{\mathrm{outer}}+\sum_jW_jE_{\mathrm{inner}}(z_j),\quad W_j>0,
+\qquad g=10^{-30}(\ell+|I_{\mathrm{direct},200,12}|).
+```
+
+Rozkład błędu dotyczy jednej części parametrycznej i dokładnych dodatnich wag GL;
+następnie sumuje się lokalne ograniczenia po oryginalnych panelach. Nie jest nowym kryterium
+przyjęcia. [NIST DLMF §3.5(v)](https://dlmf.nist.gov/3.5#v) daje pierwotny
+kontekst reszty kwadratury Gaussa; mapy/Jacobiany powyżej wyprowadzono z rzeczywistego kernela.
+Równoważność matematyczna mapy, warunkowa wydajność i przyszłe zachowane
+dowody zbieżności są odrębne. Ograniczenie reszty wewnętrznej całki M14 nie jest pełnym
+ścisłym dowodem błędu, zaokrągleń i całki zewnętrznej dla 24 przypadków. Heurystyczny estimate_error biblioteki
+nie jest twierdzeniem, ale brak jego dowodu zatrzymania a priori nie zabrania
+ograniczonego eksperymentu po przeglądach źródeł i wykonania. Nie zmieniamy epsilon.
+
+| Realizacja | Status kandydata i ograniczenie |
+|---|---|
+| FEM CPU | Planowana skalarna diagnostyka CPython/MP; bez kwalifikacji natywnego RT0/V/J/H |
+| FEM GPU | Nieobsługiwane w tym kandydacie; brak realizacji i dowodów na urządzeniu |
+| FDM CPU | Nie jest ścieżką solvera FDM; brak nowej fizyki lub obsługi runtime |
+| FDM GPU | Nieobsługiwane w tym kandydacie; brak dowodu parytetu GPU i zastępczego wykonania |
+
+Python API, ProblemIR, normalizacja, żądane i rozstrzygnięte wykonanie oraz planner nie
+otrzymują pól ani nowego modelu. Dotychczasowe pełne tabele mapowań i konstruktorów
+tej noty pozostają kontraktem definiowania problemu. Mapa ma wydzieloną implementację badawczą; poniżej wymieniono rzeczywiste
+symbole. Nie kwalifikuje jej samo istnienie konsumenta oracle. Również własność/artefakty natywnej bazy się nie zmieniają.
+
+(analytic-v2-general-map-validation)=
+#### Przegląd i wykonanie: następne bramki, bez ponownej zgody na sam kod
+
+Przegląd źródeł przez root po odwracalnej implementacji obejmuje dokładne gałęzie i zerowe C,
+Jacobian i kolejność całek, liczniki 174/9396,kontrole surowych wartości do 8192 bitów, zaokrąglenia i odmowy stabilnych wzorów,
+12 świeżych kontekstów i porządkowanie w finally i niezmienione bramki pierwotnych paneli. Potem przegląd wykonania przez root
+wiąże kapsułę źródeł, tożsamość i monitor z **jedną ograniczoną próbą** całych 24
+w niezmienionej kolejności, z zatrzymaniem przy pierwszej odmowie, bez ponawiania lub CI. To kolejne bramki
+w już autoryzowanym zadaniu; sam odwracalny patch źródeł nie wymaga nowej zgody
+użytkownika. Prerejestracja nie uruchamia eksperymentu i nie zastępuje przeglądu wykonania.
+
+Przyszły zapis dowodowy zachowa piny źródeł przed i po wykonaniu, pozostałe identyfikatory całej listy 24 i niezmienne pliki ukończonych passów,
+pracę według części, poziomu i metody i rzeczywisty stan końcowy PASS/REFUSED. Zachowana
+zbieżność przy limitach jest ograniczonym dowodem numerycznym, nie ścisłym twierdzeniem.
+Pełny korpus 54, objętościowe RT0, prąd, projekcja, H i kwalifikacja geometrii
+zamkniętego obwodu pozostają wymagane osobno. Częściowe wiersze różnych prób
+nie są sklejane.
+
+Przypięte dowody (ścieżki względem katalogu reviews; nie dowody implementacji):
+`closed-loop-reference-general-map-proposal-20261016/proposal-pl.md`
+SHA 49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296;
+`routing-algebra.json` SHA 9b937c499e15c524579e586b38c0438eeaeeb641543b0b35b154473e68dd692c.
+16 kontroli algebry i źródeł PASS obejmują tożsamości, piny i wybór gałęzi, nie kwadraturę.
+Istniejące symbole starego oracle należą do wcześniejszych konsumentów i kontroli;
+nowa mapa ma poniższych własnych właścicieli. Kompletność kontraktu: równania,
+SI, parametry, wykaz 24 i budżety zdefiniowano. Implementacja i źródłowy review
+zostały wykonane; rzeczywisty eksperyment 24 tego kandydata, pełny zakres 54,
+objętościowe RT0, błąd oraz kwalifikacja naukowa i runtime pozostają OPEN.
+
+#### Implementacja źródeł i review przed wykonaniem — 24.10.2026
+
+Nowe pliki `scripts/antenna_triangle_general_map_reference.py` oraz
+`scripts/test_antenna_triangle_general_map_reference.py` realizują ten kontrakt.
+Stary triangle oracle i jego test AST pozostały bajtowo bez zmian. Własny
+niemutowalny plan Fraction jest przygotowywany raz dla obu metod; exact
+geometry nie jest przeliczana w MP callbacks. Plan ma 985 dokładnych porównań
+dla wszystkich 24 przypadków, maksymalnie 66/test; największe wartości mają
+169 bitów przed redukcją i 85 po niej. Wszystko mieści się w starych limitach.
+
+Czternaście interpretowanych regresji PASS obejmuje zgodność mapped kernel
+z oryginalnym `Ju/R` i oboma Jacobianami, wszystkie 24 plany, dodatnie
+Jacobiany, zerowe C, 1 ULP, skalowanie, odmowy, 12 świeżych kontekstów,
+sprzątanie oraz total/local gates. Testy harmonogramu używają mockowanego
+quad; żaden z nich nie uruchamia rzeczywistej kwadratury. Review poprawił
+operację Fraction poza licznikiem, nieinstrumentowane porównanie midpoint,
+niezarejestrowane bramki degree 8/cross i kolejność attempted counters.
+Odrzucony trzeci callback ma oba attempted counters równe 3, kernel wykonano 2 razy.
+Nie zwiększano limitów i nie zmieniano tolerancji.
+
+| Odpowiedzialność | Rzeczywista ścieżka + symbol | Stan dowodu |
+|---|---|---|
+| Dokładny plan i routing | scripts/antenna_triangle_general_map_reference.py + prepare_case | source review i interpreted regressions |
+| Mapa kątowa | scripts/antenna_triangle_general_map_reference.py + angular_point | algebra punktowa; bez actual quad |
+| Stabilny radial span | scripts/antenna_triangle_general_map_reference.py + radial_parameters | algebra i odmowy |
+| Mapped kernel i Jacobian | scripts/antenna_triangle_general_map_reference.py + mapped_radial_sample | zgodność z oryginalnym Ju/R |
+| Oddzielna numeryczna metoda GL | scripts/antenna_triangle_general_map_reference.py + direct_pass | brak wywołań radial primitive lub primary edge formula |
+| Oddzielna radialna metoda TS | scripts/antenna_triangle_general_map_reference.py + radial_pass | własny świeży kontekst; wspólny neutralny plan |
+| Niezmienione bramki paneli | scripts/antenna_triangle_general_map_reference.py + check_gates | 3+3 porównania convergence oraz final cross 200/12 |
+| Właściciel 12 passów | scripts/antenna_triangle_general_map_reference.py + reference_pair | callback nie kwalifikuje wyniku; finally i wspólny Budget |
+| Uporządkowane 24 wejścia | scripts/antenna_triangle_general_map_reference.py + frozen_cases24 | literalna lista bez wyboru po wynikach |
+| Regresje algebraiczne i lifecycle | scripts/test_antenna_triangle_general_map_reference.py + class GeneralMapReferenceTests | 14 PASS, actual_quad_executed=false |
+
+Źródłowe dowody są w wolumenie kontrolnym grupy pod
+verification/universe-volume-policy-20261023/rt0-surface-reference-20261024/general-map-source-only/.
+Techniczny driver jednego przyszłego wykonania jest pod
+verification/universe-volume-policy-20261023/general-map-direct2d-20261024/.
+Obserwator reguły zlicza węzły i callbacki według panelu, części, metody,
+precyzji i poziomu; deleguje niezmienione `sum_next`. Kontrola stałej sumy
+dwóch węzłów i propagacji odmowy przeszła bez adaptive quad. Przegląd wykonania
+musi przypiąć źródła/testy/notę/mapę/wheel i zachować niezmienne pliki passów,
+PID oraz terminal przy pierwszej odmowie. Nie jest to obecnie naukowy PASS.
+
+
+(antenna-charge-true-residual-refinement-v1)=
+## FEM CPU: prerejestracja korekcji rzeczywistego residualu H1 (2026-10-16)
+
+Stan **SOURCE PLANNED / runtime NOT VERIFIED**. Prerejestracja storage-only przed kodem kandydata. Próba pakietu86 `a639aa136c044b849b3bec956b5e76ec` zatrzymała się prawidłowo: residual składowej $6.6412083209695603\times10^{-12}\,\mathrm A$ przy RHS $3.4070542875864530\,\mathrm A$ daje $1.9492522749539669\times10^{-12}>10^{-12}$. PCG77 zgłasza finalnorm $8.9461207162954813\times10^{-13}$, ale to inna norma. Bez zmiany geometrii, sourcecut, materiałów, napięcia, gauge, projekcji RT0 ani tolerancji.
+
+```{math}
+:label: antenna-charge-refinement-residual
+\mathsf A=\mathsf T^{\mathsf T}\mathsf K\mathsf T,\qquad
+\mathbf b=-\mathsf T^{\mathsf T}\mathsf K\mathbf V_0,\qquad
+\mathbf q=\mathsf T^{\mathsf T}\mathsf K\mathbf V,\qquad
+\eta_c=\frac{\|\mathbf q_c\|_2}{\max(\|\mathbf b_c\|_2,f_A)}\le\tau_H .
+```
+
+```{math}
+:label: antenna-charge-refinement-update
+\mathsf A\,\delta\mathbf u=-\mathbf q,\qquad
+\mathbf V\leftarrow\mathbf V+\mathsf T\delta\mathbf u,\qquad
+\nu=\sqrt{\mathbf r^{\mathsf T}\mathsf B\mathbf r},\qquad
+\sum_{j=0}^{p} n_j\le N_{\max} .
+```
+
+| Dokładny token | Znaczenie | Jednostka SI |
+|---|---|---|
+| $\mathsf K$ | owned oryginalny diffusion stiffness przed eliminacją | $\mathrm{S}$ |
+| $\mathsf T$ | zero-one injection wolnych quotient DOF do pełnych DOF; fixed rows zero | $1$ |
+| $\mathsf A$ | ten sam złożony i finalized free quotient operator | $\mathrm{S}$ |
+| $\mathbf V_0$ | istniejący lift plus fixed anchor/gauge | $\mathrm{V}$ |
+| $\mathbf V$ | rzeczywisty odtworzony potencjał binary64 | $\mathrm{V}$ |
+| $\mathbf b$ | pierwotny RHS, niezmienny w każdej korekcji | $\mathrm{A}$ |
+| $\mathbf q$ | true free quotient reactions, original K action + long-double quotient sum | $\mathrm{A}$ |
+| $c$ | jawny electrical component, indeks w niezmienionym partition | $1$ |
+| $\eta_c$ | niezależny per-component relative residual | $1$ |
+| $f_A$ | istniejący denominator floor, dokładnie $10^{-30}\,\mathrm A$ | $\mathrm{A}$ |
+| $\tau_H$ | istniejąca authored `algebraic_relative_tolerance`; tu $10^{-12}$ | $1$ |
+| $\delta\mathbf u$ | correction z tego samego PCG/operatora/preconditionera | $\mathrm{V}$ |
+| $\mathbf r$ | wewnętrzny rekurencyjny residual PCG | $\mathrm{A}$ |
+| $\mathsf B$ | symmetric Gauss-Seidel inverse preconditioner | $\mathrm{\Omega}$ |
+| $\nu$ | wewnętrzna norma MFEM PCG; nie norma w amperach | $\mathrm{W}^{1/2}$ |
+| $j,p,n_j,N_{\max}$ | indeks wywołania, ostatnie wywołanie, actual CG iterations, wspólny budget | $1$ |
+
+Algorytm: zachować pierwotny solve i jego warunek `GetConverged`. Po odtworzeniu V policzyć każdą składową z **oryginalnego K** identycznie jak final guard. Gdy wszystkie składowe spełniają warunek, nie wykonywać korekcji. W przeciwnym razie zadać correction RHS jako ujemne true quotient reactions. Fixed/gauge DOF nie dostają correction, każda kopia tego samego free quotient dostaje tę samą wartość. Ten sam reduced matrix i GSSmoother, zero initial correction; `RelTol` pozostaje authored, `AbsTol=0`. Nie wybierać safety factor ani mniejszego progu na podstawie wyniku. Każde wywołanie dostaje wyłącznie pozostałe `Nmax−sum(iterations)`. Zero postępu iteracyjnego, nonfinite, korekcja niezmieniająca żadnej wartości binary64, brak wewnętrznej zbieżności lub wyczerpanie budżetu przerywa refinement i pozostawia odmowę końcowej bramce. Liczba udanych rund jest ograniczona wspólnym budżetem, bo każda ma co najmniej jedną iterację. To nie obietnica zbieżności na granicy roundoff.
+
+Końcowe jump/anchor/gauge checks oraz niezależna H1 bramka i pełna diagnostyka stderr pozostają obowiązkowe bez zmiany równań/progów. `GetConverged` jest wewnętrznym warunkiem pracy PCG, nigdy samodzielnym admission. Denominator zawsze pierwotny b składowej, nigdy malejący RHS korekcji. NaN/Inf nie daje przejścia. Nie utożsamiać `b−A u` z final true reaction w arytmetyce skończonej.
+
+| Realizacja | Zakres i kwalifikacja |
+|---|---|
+| FEM CPU | proposed correction owned serial conforming P1 tet4 charge workspace; runtime NOT VERIFIED |
+| FEM GPU | poza zakresem; brak zmian i brak parytetu claim |
+| FDM CPU | not applicable: inny charge discretization, bez zmian |
+| FDM GPU | not applicable: inny charge discretization, bez zmian |
+
+Public Python/ProblemIR/planner nie otrzymują nowego pola: `ChargeSolverPolicy.relative_tolerance` → `current_modules[].solver.linear.relative_tolerance`, `max_iterations` → `.max_iterations`; oba zachowane, maksymalna liczba iteracji interpretowana jako łączny limit jednego owned charge solve, obejmujący correction. `absolute_tolerance` nie zastępuje istniejącego relative H1 admission; wewnętrzne PCG AbsTol pozostaje0. Stage-first przykład tej noty `examples/fem_antenna_closed_loop_nonmagnetic.py::study` pozostaje wzorcem; nie wykonano nowego lowering ani native run. Runtime/session/provenance zachowują requested/resolved policy, owned potentials/reactions i component residuals; błędy nadal fail closed przed accepted H1→RT0. Nie dodajemy nowego źródła fizyki do Context ani bridge.
+
+Walidacja przed apply: source review wszystkich zmienionych linii i callers; kontrola algebraiczna znaku correction, wielu quotient copies, fixed rows, oddzielnych skal komponentów, NaN, zero RHS i wspólnego budgetu; unchanged końcowy gate/diagnostyka i źródła dotychczasowych numerical controls. Następnie konieczny managed FEM CPU build/runtime prawdziwego scenariusza oraz dotychczasowe SI/current/jump/gauge/disconnected/nanometre controls. W tym kroku bez kompilacji/frameworka/solvera; source/algebra checks nie dowodzą wykonania C++.
+
+Primary source: [MFEM pinned `CGSolver::Mult`](https://github.com/mfem/mfem/blob/d964264cdb9a13e94a201b6c236c7721e0c8765f/linalg/solvers.cpp), [MFEM pinned `GSSmoother::Mult`](https://github.com/mfem/mfem/blob/d964264cdb9a13e94a201b6c236c7721e0c8765f/linalg/sparsesmoothers.cpp). Zbieżność PCG dotyczy rekurencyjnego preconditioned residualu. Log sam nie rozdziela wpływu tej normy od roundoff przy rekonstrukcji/original K action.
+
+Przypięta rewizja źródeł MFEM odpowiada odczytanej recepturze budowy; odrębne powiązanie tej rewizji z rzeczywistym obrazem pakietu86 pozostaje NOT VERIFIED. Niezmienny digest obrazu i pakietu oraz rzeczywisty log norm zachowują własne provenance.
+
+| Path | Symbol / DOC-ANCHOR | Odpowiedzialność / evidence |
+|---|---|---|
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-charge-true-residual-refinement-v1` | prerejestracja równań i limitów przed kodem |
+| `backends/fem/cpu/mfem/workflows/antenna_field_solve/charge_trace_workspace.cpp` | `ChargeTraceWorkspace::Impl::solve` | planned same-operator true-residual correction; runtime NOT VERIFIED |
+| `backends/fem/tests/conservative_current_view_contract.cpp` | `charge_trace_workspace_preserves_component_gauges_and_weak_reactions` | istniejąca numerical regression source, nieuruchomiona |
+
+(antenna-rt0-true-residual-kkt-refinement-v1)=
+## FEM CPU: prerejestracja pełnej korekcji rzeczywistego residualu RT0/KKT — 22.10.2026
+
+**Stan: SOURCE_IMPLEMENTED; native build, runtime i kwalifikacja naukowa
+NOT VERIFIED.** Prerejestracja powstała w commicie
+`2fba2495b6cd4b8ded3a61b343ea371ea40a9149` przed zmianą C++; algorytm ma teraz
+realizację źródłową, dotyczącą wyłącznie sparse MINRES w `conservative_current_view.cpp::solve_weighted_rt0_projection`.
+Dense KKT oraz CG dla układu bez constraints pozostają bez zmian. Nie jest to
+nowa fizyka, nowy backend ani publiczny parametr. Zachowujemy pełny conductor,
+coincident cut, source voltage, conductivity, gauge, zaakceptowany H1 snapshot,
+rank ledger, objective oraz wszystkie istniejące równania i progi certyfikatów.
+
+### Problem, dowód odmowy i granica wnioskowania
+
+Rzeczywista próba publiczna
+`run-live-91ade96632da3c92902cd0143337a9496518ff29ea45ab0bc22313d44421eee4`
+na pakiecie `a9259bb183cbffe96b46d4493ec55ea471cfedbd` doszła do native solve.
+Receipt workera `worker-process-exit-8c796b30fe9662d1cbf3355dd8a71d450ebc8c16010d417da0d076b4d43d2b38`
+potwierdza exit 1 i lokalny residual $-2.2630475713324681\times10^{-15}\,\mathrm A$
+przy skali $1.3631510305998916\times10^{-5}\,\mathrm A$.
+Niezmieniony dopuszczalny błąd to
+$1.3641510305998915\times10^{-15}\,\mathrm A$; odmowa jest prawidłowa.
+Przygotowanie miało 1867 Tet4, 1324 boundary faces i 678 nodes, bez invalid cells;
+4396 RT0 face DOF już przed dodatkowym rozcięciem przekracza dense cutoff 4096.
+Stan nie zawiera accepted V/J/H. Sukces solvera lub buildu nie jest
+kwalifikacją naukową.
+
+MFEM `MINRESSolver::Mult` kontroluje rekurencyjną normę z preconditionerem.
+Dotychczasowy final `scaled_kkt_residual` miesza residuale w V i A, z dolnym
+ograniczeniem mianownika 1.0; nie daje gwarancji każdego lokalnego bilansu w A.
+`AffineRt0Element::face_moment` mierzy rzeczywiste frozen coefficients przez
+exact-rational geometry moments, więc nie wolno zastąpić niezależnego pomiaru
+kopią shared DOF ani dodać flooru roundoff do certyfikatu. Nie zachowano wektora
+KKT nieudanej próby; nie rozstrzygamy udziału rekurencyjnego błędu MINRES i
+propagacji do omitted rows. Usuwamy wykazaną lukę kryterium stopu, bez obietnicy
+zbieżności dowolnego układu.
+
+### Równania pełnego refinement i jednostki
+
+Macierze oraz prawe strony pozostają oryginalne i niezmienne. D oznacza tutaj
+aktywne, niezależne constraints po dotychczasowym rank reduction; wszystkie
+wiersze, również omitted, zachowują osobny ledger i końcowe kontrole.
+
+```{math}
+:label: antenna-rt0-refinement-kkt
+\begin{bmatrix}M&D^T\\D&0\end{bmatrix}
+\begin{bmatrix}\mathbf q\\\boldsymbol\lambda\end{bmatrix}
+=\begin{bmatrix}\mathbf f\\\mathbf h\end{bmatrix}.
+```
+
+```{math}
+:label: antenna-rt0-refinement-residual
+\mathbf r_V=\mathbf f-M\mathbf q-D^T\boldsymbol\lambda,\qquad
+\mathbf r_A=\mathbf h-D\mathbf q,\qquad
+s_{V,i}=|f_i|+\sum_j|M_{ij}q_j|+\sum_k|D_{ki}\lambda_k|.
+```
+
+```{math}
+:label: antenna-rt0-refinement-update
+\begin{bmatrix}M&D^T\\D&0\end{bmatrix}
+\begin{bmatrix}\delta\mathbf q\\\delta\boldsymbol\lambda\end{bmatrix}
+=\begin{bmatrix}\mathbf r_V\\\mathbf r_A\end{bmatrix},\qquad
+\mathbf q\leftarrow\mathbf q+\delta\mathbf q,\quad
+\boldsymbol\lambda\leftarrow\boldsymbol\lambda+\delta\boldsymbol\lambda.
+```
+
+```{math}
+:label: antenna-rt0-refinement-local-gates
+\left|\sum_j d_{ij}q_j\right|\le a_A+
+\tau_c\sum_j|d_{ij}q_j|\quad\text{(div/pair)},\qquad
+\left|\sum_j d_{ij}q_j-h_i\right|\le a_A+\tau_t|h_i|
+\quad\text{(existing terminal)}.
+```
+
+```{math}
+:label: antenna-rt0-refinement-stationarity-budget
+|r_{V,i}|\le\tau_s s_{V,i},\qquad
+s_{V,i}=0\Longrightarrow r_{V,i}=0,\qquad
+\sum_{\ell=0}^{p}n_\ell\le N_{\max},\qquad
+N_{\max}=\begin{cases}
+\max(2000,4N)&N\le50000,\\
+200000&N>50000.
+\end{cases}
+```
+
+| Dokładny token | Znaczenie | Jednostka SI |
+|---|---|---|
+| $M$ | oryginalna assembled weighted RT0 mass matrix w physical flux coordinates | $\Omega$ |
+| $D,d_{ij}$ | aktywna incidence matrix i współczynniki wszystkich kontrolowanych constraints; bez nowych wierszy | $1$ |
+| $\mathbf q,q_j,\delta\mathbf q$ | physical face moments i ich pełna korekcja KKT | $\mathrm A$ |
+| $\mathbf h,h_i$ | oryginalne constraint RHS; zero dla div/pair | $\mathrm A$ |
+| $\mathbf f,f_i$ | oryginalny weighted load z tego samego zaakceptowanego H1 | $\mathrm V$ |
+| $\boldsymbol\lambda,\lambda_k,\delta\boldsymbol\lambda$ | mnożniki Lagrange'a i ich korekcja | $\mathrm V$ |
+| $\mathbf r_V,r_{V,i},s_{V,i}$ | true stationarity residual i jego lokalna skala sumy modułów | $\mathrm V$ |
+| $\mathbf r_A$ | true residual aktywnych constraints | $\mathrm A$ |
+| $a_A$ | niezmieniony absolute physical current gate, $10^{-18}$ | $\mathrm A$ |
+| $\tau_c$ | niezmieniony local continuity gate, $10^{-10}$ | $1$ |
+| $\tau_t$ | niezmieniony existing terminal-current gate, $10^{-8}$ | $1$ |
+| $\tau_s$ | nowy ostrzejszy stationarity backward-error gate, $10^{-12}$ | $1$ |
+| $N,N_{\max},n_\ell,p,\ell$ | rozmiar sparse KKT, wspólny limit, actual iteracje wywołania, ostatnie wywołanie i indeks | $1$ |
+| $i,j,k$ | indeks wiersza, flux DOF i aktywnego constraint | $1$ |
+| $\sum,\lvert\cdot\rvert,\max,{}^T,\delta,\leftarrow$ | suma, moduł, maksimum, transpozycja, korekcja i aktualizacja; jednostki argumentów zachowane | $1$ jako operatory |
+
+### Realizacja, kompletna polityka i fail-closed
+
+True residual obliczamy z oryginalnego CSR M, niezmienionych D/f/h oraz aktualnych
+binary64 q/lambda; iloczyny i sumy w `long double`, z kontrolą representability
+przy przekazaniu RHS do MFEM. Nie kopiujemy residualu rekurencyjnego ani nie
+traktujemy `GetConverged` jako admission. Nowy row-wise stationarity gate jest
+ostrzejszym warunkiem wewnętrznym, a nie zmianą dotychczasowego globalnego gate.
+Skale V i A pozostają osobne; nie sumujemy ich w nowym kryterium. Zerowa skala
+stationarity wymaga dokładnie zerowego residualu, bez arbitralnego flooru.
+
+Po pierwotnym solve kontrolujemy wszystkie div/pair rows, także omitted, oraz
+istniejące terminal rows. Gdy wszystkie lokalne i stationarity gates przechodzą,
+nie wykonujemy korekcji. W przeciwnym razie rozwiązujemy pełny układ correction
+na tym samym operatorze i preconditionerze. Aktualizacja obejmuje q **i** lambda;
+nie jest constraint-only repair, projekcją samych bilansów ani dopasowaniem
+source current. Nie zmieniamy M, D, f, h, rank decision, H1, jump, conductivity,
+voltage ani źródła. Nie dodajemy constraint $I_{\mathrm{RT0}}=I_{\mathrm{H1}}$.
+Te dwie miary i prerejestrowane porównanie source-current pozostają oddzielne.
+
+| Polityka / parametr | Typ / default lub wartość stała | SI | Walidacja i semantyka | Public Python / ProblemIR |
+|---|---|---|---|---|
+| sparse cutoff | internal integer, 4096 | $1$ | `global_dof_count > 4096`; dense bez zmian | brak nowego pola |
+| MINRES relative stop | internal double, `1e-12` | $1$ | bez zmian, każde correction solve ten sam operator i preconditioner | bez zmiany requested/resolved policy |
+| MINRES absolute stop | internal double, `0.0` | $1$ w normie wewnętrznej solvera | bez zmian; brak fixed absolute shortcut | brak nowego pola |
+| stationarity backward error | internal double, $\tau_s=10^{-12}$ | $1$ | nowy warunek per row, finite; zero scale wymaga zero residualu | brak publicznego parametru |
+| local div/pair | internal doubles, $a_A=10^{-18}$ i $\tau_c=10^{-10}$ | odpowiednio $\mathrm A$ i $1$ | wszystkie rows, również omitted; bez roundoff floor | istniejące native physical policy pins, bez nowej serializacji |
+| existing terminal | internal double, $\tau_t=10^{-8}$ | $1$ | tylko istniejące terminal constraints, skala własnego signed RHS | bez dodawania terminal/source actuator |
+| total sparse iteration budget | internal integer, $N_{\max}$ powyżej | $1$ | łącznie initial i corrections; istniejący cap typu `int`; next solve tylko remaining budget | odrębny istniejący limit RT0; nie reinterpretować H1 `max_iterations` |
+| final global KKT gate | internal double, `1e-10` | $1$ jako istniejący legacy wskaźnik | zachowany dodatkowo; sam nie dowodzi lokalnej dokładności SI | bez zmiany publicznych pins |
+| final physical Piola gates | existing request doubles, `1e-18 A` / `1e-10` | $\mathrm A$ / $1$ | ponowny niezależny pomiar final field; bez poluzowania | bez zmian IR/capabilities |
+
+Każde wywołanie MINRES musi spełnić istniejące `GetConverged`. Budżet liczymy
+łącznie, nie od nowa dla każdego RHS. Nonfinite operator/residual/correction,
+nieprzedstawialny RHS, brak zbieżności, zero postępu iteracyjnego, aktualizacja
+niezmieniająca żadnego binary64 q/lambda lub wyczerpanie budżetu kończą się
+odmową przed accepted state. Nie dodajemy safety factor, dodatkowych iteracji
+po budżecie ani mniejszego RelTol dobranego po wynikach. Refinement nie gwarantuje
+zbieżności przy złym conditioning lub na granicy roundoff.
+
+Pozostaje sparse CSR i O(N) dodatkowych wektorów, bez dense inverse/Schur matrix.
+Po zakończeniu korekcji obliczamy dotychczasowy global residual i correction
+energy z final q/lambda. Dopiero potem jedna konwersja physical moments do
+owned MFEM coefficients; niezależny `integrate_physical_certificate` ponownie mierzy
+wszystkie physical gates bez zmian. J, signed current i H muszą pochodzić z tego
+samego zaakceptowanego owned field. Getter, diagnostyka, eksport i odczyt pola
+nie uruchamiają solve/refinement i nie zmieniają zaakceptowanych coefficients.
+
+### Publiczny kontrakt, realizacje i walidacja przed kwalifikacją
+
+Publiczny flat stage-first przykład
+`examples/fem_antenna_closed_loop_nonmagnetic.py::study` oraz istniejące mapy
+Python→ProblemIR tej noty pozostają bez zmian; brak nowych constructors,
+kwargs, IR fields i capability. H1 requested policy, charge digest, prepared
+binding oraz rank ledger są zachowane. Nowy accepted source digest wynika
+wyłącznie z rzeczywistego finalnego RT0, a nie ze skorygowanej diagnostyki.
+Runtime odmawia przed publikacją V/J/H, jeżeli którakolwiek bramka nie przejdzie;
+nie ma fallbacku CPU/GPU ani alternatywnej sesji/ścieżki wyników.
+
+| Realizacja | Zakres / stan dowodu |
+|---|---|
+| FEM CPU | SOURCE_IMPLEMENTED: serial affine Tet4 sparse RT0/KKT; native build/runtime i kwalifikacja NOT VERIFIED |
+| FEM GPU | poza zakresem; brak implementacji refinement i brak parytetu |
+| FDM CPU | nie dotyczy: inna dyskretyzacja charge/current; bez zmian |
+| FDM GPU | nie dotyczy: inna realizacja; bez zmian i bez fallbacku |
+
+Przed implementacją zarejestrowano następujące dowody; ich native wykonanie
+pozostaje wymagane:
+
+1. Dokładny analityczny SPD M / signed D demonstrator: globalny residual i
+   wewnętrzny relative stop mogą przejść przy lokalnym residualu większym od
+   physical gate; pełna korekcja rozwiązuje oba bloki, bez rescale prądu.
+2. Native FEM CPU przypadek **ponad 4096 RT0 DOF**, który rzeczywiście uruchamia
+   sparse MINRES i refinement, oraz niezmienione dense controls. Każdy element,
+   paired/outer face, terminal i omitted row musi przejść swój istniejący gate.
+3. Analityczny stały prąd: V/J, podpisane I, reversal, zero drive i porównanie
+   z własną słabą reakcją oraz mocą. Zachować niezmienione H1 V/original-K
+   paired-vertex ledger i jego gate `1e-18 A + 1e-10 * sum abs(reactions)`;
+   same raw P1 face flux nie są weak reaction certificate.
+4. Ta sama pełna pętla na trzech prerejestrowanych mesh levels, bez zmian
+   geometrii, materiałów, sourcecut, napięcia, fixed targets i progów A/B/C
+   tej noty. H1/RT0 current comparison i H oracle są osobnymi bramkami;
+   algebraiczny PASS nie zastępuje convergence ani source qualification.
+5. Nonfinite, stagnation, insufficient budget i brak zbieżności: odmowa i zero
+   accepted publication. Każde powtórne odczytanie J/current/H zachowuje field,
+   H1 weak ledger i digests; getter nie może naprawiać wyniku.
+
+Read-only demonstrator Fraction wykonany podczas diagnozy potwierdził lukę
+kryterium przy dokładnym residualu constraint 2.263047571332468e-15 A,
+local gate 1.3641510305998915e-15 A i zerowej stationarity. Nie jest testem
+MFEM ani dowodem wykonania planowanej poprawki. Powyższe native/mesh/field
+regresje pozostają NOT EXECUTED. Strukturalny validator dokumentacji nie jest
+naukowym certyfikatem. Zapisano native exact KKT counterexample oraz
+nieopcjonalną regresję accepted H1→RT0 na siatce7×7×7 Tet4:4410 face DOF i
+4018 free DOF; asercje obejmują rzeczywisty sparse path, każdy lokalny bilans,
+terminalowe original-K reactions, analityczny J/power i niezmienność getterów.
+Sam ten mesh test nie gwarantuje wykonania rundy refinement; trigger korekcji
+wymaga późniejszego odtworzenia identycznej pętli, która wcześniej failowała.
+Nie dodano publicznej diagnostyki ani injection seam wyłącznie dla testu.
+Odroczone: review, zarządzany build i
+rzeczywisty publiczny solve, niezależne oracle oraz pełna kwalifikacja E2/E3.
+
+Podstawa metody: Higham 1995 [16], sekcja 1 (residual/correction/update), oraz
+MFEM 4.7 `MINRESSolver::Mult` [17] (preconditioned recursive norm). Źródła te
+uzasadniają metodę i rozróżnienie norm; nie dowodzą jej realizacji w Fullmagu.
+
+| Ścieżka | Symbol / DOC-ANCHOR | Odpowiedzialność / evidence |
+|---|---|---|
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-rt0-true-residual-kkt-refinement-v1` | prerejestracja równań, SI, polityki i testów; planned contract |
+| `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `solve_weighted_rt0_projection` | istniejący właściciel sparse KKT; refinement SOURCE_IMPLEMENTED, native build/runtime NOT VERIFIED |
+| `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `integrate_physical_certificate` | final niezależny physical Piola certificate; ma pozostać bez zmian |
+| `backends/fem/cpu/mfem/transport/affine_rt0_element.cpp` | `AffineRt0Element::face_moment` | exact-rational pomiar frozen coefficients; nie solver repair |
+| `backends/fem/cpu/mfem/transport/periodic_charge_potential.cpp` | `PeriodicChargePotentialSolver::Solve` | existing original-K paired weak reaction certificate; bez nowego solve |
+| `backends/fem/tests/conservative_current_view_contract.cpp` | `void large_tetrahedral_projection_uses_sparse_kkt_lane` | istniejący opcjonalny native control ponad cutoff; nowe wykonanie NOT VERIFIED |
+| `backends/fem/tests/conservative_current_view_contract.cpp` | `void global_kkt_norm_does_not_certify_a_local_current_balance` | exact-rational mały witness obu residual blocks; SOURCE_IMPLEMENTED, native test NOT COMPILED/NOT EXECUTED |
+| `backends/fem/tests/conservative_current_view_contract.cpp` | `void sparse_terminal_source_preserves_local_si_balances_and_h1_reactions` | real sparse4410face/4018freeDOF, H1→RT0 w SI i niezmienne original-K reactions; SOURCE_IMPLEMENTED, native test NOT COMPILED/NOT EXECUTED |
+
+
+(antenna-retained-rt0-exact-sampling-v1)=
+## FEM CPU: prerejestracja dokładnego próbkowania i wspólnej wykonalności RT0 — 23.10.2026
+
+### Problem i granica dowodu
+
+Rzeczywisty publiczny Solve pakietu `e4dce5d1551378faa8d9445620b6869c2b3dcf7d`
+zakończył się odmową `J samples are not one affine RT0 field`, przed publikacją
+accepted V/J/H. Surowe próbki tego workera nie zostały zachowane. Poniższy
+kontrprzykład dowodzi niezależnego błędu walidatora; nie jest pomiarem jego komórki.
+Dla afinicznego pola z dużą stałą składową różnica dwóch poprawnie zaokrąglonych
+próbek traci informację o nachyleniu. Wybranie najdłuższej krawędzi współrzędnych
+nie kontroluje tej utraty. Osobno, czterowyrazowe sumowanie signed RT0 w long double
+może utracić dokładność względną niemal zerowej składowej. Sam większy typ nie
+zapewnia dokładnego próbkowania przy znoszeniu składników [18,19].
+
+Kontrakt prerejestrowano przed implementacją w commicie
+`3561ec5981c40c6f2ce54535aa99e00a18ebf6fe`. Producent i konsument są teraz
+SOURCE_IMPLEMENTED; kompilacja oraz wykonanie native/Rust i runtime pozostają
+NOT VERIFIED.
+Nie zmienia fizyki H1/RT0, source drive, rozwiązanych współczynników ani progów
+bilansu. Nie kwalifikuje taperu, całkowania H, projekcji ani parytetu BORIS.
+
+### Dokładny producent i wspólny konsument
+
+Dla zamrożonych binary64 współczynników i geometrii przyjmujemy ich dokładne
+wartości dyadyczne. Tylko pięć retained próbek na Tet4 jest obliczanych przez
+istniejącego właściciela `AffineRt0Element` w arytmetyce wymiernej:
+
+```{math}
+:label: antenna-retained-rt0-exact-point-current
+J_k^{\ast}(\mathbf x)=
+\frac{\sum_{i=0}^{3}c_i^{\mathrm{signed}}(x_k-v_{i,k})}{D},
+\qquad D=\left|\det(\mathbf v_1-\mathbf v_0,
+\mathbf v_2-\mathbf v_0,\mathbf v_3-\mathbf v_0)\right|.
+```
+
+Iloczyny, suma i determinant są dokładne; dopiero końcowe dzielenie wymierne
+jest konwertowane do binary64. Producent nie rozwiązuje ponownie transportu.
+Sampler otrzymuje obecny retained center oraz cztery wierzchołki i zachowuje
+odmowę overflow oraz niezerowego exact wyniku zaokrąglonego do zera.
+Nie należy zastępować nim `current_at` w gorącej pętli całkowania H.
+Obie realizacje opisują to samo zamrożone pole; dokładność H jest osobną bramką.
+
+Konsument nie wyznacza nachylenia z jednej pary. Dla wszystkich sześciu par
+wierzchołków i trzech osi sprawdza istnienie jednego wspólnego nachylenia:
+
+```{math}
+:label: antenna-retained-rt0-common-slope-feasibility
+ e_{ik}=64\epsilon |s_{ik}|,\qquad \epsilon=2^{-52},
+\qquad
+(s_{ik}-s_{jk})-(e_{ik}+e_{jk})
+\le \beta(x_{ik}-x_{jk})
+\le (s_{ik}-s_{jk})+(e_{ik}+e_{jk}).
+```
+
+Wszystkie różnice, końce przedziałów, dzielenie i przecięcia są wymierne,
+z dokładnych wartości binary64; nie stosuje się dodatkowego zaokrąglania
+ani rozszerzenia przedziałów. Wspólne przecięcie18 warunków jest równoważne
+istnieniu offsetu dla każdej osi i jednego nachylenia takiego, że
+$|s_{ik}-(A_k+\beta x_{ik})|\le e_{ik}$: na każdej osi przedziały możliwych
+offsetów są parami przecinające się wtedy i tylko wtedy, gdy mają wspólne
+przecięcie. Dla równej współrzędnej przedział różnicy musi zawierać zero.
+Co najmniej jedna nierówna współrzędna jest wymagana przez nieosobliwą geometrię.
+Nie jest dopuszczony dowolny afiniczny tensor gradientu: shear, rotacja oraz
+różne nachylenia osi muszą być odrzucone.
+
+Dotychczasowy budżet pary nie jest podnoszony:
+
+```{math}
+:label: antenna-retained-rt0-pair-rounding-budget
+ e_{ik}+e_{jk}=64\epsilon(|s_{ik}|+|s_{jk}|)
+ \le128\epsilon\max(|s_{ik}|,|s_{jk}|).
+```
+
+### Symbole, SI i pełna polityka tego zakresu
+
+| Dokładny token | Znaczenie | Jednostka SI |
+|---|---|---|
+| $J_k^{\ast}(\mathbf x)$ | dokładna składowa pola zamrożonego RT0 | $\mathrm{A\,m^{-2}}$ |
+| $\mathbf x,x_k,x_{ik},\mathbf v_i,v_{i,k}$ | punkt próbkowania i wierzchołki Tet4 | $\mathrm m$ |
+| $c_i^{\mathrm{signed}}$ | zamrożony signed współczynnik istniejącej bazy RT0 | $\mathrm A$ |
+| $D$ | moduł determinantu geometrii komórki | $\mathrm{m^3}$ |
+| $s_{ik},e_{ik},A_k$ | retained próbka, jej budżet i offset składowej | $\mathrm{A\,m^{-2}}$ |
+| $\beta$ | wspólne skalarne nachylenie przestrzennego RT0 | $\mathrm{A\,m^{-3}}$ |
+| $\epsilon$ | binary64 machine epsilon, nie unit roundoff | $1$ |
+| $i,j,k,\sum,\det,|\cdot|,\max$ | indeksy wierzchołków/osi i operatory o jednostkach argumentów | $1$ |
+
+| Polityka | Typ i wartość | Walidacja i znaczenie | Python / ProblemIR |
+|---|---|---|---|
+| retained punkty | internal integer,5/cell |4 wierzchołki i obecny center; bez zmiany kolejności | brak nowego parametru |
+| arytmetyka producenta | exact rational z binary64 | skończone wejścia, dodatni nieosobliwy determinant, finite output; nonzero→zero odmawia | ten sam accepted source |
+| budżet próbki | internal exact rational, $64\epsilon|s_{ik}|$ | bez dodatniego absolute flooru; dla zera szerokość0 | brak nowego parametru |
+| wspólna wykonalność |18 exact pair constraints | jedna wartość $\beta$ dla wszystkich osi; puste przecięcie odmawia | brak zmiany IR |
+| subnormal/overflow | zachowane fail-closed | nie deklarujemy względnej kwalifikacji dowolnych skal subnormalnych; niespełnienie tego samego warunku odmawia | brak fallbacku |
+| pozostałe bramki | istniejące wartości | digest/identity, center interpolation, canonical face flux, divergence i signed source current bez zmiany | bez zmiany wersji operatora i payloadu |
+
+Publiczny scenariusz pozostaje `examples/fem_antenna_closed_loop_nonmagnetic.py` +
+`study`: jawne FEM CPU/double,1e-12 charge rtol, jedna antena niemagnetyczna i
+jeden stage `inspect_loop`. Python→ProblemIR→planner→runtime zachowuje te same
+geometrie, materiały, port, source cut i stage; zmienia się tylko dokładność
+retained próbek i weryfikacja ich reprezentacji. Nie dodaje się konstruktora,
+parametru ani backend capability. Acykliczne preimages nadal przypinają faktyczne
+bajty V/J/H; nie przepisuje się istniejących bundle ani ich digestów. Runtime
+zachowuje requested CPU/double i nie deklaruje kwalifikacji na podstawie buildu.
+
+| Realizacja | Stan tej poprawki |
+|---|---|
+| FEM CPU | SOURCE_IMPLEMENTED: dokładne retained sampling i wspólna walidacja; native/Rust tests oraz runtime NOT VERIFIED |
+| FEM GPU | brak nowej realizacji/kwalifikacji tego pełnego closed-loop workflow; bez fallbacku |
+| FDM CPU | nie dotyczy affine Tet4/RT0; istniejący FDM bez zmian |
+| FDM GPU | nie dotyczy affine Tet4/RT0; istniejący FDM bez zmian |
+
+### Prerejestrowane regresje, dowody i ograniczenia
+
+Counterexample: Tet4 o bokach1.1e-6,0.7e-6,0.3e-6 m, signed coefficients
+(0.21000000000044933,−0.21,−3.3e-13,−9.625000000000001e-14) A.
+Dokładne nachylenie wynosi około99935.12398881587 A/m³. Stary pivot z poprawnie
+zaokrąglonych próbek daje około99986.68323863635 A/m³ i fałszywą odmowę.
+Warunkowa emulacja każdej operacji long double o64 bitach precyzji daje osobną
+odmowę próbki prawie zerowej; to model arytmetyczny, nie wykonanie C++.
+Dowód analizy w wolumenie kontrolnym:
+`verification/closed-loop-affine-sampling-analysis-20261023/witness-and-proposal.json`,
+SHA256 `d70122caa044de99f6626e732997560588bdcd6b0966cee2a13decb70d2ccd4b`.
+
+Wymagane: old-RED counterexample; dokładny sampler przeciw niezależnemu Fraction
+oracle; normalne skale i translacje, zero/constant/reversal, niezmienione frozen
+coefficients, odmowy shear/rotation/anisotropic diagonal i overflow/underflow.
+Rust/native testów lokalnie nie kompilujemy; ich wykonanie należy do CI.
+Następnie identyczny publiczny Solve z nowym jawnym katalogiem wyników,
+actual V/J/H, binary smokes i dopiero odrębna naukowa kwalifikacja.
+Brak raw próbek poprzedniego workera nie może zostać zastąpiony twierdzeniem,
+że counterexample jest jego zmierzoną komórką.
+
+| Kontrakt / właściciel | Ścieżka + symbol | Status |
+|---|---|---|
+| równania próbkowania i wykonalności | niniejsza nota + `DOC-ANCHOR:antenna-retained-rt0-exact-sampling-v1` | prerejestrowany kontrakt, implementacja źródłowa |
+| dokładna baza i wzorzec konwersji | `backends/fem/cpu/mfem/transport/affine_rt0_element.cpp` + `AffineRt0Element::face_moment` | istniejący owner; `AffineRt0Element::retained_current_at` SOURCE_IMPLEMENTED |
+| pięć retained próbek | `backends/fem/cpu/mfem/transport/closed_loop_source_snapshot.hpp` + `export_closed_loop_source_snapshot` | SOURCE_IMPLEMENTED; wyłącznie pięć retained punktów |
+| wspólny gate live/cold | `crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs` + `verify_owned_geometry` | `verify_rt0_sample_affinity` SOURCE_IMPLEMENTED; pozostałe bramki identyczne |
+
+Źródłowa weryfikacja:33 niezależne przypadki Fraction, parser obu plików Rust
+i diff-check PASS; stary pivot odtwarza odmowę poprawnych próbek. Osobny
+Fraction oracle15wartości hex zgadza się z przygotowanym golden C++; model
+starego sumowania p=64 daje RED. To modele i źródła, nie wykonanie C++.
+Gorąca metoda `current_at` jest bajtowo identyczna; exporter różni się wyłącznie
+dwoma nazwami wywołań. Dodano9 testów Rust i natywny kontrakt, bez lokalnej
+kompilacji. Dowody w wolumenie grupy:
+`verification/closed-loop-affine-consumer-source-20261023/` oraz
+`verification/retained-rt0-exact-sampling-source-20261023/`.
+
+| Regresja | Ścieżka + symbol | Dowód wykonania |
+|---|---|---|
+| dokładny producent i fail-closed | `backends/fem/tests/conservative_current_view_contract.cpp` + `retained_rt0_sampling_is_exact_frozen_and_fail_closed` | source-only; native NOT COMPILED/NOT EXECUTED |
+| old-RED i wspólny slope | `crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2_affinity_tests.rs` + `rounded_rt0_samples_survive_an_ill_conditioned_pivot` | parser i Fraction model PASS; Rust NOT COMPILED/NOT EXECUTED |
+
 (antenna-source-code-index)=
 ### 13.1 Source-code index
 
@@ -7577,6 +10163,17 @@ Uzupełnienie E9b (mapping implementacji; build Windows i API50 nie stanowią kw
 
 | Path | Symbol / anchor | Responsibility / evidence |
 |---|---|---|
+| `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solve_native_fem_prepared_closed_loop` | Sprawdza requested/resolved policy oraz rzeczywistą liczbę par przed wywołaniem natywnym. FEM CPU/double; source_only, runtime pending. |
+| `crates/fullmag-runner/src/antenna_field_solution/direct_quadrature_v2.rs` | `verify_policy_binding` | Cold v2 wiąże dokładny tuple budżetu ze snapshotem i requested/resolved provenance; legacy bez nowych pól wymaga starego profilu. FEM CPU/double; source_only, runtime pending. |
+| `backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp` | `DirectTetraQuadrature::ResolveWorkLimits` | Zamknięty selektor legacy 1..1M lub dokładnie 4M; wyznacza globalne limity kernel i ledger bez zmiany ABI. FEM CPU/double; source_only, runtime pending. |
+| `backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp` | `WorkBudget` | Wspólny licznik kernel/ledger całego zapytania, obejmujący wszystkie targety i adaptację. FEM CPU/double; source_only, runtime pending. |
+| `crates/fullmag-ir/src/antenna.rs` | `AntennaClosedLoopDirectBudgetIR` | Wspólny typ dokładnego wersjonowanego zestawu limitów pętli; bez nowego modelu fizycznego. FEM CPU/double; source_only, runtime pending. |
+| `crates/fullmag-ir/src/antenna.rs` | `antenna_closed_loop_direct_budget` | Dokładne mapowanie production_default i volume_inspection_v1; nieznany token odrzucony. FEM CPU/double; source_only, runtime pending. |
+| `crates/fullmag-plan/src/antenna_current_source.rs` | `closed_loop_direct_field_policy` | Kontrolowany dodatni iloczyn par, wybrany limit i niezmienione tolerancje. FEM CPU/double; source_only, runtime pending. |
+| `crates/fullmag-ir/src/antenna.rs` | `closed_loop_direct_budget_requires_exact_opt_in_and_preserves_legacy_defaults` | Regresja obu dokładnych profili i odmowy nieznanych tokenów; test przygotowany do CI. FEM CPU/double; source_only, runtime pending. |
+| `crates/fullmag-plan/src/antenna_current_source.rs` | `closed_loop_volume_budget_is_explicit_and_preserves_legacy_accuracy_options` | Regresja 2 154 518 par oraz niezmienionych opcji dokładności; test przygotowany do CI. FEM CPU/double; source_only, runtime pending. |
+| `crates/fullmag-plan/src/antenna_current_source.rs` | `closed_loop_volume_budget_rejects_over_cap_overflow_empty_and_unknown_policy` | Regresja granicy 4M, overflow, pustego wejścia i nieznanego profilu; test przygotowany do CI. FEM CPU/double; source_only, runtime pending. |
+| `crates/fullmag-plan/src/antenna_current_source.rs` | `external_lead_does_not_inherit_closed_loop_volume_budget` | Regresja zachowania odmowy nowego profilu dla external-lead; test przygotowany do CI. FEM CPU/double; source_only, runtime pending. |
 | `crates/fullmag-application/src/script_stage_materialization.rs` | `validate_antenna_equilibrium_dependencies` | jednoznaczny wcześniejszy wykonawczy Relax i accepted_equilibrium; skompilowane w natywnym Windows, regresje wykonania helpera oraz target/eligibility NOT VERIFIED |
 | `packages/fullmag-py/src/fullmag/model/antenna.py` | `class EquilibriumStageOutputRef` | Istniejąca typed symbolic accepted Relax reference; public round-trip sprawdzony, runtime NOT VERIFIED. |
 | `packages/fullmag-py/src/fullmag/model/antenna.py` | `class EquilibriumArtifactRef` | Istniejący exact asset/equilibrium/content pin; v7 runtime wymaga canonical owner context. |
@@ -7611,6 +10208,123 @@ Uzupełnienie E9b (mapping implementacji; build Windows i API50 nie stanowią kw
 
 | Ścieżka | Symbol / anchor | Odpowiedzialność i dowód |
 |---|---|---|
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:analytic-v2-direct2d-general-map-prereg` | Planowany zakres general-map, zastąpienie starszego AST i harmonogramu oraz piny propozycji; brak implementacji i wykonania. Diagnostyka CPU; planned_contract; przeglądy źródeł i wykonania OPEN; SHA propozycji 49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296. |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:analytic-v2-general-map-routing` | Planowane dokładne minimum, zerowe C, dziedziny kątowe i niezmienione 24 przypadki. Diagnostyka CPU; planned_contract; przeglądy źródeł i wykonania OPEN; SHA propozycji 49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296. |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:analytic-v2-general-map-radial` | Planowana ogólna mapa radialna, Jacobian i stabilne granice; obie całki poza wierzchołkiem pozostają numeryczne. Diagnostyka CPU; planned_contract; przeglądy źródeł i wykonania OPEN; SHA propozycji 49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296. |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:analytic-v2-general-map-accounting` | Planowany jednorazowy plan w limicie 174, jawne liczniki, agregacja oryginalnych paneli i warunkowy koszt. Diagnostyka CPU; planned_contract; przeglądy źródeł i wykonania OPEN; SHA propozycji 49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296. |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:analytic-v2-general-map-validation` | Planowane przeglądy źródeł i wykonania oraz zachowane wyniki zbieżności; brak ścisłego twierdzenia dla 24. Diagnostyka CPU; planned_contract; przeglądy źródeł i wykonania OPEN; SHA propozycji 49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296. |
+| `scripts/antenna_triangle_surface_oracle.py` | `positive_reference_panels` | Istniejący dokładny podział fizyczny; nowy harmonogram i plan mapy są dopiero planowane. Diagnostyka CPU; source_only; przeglądy źródeł i wykonania OPEN; SHA propozycji 49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296. |
+| `scripts/antenna_triangle_surface_oracle.py` | `class ReferenceExactArithmetic` | Istniejący właściciel kontroli wartości przed i po redukcji; nowe operacje mapy wymagają przeglądu źródeł. Diagnostyka CPU; source_only; przeglądy źródeł i wykonania OPEN; SHA propozycji 49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296. |
+| `scripts/antenna_triangle_surface_oracle.py` | `class Budget` | Istniejący właściciel wspólnych limitów i kontroli; nowe liczniki są planowane, bez wykonania. Diagnostyka CPU; source_only; przeglądy źródeł i wykonania OPEN; SHA propozycji 49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296. |
+| `scripts/antenna_triangle_surface_oracle.py` | `reference_radial_value` | Istniejąca oddzielna referencja radialna; nowy bezpośredni kernel nie może jej wywoływać. Diagnostyka CPU; source_only; przeglądy źródeł i wykonania OPEN; SHA propozycji 49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296. |
+| `scripts/antenna_triangle_surface_oracle.py` | `reference_scale` | Istniejąca dokładna skala bramki naukowej, bez zmiany. Diagnostyka CPU; source_only; przeglądy źródeł i wykonania OPEN; SHA propozycji 49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296. |
+| `scripts/antenna_triangle_surface_oracle.py` | `mathematical_corpus` | Istniejący pełny zakres 54, którego nie zastępuje obowiązkowy eksperyment 24. Diagnostyka CPU; source_only; przeglądy źródeł i wykonania OPEN; SHA propozycji 49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296. |
+| `packages/fullmag-py/src/fullmag/meshing/_gmsh_waveguides.py` | `add_antenna_layout_parts_to_occ` | Actual OCC signal/return/bridges dimensions; source-only; exact constants frozen before solve. |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-closed-loop-independent-qualification-prereg-v1` | Preregistered independent surface/fan RT0 H oracle, exact scopes, fixed A/B/C and work gates; SOURCE PLANNED, no scientific PASS. |
+| `crates/fullmag-runner/src/native_fem/steady_transport/artifact_identity.rs` | `tagged_json_digest` | Istniejący codec prepared identity; promocja do fullmag_ir planowana; source-only |
+| `backends/fem/include/frequency_domain/canonical_digest.hpp` | `class CanonicalDigestBuilder` | Istniejący named typed BE codec; proposed rawbits v2 wykorzystuje uint64, nie add_double. source-only |
+| `crates/fullmag-runner/src/fem/eigen_native_window.rs` | `CanonicalDigestBuilder` | Istniejący Rust byte reference; niezależny transport encoder jest planned. source-only |
+| `crates/fullmag-ir/src/transport_identity.rs` | `tagged_json_digest` | Istniejący wspólny tagged-json v1 encoder po promocji exact byte operations; source-only, nie runtime proof |
+| `packages/fullmag-py/src/fullmag/model/antenna.py` | `class EquilibriumStageOutputRef` | Istniejąca typed symbolic accepted Relax reference; public round-trip sprawdzony, runtime NOT VERIFIED. |
+| `packages/fullmag-py/src/fullmag/model/antenna.py` | `class EquilibriumArtifactRef` | Istniejący exact asset/equilibrium/content pin; v7 runtime wymaga canonical owner context. |
+| `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_antenna_spectrum_request_expr` | Typed reference export i odmowa unknown keys; source-only. |
+| `crates/fullmag-ir/src/antenna.rs` | `EquilibriumReferenceIR` | Tagged deny-unknown typed refs; source-only. |
+| `crates/fullmag-ir/src/antenna.rs` | `validate_transverse_equilibrium_ref` | Required transverse ref i Cartesian ignored-ref refusal; source-only. |
+| `crates/fullmag-runner/src/fem/antenna_equilibrium.rs` | `VerifiedAntennaEquilibriumContext` | Prywatny verified accepted Relax/owning-plan context; nie raw m0 authority. |
+| `crates/fullmag-runner/src/fem/antenna_equilibrium.rs` | `AcceptedEquilibriumManifest` | Required fourth accepted_fields InputRef; exact-byte SHA/count closure; source-only, unqualified. |
+| `crates/fullmag-runner/src/fem/antenna_equilibrium.rs` | `validate_inputs` | Independent accepted baseline versus refreshed fields through six-argument canonical validator and v3 rebuild; runtime NOT VERIFIED. |
+| `crates/fullmag-session/src/typed_documents.rs` | `EquilibriumOwnedManifest` | Strict required four-input inventory schema; no default baseline; cold archive NOT VERIFIED. |
+| `crates/fullmag-runner/src/fem/antenna_equilibrium.rs` | `accepted_antenna_equilibrium_artifacts` | Actual CPU native accepted Relax wrapper; required verified replay and exact accepted_fields_json baseline retained with SHA/count, bounded at 256 MiB; runtime NOT VERIFIED. |
+| `crates/fullmag-runner/src/fem/antenna_equilibrium.rs` | `publish_accepted_antenna_equilibrium` | Closed six-artifact publication: four inputs, manifest index4, stage pin index5 last after full canonical reopen; cold runtime NOT VERIFIED. |
+| `crates/fullmag-runner/src/fem/antenna_equilibrium.rs` | `load_verified_antenna_equilibrium` | Full owner closure including required accepted baseline SHA/count and independent replay versus refreshed fields; v3 rebuild and explicit v7 refusal; runtime NOT VERIFIED. |
+| `crates/fullmag-plan/src/antenna_projection.rs` | `resolve_fem_antenna_transverse_cell_mask` | Actual volume cell Object/Region membership intersect Ms>0; source-only. |
+| `crates/fullmag-runner/src/antenna_spectrum.rs` | `compute_antenna_source_spectrum_with_equilibrium` | Private-context public dispatch, qualified source gate; source-only. |
+| `crates/fullmag-runner/src/antenna_spectrum.rs` | `compute_spectrum_artifact` | Actual P1/projection/FFT, transverse v3 and Cartesian v2; no transverse fast cache. |
+| `crates/fullmag-runner/src/antenna_spectrum.rs` | `verify_antenna_source_spectrum_equilibrium_binding` | Full canonical equilibrium/source binding on readback; source-only. |
+| `crates/fullmag-runner/src/antenna_spectrum.rs` | `validate_antenna_source_spectrum_manifest_semantics` | v3 required transverse binding, Cartesian v2 unchanged; source-only. |
+| `crates/fullmag-api/src/schemas/authoring.rs` | `EquilibriumReferenceResource` | Typed API authoring refs; generated OpenAPI/TS NOT VERIFIED. |
+| `crates/fullmag-api/src/router_v2/handlers/data/antenna.rs` | `get_antenna_source_spectrum` | Metadata reopens owner closure and checks binding; API runtime NOT VERIFIED. |
+| `crates/fullmag-api/src/router_v2/handlers/data/antenna.rs` | `get_antenna_source_spectrum_payload` | Binary read repeats canonical binding and payload integrity; browser NOT VERIFIED. |
+| `crates/fullmag-session/src/typed_documents.rs` | `equilibrium_artifact_inventory_refs` | Exact equilibrium inventory refs; no global allowlist. |
+| `crates/fullmag-session/src/typed_documents.rs` | `equilibrium_owned_inputs` | Strict four-input equilibrium inventory including accepted_fields.json SHA/count and 256 MiB budget; store/archive cold NOT VERIFIED. |
+| `crates/fullmag-session/src/typed_documents.rs` | `antenna_source_inventory_refs` | Exact source basis inventory owner refs; no CAS guessing. |
+| `crates/fullmag-session/src/typed_documents.rs` | `antenna_source_owned_inputs` | Verified source owned inputs/closure; cold NOT VERIFIED. |
+| `crates/fullmag-session/src/reachability.rs` | `walk_store_equilibrium_inventory_refs` | Canonical archive inventory reachability, source-only. |
+| `crates/fullmag-session/src/reachability.rs` | `walk_archive_live_snapshot` | Archive live-snapshot exact inventory reachability; source-only. |
+| `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp` | `void validate_charge_request` | Existing pure-charge absolute_tolerance exactly0 refusal; nominal A, no tolerance change. |
+| `backends/fem/cpu/mfem/workflows/antenna_field_solve/charge_trace_workspace.cpp` | `ChargeTraceWorkspace::Impl::solve` | Unscaled K V/RHS in A; SetAbsTol0, independent dimensionless relative residual; nominal CG unit evidence. |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-prepared-accepted-loop-contract` | Prerejestrowane public prepared→accepted source v2 / port v3 / ABI / writer; source_only integracja, inspection_only, runtime/science NOT VERIFIED |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-common-artifact-sample-carrier-contract` | Prerejestrowane ArtifactSamples/owner/indexing/locator i FMVPv6; proposed types, NOT VERIFIED. |
+| `apps/control-room/src/kernel/api/ControlRoomApi.ts` | `requestFieldVectorOnDemand` | Udany field GET wraca bez nowego materialize command; source-only. |
+| `apps/control-room/src/kernel/api/ControlRoomApi.ts` | `livePublisherOwnsFieldMaterialization` | StaleComplete jest istniejącym wynikiem publishera; source-only, bez HTTP qualification. |
+| `crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs` | `enqueue_session_command_impl_with_context` | Existing durable command lifecycle pozostaje bez zmian; dodatkowy artifact journal branch odroczony. |
+| `crates/fullmag-api/src/live_command_journal.rs` | `mutate` | Existing journal mutation bez zmian; historyczny GET nie jest nowym commandem. |
+| `crates/fullmag-api/src/router_v2/handlers/data/resolved_spatial_field.rs` | `SpatialFieldCarrier` | Istniejąca granica; ArtifactSamples i typed owner/indexing są proposed, nie istniejące deklaracje. |
+| `crates/fullmag-api/src/router_v2/handlers/data/resolved_spatial_field.rs` | `ResolvedSpatialField` | Istniejący common quantity field; planned verified artifact provider bez fake nodal J. |
+| `crates/fullmag-api/src/schemas/fields.rs` | `FieldDescriptor` | Existing descriptor; planned optional ArtifactFieldLocatorResource bez arrays. |
+| `crates/fullmag-api/src/schemas/fields.rs` | `FieldMeta` | Existing metadata; planned exact owner/carrier locator. |
+| `crates/fullmag-api/src/schemas/fields.rs` | `FieldVectorQuery` | Existing field query; planned optional carrier selector i cell-center view. |
+| `crates/fullmag-api/src/router_v2/handlers/data/fields.rs` | `get_field_vector` | Existing vector resource; planned FMVPv6 typed u64/local mapping. |
+| `crates/fullmag-api/src/router_v2/handlers/data/fields.rs` | `get_field_meta` | Existing metadata handler; planned verified artifact availability. |
+| `crates/fullmag-api/src/router_v2/handlers/data/domain.rs` | `get_domain_topology` | Existing geometry resource; planned carrier/expected revision selection realxyz. |
+| `crates/fullmag-api/src/field_store.rs` | `FieldVectorBinaryMetadataV6` | Oddzielny artifact/u64 FMVPv6 z FMMI v4; generic FMVPv5 pozostaje odrębny; runtime NOT VERIFIED. |
+| `crates/fullmag-api/src/field_store.rs` | `serialize_field_vector_binary_v6` | Artifact/u64 wire i typed local mapping, bez zmiany generic serializer v5; source-only, runtime NOT VERIFIED. |
+| `crates/fullmag-api/src/field_store.rs` | `FieldVectorIndexing` | Existing indexing enum u32 node IDs; new typed u64 sample mapping proposed. |
+| `crates/fullmag-api/src/field_store.rs` | `serialize_fem_mesh_topology_binary_v2` | Existing FMMTv2 geometry format; planned actual carrierxyz/local connectivity. |
+| `crates/fullmag-quantities/src/catalog.rs` | `quantity_spec` | Canonical V_electric/J_charge/H_ant IDs unchanged; descriptor indexing is actual carrier truth. |
+| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_public_inspection.rs` | `load_published_antenna_closed_loop_inspection` | Existing verified owned closure loader; planned common provider admission, no runtime proof. |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-prepared-accepted-source-integration` | Aktualna źródłowa integracja i generated bindings; inspection_only, runtime/typecheck/science NOT VERIFIED. |
+| `crates/fullmag-ir/src/antenna_current_source.rs` | `ResolvedAntennaClosedLoopCurrentInputIR` | Retained authored_input_preimage i owning actual prepared mesh/material/closure. |
+| `crates/fullmag-plan/src/antenna_current_source.rs` | `materialize_antenna_closed_loop_current_input` | Actual mesh/material/cut/interface i przeliczony authored tagged identity. |
+| `crates/fullmag-plan/src/antenna_field_solve.rs` | `plan_antenna_field_solve_execution` | ClosedLoopInspection public stage; bez basis promotion. |
+| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_execution.rs` | `execute_antenna_closed_loop_inspection` | Owner admission strict CPU double i bounded public outputs. |
+| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_execution.rs` | `static_envelope_digest` | Static envelope tagged-json v1 input, multiplier1. |
+| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_execution.rs` | `prepared_stage_identity` | Full stage/port/output/source strings tagged hash first8BE; exact u64 decimal string. |
+| `backends/fem/cpu/mfem/transport/prepared_closed_loop_digest_v2.hpp` | `execution_digest` | Native prepared exact named-BE physics rawbits preimage. |
+| `backends/fem/cpu/mfem/transport/prepared_closed_loop_digest_v2.hpp` | `charge_digest` | Actual owned gauged accepted charge digest after H1. |
+| `backends/fem/cpu/mfem/transport/closed_loop_source_snapshot.hpp` | `export_closed_loop_source_snapshot` | Actual RT0 certificate/sampling accepted source digest, bez circular view hash. |
+| `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp` | `fullmag_fem_solve_prepared_closed_loop_rt0_v2` | Append-only prepared pure charge entrypoint; native execution NOT VERIFIED. |
+| `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp` | `fullmag_fem_solve_prepared_closed_loop_rt0_oersted_v2` | Same-owner direct H prepared wrapper; no earlier legacy charge solve. |
+| `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp` | `prepared_output_ranges_are_disjoint` | Early malformed/alias header zero writes, safe bounded metadata reset dopiero po preflight. |
+| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs` | `build` | Inspection-only immutable writer v2, authored receipt oddzielny binary payload. |
+| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs` | `field_signature` | V2 five-member length-framed accepted source/carrier/positions/cells/direct evidence identity, live i cold rehash; legacy v1 unchanged. |
+| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs` | `validate_sampling_mesh` | Frozen nonempty actual sampling Tet4, bounded count/finite xyz/positive volume; fifth field signature frame. |
+| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs` | `sampling_cells` | Exact sample_tet4_u32_le cold decode:16bytes perTet4;22payload closure. |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-closed-loop-qualification-receipt-gap` | Missing public scientific receipt, fixed scope oracle and separate mesh/quadrature convergence; NOT VERIFIED. |
+| `examples/fem_antenna_closed_loop_nonmagnetic.py` | `study` | Actual flat public study/one inspection stage, E2 interpreted loader/Gmsh materialization682nodes1870Tet4+sampling14nodes24Tet4; nativeNOTRUN. |
+| `tests/antenna/verify_field_convergence.py` | `verify` | Existing3mesh finitefilament checker producer_provenance_qualified=False; notclosedv2ready. |
+| `scripts/antenna_current_source_oracle.py` | `prism_field` | Existing independent3D uniformprism outsideSlab only; notfullLoop/inside/face/edge proof. |
+| `crates/fullmag-cli/src/orchestrator/antenna_closed_loop_inspection.rs` | `write_record` | Jedyny terminal commit named hard_link; precommit cancellation bez handoff, postcommit result immutable. |
+| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs` | `verify` | Cold payload/provenance/current/direct-evidence source verifier, nie runtime proof. |
+| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs` | `verify` | Exact BE preimages i compact provenance maps plus authoring tagged rehash, geometry/gauge/affine RT0. |
+| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs` | `require_qualified` | Unqualified v2 zawsze odmawia qualified consumer admission. |
+| `crates/fullmag-cli/src/orchestrator/antenna_closed_loop_inspection.rs` | `execute` | Public inspection stage i immutable stage record bez fake m/spin. |
+| `crates/fullmag-cli/src/orchestrator.rs` | `publish_antenna_artifacts_atomically` | Generic atomic immutable publication całego artifact bundle. |
+| `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | Istniejący authoring/to_ir; wykonawcze lowering pętli i zachowanie intent wymagają implementacji; source-only |
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class CurrentTransport` | Istniejący moduł i charge.materials; planned single-truth material_parts i execution source v2; source-only |
+| `crates/fullmag-ir/src/spin_transport.rs` | `ConservativeCurrentSourceIR` | Istniejący typ z ExternalLeadCurrent; ClosedGeometryPotentialJump v2 jest proposed, nie istniejącym wariantem; source-only |
+| `crates/fullmag-ir/src/antenna.rs` | `AntennaPortModeIR` | Istniejący port; proposed v3 source_cut_rt0 z observational weights wymaga implementacji; source-only |
+| `packages/fullmag-py/src/fullmag/meshing/_antenna_coincident_cut.py` | `class PreparedAntennaCoincidentLoop` | Istniejący prepared geometry carrier; nie accepted field ani pełne public lowering; source-only |
+| `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `ConservativeCurrentView::Build` | Istniejący właściciel V/RT0; planned acyclic accepted digests i prepared ABI pozostają bez runtime dowodu; source-only |
+| `crates/fullmag-runner/src/antenna_field_solution.rs` | `verify_antenna_field_solution_manifest` | Istniejąca weryfikacja manifestu v1; proposed writer/read v2 wymaga signed binding i osobnej kwalifikacji; source-only |
+| `packages/fullmag-py/src/fullmag/model/geometry.py` | `class MicrostripWidthStation` | Istniejące s oraz signal_width_m; zachowanie całego taper 3D. source_only |
+| `packages/fullmag-py/src/fullmag/model/geometry.py` | `class RigidTransform` | Istniejący wspólny right-handed rigid transform; plane object-frame v2 pozostaje planned. source_only |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-solved-analysis-dispatch` | Aktualny source-only dispatch finite-k/Gamma; brak readback i kwalifikacji runtime. planned_contract |
+| `crates/fullmag-runner/src/time_events.rs` | `resolved_solved_antenna_drive_is_active` | Jawna stage activation accepted solved basis. source_only |
+| `crates/fullmag-runner/src/spin_wave_sampling.rs` | `requested_finite_k_artifacts` | FEM finite-k uwzględnia aktywne ordinary drives i accepted antenna bases, wymaga real m/H_drive snapshots. source_only |
+| `crates/fullmag-runner/src/spin_wave_response.rs` | `append_requested_spin_wave_artifacts` | Aktywna solved antenna odrzuca Gamma przed empty-return. source_only |
+| `crates/fullmag-runner/src/native_fem.rs` | `pack_native_regional_field_drives` | Istniejące pakowanie accepted solved basis do natywnego regional drive. source_only |
+| `backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp` | `materialize_regional_field_drive` | Istniejąca materializacja regional H_drive; nie total H_eff i nie automatyczny wkład per-source. source_only |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-coincident-cut-loop-design` | Zatwierdzona fizyka pełnej pętli microstrip; planowany kontrakt v2, bez dowodu implementacji lub publikacji. planned_contract |
+| `packages/fullmag-py/src/fullmag/model/geometry.py` | `class MicrostripAntennaLayout` | Obecna geometria signal/return bez mostków; parametry v2 są planowane. source_only |
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class StructuredCutPlane` | Obecna płaszczyzna x/y/z; coordinate_frame object nie istnieje. source_only |
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class StructuredCurrentClosure` | Obecny authored contract structured_current_closure.v1; wykonanie FEM wymaga nowego lowering. source_only |
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ConservativeCurrentSourceCut` | Obecny kontrakt odrzuca zerową translation_m; nie reprezentuje coincident seam. source_only |
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ImpressedPotentialJump` | Istniejący skończony niezerowy idealny skok potencjału; bez obietnicy FEM materializera. source_only |
+| `crates/fullmag-ir/src/spin_transport.rs` | `ConservativeCurrentClosureIR` | Istniejąca gałąź ClosedGeometry; proponowane v2 nie jest bieżącym operatorem. source_only |
+| `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `ConservativeCurrentView::Build` | Obecny zaakceptowany owner potencjału i RT0 wymaga periodic charge snapshot v1. source_only |
+| `backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp` | `DirectTetraQuadrature::Evaluate` | Całka po wszystkich tetraedrach zaakceptowanego view; brak prądu w nieistniejącej luce. source_only |
+| `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `NativeFemSteadyTransportRt0Result` | Wynik native zachowuje V/J/H oraz identyfikację wspólnego view. source_only |
 | `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-consumer-activation-preflight` | source commit i WIP lazy-root/clear-bases; pełne domknięcie i runtime otwarte |
 | `crates/fullmag-cli/src/orchestrator.rs` | `prepare_solved_antenna_drive_activation` | wspólna validation i clear nieaktywnych/pustych baz |
 | `scripts/test_antenna_activation_preflight_source.py` | `class AntennaActivationPreflightSourceTests` | source parent RED3 → INDEX3/3, bez Rust |
@@ -7707,6 +10421,11 @@ Uzupełnienie E9b (mapping implementacji; build Windows i API50 nie stanowią kw
 | `apps/control-room/src/modules/viewport-3d/layers/antennaCurrentSurfaceMaterial.ts` | `createAntennaCurrentSurfaceMaterial`, `updateAntennaCurrentSurfaceMaterial` | wektor interpolowany przed normą, aktualizacja LUT/uniforms bez zmiany zasobów; kontrolowany browser/GPU PASS |
 | `apps/control-room/src/modules/viewport-3d/layers/AntennaFieldLayer.tsx` | `AntennaFieldLayer` | wspólne passy i śledzone zasoby GPU, stabilne UUID oraz owner cleanup; kontrolowany browser PASS |
 | `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-straight-lead-preparation` | planned private straight-stub input, explicit currents i conservative refusal; nie closed circuit |
+| `examples/fem_antenna_sushruth_2020_gsg.py` | `study` | deklaracja GSG FEM CPU/double; nie dowód wykonania |
+| `examples/fem_antenna_sushruth_2020_gsg.py` | `lead_layers` | 20 przedziałów doprowadzenia; jawne założenie źródła |
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `TerminalLeadExtension.from_antenna_terminal` | semantyczna fabryka → istniejące markery; bez zmiany IR, runtime NOT VERIFIED |
+| `packages/fullmag-py/src/fullmag/model/_antenna_terminal.py` | `antenna_terminal_marker` | wspólny bajtowy kontrakt markera dla authoringu i meshera |
+| `packages/fullmag-py/tests/test_antenna_terminal_authoring.py` | `AntennaTerminalAuthoringTests` | regresje markera, walidacji i Python/scene round-trip; 6 interpretowanych testów PASS w Dockerze; bez native solve |
 | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `TerminalLeadExtension`, `ExternalLeadPreparation` | publiczna SI-clean deklaracja, strict intent i jawne prepare na actual mesh; nie solved source |
 | `packages/fullmag-py/src/fullmag/meshing/_antenna_external_lead_preparation.py` | `prepare_antenna_external_lead_source` | prywatna jawna preparacja actual cap → Tet4 leads i strict source MeshIR; bez solve |
 | `packages/fullmag-py/src/fullmag/runtime/scene_document.py` | `_decode_external_lead_preparation` | ścisły decoder sceny z default layers=2; brak unknown-field fallbacku |
@@ -7924,12 +10643,25 @@ Uzupełnienie E9b (mapping implementacji; build Windows i API50 nie stanowią kw
 | `crates/fullmag-runner/src/fem_reference.rs` | `reference_antenna_drive_maps_stage_clock_to_waveform_origin` | source regression for nonzero sinusoidal phase/offset and distinct stage-local/absolute clocks at a nonzero stage start; not executed under the worktree test ban |
 | `packages/fullmag-py/src/fullmag/model/antenna.py` | `class AntennaPortMode` | current public names, normalization and branch validation for the thin port contract |
 | `packages/fullmag-py/src/fullmag/model/study.py` | `class FieldOnly` | publiczny niemagnetyczny study bez dynamiki; outputs/constraints wyłącznie puste, native execution jeszcze nieweryfikowane |
+| `apps/control-room/src/modules/inspector/panels/antenna/AntennaTerminalPreparationModel.ts` | `buildAntennaTerminalPreparationTransaction`, `antennaTerminalBoundaryMarker` | istniejąca preparacja, jawne controls i revision/geometry refusal; 24 interpretowane sprawdzenia, bez browser proof |
+| `apps/control-room/src/modules/inspector/panels/antenna/AntennaTerminalsPanel.tsx` | `AntennaTerminalsPanel` | dedykowany view i właściciel transakcji; TSX/browser jeszcze nieweryfikowane |
+| `apps/control-room/src/modules/inspector/panels/antenna/AntennaResourceEditorModel.ts` | `buildAntennaResourceTransaction` | istniejące port/projection/source FFT, exact pins, explicit rebind i no-cascade refusal; 34 interpretowane sprawdzenia |
+| `crates/fullmag-runner/src/native_fem/charge_transport.rs` | `require_legacy_charge_only_publication` | preflight odmowa mieszanych ownerów; source-only, nie migracja ani kwalifikacja bazy |
 | `packages/fullmag-py/src/fullmag/model/antenna_inventory.py` | `class AntennaAuthoringInventory` | typowany immutable owner deklaracji i rozdzielenie execution base; źródłowe WIP, nie runtime proof |
 | `packages/fullmag-py/src/fullmag/world.py` | `declare_antenna_field_solve` | publiczna deklaracja bez action; odpowiadające projection/drive/spectrum używają tego samego oddzielnego ownera |
 | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_antenna_inventory_declarations` | zachowanie niewykorzystanych deklaracji w skrypcie, bez syntetycznego wykonania |
 | `packages/fullmag-py/tests/test_antenna_authoring_inventory.py` | `class AntennaAuthoringInventoryTests` | 11 interpretowanych kontroli authoringu, nie naukowa kwalifikacja pola lub LLG |
 | `packages/fullmag-py/src/fullmag/model/antenna.py` | `class AntennaSpectrumRequest` | current source-spectrum authoring fields and Python validation, including rejection of `equilibrium_ref` outside `transverse`, explicit typed transverse equilibrium references and fail-closed `mode_basis_ref` |
 | `crates/fullmag-ir/src/antenna.rs` | `validate_transverse_equilibrium_ref` | both IR versions reject ignored equilibrium references and require an explicit valid transverse equilibrium reference; runtime requires canonical verified context |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-accepted-equilibrium-transverse-contract` | Historyczny prerejestrowany E9b contract z aktualną source-only realizacją; runtime/native/browser/cold/science NOT VERIFIED. planned_contract |
+| `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` | `AcceptedFemRelaxStageHandoff` | Istniejący canonical accepted Relax v3 używany przez source-only transverse adapter; bez fake eigen plan. source_only |
+| `crates/fullmag-runner/src/fem_eigen.rs` | `validate_recomputed_fem_linearization_certificate` | Istniejąca walidacja native recompute receiptu związana z actual FemPlanIR. source_only |
+| `crates/fullmag-runner/src/fem/eigen_equilibrium.rs` | `load_certified_equilibrium_artifact` | Kanoniczny parser v7/v8; samo parsowanie v7 nie dowodzi target binding ani dopuszczenia v8 do transverse. source_only |
+| `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` | `build_shared_domain_linearization_state` | Istniejące pełne podpisy i comparison gates v7; transverse runtime odmawia v7 bez canonical owner context. source_only |
+| `crates/fullmag-runner/src/fem/eigen_native_artifacts.rs` | `native_modal_artifacts` | Obecna publikacja v7 wyłącznie z rzeczywistego accepted linearization state. source_only |
+| `crates/fullmag-plan/src/antenna_projection.rs` | `resolve_fem_antenna_projection_mask` | Istniejące nodal membership; actual transverse używa osobnego resolve_fem_antenna_transverse_cell_mask. source_only |
+| `crates/fullmag-runner/src/antenna_spectrum.rs` | `selected_components` | Istniejąca pointwise projekcja trzech komponentów; nie publiczny certificate. source_only |
+| `crates/fullmag-cli/src/orchestrator.rs` | `execute_antenna_spectrum_requests` | Istniejący dispatch rozwiązuje verified context i completed-stage pins; runtime NOT VERIFIED. source_only |
 | `packages/fullmag-py/tests/test_antenna_stage_workflow.py` | `test_antenna_solve_returns_symbolic_output_and_preserves_authoring_intent` | stage-first symbolic-reference round trip; not a field-solve runtime gate |
 | `crates/fullmag-runner/src/antenna_spectrum.rs` | `coordinate_tolerance` | lokalna tolerancja próbkowania i odmowa pracy poniżej rozdzielczości współrzędnych; regresje `identity_plane_sampling_distinguishes_micrometre_samples_far_from_origin` i `identity_plane_sampling_rejects_spacing_below_coordinate_resolution` nieuruchomione z powodu zakazu testów w worktree |
 | `crates/fullmag-runner/src/antenna_spectrum.rs` | `compute_nonuniform_k_antenna_source_spectrum_interruptible` | odrzucenie przepełnionej fazy oraz niefinitywnej amplitudy/mocy; regresja `spectrum_rejects_overflow_from_finite_inputs` pozostaje nieuruchomiona z powodu zakazu testów |
@@ -7971,6 +10703,16 @@ Uzupełnienie E9b (mapping implementacji; build Windows i API50 nie stanowią kw
 | `scripts/test_direct_oersted_adapter_source.py` | `test_regular_adapter_uses_one_full_snapshot_call`, `test_positive_sub_ulp_roundoff_is_not_erased_at_gate` | 4 interpretowane source/model checks, nie wykonanie Rust/native |
 | `crates/fullmag-runner/src/native_fem/steady_transport/direct_oersted_snapshot.rs` | `owns_twelve_complete_targets_without_json_truncation`, `refuses_mutated_headers_bindings_and_work` | zapisane niekompilowane regresje 12 targetów i 15 odmów; brak runtime dowodu |
 | `scripts/test_direct_oersted_snapshot_source.py` | `test_export_copies_same_direct_result_before_publishing_length` | source/layout regresje, 12-record model większy od 1024 bytes, nie native proof |
+
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-closed-loop-independent-qualification-prereg-v2` | Analytic signedface/fan, precision/work/corpus/API→IR plannedv2; SOURCE PLANNED, nie scientific PASS. |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:analytic-v2-canonical-boundary-direction` | Wąski plan exactidentityno-op i fresh authored boundaryledger; nie fulltaper qualification. |
+| `scripts/preflight_antenna_closed_loop_qualification.py` | `preflight`, `cut_pairs`, `semantic_owner_admission`, `check_planes`, `work_admission` | Geometry-only actualIR/counts/probes; oppositeowners i mandatorymissingledger refusal; v3REFUSED, RAMestimate niepeakproof. |
+| `scripts/test_preflight_antenna_closed_loop_qualification.py` | `test_same_side_cut_owners_are_refused`, `test_missing_ledger_refuses_even_when_partial_skew_evades_diagnostic`, `test_separate_target_and_case_work_limits` | 9 interpreted preflighttests PASS, nie current/H oracle ani native. |
+| `packages/fullmag-py/src/fullmag/runtime/loader.py` | `load_problem_from_script` | Public flat study→Problem bez stageexecution, source-only materializationentry. |
+| `packages/fullmag-py/src/fullmag/model/problem.py` | `Problem.to_ir` | Actualgeometryasset lowering/provenance, bez oraclephysicsnewAPI. |
+| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs` | `ClosedLoopAcceptedSourceInputV2` | Trzy retainedpreimages oraz actualcells/source data; dataprovenance nie independentalgorithm. |
+| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs` | `Fields`, `verify` | Source-only namedBEidentity reader; nie scientificverification integratora. |
+| `packages/fullmag-py/src/fullmag/meshing/_gmsh_waveguides.py` | `add_antenna_layout_parts_to_occ` | ExistingOCCproducer, plannedexactidentitybypass/boundaryledger separate docanchor; nie twierdzenie wdrożenia. |
 
 (antenna-finite-k-shift-contract)=
 ### Kontrakt porządku koszyków przestrzennych finite-k
@@ -8118,6 +10860,954 @@ nieznane analizy lub pola są odrzucane zamiast pomijane. Reader
 w bieżącym stage przez `resolved_solved_antenna_drive_is_active`; nie zastępuje
 to walidacji accepted basis, rzeczywistych monitorów ani kwalifikacji runtime.
 
+
+(antenna-sushruth-finite-prism-reference)=
+### Wzorzec skończonych przewodników GSG przed pierwszym solve
+
+Niezależny wzorzec dotyczy prostych pasków przykładu
+examples/fem_antenna_sushruth_2020_gsg.py (modułowa konfiguracja study).
+Nie jest solverem Fullmaga ani odtworzeniem odpowiedzi magnetycznej publikacji.
+Przekrój 200 nm × 90 nm, szczelina 250 nm i odsunięcie 30 nm odpowiadają
+nominalnym parametrom wybranego przykładu. Długość urządzenia 20 µm,
+doprowadzenia po 2 µm, przewodność 3.5e7 S/m i prąd signal 1 mA pozostają
+jawnymi założeniami przykładu. Wzorzec obejmuje pełne 24 µm modelowanych
+przewodników, bez zasilania poza elektrodami.
+
+Stały przekrój i przewodność, izolowane ściany boczne oraz ekwipotencjalne
+pełne elektrody z zadanym prądem dają stałe J i liniowe V, osobno w każdej
+rozłącznej gałęzi. Prądy gałęzi to +1, −0.5, −0.5 mA w osi world y.
+Porównuje się gradient i różnicę potencjałów, nie absolutne V różnych gałęzi.
+
+```{math}
+:label: antenna-gsg-uniform-reference
+J_b=\frac{I_b}{wt},\qquad
+\frac{\partial V_b}{\partial y}=-\frac{J_b}{\sigma},\qquad
+V_b(-L/2)-V_b(L/2)=\frac{I_bL}{\sigma wt}.
+```
+
+| Dokładny symbol | Znaczenie | SI |
+|---|---|---|
+| $b$ | indeks gałęzi | $1$ |
+| $I_b$ | podpisany prąd gałęzi | $\mathrm A$ |
+| $J_b$ | gęstość prądu gałęzi | $\mathrm{A\,m^{-2}}$ |
+| $V_b$ | potencjał gałęzi | $\mathrm V$ |
+| $w,t,L$ | szerokość, grubość i pełna długość | $\mathrm m$ |
+| $\sigma$ | jednorodna przewodność | $\mathrm{S\,m^{-1}}$ |
+| $y$ | współrzędna wzdłuż prądu | $\mathrm m$ |
+
+Pole korzysta z wyprowadzenia całki po długości wcześniejszego fixed-fixture
+oracle, lecz granice przekroju i długości są jawne. rectangular_prism_field
+liczy prąd w lokalnej osi x. Dla GSG stosujemy właściwy obrót local x → world y,
+local y → −world x, local z → world z. Punkt lokalny to
+(world y, −world x, world z), a pole wraca jako (−H_local_y, H_local_x, H_local_z).
+Nie stosujemy odbicia osi do pseudowektora pola. Całka po przekroju to
+złożony Simpson; suma obejmuje wszystkie trzy przewodniki.
+Prawo superpozycji i warunek pełnego prądu solenoidalnego:
+[MIT, Electromagnetic Fields and Energy, rozdział 8](https://web.mit.edu/6.013_book/www/chapter8/8.html).
+Ucięta domena daje częściowy wkład, a nie zakwalifikowane pole pełnego obwodu.
+
+| Python | Typ | Domyślnie | SI | Walidacja | Znaczenie | Backend | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| rectangular_prism_field.position_m | Sequence[float] | required | $\mathrm m$ | 3 skończone liczby rzeczywiste; punkt poza zamkniętą warstwą z źródła | punkt lokalny obserwacji | niezależny Python CPU; bez backendu Fullmaga | brak serializacji do ProblemIR |
+| rectangular_prism_field.lower_m | Sequence[float] | required | $\mathrm m$ | 3 skończone liczby rzeczywiste; upper > lower w każdej osi | dolne granice pryzmatu | niezależny Python CPU; bez backendu Fullmaga | brak serializacji do ProblemIR |
+| rectangular_prism_field.upper_m | Sequence[float] | required | $\mathrm m$ | 3 skończone liczby rzeczywiste; upper > lower w każdej osi | górne granice pryzmatu | niezależny Python CPU; bez backendu Fullmaga | brak serializacji do ProblemIR |
+| rectangular_prism_field.current_density_apm2 | float | required | $\mathrm{A\,m^{-2}}$ | skończona liczba ze znakiem; bool odrzucany | stały prąd lokalny x | niezależny Python CPU; bez backendu Fullmaga | brak serializacji do ProblemIR |
+| rectangular_prism_field.subdivisions | int | required | $1$ | dokładny int: 8,16,32,64,128,256; bool odrzucany | podziały Simpsona w obu osiach przekroju | niezależny Python CPU; bez backendu Fullmaga | brak serializacji do ProblemIR |
+| gsg_field.position_m | Sequence[float] | required | $\mathrm m$ | 3 skończone liczby rzeczywiste; z poza warstwą źródła; bool odrzucany | punkt world xyz | niezależny Python CPU; bez backendu Fullmaga | brak serializacji do ProblemIR |
+| gsg_field.subdivisions | int | 128 | $1$ | dokładny int: 8,16,32,64,128,256; bool odrzucany | podziały kwadratury każdego paska | niezależny Python CPU; bez backendu Fullmaga | brak serializacji do ProblemIR |
+
+reference() nie przyjmuje parametrów; zwraca 41 punktów od x=−2 µm do
++2 µm przy y=0 i z=−5 nm, oczekiwane J i gradienty V oraz parametry źródła.
+To własna siatka walidacyjna, nie pomiary publikacji. JSON zachowuje H w A/m,
+bez mnożenia przez μ0.
+
+```python
+# %% Niezależny wzorzec, bez uruchamiania Fullmaga
+import sys
+sys.path.insert(0, "scripts")
+from reference_sushruth_2020_gsg_current import gsg_field
+# %% Pole pod środkiem signal
+h = gsg_field((0.0, 0.0, -5e-9))
+assert h[0] < 0.0 and h[1] == 0.0
+```
+
+Przed odbiorem należy potwierdzić zgodność rzeczywistego wejścia i wykonać
+osobne zbieżności kwadratury oraz siatki. Kontrole wzorca: niezależna
+adaptacyjna całka 2D, znaki i symetria, niezmienność wcześniejszego fixture
+oraz niezależna całka objętościowa 3D. Różnica kolejnych poziomów nie jest
+ścisłym ograniczeniem błędu. Wzorzec nie obejmuje wnętrza/ściany przewodnika,
+taperów, RF, reakcji magnetyzacji ani pominiętego obwodu. Nie daje prawa
+do promocji inspection_only do bazy, FFT źródła lub wymuszenia LLG.
+
+Dla FDM CPU, FDM GPU, FEM CPU i FEM GPU skrypt ma status not-applicable jako
+realizacja backendu: jest niezależnym wzorcem. Przyszłe porównanie przykładu
+dotyczy FEM CPU double; pozostałe lanes nie otrzymują kwalifikacji.
+Publiczny DSL/ProblemIR, planner, sesje i round-trip pozostają bez zmian.
+Wynik techniczny zapisujemy w wolumenie Docker z hashami źródeł;
+nie jest artefaktem zaakceptowanego runu.
+
+| Kontrakt / równanie | Ścieżka + symbol | Dowód / zakres |
+|---|---|---|
+| Wkład pryzmatu | scripts/antenna_current_source_oracle.py + rectangular_prism_field | analityczna całka długości i Simpson przekroju; niezależny wzorzec |
+| GSG i normalizacja J/V | scripts/reference_sushruth_2020_gsg_current.py + reference, gsg_field | stałe przykładu, bez fit i solve Fullmaga |
+| Regresje | scripts/test_reference_sushruth_2020_gsg_current.py + test_gsg_matches_adaptive_reference_and_refines | zgodność przykładu, niezależna kwadratura i symetrie; nie native qualification |
+
+
+
+(antenna-sushruth-gsg-http-comparison)=
+### Porównanie rzeczywistego GSG z wzorcem — progi przed pierwszym wynikiem
+
+scripts/compare_sushruth_2020_gsg.py porównuje wyniki wyłącznie nominalnego
+przykładu przypiętego SHA256
+2510d8ed87f00437ca7c0d37fd5f416895ed884f83579354cbf15f2f9d99d5bd.
+Wymaga zakończonego receiptu aktywacji tego skryptu, zgodnych session/run/stage,
+surowych jednostek V, A/m² i A/m oraz payloadów o sprawdzonych hashach.
+Korzysta z istniejącego API i smoke_antenna_artifact_fields.verify; nie uruchamia
+solvera ani nie tworzy dodatkowego modelu lub endpointu. Początkowy status
+rzeczywistego porównania: NOT RUN. Regresje metryki i odmów: 11 PASS
+w interpretowanym Pythonie istniejącego backendu Compose; mock HTTP nie jest
+dowodem odczytu rzeczywistych wyników.
+
+Dla każdej gałęzi J porównuje się normę błędu wektora względem modułu jej
+niezerowego prądu referencyjnego. V porównuje się z linią o znanym nachyleniu,
+usuwając osobną stałą potencjału każdej rozłącznej gałęzi; nachylenie nie jest
+dopasowywane. H porównuje się w rzeczywistych współrzędnych próbkowania ze
+skończonym wzorcem gsg_field, z 128 podziałami przekroju.
+
+Progi diagnostyczne ustalone przed solve: maksymalny względny błąd J 1e-6,
+maksymalny błąd V po usunięciu stałej 1e-8 V oraz błąd normy wektora H
+nie większy niż 0.01 A/m + 1e-5 razy norma pola referencyjnego. Próg absolutny H
+przewyższa sprawdzony błąd kwadratury wzorca; osobna zbieżność w każdym nowym
+zestawie punktów pozostaje wymagana przed kwalifikacją naukową. Są to bramki
+tego nominalnego benchmarku, nie oszacowania błędu solvera ani certyfikaty.
+Nie rozluźniać ich po obejrzeniu wyniku bez nowej, jawnie uzasadnionej wersji.
+
+Sprawdzane są zakresy współrzędnych wszystkich trzech pasków i domeny H.
+Niezgodna geometria, brak gałęzi, niewłaściwa liczba/skład próbek, NaN/Inf,
+obcy receipt lub zmiana wyniku podczas odczytu kończą porównanie błędem.
+Sukces nie dowodzi poprawności całej connectivity, pominiętego obwodu,
+zbieżności siatki, basis/FFT/LLG ani odpowiedzi magnetyzacji z publikacji.
+physics_qualified i omitted_feed_qualified pozostają false.
+
+| Python / CLI | Typ | Domyślnie | SI | Walidacja | Znaczenie | Backend | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| compare.origin / --origin | str | required | $1$ | tylko origin loopback, bez przekierowań i proxy | istniejące API wyników | odczyt FEM CPU double; inne lanes niekwalifikowane | bez zmiany IR |
+| compare.stage_id / --stage-id | str | required | $1$ | dokładny runtime stage; authored stage inspect_gsg | właściciel wyniku GSG | odczyt FEM CPU double | istniejący stage |
+| compare.activation_receipt / --activation-receipt | Path | required | $1$ | bounded regular JSON, stan activated, zgodne źródło/session/run | pochodzenie wykonanego skryptu | istniejący Docker DEV | bez zmiany IR |
+| compare_samples.data | dict[str, tuple[list[tuple[float, float, float]], list[float]]] | required | współrzędne $\mathrm{m}$; V $\mathrm{V}$, J $\mathrm{A/m^2}$, H $\mathrm{A/m}$ | V_electric/J_charge/H_ant, skończone wartości, zgodna liczba komponentów i zakres geometrii; do 4096 punktów H | surowe próbki w układzie świata; helper metryki bez dowodu pochodzenia HTTP | diagnostyka nominalnego FEM CPU double; bez wykonania backendu | bez zmiany IR |
+
+Polecenie wykonuje się w istniejącym backendzie grupy Compose; jego JSON i log
+trafiają do wolumenu technicznego. Kod wyjścia 0 oznacza przejście wymienionych
+porównań i kontroli HTTP, 1 — odmowę albo przekroczony próg. Wynik zachowuje
+identyfikatory, hashe danych, progi i błędy; nie nadpisuje artefaktów solvera.
+Dla FDM CPU, FDM GPU i FEM GPU ten benchmark pozostaje niezakwalifikowany.
+Przepływy publicznego DSL/ProblemIR, planera, archiwum i UI nie są zmieniane.
+
+| Kontrakt | Ścieżka + symbol | Dowód / zakres |
+|---|---|---|
+| Porównanie V/J/H | scripts/compare_sushruth_2020_gsg.py + compare_samples | diagnostyczny nominalny benchmark, bez promocji kwalifikacji |
+| Binding wykonania i HTTP | scripts/compare_sushruth_2020_gsg.py + compare | receipt → sesja/run/stage → niezmienne payloady |
+| Regresje porównania | scripts/test_compare_sushruth_2020_gsg.py + test_gauge_offsets_are_not_fitted_slopes | sztuczne dane sprawdzają metrykę i odmowy; nie są solve Fullmaga |
+
+(antenna-retained-rt0-reference-fit)=
+## Rekonstrukcja retained RT0 dla niezależnego oracle — kontrakt implementacji 22.10.2026
+
+Realizujemy wyłącznie uprzednio prerejestrowane równanie
+`antenna-loop-prereg-rt0-fit`, bez zmiany jego metody i progów. Stan przed
+implementacją: brak ogólnego referencyjnego fitu retained RT0; istniejący
+`antenna_rt0_fixture_check.compare_rt0_fixture` kontroluje momenty stałego prądu
+w jednym fixture i nie zastępuje tej rekonstrukcji.
+
+`antenna_rt0_surface_oracle.fit_retained_rt0` ma użyć własnego Householder QR
+12×4: trzy składowe $\boldsymbol\alpha$ i jeden skalarny $\beta$.
+Współrzędne centrujemy w $\mathbf c$, a skala $\ell$ jest największą długością
+krawędzi. Zwracamy centered coefficients; dalsza całka ma używać
+$\mathbf J_T(\mathbf r)=\boldsymbol\alpha+\beta(\mathbf r-\mathbf c)/\ell$.
+Nie odtwarzamy prądu przez wygładzanie, pełny gradient 3×3 ani korektę danych.
+
+Obowiązkowe są dwa niezależne arytmetycznie dopasowania tych samych binary64
+inputs: binary64 oraz Decimal120 z dokładnym `Decimal.from_float`. Decimal120
+ma własny jawny kontekst round-half-even, prec120 i zakres wykładników
+[-999999,999999], niezależny od rounding, traps i wykładników wywołującego.
+Oba dopasowania używają
+prerejestrowanego progu $256\epsilon$ z $\epsilon=2^{-52}$ i bez absolutnego
+floor w jednostkach prądu. Normy binary64 wymagają skalowanego hypot; RHS QR
+może być dzielony przez największy moduł wejściowej składowej J i następnie
+odskalowany. Nie zmienia to zadania LS ani progu residualu. Dla zerowego J
+wynik i residual muszą być dokładnie zerowe. Osobny dokładny determinant
+binary64 geometry ma odrzucać płaski, odwrócony lub powtórzony Tet4 — sama
+ranga4 układu12×4 nie dowodzi dodatniej objętości. Niepoprawny residual,
+niepełna ranga, wartości niefinite lub nierozstrzygnięty zakres arytmetyki
+kończą się odmową, bez false zero i bez nieskończonego progu akceptacji.
+
+| Parametr | Typ | Domyślnie | SI | Walidacja | Znaczenie | Backend | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| fit_retained_rt0.vertices_m | list/tuple (4×3 float) | required | $\mathrm m$ | dokładnie4×3 skończone binary64; bool i niepositive Tet4 odrzucane | retained współrzędne jednej komórki, bez scalania ID | referencyjny Python CPU; bez wykonania backendu | bez nowej serializacji; wejście z przyjętego carriera |
+| fit_retained_rt0.vertex_current_apm2 | list/tuple (4×3 float) | required | $\mathrm{A\,m^{-2}}$ | dokładnie4×3 skończone binary64, w tej samej kolejności; wymagany scalar-slope residual gate | cztery lokalne ślady J tej komórki, bez uśredniania z sąsiadami | referencyjny Python CPU; bez wykonania backendu | bez zmiany semantyki IR |
+
+Wynik zawiera osobno binary64 i Decimal120: center, length, alpha, beta,
+maximum residual i niezmieniony residual limit. Nie publikuje scientific
+receiptu ani pola H. Brak zmian DSL, ProblemIR, planera, runtime, archiwum i
+katalogu quantities. FEM CPU wymaga późniejszego związania z rzeczywistym
+accepted V/J/H i wykonania całego A/B/C. FEM GPU, FDM CPU i FDM GPU pozostają
+poza kwalifikacją tego helpera. Samo przejście jego testów nie kwalifikuje
+triangle corpus, pełnej całki RT0, domknięcia źródła, basis, FFT ani LLG.
+
+Przed wykonaniem ustalamy testy: znany scalar slope na asymetrycznym dyadic
+Tet4; stały i zerowy prąd; odrzucenie pełnych gradientów shear/rotation i
+anisotropic diagonal; skale geometrii2^-20/1/2^20 z dokładną translacją;
+skale prądu2^-600/1/2^600 z zachowaniem odmowy względnego błędu; dodatnia
+parzysta permutacja; degeneracja, odwrócenie, niefinite, bool i zła liczba
+próbek; dokładny import binary64 i zachowanie wejść oraz kontekstu Decimal.
+To kontrole interpretowane, nie kompilacja testów natywnych.
+
+| Kontrakt | Ścieżka + symbol | Zakres dowodu |
+|---|---|---|
+| Centered scalar RT0 fit | scripts/antenna_rt0_surface_oracle.py + fit_retained_rt0 | źródłowa realizacja istniejącego równania i progu, bez pełnego H |
+| Niezgodny pełny gradient | scripts/test_antenna_rt0_surface_oracle.py + RetainedRT0FitTests.test_full_affine_non_rt0_gradients_are_rejected | odrębna kontrola przestrzeni RT0 |
+| Zera i brak absolutnego floor | scripts/test_antenna_rt0_surface_oracle.py + RetainedRT0FitTests.test_current_scaling_has_no_absolute_acceptance_floor | odrębna kontrola skali, bez kwalifikacji solvera |
+
+(antenna-retained-rt0-surface-evaluation)=
+## Pole jednego zachowanego RT0 z potencjałów ścian — kontrakt implementacji 24.10.2026
+
+Realizacja `antenna_rt0_surface_oracle.evaluate_retained_rt0` wykonuje istniejącą
+redukcję `analytic-v2-rt0-reduction`, bez native kernel, Duffy ani ponownego
+rozwiązywania transportu. Jej wejściem są cztery lokalne ślady zaakceptowanego
+prądu jednej komórki; nie magnetyzacja i nie uśredniony prąd węzłowy.
+Status wykonania helpera: **19 regresji interpreted PASS; kwalifikacja naukowa
+i native NOT VERIFIED**. Testy nie kompilują Rust ani bibliotek natywnych.
+
+Własny fit `fit_retained_rt0` zachowuje bramkę scalar-slope i oba warianty
+binary64/Decimal120. Cztery dodatnio zorientowane outward faces dodatniego
+Tet4 mają kolejność (1,2,3), (0,3,2), (0,1,3), (0,2,1). Dokładne rational
+wektory pól ścian wyznaczają normalne; potencjały bierze się wyłącznie przez
+istniejące `antenna_triangle_surface_oracle.evaluate_triangle`, z jego pełnymi
+passami binary64/80/120 i niezmienionymi odmowami. Warianty 80/120 używają
+Decimal120 fit przekonwertowanego do własnego kontekstu; binary64 korzysta
+z odrębnego fitu binary64. Nie jest to niezależny fit o 80 cyfrach, ani native RT0.
+
+Każda składowa pola ma jednostkę $\mathrm{A/m}$ i znak iloczynu
+$\mathbf J_T(\mathbf r)\times\mathbf n_F$, bez czynnika $\mu_0$.
+Sumowanie jest kompensowane w binary64 i przez fsum kontekstu w 80/120.
+Zgodność 80→120 i whole-face→fan sprawdza zarówno normę całego pola, jak sumę
+lokalnych norm wkładów. Obowiązuje wcześniejszy budżet
+$10^{-6}\,\mathrm{A/m}+10^{-6}\|\mathbf H_{120}\|$ oraz odmowa
+highprecision cancellation większego niż $10^{40}$; binary64 wymaga 120 cyfr przy
+cancellation większym niż $10^8$, wskaźniku $64\epsilon\sum\|\mathbf H_{fan}\|$
+przekraczającym budżet albo przekroczeniu budżetu różnicy precyzji. Nie zmieniamy
+zarejestrowanych limitów pracy triangle oracle. Zgodność formuł i precyzji nie
+jest rygorystycznym certyfikatem błędu ani porównaniem z niezależną całką 3D.
+
+| Parametr helpera | Typ | Domyślnie | SI | Walidacja | Znaczenie | Backend | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| evaluate_retained_rt0.vertices_m | 4×3 int/float | required | $\mathrm m$ | Skończone binary64 bez bool; dodatni niepłaski Tet4. | Zachowana geometria jednej komórki. | referencyjny Python CPU; bez wykonania lub kwalifikacji native | brak nowej serializacji; research-only retained data |
+| evaluate_retained_rt0.vertex_current_apm2 | 4×3 int/float | required | $\mathrm{A/m^2}$ | Skończone lokalne ślady bez bool; scalar-slope RT0 residual gate. | Retained J tej samej komórki. | referencyjny Python CPU; bez wykonania lub kwalifikacji native | brak nowej serializacji; research-only retained data |
+| evaluate_retained_rt0.target_m | 3 int/float | required | $\mathrm m$ | Trzy skończone binary64 bez bool, bez przesuwania punktu. | Punkt odczytu H. | referencyjny Python CPU; bez wykonania lub kwalifikacji native | brak nowej serializacji; research-only retained data |
+| evaluate_retained_rt0.budget | Budget \| None | None | $1$ | Istniejące zamrożone limity; wspólny przekazany licznik nie jest resetowany. | Czas i koszt wszystkich czterech ścian oraz redukcji pola. | referencyjny Python CPU; bez wykonania lub kwalifikacji native | brak nowej serializacji; research-only retained data |
+
+FEM CPU ma wykonany research helper oraz prywatne źródła natywne opisane niżej;
+wykonanie i kwalifikacja nowego rdzenia H oraz pełnego Universe pozostają
+NOT VERIFIED. FEM GPU, FDM CPU i FDM GPU nie uzyskują tej realizacji.
+Python DSL, planner, runtime/session, archiwum, quantities i scientific
+receipts pozostają bez zmian. Helper wymaga dokładnie przypiętego wheel
+mpmath 1.3.0 z wcześniejszego kontraktu; nie instaluje go globalnie.
+
+Wykonane regresje obejmują: jednostkowy dodatni Tet4, target w początku,
+stały prąd (1,-2,3) daje H=(5,-2,-3)/24 A/m; scalar slope nie zmienia pola w tym
+punkcie. Ponadto signed reversal, mnożenie prądu, geometry scaling, zero field,
+nieprawidłowy target i nie-RT0 gradient. To testy helpera, nie scientific PASS.
+
+W tej samej grupie Docker wykonano 54/54 par scalar triangle potential
+(base/shear/rotate90), w tym M16/M17, bez zmiany tolerancji ani budżetów.
+Analytic binary64/80/120 przeszło korpus, a analytic120 whole-face i fan
+porównano z istniejącą referencją GENERAL_RADIAL_1D o 160/200 cyfrach przy stopniach 8/10/12.
+Część referencyjna trwała 554,91 s, wykonała 1 305 106 integrand evaluations i miała
+zmierzony szczyt RAM 49 238 016 B. Raport scalar-corpus-reference.json ma SHA256
+38b6611aae1a869377c3eb8b3a884d334b811c0d07355eace4758c7ccb851d02.
+To zgodność wyłącznie tych 54 par; ta referencja korzysta z radial primitive,
+więc nie zastępuje wymaganej niezależnej direct2D quadrature. Pełne identities,
+extreme cases i independent direct3D RT0 pozostają NOT VERIFIED.
+
+Oddzielny odczyt rzeczywistego FMACLB01 o SHA256
+fd5edd5783f7b018559ccd589ceb6ae59c3f8a89b240da9f8ab01a7e7ed8ec62 potwierdził
+wszystkie 22 payload digests, zgodność cells280/J_local i geometrii według stable
+vertex IDs. Własny binary64/Decimal120 fit przeszedł dla 1867/1867 zachowanych
+Tet4; największy stosunek residual/gate wyniósł 0.006670316465837793. Nie
+rozwiązywano ponownie prądu. Jest to historyczna siatka 1867 Tet, a nie siatka
+1863 Tet nieudanego Universe 470df; ich identity nie są zamienne.
+
+Dla pierwszego z 14 zachowanych targetów, (9.6e-7,-4e-8,3.4e-7) m,
+niezależna suma wszystkich 1867 Tet dała H ≈ (55.3482111984,-39838.5919788,
+-7199.21666521) A/m. Norma różnicy względem zapisanego native H wyniosła
+0.0004736117313045841 A/m (1.1698771017619965e-8 normy native), przy czasie 154,02 s.
+Globalna różnica sum 80→120 wyniosła 1.135e-75 A/m, a suma lokalnych różnic
+precyzji 1.9953e-73 A/m. To kontrola spójności arytmetycznej i porównanie jednego
+historycznego punktu; nie rygorystyczne ograniczenie błędu, pełna zbieżność ani
+kwalifikacja transportu/native. Ten driver nie przechował globalnej sumy norm
+wszystkich fanów; jego wynik nie kwalifikuje globalnej bramki cancellation.
+Raport retained-first-target.json ma SHA256
+22dbe513222526a66db51886df2a9394a54f1852123ec607ff1bb8f6c519bbe1.
+
+Osobno obliczono H historycznego źródła w punkcie (0,-4.6176898829131121e-12,-1e-7) m,
+którego współrzędne występują w failure 470df. Wynik to około
+(1713.51345787,247158.911230,245.562588371) A/m; czas 154,14 s.
+Pełna suma norm fanów wyniosła 1.1971117016e8 A/m, a globalny cancellation
+484.3371. Globalna różnica 80→120 i sumy lokalnych różnic precision/formula
+przeszły dotychczasowy consistency gate 0.24716597 A/m. Nie jest to certyfikat
+błędu quadrature ani porównanie z natywnym wynikiem tego targetu. Użyto źródła
+1867 Tet, a nie źródła 1863 Tet z nieudanej próby. Raport
+historical-source-near-target.json ma SHA256
+15795e97ca63f4ad76daa646d32c7373c62463b3269796170a420c0fd4404ee8.
+
+Pozostają wymagane niezależna całka 3D, pełny prerejestrowany zakres trójkątów,
+globalne bramki sumowania i wszystkie zadane targety, a następnie kompilacja,
+wywołanie i walidacja prywatnego rdzenia native opisanego niżej. Dowody techniczne są w wolumenie kontrolnym tej grupy,
+verification/universe-volume-policy-20261023/rt0-surface-reference-20261024/;
+nie są artefaktami zaakceptowanego runu ani kwalifikującym receiptem.
+
+| Kontrakt | Ścieżka + symbol | Dowód |
+|---|---|---|
+| Redukcja retained RT0 do H | scripts/antenna_rt0_surface_oracle.py + evaluate_retained_rt0 | 19 regresji interpreted PASS; bez kwalifikacji native |
+| Outward orientation i znany H | scripts/test_antenna_rt0_surface_oracle.py + class RetainedRT0FieldTests | wykonana regresja interpreted |
+| Potencjały ścian i odmowy | scripts/antenna_triangle_surface_oracle.py + evaluate_triangle | istniejące formuły i bramki, bez zmiany |
+
+
+(antenna-native-rt0-surface-core)=
+### Prywatny rdzeń FEM CPU: współczynniki RT0, bez aktywacji solvera
+
+**KOMPILACJA POTWIERDZONA / wykonanie i kwalifikacja numeryczna NOT VERIFIED.** `surface_rt0.hpp` i `surface_rt0.cpp` zawierają prywatny operator
+`evaluate_surface_rt0`. Przegląd root i niezależny przegląd źródeł nie wykazały
+pozostałych blokerów źródłowych. Zgodność źródeł z faktycznym kompilatorem i Boost została następnie potwierdzona
+w zarządzanym buildzie opisanym niżej. Nie dowodzi to wykonania operatora ani
+poprawności fizycznej. Prywatne źródło wpisano do produkcyjnej listy biblioteki FEM w CMake,
+przy `FULLMAG_USE_MFEM_STACK`; kompilację potwierdzono poniżej. To podłączenie
+nie udostępnia publicznego dispatchu,
+C ABI, opcji Python, `ProblemIR`, nowego profilu limitów ani automatycznego Solve.
+
+Wejściem jest wektor kopii `AffineRt0Element::FrozenInput` z getterem
+`AffineRt0Element::frozen_input`. Getter wymaga uprzednio zamrożonych
+współczynników pola i zwraca własne tablice geometrii oraz signed coefficients.
+Współczynniki mają jednostkę $\mathrm A$ i znak lokalnego DOF zastosowany raz;
+**nie są fizycznymi strumieniami przez ściany**. Rdzeń nie dopasowuje śladów
+węzłowych. Oblicza dokładną wymierną wartość prądu z tych samych czterech
+współczynników i wierzchołków, według
+`antenna-retained-rt0-exact-point-current`, w każdym żądanym punkcie.
+Wartość $\mathbf J_T(\mathbf r)$ jest tu afinicznym przedłużeniem z jednej
+komórki do targetu H, również gdy target leży poza tą komórką. Jest pomocniczym
+czynnikiem tożsamości powierzchniowej; fizyczna domena prądu pozostaje domeną
+przewodnika, a pole H może być próbkowane w Universe. Nie tworzy to carrieru
+prądu w powietrzu. Rdzeń nie wywołuje QR, `current_at`, transport solve,
+projekcji ani odczytu archiwum.
+Obie niezerowe orientacje determinanty są obsługiwane przez jej moduł.
+Zmienia się jedynie winding odpowiedniej ściany, bez permutacji współczynników;
+dokładny iloczyn normalnej i wektora do przeciwległego wierzchołka musi być ujemny.
+
+Redukcja `analytic-v2-rt0-reduction` daje surowe H w $\mathrm{A/m}$, bez $\mu_0$.
+Każdy właściciel komórki zachowuje własny prąd i outward normal; wspólne ściany
+nie scalają lokalnych współczynników. Signed fans i whole-face wykonywane są
+osobno dla binary64, `cpp_dec_float<80>` i `cpp_dec_float<120>`. Dokładne
+zero/sign predicates poprzedzają zaokrąglenie geometrii, a range lub underflow
+nie mogą udawać fizycznego zera. Numeric refusal binary64 pozostaje jawną
+diagnozą; nie przechwytuje odmowy limitu pracy, czasu lub RSS i nie pomija
+obowiązkowych passów 80/120.
+
+Rdzeń sprawdza zgodność scalar whole-face/fan w 80 i 120 cyfrach, zgodność
+80→120, a następnie lokalne ważone normy i normę globalnego pola dla obu formuł
+oraz precyzji. Osobno raportuje cancellation ścian i całego pola, wskaźnik
+roundoff binary64 i konieczność użycia 120 cyfr. Końcowa konwersja H120 do
+binary64 wymaga skończoności, zachowania niezerowego wyniku oraz spełnienia
+budżetu normy błędu kwantyzacji. Wartości tolerancji są obowiązkowym wejściem
+callera; ich typ nie wybiera ani nie zmienia wcześniejszej zarejestrowanej
+polityki. Przed przyszłą aktywacją adapter musi jawnie powiązać zatwierdzoną
+politykę z rzeczywistymi wartościami. Zgodność tych obliczeń **nie jest
+rygorystycznym certyfikatem błędu** ani niezależną referencją objętościową RT0.
+
+#### Przygotowanie niezmiennej geometrii źródła — 25.10.2026
+
+`surface_rt0.cpp + element`, `prepare_face` i `evaluate_surface_rt0`
+przygotowują dokładne wymierne wierzchołki, współczynniki, moduł wyznacznika,
+outward winding, normalne i krawędzie raz na wywołanie, przed pętlą targetów.
+`current_at_target` zachowuje dotychczasową kolejność czterech składników
+wzoru prądu. `geometry` kopiuje stałe ściany i nadal wyznacza wszystkie
+predykaty oraz normalizację zależne od targetu dokładnie, bez zaokrąglenia.
+Nie scala ścian wspólnych ani lokalnych prądów sąsiednich komórek.
+
+Zmiana dotyczy wyłącznie realizacji FEM CPU; publiczne parametry Python,
+ProblemIR, trzy obowiązkowe precyzje, kolejność sumowania pól i tolerancje
+pozostają zgodne z powyższym kontraktem. Pozostałe trzy lanes nie uzyskują
+nowej capability. Jednorazowe operacje przygotowania są w liczniku total,
+bez przypisania do targetu; pary i passy pozostają liczone dla każdego
+celu. Pojemność wektora jest sprawdzana przed rezerwacją, a limit czasu
+całkowitego i sampled RSS obejmuje również przygotowanie. Nie jest to
+ścisły limit alokatora ani pełne rozliczenie pamięci Boost.
+
+Bramka regresji wymaga porównania raw H, wszystkich wyników trzech precyzji
+i diagnostyk numerycznych dla zamrożonego źródła oraz targetów; liczniki
+pracy i czas powinny odzwierciedlać rzeczywiście mniejszą pracę. Managed build `d3b549111d8c4fd29cb99a0f75184f72` i publiczny
+Submit → materialization → retry → Succeeded potwierdziły wykonanie dla
+zamrożonych 1865 Tet4 i 14 targetów. Wszystkie 21 pozostałych payloadów,
+w tym raw/per-A V/J/H i certyfikat źródła, są identyczne bajtowo z baseline.
+Pełne diagnostyki trzech precyzji, tolerancje, limity i liczniki passów
+pozostają identyczne; zmieniły się tylko raporty rzeczywiście wykonanej pracy.
+Czas operatora spadł z 487,287556356 s do 418,612782124 s (14,09%).
+Jest to jeden pomiar porównawczy, nie statystyczna kwalifikacja wydajności.
+
+Niezależne całkowanie objętościowe zachowanego afinicznego prądu wykonano
+przez kwadraturę o rzędach 4, 8, 12, 16 i 24. Wszystkie 14 targetów leżą
+poza komórkami źródła. Przy rzędzie 24 maksymalna norma różnicy wektorów H wyniosła
+$5.147751632094446\times10^{-11}\,\mathrm{A/m}$, w zachowanej bramce
+$10^{-9}\,\mathrm{A/m}+10^{-5}\lVert\mathbf H\rVert_2$.
+Nie jest to rygorystyczny certyfikat błędu, kwalifikacja transportu ani dowód
+dla near/inside-source lub całego Universe. Dowody są w wolumenie kontrolnym
+tej grupy, `verification/surface-rt0-performance-20261025/`:
+`prepared-source-result-comparison.json` i `independent-volume-quadrature.json`.
+Ich przypięte SHA256 i tożsamość runtime zapisano w checkpointcie
+`docs/superpowers/plans/2026-10-25-terminal-history-recovery-v3.md`.
+Pełne Universe i UI pozostają nieukończone; wynik pozostaje inspection_only.
+
+#### Dokładne tożsamości liczników kątów — 25.10.2026
+
+Dla nieosobliwej, zorientowanej ściany Tet4 definiujemy poniższe wielkości
+przed dotychczasową normalizacją przez potęgę dwóch. Indeksy wierzchołków
+są cykliczne modulo trzy.
+
+```{math}
+:label: antenna-surface-exact-geometry-definitions
+\begin{aligned}
+\mathbf u_i&=\mathbf t-\mathbf a_i,&
+\mathbf e_i&=\mathbf a_{i+1}-\mathbf a_i,\\
+\mathbf N&=(\mathbf a_1-\mathbf a_0)\times(\mathbf a_2-\mathbf a_0),&
+S&=\mathbf N\cdot\mathbf N>0,\\
+h&=\mathbf N\cdot\mathbf u_0,&
+\mathbf q&=\frac{h\mathbf N}{S},\\
+d_i&=(\mathbf a_i-\mathbf t)\cdot(\mathbf e_i\times\mathbf N).
+\end{aligned}
+```
+
+| Dokładny symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $i$ | Cykliczny indeks wierzchołka i krawędzi | $1$ |
+| $\mathbf a_i,\mathbf t$ | Wierzchołek ściany i target | $\mathrm m$ |
+| $\mathbf u_i,\mathbf e_i,\mathbf q$ | Wektory do targetu, krawędź i normalny rzut targetu | $\mathrm m$ |
+| $\mathbf N$ | Zorientowana, nieunormowana normalna ściany | $\mathrm{m^2}$ |
+| $S$ | Kwadrat normy normalnej | $\mathrm{m^4}$ |
+| $h$ | Podpisany iloczyn normalnej i wektora do targetu, nie odległość | $\mathrm{m^3}$ |
+| $d_i$ | Podpisany licznik współczynnika krawędzi | $\mathrm{m^4}$ |
+
+Ponieważ $\mathbf u_{i+1}=\mathbf u_i-\mathbf e_i$, cykliczna tożsamość
+iloczynu mieszanego daje
+$\mathbf N\cdot(\mathbf u_i\times\mathbf u_{i+1})=d_i$.
+W drugim wyznaczniku składniki zawierające dwukrotnie $\mathbf u_0$ znikają.
+Stąd dokładnie, również dla $h=0$ i obu orientacji ściany:
+
+```{math}
+:label: antenna-surface-exact-determinant-identities
+\begin{aligned}
+\mathbf q\cdot(\mathbf u_i\times\mathbf u_{i+1})&=\frac{h d_i}{S},\\
+\mathbf u_0\cdot(\mathbf u_1\times\mathbf u_2)&=h.
+\end{aligned}
+```
+
+`surface_rt0.cpp + geometry` może więc zastąpić wielokrotne dokładne
+iloczyny wektorowe i skalarne mnożeniem oraz dzieleniem już wyznaczonych
+liczb wymiernych. To tożsamość algebraiczna, bez przybliżenia, zmiany znaku,
+permutacji, progu zero lub redukcji precyzji. Normalizacja, predykaty,
+wszystkie passy binary64/80/120 i końcowe bramki pozostają obowiązkowe.
+Nie ma zmiany publicznych parametrów Python, ProblemIR ani capability:
+realizacja dotyczy tylko istniejącego prywatnego operatora FEM CPU.
+
+`scripts/test_antenna_rt0_surface_oracle.py + ExactSurfaceGeometryIdentityTests.test_signed_determinants_for_all_face_targets`
+wykonał 2160 dokładnych porównań w 540 konfiguracjach: wszystkie permutacje,
+nieomal współliniowa ściana, skale potęg dwóch, targety na ścianie, krawędzi,
+wierzchołku oraz po obu stronach. PASS nie jest dowodem wykonania native.
+Managed build iteracji `762850b9674b4e8cb49007b4101ad2be` zakończył się
+poprawnie. Publiczna próba `run-surface-exact-identities-20261025-01`
+zakończyła się Succeeded, a worker wyszedł z kodem zero. Ścisłe porównanie
+z poprzednim pakietem wykazało identyczność bajtową wszystkich 21 payloadów
+poza raportem pracy oraz identyczność pełnych diagnostyk trzech precyzji,
+limitów i tolerancji. Czas operatora spadł z 418.612782124 do 371.592043076 s
+w jednym pomiarze. Raport `exact-identities-result-comparison.json`
+zachowano w wolumenie kontrolnym grupy, pod
+`verification/surface-rt0-performance-20261025/`. Jest to wynik 14 targetów,
+nie całego Universe; nie stanowi statystycznej kwalifikacji wydajności
+ani potwierdzenia wizualizacji w UI.
+
+(antenna-surface-gmp-dev-package)=
+#### Realizacja liczb dokładnych przez GMP — 25.10.2026
+
+Wariant FEM CPU zastępuje wewnętrzne `cpp_int/cpp_rational` typami
+`mpz_int/mpq_rational` przez publiczny wrapper Boost. Pozostają te same
+liczby wymierne, dokładne predykaty i jawne surowe iloczyny przed normalizacją.
+`surface_rt0.cpp + ExactArithmetic` nadal instrumentuje każdą swoją operację,
+kontroluje raw/reduced bits oraz rzeczywisty próbkowany peak RSS. Liczniki
+nie obejmują wszystkich wewnętrznych operacji gcd, konwersji i alokacji GMP.
+Nie zastępujemy wrappera bezpośrednim, nieinstrumentowanym `mpq_add/mpq_mul`.
+
+`surface_rt0.cpp + Arithmetic::number` zachowuje dotychczasową kolejność:
+`convert_to<double>()` dla binary64 oraz osobna konwersja licznika i mianownika
+z końcowym dzieleniem dla `cpp_dec_float<80/120>`. Lokalne nagłówki Boost
+kierują konwersję obu rational do tego samego algorytmu dokładnego ilorazu
+z zaokrągleniem nearest-even; wrapper GMP nie wywołuje tutaj `mpq_get_d`.
+Compile-time kontrola zgodnych szerokości limb zabezpiecza porównywaną
+ścieżkę integer→decimal na bieżącym Linux/amd64. To dowód źródłowy;
+zgodność zapisanych wartości musi dodatkowo potwierdzić publiczny benchmark.
+Nie zmieniamy realizacji dziesiętnej 80/120 cyfr na MPFR.
+
+`backends/fem/CMakeLists.txt + DOC-ANCHOR: antenna-surface-gmp-dependency`
+wymaga GMP wyłącznie w realizacji MFEM. Brak zależności powoduje błąd
+konfiguracji, bez fallbacku do innego dokładnego backendu. Docker DEV dodaje
+`libgmp-dev` późnym krokiem finalnego obrazu. Dotychczasowy writer i jego
+wczesny COPY pozostają bez zmian, aby nie unieważnić ciężkich warstw deps.
+Manifest obrazu zapisuje rzeczywiste wersje pakietów GMP i Boost w dodatkowym
+`actual.system_packages`; pełny hash manifestu identyfikuje toolchain.
+Nowy toolchain ma osobny cache aplikacji, a stary cache pozostaje zachowany.
+
+To zmiana prywatnej realizacji arytmetycznej, bez nowych parametrów Python,
+ProblemIR, capabilities, jednostek, tolerancji, limitów i wersji fizycznego
+operatora. Requested/resolved solver nadal oznacza FEM CPU. Dowody dla
+FDM CPU/GPU ani FEM GPU nie wynikają z tej zmiany. Dystrybucyjne notices GMP
+pozostają w obrazie; kompletność osobnego eksportu portable nie jest tu
+kwalifikowana. Nie deklarujemy nowego certyfikatu błędu lub gotowej bazy LLG.
+
+Zarządzany build aplikacji `d30549fadeb14aadb517a0a491ca50b0` zakończył
+się poprawnie. Biblioteka FEM wymaga `libgmp.so.10`; kontrola zależności nie
+wykazała brakujących bibliotek. Zaakceptowany benchmark
+`run-surface-gmp-20261025-01` zachował bajtowo wszystkie 21 payloadów,
+pełne diagnostyki trzech precyzji, liczniki, maksymalne długości liczb oraz
+limity i tolerancje. Czas operatora wyniósł 346.505338649 s wobec
+371.592043076 s poprzedniej realizacji. Raport
+`verification/surface-rt0-performance-20261025/gmp-result-comparison.json`
+w wolumenie kontrolnym dokumentuje ten pojedynczy pomiar dla 14 targetów.
+Nie dowodzi on wydajności pełnego Universe ani niezależnej kwalifikacji
+wszystkich położeń próbek. Ciężkie zależności zostały rzeczywiście
+przebudowane; nie deklarujemy dla tej operacji spełnienia bramki CACHED.
+
+Kolejna poprawka `ExactArithmetic::bits/watch/sign` odczytuje długość
+liczb przez `mpz_sizeinbase(...,2)` oraz pożycza numerator i denominator
+z GMP, bez tworzenia ich kopii. Jawnie zachowuje `bits(0)=0`, długość
+modułu liczby ujemnej oraz kolejność naliczania i kontroli raw/reduced.
+Nie zmienia surowych iloczynów, konwersji, formuł ani trzech precyzji.
+Ta poprawka wymaga nowego zarządzanego buildu, parytetu payloadów,
+diagnostyk, liczników i odmów oraz pomiaru czasu. Jej wykonanie,
+pełne Universe i browser/WebGL pozostają **NOT VERIFIED**.
+
+(antenna-surface-face-dot-reuse)=
+#### Kandydat FEM CPU: ponowne użycie iloczynów ściany — 26.10.2026
+
+`surface_rt0.cpp + face_pass` może ponownie wykorzystać trzy iloczyny
+sąsiednich wektorów i trzy iloczyny z rzutem normalnym. Signed-fan i whole-face
+używają tych samych zaokrąglonych wektorów w obrębie jednej ściany i jednej
+precyzji. Każdy iloczyn zachowuje istniejącą sumę trzech składników w tej
+samej kolejności, bez zamiany na analitycznie równoważne wyrażenie wysokości.
+Symetria mnożenia skończonych skalarów pozwala wykorzystać także odwróconą
+kolejność argumentów tego samego iloczynu. Pamięć jest lokalna dla wywołania;
+nie jest cache między targetami, komórkami ani precyzjami.
+
+Obliczenie jest leniwe: exact-zero fan nadal nie oblicza swojego kąta,
+exact-zero height nadal pomija wszystkie kąty, a `solid_angle` sprawdza
+niezerowy licznik przed żądaniem iloczynów mianownika. Nie zmieniają się
+predykaty wymierne, normalizacja, binary64/80/120, kompensowane sumowanie,
+równania, jednostki, Python, ProblemIR, capability ani polityka limitów.
+Jawne liczniki wrappera nie obejmowały tych iloczynów i pozostają porównywane
+bez ich redefinicji. Nie dodajemy nowego właściciela stanu ani alokacji heap.
+Pozostałe realizacje FDM CPU/GPU i FEM GPU nie otrzymują nowego operatora.
+
+Przed promocją kandydata wymagane są: zarządzany build tej samej grupy,
+identyczność bajtowa 21 naukowych payloadów retained benchmarku, zgodność
+pełnych diagnostyk precyzji, liczników, tolerancji i odmów, a następnie
+współczesne baseline–candidate–baseline dla czasu. Wynik na 14 punktach nie
+kwalifikuje pełnego Universe ani near/inside-source. Brak poprawy czasu lub
+naruszenie zgodności oznacza odrzucenie tej optymalizacji. Stan kandydata
+przed wykonaniem: **NOT VERIFIED**. Nie deklarujemy przyspieszenia na
+podstawie samej liczby pominiętych mnożeń.
+
+Zarządzana iteracja `ee866bdfe38f4b43a093d2f667467876` zbudowała kandydata;
+publiczny run `run-antenna-surface-dot-reuse-20261026-01` zakończył się
+succeeded. Biblioteka miała SHA256
+`304f9d38ee42b587201f44b8d360b7c926a2ce9e1f4cdedf320dea712c6b8839`.
+Wszystkie 21 naukowych payloadów, pełne diagnostyki trzech precyzji i liczniki
+pracy są identyczne z zachowaną referencją. Dziewięć faz profilu sumuje się
+prawidłowo. Raport `verification/antenna-surface-dot-reuse-20261026/on/comparison.json`
+w wolumenie kontrolnym wiąże bundle
+`12a533e071ef5d9163c934d24ab15c9bc7dff3f2043f365d5283c997e63b7dbd`
+z tym pojedynczym wykonaniem. Czas operatora wyniósł 371.441557726 s wobec
+401.198955137 s poprzedniej próby ON na tej samej geometrii. Te dwa pomiary
+nie wyodrębniają wpływu obciążenia nadzorców i nie spełniają prerejestracji
+baseline–candidate–baseline. Przyspieszenie pozostaje **NOT VERIFIED**;
+nie kwalifikujemy na tej podstawie pełnej siatki ani innych położeń targetów.
+
+(antenna-surface-mpfr-candidate)=
+#### Kandydat FEM CPU: MPFR ze stałą precyzją — prerejestracja 26.10.2026
+
+Profil publicznego runu `run-antenna-release-proof-20261026-01` wiąże
+bibliotekę `22c08a0585a5511d6737b9d429de180b9f22bdf4ed249382665ed7c42815c909`
+i bundle `6bacf94351693955f5b97ab7485613e5a23cc29e835ffaf02527cdb6389e0ca4`:
+14 targetów, 363,113 s operatora, z czego 306,656 s w dwóch wysokich
+precyzjach. Jest to punkt odniesienia dla kandydata, nie dowód czasu pełnego
+Universe. Źródło, kolejność targetów, signed current i wszystkie parametry
+polityki pozostają przypięte do zachowanego requestu tej próby.
+
+Nowa realizacja zachowuje dokładne GMP rational predykaty, formuły ścian,
+binary64, kompensowaną kolejność sumowania i wszystkie istniejące odmowy.
+Zastępuje wyłącznie wysokie typy arytmetyczne przez stałe MPFR. Jest to
+zmiana radix i reguły zaokrąglania, a nie neutralna podmiana biblioteki.
+Nie wolno przypisywać jej starej tożsamości operatora. Kandydat ma nazwę
+`fem_oersted_rt0_surface.mpfr128_160_rndn_etoff.inspection.v1`; stare archiwa
+`fem_oersted_rt0_surface.inspection.v1` nadal mają własną interpretację.
+Świeży native output wymaga aktualnej tożsamości; cold reader rozpoznaje
+wyłącznie te dwie jawne wersje, bez wildcard i bez zmiany znaczników
+inspection-only lub error-certificate.
+
+| Własność realizacji | Typ / wartość | Domyślnie / jednostka | Znaczenie i kontrola |
+|---|---|---|---|
+| Poziom logiczny 80 | `mpfr_float_backend<128, allocate_stack>` | stałe, $1$ | 427 bitów w zainstalowanym Boost 1.74; co najmniej 128 cyfr dziesiętnych. Static assertion wymaga nie mniej niż cała pojemność poprzedniego `cpp_dec_float<80>` wraz z guard limbs: 104 cyfry. |
+| Poziom logiczny 120 | `mpfr_float_backend<160, allocate_stack>` | stałe, $1$ | 533 bity; co najmniej 160 cyfr. Analogiczna kontrola względem 144 cyfr starego typu. |
+| Ewaluacja wyrażeń | `et_off` | stałe, $1$ | Jawne materializowanie wyników; brak automatycznego MPFR FMA z expression templates. Nie jest to deklaracja identyczności z dawnymi zaokrągleniami. |
+| Zaokrąglanie | `GMP_RNDN` w wrapperze Boost | stałe, $1$ | Nearest-even; bez zmiany globalnej precyzji lub zakresu wykładnika MPFR procesu. |
+| Konwersja exact → real | licznik, mianownik, następnie istniejące `divide` | bez nowego parametru, $1$ | Bez bezpośredniego `mpfr_set_q` i bez zmiany naliczania real divisions w pierwszym wariancie. |
+| Serializacja | dotychczasowy `Arithmetic::text` | ograniczona, $1$ | Więcej cyfr i inna rezerwacja bajtów wynikają z konkretnego typu. Dłuższy string nie stanowi certyfikatu błędu. |
+| Zależności | Boost 1.74, GMP 6.2.1, MPFR 4.1.0 | jawny obraz / $1$ | W obrazie development pakiet `libmpfr-dev=4.1.0-3build3` dopasowany do istniejącego runtime. Wersje dev/runtime w manifeście, CMake wymaga MPFR; brak zależności odmawia builda. |
+
+Pierwsza próba jest przypięta do istniejącej grupy Ubuntu 22.04 (Jammy),
+Boost 1.74 i pakietów MPFR `4.1.0-3build3`. Kanoniczna konfiguracja Compose
+tej grupy wybiera ten base jawnie. Alternatywne base, w tym fallback Ubuntu
+20.04 samego Dockerfile, nie są zakwalifikowane dla tego kandydata; brak
+przypiętego pakietu lub MPFR co najmniej 4.1 ma jawnie odmówić builda,
+a nie instalować nieprzypiętej wersji. Nie zmieniamy base ani systemowych
+bibliotek działającego backendu poza zarządzanym obrazem kandydata.
+
+Lokalny bufor mantysy nie dowodzi braku alokacji wewnątrz MPFR lub
+serializacji. Pozostają kontrole rzeczywistego lifetime peak RSS,
+rezerwowanych wyjść i wszystkich dotychczasowych limitów. Nie zwiększamy
+limitu par, operacji, czasu ani RAM. Pozostają te same tolerancje SI i
+underflow/finite/zero-denominator gates. Nowy typ ma inny zakres wykładnika;
+przypadki skrajne wymagają odrębnych testów odmowy.
+
+FDM CPU, FDM GPU i FEM GPU nie otrzymują nowego operatora. Nadal wykonujemy
+FEM CPU precompute; wykryte GPU ani biblioteka CUDA nie zmieniają tej
+klasyfikacji. Python i ProblemIR nie otrzymują nowego parametru, modelu
+źródła lub ukrytej fizyki. Istniejące `analytic_rt0_surface`, polityka i
+sampling zachowują autorstwo; resolved execution/evidence mają jawną nową
+tożsamość arytmetyczną. Runtime nadal publikuje atomowo jeden accepted V/J/H.
+
+Kryteria ustalone **przed uruchomieniem kandydata**:
+
+1. Zarządzany build i runtime wyłącznie w grupie Docker zadania. Zatrzymać
+   promocję przy błędzie builda, niejednoznacznych zależnościach lub wersji.
+2. Ten sam frozen request z innym run ID/idempotency key i przypiętą nową
+   biblioteką. Wszystkie 21 payloadów poza direct evidence muszą być
+   identyczne bajtowo, w tym raw H i per-A H. Każda rozbieżność zatrzymuje
+   tę pierwszą próbę promocji; nie zmieniamy progu po obejrzeniu wyniku.
+3. Evidence musi jawnie wskazywać nowy operator, zachować źródło, targety,
+   politykę, tolerancje, klasyfikację binary64 i wszystkie bramki lokalne /
+   globalne scalar, angle, field, cancellation oraz output quantization.
+   Decimal strings i reserved_output_bytes mogą się zmienić. Pozostałe
+   liczniki mają pozostać zgodne; oczekiwaną zmianę rezerwacji oblicza się
+   z pojemności nowych typów i tej samej liczby wywołań `text`, nie z
+   dopasowania po fakcie. Wszystkie wartości nadal muszą mieścić się w
+   niezmienionych limitach. Nie porównujemy strings jako dowodu naukowego.
+4. Przed szerszą kwalifikacją: dwa windingi, skale ekstremalne,
+   near/on-face/on-edge/on-vertex/inside-source, zera i binary refusal,
+   odmowy danych i limitów oraz niezależne całkowanie objętościowe RT0.
+   Zgodność dwóch przejść MPFR nie zastępuje niezależnej referencji.
+5. Przyspieszenie wymaga kontrolowanego baseline–candidate–baseline z
+   tymi samymi wejściami, czasami faz i całkowitymi, peak RSS oraz
+   licznikami. Pojedynczy wynik 14 punktów nie kwalifikuje Universe, bazy,
+   projekcji LLG ani innych geometrii. Nie obniżamy jakości wizualizacji.
+
+Dla zachowanej pierwszej próby wszystkie 14 przejść binary64 są evaluated.
+`Arithmetic::text` używa limitu `max_digits10 + 64`: stare wartości
+`max_digits10` to 104/144, nowe 131/163, a różnice pojemności wynoszą
+27/19 bajtów na wywołanie. Na target przypada 9 tekstów poziomu logicznego
+80 oraz 14 tekstów poziomu 120 (w tym roundoff przy ocenionym binary64).
+Oczekiwana zmiana wynosi więc dokładnie 509 bajtów na target i 7126 bajtów
+łącznie: total reserved output 90174 → 97300, ostatni target 5153 → 5662.
+Te wartości ustalono przed kandydatem w
+`verification/antenna-mpfr-20261026/comparison-expectations-v1.json` w wolumenie
+kontrolnym. Nie dotyczą automatycznie przypadków binary refusal.
+
+Mapa implementacji: `surface_rt0.cpp + Decimal80/Decimal120/Arithmetic`;
+`surface_rt0.hpp + surface_rt0_operator_version`;
+`accepted_surface_rt0.cpp + serialize`;
+`surface_rt0_evidence_v1.rs + SurfaceRt0Snapshot::validate`;
+`native_fem/surface_rt0.rs + SurfaceSnapshotBuffer::finish`;
+`backends/fem/CMakeLists.txt + pkg_check_modules`. Każdy path jest rozwinięty
+w sąsiedniej mapie źródeł. Stan przed wykonaniem: **implementation unqualified;
+runtime / parity / speed / scientific qualification NOT VERIFIED**.
+
+Podstawy biblioteczne: [Boost 1.74 MPFR](https://www.boost.org/doc/libs/1_74_0/libs/multiprecision/doc/html/boost_multiprecision/tut/floats/mpfr_float.html),
+[Boost 1.74 cpp_dec_float](https://www.boost.org/doc/libs/1_74_0/libs/multiprecision/doc/html/boost_multiprecision/tut/floats/cpp_dec_float.html)
+i [MPFR](https://www.mpfr.org/mpfr-current/mpfr.html). Semantyka lokalnego
+Boost została dodatkowo odczytana z nagłówków przypiętego obrazu.
+
+(antenna-mpfr-canonical-log-work-protocol)=
+#### Osobny protokół potwierdzający: dokładny model pracy gałęzi logarytmu
+
+Pierwsza próba MPFR z 26.10.2026 **nie przeszła prerejestrowanej promocji**.
+Zakończony run `run-antenna-mpfr-20261026-01` zachował 21/21 naukowych
+payloadów, ale zmienił `real_divisions` o 16 dla targetów 10–13 i nie ma
+kompletnego zachowanego dowodu obserwacji live. Tych braków nie uzupełniamy
+retrospektywnie. Poniższy protokół dotyczy oddzielnego badania
+potwierdzającego; nie zmienia operatora, tolerancji ani limitów.
+
+`face_pass` wybiera algebraicznie równoważne stabilizowane postacie na
+podstawie zaokrąglonych `xi < 0` i `xj > 0`. Zera oraz kasowanie
+w projekcjach mogą prowadzić do różnej liczby jawnych dzieleń; także dokładnie
+niezerowy iloczyn może po konwersji i zaokrągleniu dać zero lub przeciwny znak. Dla
+niezdegenerowanej krawędzi można niezależnie przewidzieć matematyczne znaki:
+
+```{math}
+:label: antenna-mpfr-exact-log-signs
+\begin{aligned}
+\mathbf r_i&=\mathbf x-\mathbf v_i,\quad
+\mathbf e_i=\mathbf v_j-\mathbf v_i=\mathbf r_i-\mathbf r_j,\quad
+L_i=\sqrt{\mathbf e_i\cdot\mathbf e_i}>0,\\
+\xi_i&=-\frac{\mathbf r_i\cdot\mathbf e_i}{L_i},\quad
+\eta_i=\xi_i+L_i=-\frac{\mathbf r_j\cdot\mathbf e_i}{L_i},\\
+b_i^L&=[\mathbf r_i\cdot\mathbf e_i>0],\quad
+b_i^R=[\mathbf r_j\cdot\mathbf e_i<0].
+\end{aligned}
+```
+
+| Token | Znaczenie | SI |
+|---|---|---|
+| $\tau,f,i,j,p$ | Target, ściana, skierowane końce krawędzi i poziom precyzji $p=0,1,2$. | $1$ |
+| $\mathbf x,\mathbf v_i,\mathbf v_j$ | Target i oryginalne wierzchołki, dokładnie z zachowanych binary64. | $\mathrm m$ |
+| $\mathbf r_i,\mathbf r_j,\mathbf e_i$ | Wektory target–wierzchołek oraz krawędź. | $\mathrm m$ |
+| $L_i,\xi_i,\eta_i$ | Długość krawędzi i dwie projekcje wzdłuż niej. | $\mathrm m$ |
+| $b_i^L,b_i^R$ | Matematyczne predykaty wyboru racjonalizowanej postaci; nawias oznacza wskaźnik logiczny. | $1$ |
+| $A_{\tau f}$ | Liczba aktywnych fanów, z pominięciem dokładnego `d_zero`. | $1$ |
+| $B_{\tau f}$ | Suma $b_i^L+b_i^R$ po aktywnych fanach. | $1$ |
+| $h_{\tau f}$ | Podpisana odległość od płaszczyzny ściany; zero odpowiada dokładnemu `hnum == 0`. | $\mathrm m$ |
+| $E_{\tau f}$ | Liczba warunkowych konwersji qvector i liczników kątów. | $1$ |
+| $D_{\tau p}$ | Przewidywana liczba jawnych `Arithmetic::divide` w targetcie i precyzji. | $1$ |
+
+Dodatnia normalizacja potęgą dwóch nie zmienia **dokładnych** znaków, lecz
+nie gwarantuje zachowania znaków po konwersji i sekwencyjnych działaniach.
+Model v1 używający tylko tych znaków przeszedł kontrolę sum globalnych,
+ale nie przeszedł preflightu per-target: targety 0/4 miały różnicę −2,
+a 8/9 +2. Nie wykonano submit v1. Niezależny odczytowy model binary64
+potwierdził te osiem krawędzi i wzajemne znoszenie różnic.
+
+Model v2 odtwarza wyłącznie projekcje gałęzi dla wszystkich aktywnych krawędzi:
+
+```{math}
+:label: antenna-mpfr-rounded-log-signs
+\begin{aligned}
+\widehat{\mathbf r}_i^{(p)}&=C_p(\mathbf r_i/s_{\tau f}),\quad
+\widehat{\mathbf e}_i^{(p)}=C_p(\mathbf e_i/s_{\tau f}),\\
+\widehat L_i^{(p)}&=\operatorname{fl}_p\!\left(\sqrt{\operatorname{fl}_{p,\Sigma}
+  (\widehat{\mathbf e}_i^{(p)}\cdot\widehat{\mathbf e}_i^{(p)})}\right),\\
+\widehat\xi_i^{(p)}&=\operatorname{fl}_p\!\left(
+  -\operatorname{fl}_{p,\Sigma}(\widehat{\mathbf r}_i^{(p)}\cdot\widehat{\mathbf e}_i^{(p)})/\widehat L_i^{(p)}\right),\\
+\widehat\eta_i^{(p)}&=\operatorname{fl}_p(\widehat\xi_i^{(p)}+\widehat L_i^{(p)}),\\
+B_{\tau f}^{(p)}&=\sum_{i\,\mathrm{active}}
+  \left([\widehat\xi_i^{(p)}<0]+[\widehat\eta_i^{(p)}>0]\right).
+\end{aligned}
+```
+
+| Token | Znaczenie | SI |
+|---|---|---|
+| $s_{\tau f}$ | Dokładna dodatnia potęga dwóch wybrana z maksymalnej składowej geometrii ściany i targetu. | $\mathrm m$ |
+| $\widehat{\mathbf r}_i^{(p)},\widehat{\mathbf e}_i^{(p)}$ | Skonwertowane i znormalizowane wektory dla danego poziomu arytmetyki. | $1$ |
+| $\widehat L_i^{(p)},\widehat\xi_i^{(p)},\widehat\eta_i^{(p)}$ | Zaokrąglona długość i projekcje użyte tylko do wyboru gałęzi. | $1$ |
+| $B_{\tau f}^{(p)}$ | Liczba wybranych racjonalizacji po aktywnych fanach w danej arytmetyce. | $1$ |
+| $C_p,\operatorname{fl}_p,\operatorname{fl}_{p,\Sigma}$ | Konwersja, zaokrąglenie najbliższe z ties-to-even i sekwencyjny iloczyn skalarny bez FMA. | $1$ |
+
+Weryfikator nadal wyznacza geometrię i exact-zero przez `Fraction` z oryginalnego
+bundle. Binary64 używa zwykłych sekwencyjnych operacji Python float. Dla obu
+wysokich poziomów wywołuje jedynie libmpfr przez ctypes, z 427/533 bitami i RNDN.
+Konwersja $C_0$ zaokrągla dokładną liczbę wymierną; $C_1$ i $C_2$ najpierw
+osobno zaokrąglają licznik i mianownik całkowity, a następnie ich iloraz,
+zgodnie z `Arithmetic::number`. Nie wolno zastępować tego przez bezpośrednie
+`mpfr_set_q`. Każde mnożenie i dodanie iloczynu skalarnego ma osobne
+zaokrąglenie. Model nie oblicza logarytmu, potencjału, prądu ani pola.
+Przypina wersję, hash i ścieżkę rzeczywiście załadowanej libmpfr oraz
+flagi kompilacji operatora wykluczające FMA/fast-math w tym pakiecie.
+
+Dla ukończonych wszystkich face passów, niezerowej powierzchni i
+$A_{\tau f}\geq1$ model pracy wynosi:
+
+```{math}
+:label: antenna-mpfr-canonical-log-divisions
+\begin{aligned}
+E_{\tau f}&=\begin{cases}A_{\tau f}+4,&h_{\tau f}\neq0,\\0,&h_{\tau f}=0,\end{cases}\\
+D_{\tau0}&=2+\sum_f(11+2A_{\tau f}+B_{\tau f}^{(0)}),\\
+D_{\tau1}&=1+\sum_f(41+2A_{\tau f}+B_{\tau f}^{(1)}+E_{\tau f}),\\
+D_{\tau2}&=2+\sum_f(42+2A_{\tau f}+B_{\tau f}^{(2)}+E_{\tau f}).
+\end{aligned}
+```
+
+Stała 11 obejmuje h, trzy d, cancellation, trzy składowe normalnej oraz trzy
+wagi pola. Każdy aktywny fan ma dzielenie projekcji i argumentu log1p.
+Wysoka precyzja konwertuje dodatkowo 29 stałych dokładnych na ścianę;
+$E_{\tau f}$ obejmuje trzy współrzędne qvector, aktywne kąty fanów i kąt
+whole. `scalar_agreement` dodaje jedną konwersję skali w obu wysokich
+precyzjach, a zgodność z binary64 jeszcze jedną w najwyższej. Końcowe
+stałe 2/1/2 obejmują cancellation w redukcji i `precision_result`.
+
+Dla zamrożonych 1865 komórek i 14 targetów model dokładnych znaków przewidział globalnie
+`[2109098, 5972088, 6076542]`. Wartości sum zgadzają się z zachowaną próbą MPFR;
+stara arytmetyka dziesiętna naliczyła o 32 więcej w każdym wysokim poziomie.
+To dowód zgodności sum z modelem, **nie wszystkich pojedynczych znaków**.
+Runtime zapisuje sumy per-target i globalne `by_precision`, a nie pełną
+zaobserwowaną macierz target × precision; różnice mogą się kompensować.
+Nie uznajemy tego modelu za certyfikat błędu pola lub ogólną kwalifikację.
+
+Przed nowym submit należy zamrozić hash weryfikatora, JSON oczekiwań,
+referencyjny bundle i input, bibliotekę, worker i receipt. Nowe badanie
+wymaga 21/21 identycznych payloadów naukowych, zachowania pozostałych
+niezmienników direct diagnostics i dotychczasowych diagnostyk binary64,
+wszystkich trzech `evaluated=true` bez refusal oraz zgodności każdej sumy
+targetu, globalnych trzech liczników precyzji i sumy globalnej z modelem.
+Pozostałe liczniki są równe referencji z wyjątkiem wcześniej wyprowadzonej
+rezerwacji 509 bajtów/target. Zachowujemy wszystkie lokalne/globalne bramki
+80/120, whole/fan, cancellation, SI, finite, underflow i kwantyzacji.
+Zmieniać mogą się wyłącznie jawna wersja arytmetyki, dozwolone teksty wysokiej
+precyzji, wyprowadzone liczniki, czas i RSS. Brak kompletnego dowodu jednej
+obserwacji rzeczywistego workera zatrzymuje promocję do Universe; receipt
+musi wiązać również załadowany SONAME z tym samym hashem pakietu.
+
+Mapa źródeł: `surface_rt0.cpp + face_pass/Arithmetic/scalar_agreement/evaluate_surface_rt0`
+oraz `scripts/test_antenna_surface_log_branch_model.py + canonical_division_counts/read_bundle`.
+Weryfikator jest narzędziem testowym, nie solverem ani publicznym parametrem.
+Python DSL, ProblemIR, planowanie, jednostki, źródło, publikacja i archiwa
+nie zmieniają semantyki. Zakres dotyczy FEM CPU; FDM CPU, FDM GPU i FEM GPU
+nie otrzymują realizacji lub kwalifikacji. Brak B–C–B i szerokich geometrii
+nadal blokuje deklarację ogólnego przyspieszenia i kwalifikacji naukowej.
+
+#### Pełne parametry prywatnego wywołania
+
+Poniższe typy C++ nie są nowym publicznym Python API. Wszystkie argumenty są
+wymagane; nie mają domyślnych limitów liczbowych. Ich destination `ProblemIR`
+to **brak nowej serializacji lub dispatchu**. Requested/resolved publicznego
+problemu, archiwa, runtime/session i scientific receipts nie uzyskują nowego
+wariantu od samego istnienia tych źródeł.
+
+| Argument / pole | Typ | Domyślnie | SI lub metadane | Walidacja, znaczenie i odmowa |
+|---|---|---|---|---|
+| source[].vertices_m | 4×3 binary64 | wymagane | $\mathrm m$ | Skończone dane dokładnie z FrozenInput, niepłaski Tet4; obie orientacje, bez zmiany kolejności vertex/coefficient. |
+| source[].signed_coefficients_a | 4 binary64 | wymagane | $\mathrm A$ | Skończone generic basis coefficients ze znakiem DOF zastosowanym raz; nie face fluxes; źródło musi być niepuste. |
+| caller_source_digest | `array<uint8_t,32>` | wymagane | $1$ — identyfikator | Opaque binding dostarczony przez właściciela; operator go zwraca, ale nie przelicza ani nie uwierzytelnia hasha źródła. |
+| ordered_targets_m | `vector<array<double,3>>` | wymagane | $\mathrm m$ | Niepusta uporządkowana lista skończonych punktów; bez przesunięcia, snapping lub pomijania targetów. |
+| limits | SurfaceRt0WorkLimits | wymagane | mieszane, poniżej | Jawne dodatnie limity dla każdej nazwanej kategorii, czasu, bitów i próbkowanego RSS; bez domyślnego profilu. |
+| tolerances | SurfaceRt0Tolerances | wymagane | mieszane, poniżej | Każde pole skończone i dodatnie; caller odpowiada za zgodność z zatwierdzoną polityką. |
+| peak_rss | SurfaceRt0PeakRss | wymagane | $1$ — bajty danych | Callback rzeczywistego lifetime process peak RSS; brak, wyjątek lub zero odmawia. Jest próbkowany przed/po ograniczonej pracy i według guard_interval_events. |
+| report | SurfaceRt0WorkReport& | wymagane | metadane | Reset raz na wejściu, przed walidacją tolerancji. total i by_precision kumulują całe wywołanie bez resetu; current_target zeruje się przy begin_target zgodnie ze znaczeniem limitu per_target. W obrębie targetu nie zeruje się go między komórkami, formułami ani precyzjami; raport pozostaje czytelny po odmowie. |
+
+Obie tablice `limits.total` i `limits.per_target` mają po jednej dodatniej
+wartości uint64 dla **każdej** poniższej kategorii `SurfaceRt0WorkKind`.
+Przekroczenie, overflow licznika lub iloczynu rozmiarów powoduje odmowę;
+preflight rezerwacji własnych wyjść odbywa się przed alokacją kontenera.
+
+| Indeks total/per_target | Jednostka | Co jest naliczane i ograniczone |
+|---|---|---|
+| source_target_pairs | $1$ | Próby par komórka–target, bez ponownego solve prądu. |
+| face_precision_passes | $1$ | Ściana i precyzja; pełna para ma 4×3 = 12 passów. |
+| whole_face_formulas | $1$ | Oddzielne próby whole-face; pełna para ma 12. |
+| signed_fan_panels | $1$ | Wszystkie trzy gałęzie signed fan, również exact zero skip przed log/atan2; pełna para ma 36. |
+| exact_fraction_operations | $1$ | Jawne operacje wymierne i konstrukcja dokładnego wejścia; nie wszystkie kroki gcd/Boost. |
+| exact_integer_operations | $1$ | Instrumentowane surowe operacje całkowite i kontrole długości; nie liczba instrukcji CPU. |
+| exact_comparisons | $1$ | Jawne predykaty dziedziny wymiernej, w tym zero podczas konwersji; administracyjne guardy nie są pełnym licznikiem instrukcji porównań. |
+| real_divisions | $1$ | Dzielenia przez wrapper arytmetyki danej precyzji. |
+| copied_input_bytes | $1$ — bajty danych | Kopiowane oryginalne skalary binary64 i opaque digest na granicy wejścia; nie wszystkie pochodne kopie Boost. |
+| reserved_output_bytes | $1$ — bajty danych | Sprawdzone rezerwacje własnego kontenera wyniku i konserwatywny budżet serializowanych znaków; nie dowód wielkości heap streama lub Boost. |
+| sqrt_calls | $1$ | Jawne wywołania sqrt według precyzji. |
+| log_calls | $1$ | Jawne wywołania log według precyzji, również dopuszczona postać 120-cyfrowa. |
+| log1p_calls | $1$ | Jawne wywołania log1p według precyzji. |
+| atan2_calls | $1$ | Jawne wywołania atan2 według precyzji, w tym wyznaczenie stałej pi; exact zero branch nie wykonuje nieokreślonego kąta. |
+
+Pełna para wymaga zatem **48 gałęzi formuł**: 12 whole-face i 36 signed fan,
+a nie arbitralnych „24 kernel operations”. Preflight sprawdza iloczyny
+liczby source/target i ten pełny harmonogram przed rezerwacją wyniku.
+Nie utożsamia tych liczników z kategorią 500M operations innego algorytmu.
+
+| Pozostałe pole limits | Typ / domyślnie | Jednostka | Walidacja i odmowa |
+|---|---|---|---|
+| maximum_raw_integer_bits | uint64 / wymagane | $1$ — bity danych | Dodatnie; konserwatywny bound przed budową/mnożeniem surowego integer oraz kontrola otrzymanej długości przed redukcją. |
+| maximum_reduced_fraction_bits | uint64 / wymagane | $1$ — bity danych | Dodatnie; kontrola numerator/denominator po redukcji i dokładnego wejścia. |
+| maximum_lifetime_peak_rss_bytes | uint64 / wymagane | $1$ — bajty danych | Dodatnie; porównane z rzeczywistym dodatnim wynikiem callbacku, z zachowaniem największej próbki. |
+| guard_interval_events | uint64 / wymagane | $1$ | Dodatnia liczba nazwanych zdarzeń między dodatkowymi kontrolami; jawne guardy granic pracy pozostają. |
+| maximum_total_seconds | double / wymagane | $\mathrm s$ | Skończone i dodatnie; czas całego wywołania mierzony zegarem monotonicznym. |
+| maximum_target_seconds | double / wymagane | $\mathrm s$ | Skończone i dodatnie; osobny czas bieżącego targetu, bez zerowania czasu całkowitego. |
+
+| Pole tolerances | Typ / domyślnie | SI | Znaczenie; każde pole skończone i dodatnie |
+|---|---|---|---|
+| absolute_field_apm | double / wymagane | $\mathrm{A/m}$ | Bezwzględna część budżetu H; bez nowego implicit default. |
+| relative_field | double / wymagane | $1$ | Względna część budżetu H i kontroli końcowej kwantyzacji. |
+| cancellation_floor_apm | double / wymagane | $\mathrm{A/m}$ | Jawny mianownik skali wskaźnika cancellation całego pola. |
+| scalar_relative_80 | double / wymagane | $1$ | Scalar whole/fan80 oraz scalar80→120, globalnie i lokalnie po fanach. |
+| scalar_relative_120 | double / wymagane | $1$ | Scalar whole/fan120 względem skali i dodatniego potencjału. |
+| angle_relative_80 | double / wymagane | $1$ | Kontrola kąta80 oraz80→120 przy dokładnie niezerowej wysokości. |
+| angle_relative_120 | double / wymagane | $1$ | Kontrola sumy kątów fanów i kąta whole-face120. |
+| binary_scalar_epsilon_factor | double / wymagane | $1$ | Mnożnik epsilon w binary64 scalar i weighted-angle diagnostics. |
+| binary_roundoff_epsilon_factor | double / wymagane | $1$ | Mnożnik epsilon i sumy lokalnych norm pola w roundoff indicator. |
+| binary_cancellation_limit | double / wymagane | $1$ | Próg wymagający jawnego wyniku120 w diagnozie binary64. |
+| highprecision_cancellation_limit | double / wymagane | $1$ | Próg odmowy highprecision cancellation ściany lub całego pola. |
+
+Pomiar RSS jest **próbkowaniem szczytu procesu, nie twardym limitem alokatora**.
+Możliwe jest przekroczenie pomiędzy guardami. Konserwatywny bound surowych
+integer może odmówić jeszcze przed alokacją. Żaden licznik nie jest pełnym
+zliczeniem arytmetyki CPython/libmp/Boost, wszystkich kopii ani heap;
+`sizeof(Exact)` nie jest deklarowany jako wykorzystanie pamięci.
+Błąd callbacku nie powoduje zastępczej metody ani pominięcia kontroli.
+
+| Realizacja | Stan tego rdzenia i pozostały dowód |
+|---|---|
+| FEM CPU | Zarządzane wykonanie i parytet V/J/H dla 14 targetów potwierdzone; niezależne całkowanie retained J sprawdza te zewnętrzne punkty. Pełny Universe, próbki wewnątrz źródła i ogólna kwalifikacja pozostają NOT VERIFIED. |
+| FEM GPU | Brak realizacji surfaceRT0 i dowodów urządzeniowych; kompilacja wspólnej biblioteki nie oznacza parytetu GPU. |
+| FDM CPU | Nie jest nową ścieżką solvera FDM; brak aktywacji, przeniesienia i kwalifikacji przez sam rdzeń. |
+| FDM GPU | Brak realizacji i kwalifikacji urządzeniowej; bez cichego fallbacku. |
+
+Oddzielny eksperyment general-map direct2D zakończył się terminalnie
+**20/24 scalar cases, REFUSED / NOT VERIFIED**. Przypadek 21, M16/shear,
+wykonał pięć passów i został zatrzymany przez wcześniej zadany limit 3600 s;
+nie ponowiono go i nie sklejono częściowych passów w PASS. To nie jest weighted
+RT0, native H ani pełna niezależna kwalifikacja referencji. Zachowane źródła
+tej próby pozostają jej historycznymi pinami; niniejsza późniejsza aktualizacja
+noty nie zmienia wyniku ani nie przepisuje wcześniejszej kapsuły źródeł.
+Terminal w `general-map-direct2d-20261024/af098a83098f4ed39f0599c05ff6c690/terminal.json`
+ma SHA256 `7975ab6ff2402f7e10ab61a5bdcfcc4528b81428e3c0e6085026cdd94211b9d3`.
+
+Historyczne źródła rdzenia w buildzie5579 miały SHA256: HPP
+`ce0cf6fe1c8b3fd4deb6fc6218dd0a428ad7ff19d1cd7d6c1abeafc38e671253`, CPP
+`e43030789b5a2ff1ac92a4c7537c12b3c0c75fbb5751e0cda7cfcba39e002eb2`.
+Zachowane `native-rt0-surface-core-source-20261024/root-independent-review-pl.json`
+(SHA256 `0492fdb103c7682064b318857893e9c20fdf66dc07faa8492a9acf95ccd81959`)
+i `source-only-published-checkpoint.json` opisują wyłącznie source review.
+Ścieżki dowodów są względem wcześniejszego katalogu verification tej grupy.
+**Pełna mapa H w Universe nadal nie jest gotowa ani zakwalifikowana.**
+
+Zarządzany `just docker-dev-restart-saved-authoring` skompilował i zainstalował
+bibliotekę w tej samej grupie WSL/Docker, bez kompilowania testów jednostkowych.
+Iteracja `d5ff44bd896e4613b5d85d1d58d8cc00` zakończyła się `succeeded`, snapshot
+`5579ddeee3a12d0f4591612f517451bba8158f7a1901c5d81bf6c28de5c68a59`.
+Nowy obiekt `surface_rt0.cpp.o` ma SHA256
+`21025b820c8a741abb58e20817260fcb17fe2b00c580a5495d5cb8fce6b2ba9d`.
+Zainstalowany `lib/libfullmag_fem.so` ma SHA256
+`f9b5d320b94b36a0533f0be332b85ab0e342d9009ba55f2011b9d8f248b11416`;
+odczyt ELF przez `nm -C` potwierdził symbol `evaluate_surface_rt0`.
+To dowód kompilacji i linkowania (`compiled_only`), nie wywołania funkcji,
+wydajności, poprawności H, kwalifikacji GPU ani aktywacji publicznego Solve.
+Receipt `surface-rt0-compile-preflight-20261024/postbuild-5579ddee/report.json`
+ma SHA256 `01667d77e56b00f112ce9b4aaab816cedd0b0f08d6081695bfe8495a428b3860`.
+API200 i dokładny restore zapisanej sceny potwierdzono bez nowego Solve.
+
+
+| Kontrakt rdzenia | Ścieżka + symbol | Dowód |
+|---|---|---|
+| Prywatne argumenty, typed limits i tolerances | backends/fem/cpu/mfem/interactions/oersted/surface_rt0.hpp + evaluate_surface_rt0 | compiled_only; bez publicznego API lub runtime |
+| Prywatna lista źródeł MFEM | backends/fem/CMakeLists.txt + FEM_SOURCES przy FULLMAG_USE_MFEM_STACK | compiled_only; źródło skompilowane i zlinkowane w bibliotece; bez dispatchu |
+| Własna kopia signed coefficients i geometrii | backends/fem/cpu/mfem/transport/affine_rt0_element.cpp + AffineRt0Element::frozen_input | compiled_only; znak raz w konstruktorze |
+| Dokładny prąd z coefficients/abs(det) | backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp + element | compiled_only; bez fitu lub current_at |
+| Obie orientacje i outward owner | backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp + outward_face | compiled_only; bez przestawiania coefficients |
+| Exact zero/sign i skalowanie | backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp + geometry | compiled_only; bounded raw/reduced integers |
+| Signed fans, whole-face i trzy precyzje | backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp + face_pass | compiled_only; formuły, nie niezależna3Dreference |
+| Scalar gates80/120 | backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp + scalar_agreement | compiled_only; bez error certificate |
+| Limity, czas i sampled RSS | backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp + class Work | compiled_only; bez hard allocator cap |
+| Dokładne operacje i bit guards | backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp + class ExactArithmetic | compiled_only; bez exhaustive Boost claim |
+| Lokalne/globalne H i output quantization gate | backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp + evaluate_surface_rt0 | compiled_only; wykonanie/kwalifikacja NOT VERIFIED |
+
 (antenna-scientific-bibliography)=
 ## 14. References
 
@@ -8158,3 +11848,524 @@ to walidacji accepted basis, rzeczywistych monitorów ani kwalifikacji runtime.
     https://ogilab.w.waseda.jp/ogita/math/doc/2005_OgRuOi.pdf
     (odczyt 2026-10-06). FastTwoSum dotyczy samego sumowania, nie estymatora
     kwadratury ani kwalifikacji fizycznej Fullmag.
+11. A. van Oosterom, „Closed-form analytical expressions for the potential fields generated by triangular monolayers with linearly distributed source strength”, DOI https://doi.org/10.1007/s11517-011-0837-9. Kandydacka primary reference; własny surface-div proof i orientation opisane w analyticv2; pełny tekst niezweryfikowany w tym kroku.
+12. A. van Oosterom, J. Strackee, „The solid angle of a plane triangle” (1983), DOI https://doi.org/10.1109/TBME.1983.325207. Bibliographic reference dla determinant/atan2; independent syntheticmath checks nie pełna native qualification.
+13. Erratum (2015), DOI https://doi.org/10.1007/s11517-015-1300-0. Treść **nieprzeczytana**; nie domniemywać korekty ani zakresu niewpływania na własne wyprowadzenie.
+14. Gmsh manual, https://gmsh.info/doc/texinfo/gmsh.html. Primary API dla OCC/meshimport; `MeshOnlyVisible` experimental, geometry-only proof23nodes/48Tet niefulltaper qualification.
+15. PyPI, mpmath1.3.0 releasefiles, https://pypi.org/project/mpmath/1.3.0/#files. Wheelpin/hash metadata, nie mathematical errorcertificate; nieinstalowane w tej publikacji.
+
+16. N. J. Higham, „Iterative Refinement and LAPACK”, Numerical Analysis Report 277,
+    University of Manchester (1995), https://www.netlib.org/lapack/lawnspdf/lawn104.pdf
+    (odczyt 2026-10-22). Podstawa pełnej korekcji residualu, nie gwarancja
+    zbieżności konkretnego sparse KKT Fullmaga.
+17. MFEM 4.7, `MINRESSolver::Mult`, primary source:
+    https://docs.mfem.org/4.7/solvers_8cpp_source.html
+    (odczyt 2026-10-22). Preconditioned recursive norm i relative stop;
+    nie local-current admission ani dowód pakietu Fullmaga.
+18. D. Goldberg, „What Every Computer Scientist Should Know About Floating-Point Arithmetic”,
+    Computing Surveys (1991), edytowany przedruk autora w Oracle Numerical
+    Computation Guide: https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html
+    (odczyt 2026-10-23). Zaokrąglenia i utrata informacji w różnicy zaokrąglonych
+    danych; nie dowód samplera ani kwalifikacji Fullmaga.
+19. N. J. Higham, „The Accuracy of Floating Point Summation”, SIAM Journal on
+    Scientific Computing14(4),783–799 (1993), https://doi.org/10.1137/0914050;
+    kopia autora: https://nhigham.com/wp-content/uploads/2023/10/high93s.pdf
+    (odczyt 2026-10-23). Błąd sumowania znoszących się składników; bez gwarancji
+    względnej przy underflow i bez dowodu konkretnego kodu Fullmaga.
+
+
+(antenna-accepted-surface-boundary)=
+### Kontrakt integracji FEM CPU: zaakceptowany prąd → osobny wynik surface
+
+**IMPLEMENTACJA ŹRÓDŁOWA; nowy build, wykonanie i kwalifikacja NOT VERIFIED.**
+Następną granicą jest addytywny C ABI
+`fullmag_fem_solve_prepared_closed_loop_rt0_surface_v1`. Właścicielem charge H1
+oraz rekonstrukcji i akceptacji RT0 pozostaje istniejący `solve_rt0`.
+Dopiero po `ConservativeCurrentView::Build` nowy adapter kopiuje
+`AffineRt0Element::frozen_input` z tego samego zaakceptowanego pola.
+Nie wykonuje drugiego solve, nie dopasowuje śladów archiwalnych i nie
+zmienia prepared-source preimage v2. Zmiana metody pola nie zmienia
+fizycznej tożsamości źródła; metoda, uporządkowane targety i jawna polityka
+należą do odrębnego powiązania wyniku pola.
+
+Ten etap dostarcza niskopoziomowy adapter, **bez nowych parametrów publicznego
+Python API i bez nowego wariantu `ProblemIR`**. Dotychczasowy stage, planner,
+codec direct oraz bramki `require_qualified`, FFT i LLG pozostają niezmienione.
+Callable native ABI nie jest publicznym end-to-end wykonaniem anteny.
+Włączenie go do stage wymaga osobnej typowanej polityki, dispatchu,
+codec dowodu i pełnej walidacji cold importu. Brak któregokolwiek z tych
+ogniw zabrania raportowania gotowego pola w Universe.
+
+| Argument / pole nowej granicy | Typ | Domyślnie | SI / znaczenie | Walidacja i failure semantics |
+|---|---|---|---|---|
+| request.rt0 | istniejący prepared closed-loop request v2 | wymagane | parametry V/J opisane w istniejącym kontrakcie prepared v2 | Bez zmian ABI, preimage, jednostek, tolerancji charge/RT0 i warunków coincident cut v2. |
+| request.target_points_xyz, target_points_xyz_len | pointer binary64, uint64 | wymagane | world xyz w $\mathrm m$; długość to liczba skalarów | Niepuste, skończone, długość podzielna przez trzy, bez przesuwania punktów. |
+| request.options.work_limits | osobna struktura C odwzorowująca SurfaceRt0WorkLimits | wymagane | wszystkie 14 kategorii, bity, bajty i $\mathrm s$ | Każde pole i jego jednostka dokładnie jak w tabelach prywatnego rdzenia powyżej; bez implicit limitu, bez reinterpretacji 500M direct operations. |
+| request.options.tolerances | osobna struktura C odwzorowująca SurfaceRt0Tolerances | wymagane | $\mathrm{A/m}$ lub $1$ według tabeli powyżej | Wszystkie 11 pól skończone i dodatnie; sama etykieta polityki nie zastępuje ich sprawdzenia. |
+| request.options.policy_version | const char* | wymagane | $1$; jawna etykieta polityki callera | Niepusta ograniczona etykieta; nie wybiera ukrytych wartości ani nie uprawnia do kwalifikacji. |
+| result.rt0 | dotychczasowy RT0 result v1 | wymagane | zaakceptowany prąd i jego tożsamość | Te same bufory, długości i bramki co prepared v2. |
+| result.h_xyz_apm, capacity, len | caller-owned binary64 buffer, uint64 | wymagane | surowe uporządkowane H w $\mathrm{A/m}$ | Dokładnie trzy składowe na target; bez $\mu_0$, normalizacji, rekonstrukcji lub publikacji częściowego wyniku. |
+| result.evidence_json, capacity, len | caller-owned uint8 buffer, uint64 | wymagane | $1$ — bajty jawnej diagnostyki | Osobny bounded payload; za mała pojemność odmawia bez powtarzania solve. Nie jest istniejącym direct snapshot ani certyfikatem. |
+| charge | istniejący charge snapshot v1 | wymagane | V i wierzchołki tego samego charge solve | Zachowany kontrakt przygotowanego źródła; długości nie mogą ujawniać częściowego sukcesu po błędzie. |
+| source | istniejący prepared source snapshot v2 | wymagane | tożsamości, komórki i certyfikat bilansu | Zachowane accepted charge/source digests oraz canonical certificate; bez nowego układu istniejącej struktury. |
+| abi_version, reserved_flags, struct_size | uint32, uint32, uint64 | wymagane | $1$; nagłówek nowych request/result | Tylko nowa wersja 1, flags zero i dokładny rozmiar; stare funkcje i układy bez zmiany. |
+
+Wszystkie zakresy nowych wyjść, w tym nagłówki i dane diagnostyki, muszą być
+rozłączne z sobą i wejściami przed pierwszym resetem metadanych.
+Niespójny ABI lub alias odmawia bez zapisu przez alias. Po błędzie wykonania
+żadna poprawna długość wyjścia, digest ani częściowy H nie oznaczają sukcesu.
+Nie ma automatycznego retry, cichego direct fallbacku ani alternatywnego
+solve. Adapter sprawdza oczywiste błędy parametrów przed charge solve.
+
+Dla FEM CPU/Linux callback pamięci używa rzeczywistego lifetime peak RSS
+procesu (`getrusage(RUSAGE_SELF)`, przeliczenie KiB na bajty). Brak wsparcia,
+błąd, overflow lub zero powoduje odmowę. Nadal jest to próbkowany peak całego
+procesu, nie pomiar alokatora i nie twardy limit między guardami.
+
+Osobny natywny payload ma schema `fem_rt0_surface_snapshot.v1`, operator
+`fem_oersted_rt0_surface.inspection.v1`, basis `fem_generic_affine_rt0.v1`,
+`inspection_only=true` i `error_certificate_available=false`. Zachowuje digest
+widoku zaakceptowanego źródła, uporządkowane targety, surowe H, pełne
+limity/tolerancje, total/by-precision/per-target counters i wszystkie trzy
+rekordy precyzji ze stringami oraz powodami odmowy binary64. Nie może nosić
+nazwy ani wskaźników błędu istniejącej metody direct. Etykieta polityki jest
+zapisywana razem z faktycznymi wartościami; zewnętrzny odbiorca nadal musi
+sprawdzić ich binding i przygotować odrębny codec dowodu. Sama zgodność
+native JSON i raw H nie uwierzytelnia zaakceptowanego artefaktu naukowego.
+
+| Realizacja | Stan tej granicy |
+|---|---|
+| FEM CPU | Planowany adapter zaakceptowanego RT0; źródło, build, wykonanie i weighted-reference wymagają oddzielnych dowodów. |
+| FEM GPU | Nieobsługiwane; brak operatora i dowodu urządzeniowego. |
+| FDM CPU | Nieobsługiwane; prepared MFEM RT0 nie jest modelem siatki FDM. |
+| FDM GPU | Nieobsługiwane; bez cichego fallbacku. |
+
+Weryfikacja obejmuje najpierw source review aliasów i resetów oraz zarządzany
+build tej samej grupy. Następnie wymagane jest rzeczywiste wywołanie z
+zaakceptowanym źródłem, porównanie H oraz pól tożsamości, sprawdzenie malformed
+input i odmowy limitu, a docelowo fresh stage → artefakt → publiczne API →
+cold import. Kompilacja adaptera nie zastępuje tych kroków. Niezależne
+weighted RT0, inside/near/far i zbieżność siatki pozostają osobnymi bramkami.
+Równania, symbole i literatura są te same co w części reduction RT0 powyżej;
+nowy adapter nie definiuje innej fizyki ani jednostek.
+
+| Kontrakt integracji | Ścieżka + symbol | Dowód |
+|---|---|---|
+| Jedno accepted źródło, oddzielny payload i brak aktywacji | docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md + DOC-ANCHOR:antenna-accepted-surface-boundary | planned_contract; runtime NOT VERIFIED |
+
+
+(antenna-surface-public-policy)=
+### Planowany publiczny kontrakt inspekcji surface: jawna polityka wykonania
+
+**IMPLEMENTACJA ŹRÓDŁOWA; build/runtime NOT VERIFIED.** Poniższy wariant uzupełnia poprzedni etap
+adaptera; nie oznacza, że samo C ABI wystarcza do publicznego Solve.
+Nowe `oersted_realization="analytic_rt0_surface"` ma być addytywną metodą
+wyłącznie prepared closed-loop FEM P1 / CPU / double / strict. Dotychczasowa
+wartość domyślna `direct_tetra_quadrature` i jej serializacja pozostają bez zmian.
+Żadna ogólna ścieżka terminalowa, legacy, GPU lub FDM nie może mapować nowego
+tokenu na direct. Inne kombinacje otrzymują jawną odmowę.
+
+Publiczne `fullmag.AntennaSurfaceFieldPolicy` jest typowanym opisem jawnych
+zaawansowanych parametrów wykonania, nie nowym modelem fizycznym. Wszystkie
+parametry są wymagane; brak liczbowych defaults lub nowego automatycznego
+profilu pracy. Caller wybiera niższe skończone budżety i może zaostrzyć bramki,
+ale nie może poluzować poniższych maksymalnych tolerancji. Sam napis wersji
+nie nadaje wynikowi statusu kwalifikowanego. Zmiana polityki nie uruchamia Solve.
+
+| Publiczny parametr | Typ / domyślnie | SI | Walidacja i kanoniczna destination |
+|---|---|---|---|
+| AntennaFieldSolveStage.oersted_realization | str / direct_tetra_quadrature | $1$ | Addytywny analytic_rt0_surface tylko dla prepared inspekcji; ProblemIR.antenna_field_solve_stages[].oersted_realization. |
+| AntennaFieldSolveStage.surface_field_policy | AntennaSurfaceFieldPolicy lub None / None | $1$ | Wymagany tylko dla analytic_rt0_surface i zabroniony dla pozostałych metod; pole pomijane dla None, bez zmiany dawnych dokumentów. Destination: ten sam stage.surface_field_policy. |
+| AntennaSurfaceFieldPolicy.policy_version | str / wymagane | $1$ | Dokładnie caller_supplied_rt0_surface.inspection.v1, bez ukrytego wyboru limitów. Destination: stage.surface_field_policy.policy_version. |
+| AntennaSurfaceFieldPolicy.limits | closed mapping / wymagane | mieszane według pełnych tabel native powyżej | Wszystkie klucze SurfaceRt0WorkLimits, total/per_target jako dokładnie 14 dodatnich uint64 w zarejestrowanej kolejności SurfaceRt0WorkKind; bool, brakujące i obce pola odrzucane. Destination: stage.surface_field_policy.limits, bez utraty int przez float. |
+| AntennaSurfaceFieldPolicy.tolerances | closed mapping / wymagane | mieszane według pełnej tabeli native powyżej | Dokładnie 11 pól SurfaceRt0Tolerances, dodatnie skończone liczby bez bool; dalsze nieprzekraczalne bramki poniżej. Destination: stage.surface_field_policy.tolerances. |
+
+Wszystkie pozostałe pola limits i tolerances, typy, jednostki i znaczenie są
+wyliczone w całości w `antenna-native-rt0-surface-core`; Python i `ProblemIR`
+nie zmieniają ich nazw ani kolejności kategorii. total.source_target_pairs
+(indeks 0) nie może przekroczyć wcześniej zatwierdzonego limitu 4 mln par.
+Nie ma przelicznika, który podmieniałby dawne 500 mln direct operations
+na liczniki Boost lub operacje exact. Per-target i total pozostają osobne;
+liczby bitów i czasu są dodatnie i skończone. Błąd dowolnego parametru
+odrzuca definicję przed charge solve, zamiast wykonywać tańszy fallback.
+
+| Parametr tolerances | Nieprzekraczalna bramka publicznej inspekcji | SI |
+|---|---|---|
+| absolute_field_apm | dodatni i nie większy niż 1e-9 | $\mathrm{A/m}$ |
+| relative_field | dodatni i nie większy niż 1e-5 | $1$ |
+| cancellation_floor_apm | dodatni i nie większy niż 1e-6 | $\mathrm{A/m}$ |
+| scalar_relative_80, angle_relative_80 | dodatnie i nie większe niż 1e-45, jak istniejący scalar oracle | $1$ |
+| scalar_relative_120, angle_relative_120 | dodatnie i nie większe niż 1e-55, jak istniejący scalar oracle | $1$ |
+| binary_roundoff_epsilon_factor | skończony i co najmniej 64; większy oznacza ostrzejszy wskaźnik odmowy | $1$ |
+| binary_cancellation_limit | dodatni i nie większy niż 1e8 | $1$ |
+| highprecision_cancellation_limit | dodatni i nie większy niż 1e40 | $1$ |
+| binary_scalar_epsilon_factor | dodatni i skończony; wyłącznie diagnostyka binary64, bez pomijania 80/120 | $1$ |
+
+Te bramki nie kwalifikują metody; zgodność 80/120 i dwóch formuł pozostaje
+empiryczną kontrolą. Niezależna referencja objętościowa i konwergencja pozostają
+wymagane przed użyciem bazy w LLG, FFT lub `require_qualified`.
+
+`to_ir()` i eksport kanonicznego skryptu mają zachować całą politykę.
+Nie wolno uzupełniać pominiętych pól w eksporcie, importerze lub plannerze.
+Requested intent przechowuje wybraną metodę i pełną politykę; resolved execution
+zachowuje rzeczywistą metodę, wartości i inspection_only. Prepared charge/source
+preimage v2 **pozostaje bez zmian**: metoda pola nie jest fizyczną zmianą źródła.
+Osobny dowód `fem_rt0_surface_evidence.v1` wiąże accepted source/view digest,
+balance certificate, uporządkowane punkty, raw H i signed per-A oraz faktyczne
+parametry. Wspólny field signature musi hashować dokładne bajty tego dowodu.
+Stare evidence bytes direct i framing FMACLB01 pozostają zgodne bitowo.
+
+FEM GPU, FDM CPU i FDM GPU są dla nowej metody nieobsługiwane; nie ma nowego
+cichego transferu pomiędzy lane. UI nie dostaje wybieralnej opcji, dopóki nie
+potrafi prawidłowo zachować i edytować kompletnej polityki. Import i eksport
+muszą mimo to przechować kanoniczną definicję bez utraty pól.
+
+Weryfikacja: interpretowane Python construction/round-trip i odrzucanie błędów,
+source review wszystkich enum matches i bramek, zarządzany build, świeży
+accepted run, exact raw/evidence binding, zapis i cold import. Żaden krok
+nie zastępuje pozostałych; obecnie publiczne wykonanie jest NOT VERIFIED.
+Wykonany przykład construction/export i rzeczywisty IR zamieszczono niżej.
+Przed ukończeniem publicznego etapu nadal wymagane są faktyczne obliczenie,
+publiczny odczyt i cold import wyniku; lowering nie zastępuje tych bramek.
+
+| Kontrakt | Ścieżka + symbol | Dowód |
+|---|---|---|
+| Jawna polityka, Python→IR, dispatch i oddzielny dowód | docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md + DOC-ANCHOR:antenna-surface-public-policy | planned_contract; wykonanie i kwalifikacja NOT VERIFIED |
+
+
+#### Stan źródeł integracji i rzeczywisty lowering, 24.10.2026
+
+W osobnej gałęzi pól zachowano zamknięty wybór Direct/Surface. Historyczna
+nazwa slotu `direct_evidence` i pola manifestu `direct_evidence_schema` zostaje
+zachowana dla zgodności framingu i istniejących importerów; **wartość schema**
+wybiera dokładnie jeden codec. Surface ma własny magic `FM-RT0-SURF-V1`,
+header 176 bajtów i kanoniczny typed JSON; stary direct zachowuje swoje bajty.
+Nie są publikowane fikcyjne liczniki leaves, refinement lub direct error.
+Nieznana rodzina, mieszane metody/polityki i sprzeczne powiązania są odrzucane.
+
+Dekoder surface sprawdza także dokładne uporządkowanie ograniczonych stringów
+dziesiętnych: trzy lokalne delty nie mogą przekraczać dodatniego budżetu;
+H120 musi dać te same bity binary64 co raw H. Weryfikuje obowiązkowe liczniki
+obu passów highprecision. Konserwatywny przedział budżetu używa outward L1
+surowego H; jest kontrolą spójności metadanych, **nie odtworzeniem normy120 ani
+certyfikatem**. Przygotowanie FrozenInput i serializacja wrappera nie należą
+do liczników arytmetyki rdzenia. JSON ma oddzielną pojemność caller-owned;
+nie ma deklaracji pełnego rozliczenia wszystkich alokacji.
+
+Wykonano interpretowane kontrole publicznego konstruktora i eksportu:
+6 metod unittest, w tym 22 negatywne subtesty, oraz 27 istniejących unittest
+zakończyły się PASS. Nie kompilowano testów Rust/C++ i nie wykonano Solve.
+Fixture lowering celowo ma zbyt małe budżety wykonania; nie jest skryptem
+kwalifikacji fizycznej ani parametryzacją próby Universe. Kanoniczny eksport
+Python, authored IR i prepared IR pochodzą z wykonania, nie ręcznego wzoru.
+Dowody w control volume: `verification/surface-public-policy-20261024/`;
+report SHA256 `a1a50887b0beced4378ea421dad7dabf860b9b2b9943fb051db256879b10e9f7`.
+
+| Kontrakt / odpowiedzialność | Ścieżka + symbol | Lane / dowód |
+|---|---|---|
+| Publiczna zamknięta polityka i to_ir | packages/fullmag-py/src/fullmag/model/antenna.py + AntennaSurfaceFieldPolicy | FEM CPU; interpreted authoring PASS, bez Solve |
+| Pełny eksport etapu | packages/fullmag-py/src/fullmag/runtime/script_builder.py + _render_antenna_field_solve_definition_expr | wspólny Python→IR→Python; interpreted PASS |
+| Typy i bramki polityki | crates/fullmag-ir/src/antenna.rs + AntennaSurfaceFieldPolicyIR::validation_errors | wspólna semantyka; source-only |
+| Rozłączna metoda i resolved policy | crates/fullmag-ir/src/antenna_current_source.rs + ResolvedAntennaClosedLoopCurrentInputIR::validate_field_policy | source-only |
+| Prepared planner | crates/fullmag-plan/src/antenna_current_source.rs + materialize_antenna_closed_loop_current_input | FEM CPU; source-only |
+| Jeden solve i addytywny C ABI | backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp + fullmag_fem_solve_prepared_closed_loop_rt0_surface_v1 | FEM CPU; source-only |
+| Właściciel accepted surface i bounded JSON | backends/fem/cpu/mfem/workflows/antenna_field_solve/accepted_surface_rt0.cpp + evaluate_accepted_surface_rt0 | FEM CPU; source-only |
+| Oddzielny snapshot i decoder | crates/fullmag-runner/src/antenna_field_solution/surface_rt0_evidence_v1.rs + SurfaceRt0Snapshot::validate | FEM CPU inspection; source-only |
+| Własny codec pola | crates/fullmag-runner/src/antenna_field_solution/surface_rt0_evidence_v1.rs + SurfaceRt0EvidenceV1::decode | cold inspection; source-only |
+| Zamknięty wybór dowodu | crates/fullmag-runner/src/antenna_field_solution/closed_loop_field_evidence.rs + ClosedLoopFieldEvidence::verify_policy_binding | source-only |
+| Wspólny field signature i cold reader | crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs + field_signature | source-only; direct framing bez zmiany |
+| Dispatch zaakceptowanego wyniku | crates/fullmag-runner/src/antenna_field_solution/closed_loop_execution.rs + execute_native | FEM CPU; source-only |
+
+
+#### Pełne wiersze parametrów publicznych i mapowanie IR
+
+| Publiczny parametr | Typ | Domyślnie | SI | Walidacja | Znaczenie | Lane | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| AntennaSurfaceFieldPolicy.policy_version | str | required | $1$ | dokładnie caller_supplied_rt0_surface.inspection.v1 | jawna wersja parametrów bez ukrytych defaults | prepared FEM CPU double strict inspection; GPU/FDM unsupported | surface_field_policy.policy_version |
+| AntennaSurfaceFieldPolicy.limits | Mapping[str,object] | required | mieszane; pełne tabele limits w sekcji private native | closed mapping; wszystkie dodatnie uint64 i finite seconds; totalpairs<=4000000 | jawny bounded koszt pracy | prepared FEM CPU double strict inspection; GPU/FDM unsupported | surface_field_policy.limits |
+| AntennaSurfaceFieldPolicy.tolerances | Mapping[str,float] | required | mieszane; A/m i1 jak pełne tabele tolerances | closed mapping 11 pól; finite positive oraz nieprzekraczalne bramki | jawna dokładność inspekcji | prepared FEM CPU double strict inspection; GPU/FDM unsupported | surface_field_policy.tolerances |
+| AntennaFieldSolveStage.surface_field_policy | Optional[AntennaSurfaceFieldPolicy] | None | $1$ | wymagane iff analytic_rt0_surface; dla innychmetod forbidden | polityka zaawansowanej metody wykonania | prepared FEM CPU double strict inspection; GPU/FDM unsupported | antenna_field_solve_stages[].surface_field_policy |
+
+
+#### Wykonany przykład construction/export — bez Solve
+
+Poniższy pełny skrypt pochodzi z rzeczywistego eksportu. Ma celowo
+niewystarczające limity RSS/pracy i sprawdza wyłącznie authoring/lowering.
+Oczekiwanym zachowaniem próby native z takimi limitami jest odmowa; nie należy
+używać go jako konfiguracji obliczenia Universe. Nie zawiera Relax ani Run.
+
+```python
+# %% Canonical exported authoring fixture; no Solve
+"""Canonical Fullmag script generated from the model builder.
+
+Source: surface-authoring.py
+Entrypoint: flat_workspace
+"""
+
+import fullmag as fm
+
+study = fm.study("coincident_public")
+
+# Engine
+study.engine("fem")
+study.device("cpu", precision="double")
+study.parallel_execution(mode='serial', max_cpu_percent=90.0, max_memory_percent=80.0, memory_reserve_bytes=1073741824, max_workers=None, threads_per_worker=1)
+
+# Geometry & Material
+loop = study.antenna_object(fm.MicrostripAntennaLayout(name="loop", length_m=2e-06, thickness_m=2e-07, conductivity_s_per_m=58000000.0, stations=(fm.MicrostripWidthStation(s=0.0, signal_width_m=3e-07), fm.MicrostripWidthStation(s=0.5, signal_width_m=1e-07), fm.MicrostripWidthStation(s=1.0, signal_width_m=3e-07),), closed_loop=True, inlet_connection_length_m=2e-07, inlet_connection_width_m=4e-07, inlet_connection_offset_v_m=0.0, inlet_connection_part_id="inlet", inlet_connection_conductivity_s_per_m=30000000.0, outlet_connection_length_m=2e-07, outlet_connection_width_m=4e-07, outlet_connection_offset_v_m=0.0, outlet_connection_part_id="outlet", outlet_connection_conductivity_s_per_m=30000000.0, return_width_m=1e-06, return_offset_m=4e-07), name="loop", object_id="object")
+
+# Current modules
+study.current_transport(name="charge", model="ohmic_poisson", domain=[fm.RegionRef("object")], materials=[fm.ChargeTransportMaterialAssignment(fm.RegionRef("object", region_id="signal"), fm.ChargeTransportMaterial(sigma_Spm=58000000)), fm.ChargeTransportMaterialAssignment(fm.RegionRef("object", region_id="return"), fm.ChargeTransportMaterial(sigma_Spm=58000000)), fm.ChargeTransportMaterialAssignment(fm.RegionRef("object", region_id="inlet"), fm.ChargeTransportMaterial(sigma_Spm=30000000)), fm.ChargeTransportMaterialAssignment(fm.RegionRef("object", region_id="outlet"), fm.ChargeTransportMaterial(sigma_Spm=30000000))], gauge=fm.ChargePotentialGauge("zero_mean"), solver=fm.ChargeSolverPolicy(engine="cg", relative_tolerance=1e-12, absolute_tolerance=0, max_iterations=10000, physical_residual_version="charge_balance_integrated_l2.v1", operator_version="fem_charge_conforming_h1_p1.transparent.v1"), structured_current_closure=fm.StructuredCurrentClosure(closure_id="loop", source_cuts=[fm.StructuredCurrentSourceCut(source_cut_id="cut", circuit_id="circuit", region=fm.RegionRef("object", region_id="inlet"), plane=fm.StructuredCutPlane(axis="z", offset_m=-3e-07, normal="positive_axis", coordinate_frame="object"), drive=fm.ImpressedPotentialJump(drive_id="drive", potential_jump_V=0.25))], schema_version="structured_current_closure.v2"))
+
+# Antenna port modes
+study.add_antenna_port_mode(port_mode=fm.AntennaPortMode(id="port", source_object_id="object", current_transport_id="charge", branches=(fm.AntennaPortBranch(id="signal", inlet_terminal_ref="signal-in", outlet_terminal_ref="signal-out", signed_weight=1), fm.AntennaPortBranch(id="return", inlet_terminal_ref="return-in", outlet_terminal_ref="return-out", signed_weight=-1),), normalization_current_a=1, schema_version="antenna_port_mode.v3", normalization=fm.AntennaSourceCutRt0(source_cut_ref="cut", orientation="minus_outward")))
+
+# Effective-field terms
+study.disable_exchange()
+
+# Outer boundary / demag
+study.disable_demag()
+
+# Mesh
+study.objects.mesh.defaults(maximum_element_size=1.5e-07, order=1)
+
+
+study.declare_antenna_field_solve(definition=fm.AntennaFieldSolveStage(id="solve", source_object_id="object", current_transport_id="charge", port_mode_ids=["port"], model="quasistatic_conduction_biot_savart3d", oersted_realization="analytic_rt0_surface", conductor_mesh_policy="authored_shared_domain", solver_policy="production_default", surface_field_policy=fm.AntennaSurfaceFieldPolicy(**{"limits": {"guard_interval_events": 1, "maximum_lifetime_peak_rss_bytes": 1, "maximum_raw_integer_bits": 64, "maximum_reduced_fraction_bits": 64, "maximum_target_seconds": 0.25, "maximum_total_seconds": 0.5, "per_target": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], "total": [4000000, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}, "policy_version": "caller_supplied_rt0_surface.inspection.v1", "tolerances": {"absolute_field_apm": 1e-09, "angle_relative_120": 1e-55, "angle_relative_80": 1e-45, "binary_cancellation_limit": 100000000, "binary_roundoff_epsilon_factor": 64, "binary_scalar_epsilon_factor": 64, "cancellation_floor_apm": 1e-06, "highprecision_cancellation_limit": 1e+40, "relative_field": 1e-05, "scalar_relative_120": 1e-55, "scalar_relative_80": 1e-45}}), field_sampling_domain=fm.FieldTarget(**{"kind": "object", "object_id": "object"}), target_refs=[fm.FieldTarget(**{"kind": "object", "object_id": "object"})], outputs=[fm.AntennaNamedOutput(**{"id": "inspection", "quantity": "H_ant_basis"})]))
+
+```
+
+Rzeczywiście wygenerowany fragment `antenna_field_solve_stages` (pozostałe
+21882 bajty authored IR i 780636 bajtów prepared IR zachowano w wolumenie):
+
+```json
+{
+  "antenna_field_solve_stages": [
+    {
+      "conductor_mesh_policy": "authored_shared_domain",
+      "current_transport_id": "charge",
+      "field_sampling_domain": {
+        "kind": "object",
+        "object_id": "object"
+      },
+      "id": "solve",
+      "model": "quasistatic_conduction_biot_savart3d",
+      "oersted_realization": "analytic_rt0_surface",
+      "outputs": [
+        {
+          "id": "inspection",
+          "quantity": "H_ant_basis"
+        }
+      ],
+      "port_mode_ids": [
+        "port"
+      ],
+      "solver_policy": "production_default",
+      "source_object_id": "object",
+      "surface_field_policy": {
+        "limits": {
+          "guard_interval_events": 1,
+          "maximum_lifetime_peak_rss_bytes": 1,
+          "maximum_raw_integer_bits": 64,
+          "maximum_reduced_fraction_bits": 64,
+          "maximum_target_seconds": 0.25,
+          "maximum_total_seconds": 0.5,
+          "per_target": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "total": [
+            4000000,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "policy_version": "caller_supplied_rt0_surface.inspection.v1",
+        "tolerances": {
+          "absolute_field_apm": 1e-09,
+          "angle_relative_120": 1e-55,
+          "angle_relative_80": 1e-45,
+          "binary_cancellation_limit": 100000000.0,
+          "binary_roundoff_epsilon_factor": 64.0,
+          "binary_scalar_epsilon_factor": 64.0,
+          "cancellation_floor_apm": 1e-06,
+          "highprecision_cancellation_limit": 1e+40,
+          "relative_field": 1e-05,
+          "scalar_relative_120": 1e-55,
+          "scalar_relative_80": 1e-45
+        }
+      },
+      "target_refs": [
+        {
+          "kind": "object",
+          "object_id": "object"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Eksport, import sceny i ponowny eksport sprawdzono wykonaniem unittest.
+Przykład nie dowodzi działania planera Rust, native operatora, odczytu HTTP
+ani kwalifikacji; te bramki pozostają oddzielne.
+
+
+#### Build integracji i cienkie metadane — checkpoint 24.10.2026
+
+Zarządzana iteracja `296a70c94fd24417aeb249c8eecbb8cc` zakończyła się succeeded,
+make exit0 po1493889 ms. Pakiet
+`4b64b46b6025e2ddb0534135c904f58541a3ee9251b1af2cd93ec22c1b4b9453`
+zawiera nowy wyeksportowany symbol C ABI. Biblioteka ma SHA256
+`e7b90abe08bc50eafb736ba88e70c25b484a03b5bcc523762a326eebdab1dba9`.
+API health200 i dokładny restore sceny o SHA256
+`93fd3ea07d2ede195da64c00776be95475fa2c33f8a1d446ecc3e7c3745e8220`
+potwierdzono w sesji `session-18e186a00aa73146000021f5`, bez Solve/runu/commands.
+To dowód build/start, **nie wykonania nowego pola**.
+
+Następna poprawka `closed_loop_public_inspection::inspection_view` zachowuje
+pełne canonical policy arrays w manifeście/evidence, ale w cienkim odczycie
+API zamienia dokładnie 14 wpisów total/per_target na mapę nazw SurfaceRt0WorkKind.
+Pole `surface_counter_encoding="named_work_kind.v1"` jawnie opisuje ten widok.
+To projekcja control-plane po pełnej walidacji bundle, bez zmiany surowego
+manifestu, podpisu, danych numerycznych lub domyślnych limitów. Direct view
+pozostaje bez zmian. Nie wolno zamiast tego wyłączać zakazu ciężkich tablic
+w metadanych. Poprawka jest po powyższym buildzie i wymaga kolejnego buildu
+oraz rzeczywistego odczytu HTTP; obecnie source-only.
+
+
+Przygotowano dwa jawne skrypty inspekcyjne (oba wait_for_solve, bez Solve):
+`examples/fem_antenna_surface_nonmagnetic.py` zachowuje mały niezależny carrier
+pierwotnej próby, z40 tys. totalpairs/4 tys. pertarget,16 MiB wyjścia i600 s;
+`examples/antenna_universe/fem_antenna_closed_loop_universe_surface.py`
+zachowuje istniejącą graded Universe bez obniżania jakości siatki, z4 mln
+par/40 tys. pertarget,128 MiB wyjścia i1800 s. Oba mają90 s/target,
+lifetimeRSS6 GiB,raw/reduced bitcaps8192 i guard256. Nie zmieniają limitu
+8 GiB/4 CPU kontenera. Pozostałe jawne liczniki i pełne niepoluzowane
+tolerancje znajdują się w module-level surface_policy tych skryptów.
+Mnożniki liczników są budżetami eksperymentu, nie zmierzonym kosztem ani
+nową interpretacją dawnego limitu500M direct operations. Wydajność nie jest
+jeszcze zmierzona; odmowa limitu nie może być przepisana na kwalifikację.
+AST parse wykonano; lowering i obliczenie tych konkretnych skryptów są
+NOT VERIFIED. Najpierw potrzebne jest nowe V/J/H na małym carrierze i kontrola
+względem zachowanego direct wyniku, następnie jedna próba Universe.
+
+
+Rzeczywisty lowering obu nowych przykładów zakończył się PASS bez Solve:
+mały carrier3.746 s,229114 bajtów IR,
+SHA256 `753092963fa7a333d71d1e96d32d97d2fc949781cf7a984a618c6633bd528c9d`;
+Universe8.766 s,618527 bajtów IR,
+SHA256 `01d384f7fbcc96ef5a44b30ed8ecff7d735d1f299a0da40f2c78b2cbf5360929`.
+Skrypty zachowują odpowiednio SHA256
+`24a40b2d730c3064ac6005c6870373fe2297cd07f724755243dc23051e397d38` i
+`fcfba6ee532835b75e0e18f029246e8576fd0e8e5de82e5fafd727df848a2bd5`.
+Dowody: surface-public-integration-20261024/example-lowering/ w tym samym
+wolumenie kontrolnym. Wygenerowane IR mają wyłącznie nową metodę z kompletną
+polityką i bez magnetów. Nie uruchomiono Solve; native H nadal NOT VERIFIED.
+
+
+(antenna-cold-rt0-moments-v2)=
+### Walidacja cold-load: momenty RT0 a zaokrąglone ślady J — 25.10.2026
+
+Dokładny kontrprzykład na pierwszym Tet4 siatki benchmarku wykazał błąd
+walidatora, a nie nowy model fizyczny. Zadane współczynniki
+$(0,1/8,-1/4,1/8)\,\mathrm A$ dają dokładnie zerowy moment przez ścianę
+przeciwległą do pierwszego wierzchołka. Po jednorazowym zaokrągleniu śladów J
+do binary64 naiwny iloczyn przez normalną daje około
+$-5.8912\times10^{-18}\,\mathrm A$. Porównanie względem samych znoszących się
+strumieni odrzuca go przy około $10^{-18}\,\mathrm A$. To niezależny
+kontrprzykład tej kontroli na rzeczywistej geometrii, nie odzysk wartości
+nieudanego natywnego rozwiązania.
+
+Kanoniczne momenty fizyczne pozostają właścicielem bilansu. Dla dodatnio
+zorientowanego straight Tet4 i generic RT0 zachowujemy tożsamość
+`antenna-retained-rt0-exact-point-current` oraz:
+
+```{math}
+:label: antenna-cold-rt0-moment-reconstruction
+c_{Ti}=2s_{Ti}\Phi_{F_i},\qquad
+\mathbf J_T(\mathbf r)=
+\frac{\sum_{i=0}^{3}c_{Ti}(\mathbf r-\mathbf v_{Ti})}
+     {|\det(\mathbf v_{T1}-\mathbf v_{T0},\mathbf v_{T2}-\mathbf v_{T0},\mathbf v_{T3}-\mathbf v_{T0})|}.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $T$, $i$ | Komórka i lokalny indeks przeciwległego wierzchołka $0,\ldots,3$ | $1$ |
+| $F_i$ | Ściana przeciwległa do wierzchołka $i$ | $1$ |
+| $\mathbf v_{Ti}$, $\mathbf r$ | Wierzchołek i punkt próbkowania | $\mathrm m$ |
+| $c_{Ti}$ | Współczynnik generic RT0 ze znakiem; nie fizyczny strumień | $\mathrm A$ |
+| $\Phi_{F_i}$ | Fizyczny strumień w orientacji rosnących stable vertex IDs | $\mathrm A$ |
+| $s_{Ti}$ | Znak przejścia od normalnej kanonicznej do outward normal komórki | $1$ |
+| $\mathbf J_T$ | Prąd RT0 z kanonicznych momentów | $\mathrm{A\,m^{-2}}$ |
+| $u$ | Dotychczasowa epsilon binary64, $2^{-52}$ | $1$ |
+
+Znak wyznacza parzystość permutacji stable IDs względem outward table
+`(123),(032),(013),(021)` dodatnio zorientowanego Tet4. Iloczyn generic basis
+przez outward surface ma dokładnie moment $1/2$; stąd czynnik 2. Ten sam
+wynik daje natywne `geometric_face_weights`. Wszystkie współrzędne i momenty
+binary64 traktujemy jako dokładne liczby wymierne podczas rekonstrukcji.
+Każdy zapisany komponent J musi odpowiadać rekonstrukcji w istniejącym
+budżecie $64u$ względnego błędu próbki, bez absolutnego flooru. Zachowujemy
+również wcześniejszy test wspólnej afiniczności i interpolacji środka.
+Nie zwiększamy tego budżetu ani fizycznych gates certyfikatu.
+
+`verify_balance_certificate` sprawdza potem fizyczne bilanse, outward flux,
+pary źródła, izolację, rangę i residuals względem kanonicznych momentów,
+a nie ponownie całkuje prezentacyjne ślady J. Nie wolno użyć tej funkcji
+bez wcześniejszego `verify_owned_geometry`, które wiąże wszystkie ślady
+z tymi momentami. Nie ma wygładzania nodal J, korekcji strumieni ani
+ponownego solve.
+
+| Prywatne wejście kontroli | Typ / domyślnie | SI | Walidacja i destination |
+|---|---|---|---|
+| points | $4\times3$ binary64 / wymagane | $\mathrm m$ | finite, dodatni niezerowy exact determinant; zachowana kolejność Tet4; brak nowego ProblemIR |
+| vertex_ids | 4 uint64 / wymagane | $1$ | istniejące unikalne stable IDs nośnika; brak nowego ProblemIR |
+| currents | 12 binary64 / wymagane | $\mathrm{A\,m^{-2}}$ | cell-local4 XYZ, finite, zgodność z exact RT0 w istniejącym budżecie; brak nowego ProblemIR |
+| fluxes | mapa sorted 3 IDs → binary64 / wymagane | $\mathrm A$ | kompletne istniejące canonical face records, finite, bez zmiany kolejności lub podpisów; brak nowego ProblemIR |
+
+Zakres: cold validation wyników FEM CPU. Native FEM CPU nie zmienia
+równań ani rozwiązania. FDM CPU/FDM GPU/FEM GPU nie otrzymują nowej
+realizacji ani kwalifikacji. Publiczny Python, ProblemIR, planner,
+requested/resolved, schemat bundle v2, jednostki i hashe pozostają bez zmian.
+Starsze i nowe archiwa przechodzą ten sam globalny walidator; nie ma wyjątku
+dla jednego pola lub konkretnego wyniku.
+
+| Twierdzenie | Ścieżka + symbol | Dowód i ograniczenia |
+|---|---|---|
+| Rekonstrukcja z momentów | `crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs` + `verify_rt0_sample_moments` | źródło wymaga buildu/runtime; exact counterexample w wolumenie kontrolnym |
+| Zachowanie fizycznego certyfikatu | `crates/fullmag-runner/src/antenna_field_solution/closed_loop_balance_v2.rs` + `verify_balance_certificate` | niezmienione fizyczne gates; runtime NOT VERIFIED |
+| Natywny moment i ślady | `backends/fem/cpu/mfem/transport/affine_rt0_element.cpp` + `AffineRt0Element::face_moment`, `AffineRt0Element::retained_current_at` | obecna dokładna definicja; nie nowy solver |
+
+Pierwszy publiczny benchmark zakończył się odmową certyfikatu/J. Nie ma
+przyjętego H ani pomiaru przyspieszenia. Kontrprzykład Fraction jest wykonany;
+rzeczywiste ponowienie z zamrożonymi wejściami pozostaje do wykonania.
+Kompilację aplikacji z poprawką potwierdził build kandydata
+`6b7b046482f8408e850eb1918caa7985` ze źródła
+`4a489e3c549e51cfb2cd30e51c14d6944baaac7c` (Make exit0, 221317 ms).
+Kandydat nie został promowany ani uruchomiony; to dowód kompilacji, nie
+nowego V/J/H. Nie kompilujemy natywnych testów jednostkowych. Podstawą naukową
+pozostają definicja RT0 i bibliografia kanonicznego rozdziału wyżej; nowa
+kontrola nie dodaje aproksymacji modelu.

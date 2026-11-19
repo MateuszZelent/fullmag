@@ -5042,6 +5042,7 @@ fn execution_plan_ir_serializes() {
             boundary_delta_min: None,
             boundary_geometry: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             current_density: None,
             stt_degree: None,
             stt_beta: None,
@@ -6074,6 +6075,26 @@ fn declared_universe_accepts_scene_box_as_manual_airbox() {
     assert_eq!(universe.airbox_hmin, Some(2.0e-8));
     assert_eq!(universe.airbox_growth_rate, Some(2.5));
     assert_eq!(universe.airbox_grading.as_deref(), Some("geometric"));
+    assert_eq!(universe.airbox_curvature_factor, None);
+}
+
+#[test]
+fn declared_universe_carries_air_feature_controls() {
+    let value = serde_json::json!({
+        "mode": "manual",
+        "size": [4e-7, 2.4e-7, 2.4e-7],
+        "airbox_hmax": 4e-8,
+        "airbox_curvature_factor": 0.3,
+        "airbox_narrow_region_resolution": 0.5
+    });
+
+    let universe = DeclaredUniverseIR::from_study_universe_value(&value).unwrap();
+
+    assert_eq!(universe.airbox_curvature_factor, Some(0.3));
+    assert_eq!(universe.airbox_narrow_region_resolution, Some(0.5));
+    let encoded = serde_json::to_value(&universe).unwrap();
+    assert_eq!(encoded["airbox_curvature_factor"], 0.3);
+    assert_eq!(encoded["airbox_narrow_region_resolution"], 0.5);
 }
 
 #[test]
@@ -6125,6 +6146,7 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
                 mixed_layer_topology_certificate: None,
                 mixed_layer_topology_certificate_v2: None,
                 mixed_topology_provenance: None,
+                mesh_statistics: None,
             }),
         }),
     });
@@ -6198,6 +6220,12 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
             "coordinate_quantization_m": 1e-12,
             "digest": "44067a65a859016cea21ecf2d902837ea7322183d996d420de0ec0d942d29642"
         }],
+        "mesh_statistics": {
+            "mesh_name": "shared_domain",
+            "quality_source": "gmsh",
+            "global": {"element_count": 3, "quality_by_family": {"tet4": {"cell_count": 3}}},
+            "scopes": []
+        },
         "degraded": false,
         "authored_regions_count": 3,
         "realized_regions_count": 2
@@ -6221,6 +6249,10 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
     assert_eq!(report.authored_regions_count, Some(3));
     assert_eq!(report.realized_regions_count, Some(2));
     assert_eq!(report.magnetic_submesh_signatures[0].node_count, 708);
+    assert_eq!(
+        report.mesh_statistics.as_ref().unwrap()["global"]["quality_by_family"]["tet4"]["cell_count"],
+        3
+    );
     assert_eq!(
         report.magnetic_submesh_signatures[0].digest.as_deref(),
         Some("44067a65a859016cea21ecf2d902837ea7322183d996d420de0ec0d942d29642")
@@ -6246,6 +6278,10 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
     );
     assert_eq!(round_trip["authored_regions_count"], 3);
     assert_eq!(round_trip["realized_regions_count"], 2);
+    assert_eq!(
+        round_trip["mesh_statistics"]["global"]["quality_by_family"]["tet4"]["cell_count"],
+        3
+    );
     assert_eq!(
         round_trip["magnetic_submesh_signatures"][0]["digest"],
         "44067a65a859016cea21ecf2d902837ea7322183d996d420de0ec0d942d29642"
@@ -6709,6 +6745,7 @@ fn canonical_slonczewski_requires_oriented_versioned_thin_layer_realization() {
         epsilon_prime: 0.0,
         free_layer_thickness_m: Some(1.5e-9),
         fixed_layer_position: None,
+        time_expression: None,
         realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
             realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
         }),
@@ -6745,6 +6782,7 @@ fn canonical_slonczewski_rejects_nonfinite_scalar_coefficients() {
             epsilon_prime,
             free_layer_thickness_m,
             fixed_layer_position: None,
+            time_expression: None,
             realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
                 realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
             }),
@@ -6780,6 +6818,7 @@ fn canonical_slonczewski_interface_flux_does_not_require_bulk_thickness() {
         epsilon_prime: 0.0,
         free_layer_thickness_m: None,
         fixed_layer_position: None,
+        time_expression: None,
         realization: Some(fullmag_ir::SlonczewskiRealizationIR::InterfaceFlux {
             interface_id: "fixed-to-free".to_string(),
             realization_version: "slonczewski_interface_flux.v1".to_string(),
@@ -6838,6 +6877,7 @@ fn slonczewski_fixed_layer_position_accepts_top_and_bottom() {
             epsilon_prime: 0.0,
             free_layer_thickness_m: Some(1.5e-9),
             fixed_layer_position: Some(position.to_string()),
+            time_expression: None,
             realization: None,
         }];
 
@@ -6863,6 +6903,7 @@ fn slonczewski_rejects_invalid_fixed_layer_position() {
         epsilon_prime: 0.0,
         free_layer_thickness_m: Some(1.5e-9),
         fixed_layer_position: Some("side".to_string()),
+        time_expression: None,
         realization: None,
     }];
 
@@ -6891,6 +6932,7 @@ fn slonczewski_rejects_non_positive_free_layer_thickness() {
         epsilon_prime: 0.0,
         free_layer_thickness_m: Some(0.0),
         fixed_layer_position: Some("top".to_string()),
+        time_expression: None,
         realization: None,
     }];
 
@@ -7123,7 +7165,7 @@ fn validation_rejects_invalid_dmi_energy_terms() {
 
 #[test]
 fn rotated_interfacial_dmi_round_trips_and_preserves_signed_d() {
-    let term = EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3 };
+    let term = EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3, object_ids: None };
     let json = serde_json::to_value(&term).unwrap();
     assert_eq!(
         json,
@@ -7137,7 +7179,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
     let mut non_finite = ProblemIR::bootstrap_example();
     non_finite
         .energy_terms
-        .push(EnergyTermIR::RotatedInterfacialDmi { d: f64::NAN });
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: f64::NAN, object_ids: None });
     let errors = non_finite
         .validate()
         .expect_err("non-finite rotated interfacial DMI must fail validation");
@@ -7147,8 +7189,8 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
 
     let mut duplicate = ProblemIR::bootstrap_example();
     duplicate.energy_terms.extend([
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
-        EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
+        EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3, object_ids: None },
     ]);
     let errors = duplicate
         .validate()
@@ -7159,7 +7201,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
 
     let mut mixed = ProblemIR::bootstrap_example();
     mixed.energy_terms.extend([
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
         EnergyTermIR::BulkDmi { d: 1.0e-3 },
     ]);
     let errors = mixed
@@ -7173,7 +7215,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
     let mut material_mixed = ProblemIR::bootstrap_example();
     material_mixed
         .energy_terms
-        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None });
     material_mixed.materials[0].interfacial_dmi = Some(1.0e-3);
     let errors = material_mixed
         .validate()
@@ -7186,7 +7228,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
     let mut dormant_material = ProblemIR::bootstrap_example();
     dormant_material
         .energy_terms
-        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None });
     let mut unused_material = dormant_material.materials[0].clone();
     unused_material.name = "unused".to_string();
     unused_material.interfacial_dmi = Some(1.0e-3);
@@ -7201,7 +7243,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
 fn empty_material_dmi_fields_do_not_conflict_with_rotated_dmi() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.energy_terms
-        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None });
     ir.materials[0].dind_field = Some(Vec::new());
     ir.materials[0].dbulk_field = Some(Vec::new());
 
@@ -9088,4 +9130,21 @@ fn eigen_spectrum_scope_is_typed_and_legacy_wire_defaults_to_per_sample() {
         error.to_string().contains("unknown variant"),
         "expected an enum deserialization error, got {error}"
     );
+}
+
+#[test]
+fn rotated_dmi_object_scope_roundtrip_and_validation() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.magnets[0].object_id = Some("film-id".into());
+    for ids in [vec![], vec!["unknown".into()], vec!["film-id".into(), "film-id".into()], vec!["".into()]] {
+        ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d: 0.0, object_ids: Some(ids) }];
+        let errors = ir.validate().expect_err("invalid scope must not become global, including D=0");
+        assert!(errors.iter().any(|e| e.contains("object_id")), "{errors:?}");
+    }
+    let term = EnergyTermIR::RotatedInterfacialDmi { d: -0.004, object_ids: Some(vec!["film-id".into()]) };
+    let value = serde_json::to_value(&term).unwrap();
+    assert_eq!(value["object_ids"], serde_json::json!(["film-id"]));
+    assert_eq!(serde_json::from_value::<EnergyTermIR>(value).unwrap(), term);
+    ir.energy_terms = vec![EnergyTermIR::Exchange, term];
+    ir.validate().expect("existing explicit magnet ID is legal");
 }

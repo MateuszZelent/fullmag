@@ -1,10 +1,10 @@
 pub use fullmag_runtime_control::process_environment::{
-    remove_local_compute_operator_token, LOCAL_COMPUTE_OPERATOR_TOKEN_ENV,
+    LOCAL_COMPUTE_OPERATOR_TOKEN_ENV, remove_local_compute_operator_token,
 };
 
 #[cfg(test)]
 mod tests {
-    use super::{remove_local_compute_operator_token, LOCAL_COMPUTE_OPERATOR_TOKEN_ENV};
+    use super::{LOCAL_COMPUTE_OPERATOR_TOKEN_ENV, remove_local_compute_operator_token};
     use std::{ffi::OsStr, process::Command};
 
     #[test]

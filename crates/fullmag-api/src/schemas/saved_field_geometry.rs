@@ -15,8 +15,8 @@ pub const SAVED_FIELD_GEOMETRY_RESOURCE_SCHEMA: &str =
 pub const SAVED_FIELD_GEOMETRY_BINARY_SCHEMA: &str = "fullmag.binary.saved_field_geometry.v1";
 pub const SAVED_FIELD_SUPPORT_BINARY_SCHEMA: &str = "fullmag.binary.saved_field_support.v1";
 
-/// Existing cold geometry reader bound.  This is a decode/output guard, not a
-/// measurement of peak process memory.
+/// 64 MiB bound for FMMT topology decode/output. Persisted JSON CAS geometry
+/// has a separate larger bound in `fullmag-session`; this is not a RAM claim.
 pub const MAX_SAVED_FIELD_GEOMETRY_DECODE_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_SAVED_FIELD_GEOMETRY_METADATA_BYTES: usize = 1024 * 1024;
 pub const MAX_SAVED_FIELD_SUPPORT_BINARY_BYTES: u64 = 1024 * 1024;

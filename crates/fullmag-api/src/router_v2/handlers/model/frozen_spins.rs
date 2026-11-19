@@ -771,7 +771,7 @@ fn ensure_preview_current(
         snapshot
             .fem_mesh
             .as_ref()
-            .map(fullmag_runner::fem_mesh_topology_fingerprint)
+            .map(|mesh| mesh.topology_fingerprint().to_owned())
             .as_deref()
             == Some(record.topology_fingerprint.as_str())
     } else {

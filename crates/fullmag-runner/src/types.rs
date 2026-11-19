@@ -663,6 +663,27 @@ pub struct LiveFieldMaterializationStatus {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CpuFixedTransferDiagnostics {
+    pub state: String,
+    pub reason: String,
+    pub build_count: u64,
+    pub reuse_count: u64,
+    pub nnz: u64,
+    pub persistent_bytes: u64,
+    pub setup_wall_time_ns: u64,
+    pub setup_rss_baseline_bytes: u64,
+    pub setup_observed_peak_rss_bytes: u64,
+    pub setup_observed_peak_delta_bytes: u64,
+    pub setup_estimated_peak_delta_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CpuFixedCouplingTelemetry {
+    pub rhs: CpuFixedTransferDiagnostics,
+    pub recovery: CpuFixedTransferDiagnostics,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(non_snake_case)]
 pub struct StepStats {
@@ -805,6 +826,10 @@ pub struct StepStats {
     /// Effective native BoomerAMG policy copied from the native step-stats ABI.
     #[serde(default)]
     pub demag_amg_relax_type: i32,
+    /// Effective GPU coarse-cycle type, queried from HYPRE after configuration.
+    /// Historical results and unconfigured/non-GPU paths have no observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_amg_coarse_relax_type: Option<i32>,
     #[serde(default)]
     pub demag_amg_coarsening: i32,
     #[serde(default)]
@@ -1010,6 +1035,8 @@ pub struct StepStats {
     /// Optional native CPU RK accepted-endpoint cache receipt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_cache_telemetry: Option<fullmag_quantities::EndpointCacheTelemetry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_fixed_coupling: Option<CpuFixedCouplingTelemetry>,
     /// Versioned receipt of the native FEM state/material representation and
     /// cumulative conversion traffic observed by this backend handle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1146,6 +1173,7 @@ impl Default for StepStats {
             demag_solver: None,
             demag_preconditioner: None,
             demag_amg_relax_type: 0,
+            demag_amg_coarse_relax_type: None,
             demag_amg_coarsening: 0,
             demag_amg_interpolation: 0,
             demag_amg_aggressive_coarsening: 0,
@@ -1225,6 +1253,7 @@ impl Default for StepStats {
             demag_solves: 0,
             fsal_reused: false,
             endpoint_cache_telemetry: None,
+            cpu_fixed_coupling: None,
             fem_representation_receipt: None,
             solver_attempts: Vec::new(),
             poisson_iterations: 0,
@@ -1254,6 +1283,7 @@ impl Default for StepStats {
 #[cfg(test)]
 mod all_in_gpu_fem_transfer_audit_tests {
     use super::{
+        CpuFixedCouplingTelemetry, CpuFixedTransferDiagnostics,
         ExecutionProvenance, FdmMultilayerStageTelemetry, FdmMultilayerTransferTelemetry,
         FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation, StepStats,
     };
@@ -1280,6 +1310,36 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(stats.hot_loop_exchange_host_sync_count, 2);
         assert_eq!(stats.hot_loop_compute_host_sync_count, 6);
         assert_eq!(stats.hot_loop_control_scalar_host_sync_count, 4);
+    }
+
+    #[test]
+    fn cpu_fixed_coupling_is_optional_in_historical_step_json() {
+        let historical = serde_json::to_value(StepStats::default()).unwrap();
+        assert!(historical.get("cpu_fixed_coupling").is_none());
+        let restored: StepStats = serde_json::from_value(historical).unwrap();
+        assert!(restored.cpu_fixed_coupling.is_none());
+        let telemetry = CpuFixedCouplingTelemetry {
+            rhs: CpuFixedTransferDiagnostics {
+                state: "ready".into(),
+                build_count: 1,
+                reuse_count: 17,
+                nnz: 39,
+                persistent_bytes: 1024,
+                setup_wall_time_ns: 123,
+                ..Default::default()
+            },
+            recovery: CpuFixedTransferDiagnostics {
+                state: "quadrature".into(),
+                reason: "persistent cache budget exceeded".into(),
+                ..Default::default()
+            },
+        };
+        let value = serde_json::to_value(StepStats {
+            cpu_fixed_coupling: Some(telemetry.clone()),
+            ..Default::default()
+        }).unwrap();
+        let restored: StepStats = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.cpu_fixed_coupling, Some(telemetry));
     }
 
     #[test]
@@ -1771,7 +1831,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
 
 /// Native reducers expose aggregate DMI energy. In a rotated-only plan the
 /// aggregate is also the exact rotated component; it must not be zeroed.
-#[cfg(any(test, feature = "cuda", feature = "fem-gpu"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) fn split_rotated_only_dmi_energy(rotated_dmi_only: bool, aggregate: f64) -> (f64, f64) {
     (aggregate, if rotated_dmi_only { aggregate } else { 0.0 })
 }
@@ -2675,6 +2735,19 @@ fn digest_hex(bytes: &[u8]) -> String {
     out
 }
 
+/// Identity of a Build Mesh domain in the normalized Live viewport format.
+pub fn geometry_only_mesh_topology_fingerprint(mesh: &fullmag_ir::MeshIR) -> Result<String, String> {
+    fullmag_ir::fem_mesh_topology_fingerprint_v3(
+        &mesh.nodes,
+        &mesh.cells,
+        &normalized_payload_element_markers(&mesh.element_markers, None),
+        &mesh.facets,
+        &mesh.boundary_markers,
+        &mesh.periodic_boundary_pairs,
+        &mesh.periodic_node_pairs,
+    )
+}
+
 fn normalized_payload_element_markers(
     element_markers: &[u32],
     magnetic_markers: Option<&BTreeSet<u32>>,
@@ -2790,6 +2863,66 @@ fn update_hash_serialized<T: Serialize + ?Sized>(hasher: &mut Sha256, label: &st
 }
 
 impl FemMeshPayload {
+    /// Live payload for a mesh realized from geometry alone (ADR 0074). There
+    /// is no plan yet, so magnetic markers are the packed object segments and
+    /// the identity uses the same stable payload fingerprint as plan meshes.
+    pub fn from_geometry_only_domain_mesh(
+        mesh: &fullmag_ir::MeshIR,
+        object_segments: &[fullmag_ir::FemObjectSegmentIR],
+        mesh_parts: &[fullmag_ir::FemMeshPartIR],
+        build_report: Option<fullmag_ir::FemSharedDomainBuildReportIR>,
+    ) -> Self {
+        record_fem_mesh_payload_build();
+        let domain_mesh_mode = if mesh.element_markers.contains(&0) {
+            fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+        } else {
+            fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
+        };
+        let element_markers = normalized_payload_element_markers(&mesh.element_markers, None);
+        let generation_id = stable_fem_mesh_generation_id(
+            mesh,
+            &element_markers,
+            object_segments,
+            mesh_parts,
+            domain_mesh_mode,
+            &None,
+        );
+        Self {
+            mesh_name: mesh.mesh_name.clone(),
+            mesh_id: format!("{}:{}", mesh.mesh_name, generation_id),
+            nodes: mesh.nodes.clone(),
+            cells: mesh.cells.clone(),
+            element_markers,
+            facets: mesh.facets.clone(),
+            boundary_markers: mesh.boundary_markers.clone(),
+            periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
+            periodic_node_pairs: mesh.periodic_node_pairs.clone(),
+            object_segments: object_segments
+                .iter()
+                .map(|segment| FemMeshObjectSegment {
+                    object_id: segment.object_id.clone(),
+                    geometry_id: segment.geometry_id.clone(),
+                    node_start: segment.node_start,
+                    node_count: segment.node_count,
+                    element_start: segment.element_start,
+                    element_count: segment.element_count,
+                    boundary_face_start: segment.boundary_face_start,
+                    boundary_face_count: segment.boundary_face_count,
+                })
+                .collect(),
+            mesh_parts: mesh_parts.iter().map(FemMeshPartPayload::from).collect(),
+            domain_mesh_mode: Some(domain_mesh_mode_name(domain_mesh_mode).to_string()),
+            domain_frame: None,
+            generation_id: Some(generation_id),
+            per_domain_quality: mesh
+                .per_domain_quality
+                .iter()
+                .map(|(k, v)| (*k, MeshQualityPayload::from(v)))
+                .collect(),
+            build_report,
+        }
+    }
+
     pub fn from_fem_plan_with_generation(
         plan: &fullmag_ir::FemPlanIR,
         generation_id: String,
@@ -3315,6 +3448,7 @@ pub enum LlgTimestepQualificationId {
     ExplicitFixedFemGpuDouble,
     ExplicitAdaptiveFdmCpuDouble,
     ExplicitAdaptiveFdmCudaDouble,
+    ExplicitAdaptiveFdmCudaSingle,
     ExplicitAdaptiveFemCpuDouble,
     ExplicitAdaptiveFemGpuDouble,
 }
@@ -4012,6 +4146,41 @@ impl FemGpuExecutionReceipt {
     }
 }
 
+/// Native direct-minimizer accounting, distinct from an RK time integrator.
+/// `accounting.integrator` is `not_used`: the algorithm is identified by a
+/// dedicated native operator bit committed with the accepted minimizer step.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FemGpuMinimizerExecutionReceipt {
+    pub schema_version: String,
+    pub algorithm: String,
+    pub accounting: FemGpuExecutionReceipt,
+}
+
+impl FemGpuMinimizerExecutionReceipt {
+    pub fn validate_strict_device(&self) -> Result<(), &'static str> {
+        let algorithm_bit = match self.algorithm.as_str() {
+            "projected_gradient_bb" => 1_u64 << 10,
+            "nonlinear_cg" => 1_u64 << 11,
+            _ => return Err("fem_gpu_minimizer_receipt_unknown_algorithm"),
+        };
+        let minimizer_bits = (1_u64 << 10) | (1_u64 << 11);
+        let time_evolution_bits = (1_u64 << 5) | (1_u64 << 6) | (1_u64 << 7);
+        let receipt = &self.accounting;
+        if self.schema_version != "fullmag.fem.gpu.minimizer-execution-receipt.v1"
+            || receipt.integrator != "not_used"
+            || receipt.required_operator_mask & minimizer_bits != algorithm_bit
+            || receipt.required_operator_mask & time_evolution_bits != 0
+            || receipt.requested != "strict_device"
+            || receipt.precision != "double"
+            || receipt.device_ordinal != 0
+        {
+            return Err("fem_gpu_minimizer_receipt_identity_mismatch");
+        }
+        receipt.validate_strict_device()
+    }
+}
+
 #[cfg(test)]
 mod fem_gpu_execution_receipt_contract_tests {
     use super::*;
@@ -4376,6 +4545,8 @@ pub struct FdmGpuEndpointCacheTelemetry {
 /// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionProvenance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_fixed_coupling: Option<CpuFixedCouplingTelemetry>,
     /// Engine that executed the run: e.g. "cpu_reference", "cuda_fdm",
     /// "fem_cpu_baseline_internal", "fem_cpu_native", "fem_native_gpu",
     /// "fem_eigen_cpu_baseline", or "fem_eigen_native_gpu".
@@ -4419,6 +4590,9 @@ pub struct ExecutionProvenance {
     /// GPU residency without inferring execution from the RK plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_gpu_execution_receipt: Option<FemGpuExecutionReceipt>,
+    /// Native accounting for accepted PG-BB/NCG steps, without RK operators.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_minimizer_execution_receipt: Option<FemGpuMinimizerExecutionReceipt>,
     /// Legacy compatibility observations retained for historical artifacts.
     /// Physics-graph realization must never infer an executed module from a
     /// kind-only observation.
@@ -4989,8 +5163,9 @@ pub struct AuxiliaryArtifact {
 
 pub(crate) struct LiveStepConsumer<'a> {
     pub grid: [u32; 3],
-    /// Cadence for heavier live payloads such as full magnetization snapshots.
-    pub field_every_n: u64,
+    /// Step and wall-clock cadence for heavy live payloads: the magnetization
+    /// copy and, at a stride of one step, the full observation catalog.
+    pub field_cadence: crate::LiveFieldCadence,
     /// Whether this consumer needs a full step-0 physics snapshot before
     /// the first accepted step.
     pub initial_snapshot: bool,
@@ -5260,6 +5435,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
             charge_transport_plans: Vec::new(),
@@ -6092,4 +6268,14 @@ mod tests {
         assert_eq!(provenance.variational_energy_joules, None);
         assert_eq!(provenance.recovered_field_energy_joules, None);
     }
+}
+
+/// Original output position and the existing scalar/field schedule position.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalOutputScheduleBinding {
+    pub output_index: u64,
+    pub schedule_index: u64,
+    pub name: String,
+    pub every_seconds: f64,
 }

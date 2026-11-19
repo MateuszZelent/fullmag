@@ -4,7 +4,10 @@ use axum::{extract::{Query, State}, Json};
 use std::sync::Arc;
 
 use crate::schemas::quantities::QuantityCatalogResponse;
-use crate::session::relevant_field_materialization_status;
+use crate::session::{
+    relevant_field_materialization_status, resolved_current_field_source,
+    ResolvedCurrentFieldSource,
+};
 use crate::types::{AppState, SessionStateResponse};
 use fullmag_quantities::{quantity_spec, QuantitySpec};
 use fullmag_runner::{
@@ -14,6 +17,7 @@ use fullmag_runner::{
 
 use super::resolved_spatial_field::{
     full_field_publication_carrier_identity, resolve_current_spatial_field_metadata,
+    SpatialFieldCarrier, SpatialFieldSourceKind,
 };
 
 #[utoipa::path(
@@ -83,11 +87,26 @@ fn annotate_runtime_quantity_state(
     // An unresolved workspace remains unknown. A resolved nonmagnetic
     // inspection, however, has no magnetic provider: use the canonical
     // unavailable capability path even without a magnetic runtime profile.
-    if snapshot.capabilities.is_none() && !standalone_inspection {
+    let field_only = snapshot.metadata.as_ref()
+        .and_then(|metadata| metadata.get("magnetic_state_present"))
+        .and_then(serde_json::Value::as_bool) == Some(false);
+    let prepared_m_without_runtime_capabilities = snapshot.capabilities.is_none()
+        && !standalone_inspection
+        && quantity_spec("m").is_some_and(|spec| {
+            prepared_initial_state_m_carriers(snapshot, spec, spec.domain.as_str()).is_some()
+        });
+    let prepared_only = snapshot.capabilities.is_none() && !standalone_inspection && !field_only;
+    let prepared_damping = prepared_only && quantity_spec("mat_alpha").is_some_and(|spec|
+        prepared_damping_carriers(snapshot, spec, spec.domain.as_str()).is_some());
+    if prepared_only && !prepared_m_without_runtime_capabilities && !prepared_damping {
         return;
     }
 
     for entry in &mut response.quantities {
+        if prepared_only && !(entry.id == "m" && prepared_m_without_runtime_capabilities
+            || entry.id == "mat_alpha" && prepared_damping) {
+            continue;
+        }
         let Some(spec) = quantity_spec(&entry.id) else {
             continue;
         };
@@ -98,8 +117,8 @@ fn annotate_runtime_quantity_state(
             Vec::new(),
             spec.domain.as_str(),
         );
-        let supported =
-            preliminary.provider == fullmag_runner::QuantityProviderCapability::Available;
+        let supported = preliminary.provider == fullmag_runner::QuantityProviderCapability::Available
+            && preliminary.reason_code.as_deref() != Some(PREPARED_DAMPING_READ_ONLY);
 
         let status = relevant_field_materialization_status(snapshot, &entry.id);
         let resolved_field = resolve_current_spatial_field_metadata(
@@ -181,25 +200,47 @@ fn annotate_runtime_quantity_state(
             carriers,
             spec.domain.as_str(),
         );
-        entry.capability_state = if supported {
+        entry.capability_state = if resolved.provider == fullmag_runner::QuantityProviderCapability::Available {
             "supported"
         } else {
             "unsupported"
         }
         .to_string();
-        entry.solver_capability = entry.capability_state.clone();
+        entry.solver_capability = if supported { "supported" } else { "unsupported" }.to_string();
         entry.requestable = matches!(
             resolved.request,
             fullmag_runner::QuantityRequestCapability::FieldVector
                 | fullmag_runner::QuantityRequestCapability::ScalarResource
         );
-        entry.materializable = matches!(
+        entry.materializable = supported && matches!(
             resolved.request,
             fullmag_runner::QuantityRequestCapability::FieldVector
-        );
+        ) && resolved.reason_code.as_deref() != Some("prepared_initial_state");
+        // The Docker runtime only adopts fields a finished accepted run
+        // published; it has no evaluator for a prepared state. Report such a
+        // field as supported but not yet computable instead of letting a
+        // Compute request fail.
+        if entry.materializable
+            && materialization_state == "unmaterialized"
+            && accepted_fields_require_terminal_run(snapshot)
+        {
+            entry.materializable = false;
+            entry.materialization_reason_code = Some("accepted_state_required".to_string());
+        }
+        if super::field_resolution::current_fem_damping_uses_nodes(snapshot, &entry.id) {
+            entry.location = "node".to_owned();
+        }
         entry.renderable = resolved.render == fullmag_runner::QuantityRenderCapability::Renderable;
         entry.resolved_capability = Some(resolved.into());
     }
+}
+
+/// Whether field materialization must wait for a finished accepted run.
+fn accepted_fields_require_terminal_run(snapshot: &SessionStateResponse) -> bool {
+    crate::live_accepted_execution::docker_api_only_runtime()
+        && !snapshot.run.as_ref().is_some_and(|run| {
+            matches!(run.status.as_str(), "completed" | "failed" | "cancelled")
+        })
 }
 
 pub(crate) fn current_field_carriers(
@@ -213,6 +254,7 @@ pub(crate) fn current_field_carriers(
     if !matches!(
         spec.shape,
         fullmag_quantities::QuantityShape::VectorField
+            | fullmag_quantities::QuantityShape::TensorField
             | fullmag_quantities::QuantityShape::SpatialScalar
     ) || carrier_id.trim().is_empty()
         || carrier_fingerprint.is_none_or(|fingerprint| fingerprint.trim().is_empty())
@@ -234,6 +276,41 @@ pub(crate) fn current_field_carriers(
     }]
 }
 
+const PREPARED_DAMPING_READ_ONLY: &str = "prepared_damping_read_only";
+
+/// A scene coefficient can be inspected before a solver has selected a provider.
+/// Require the exact current authored or plan-owned data and its physical carrier.
+fn prepared_damping_carriers(
+    snapshot: &SessionStateResponse,
+    spec: &QuantitySpec,
+    scope: &str,
+) -> Option<Vec<FieldCarrierDescriptor>> {
+    if spec.id.as_str() != "mat_alpha" || matches!(scope.trim(), "" | "airbox") {
+        return None;
+    }
+    let raw = snapshot.latest_fields.get("mat_alpha")?;
+    let verified = if crate::live_authored_damping::publication_revision(snapshot).is_some() {
+        crate::live_authored_damping::matches_publication(snapshot, raw)
+    } else {
+        crate::session::authored_material_field_matches_memoized(snapshot, "mat_alpha", raw)
+    };
+    if !verified {
+        return None;
+    }
+    let field = resolve_current_spatial_field_metadata(snapshot, "mat_alpha", 1).ok()??;
+    if field.source_kind != SpatialFieldSourceKind::Materialized {
+        return None;
+    }
+    let identity = full_field_publication_carrier_identity(&field)
+        .or_else(|| super::resolved_spatial_field::authored_multilayer_publication_carrier_identity(&field))?;
+    let mut carriers = current_field_carriers(spec, &identity.scope_kind, identity.scope_id.as_deref(),
+        &identity.carrier_id, Some(&identity.carrier_fingerprint), None);
+    if matches!(field.carrier, SpatialFieldCarrier::FemNodes { .. }) {
+        for carrier in &mut carriers { carrier.indexing = "node".to_owned(); }
+    }
+    (!carriers.is_empty()).then_some(carriers)
+}
+
 pub(crate) fn resolved_quantity_capability_for_snapshot(
     snapshot: &SessionStateResponse,
     spec: &QuantitySpec,
@@ -246,7 +323,19 @@ pub(crate) fn resolved_quantity_capability_for_snapshot(
         .resolved_precision
         .as_deref()
         .unwrap_or(snapshot.session.precision.as_str());
-    match snapshot.capabilities.as_ref() {
+    let field_only = snapshot.metadata.as_ref()
+        .and_then(|metadata| metadata.get("magnetic_state_present"))
+        .and_then(serde_json::Value::as_bool) == Some(false);
+    let capabilities = snapshot.capabilities.as_ref().filter(|_| {
+        !(field_only && spec.domain == fullmag_quantities::QuantityDomain::MagneticOnly)
+    });
+    let mut carriers = carriers;
+    if super::field_resolution::current_fem_damping_uses_nodes(snapshot, spec.id.as_str()) {
+        for carrier in &mut carriers { carrier.indexing = "node".to_owned(); }
+    }
+    let requested_damping_carriers = (spec.id.as_str() == "mat_alpha" && !carriers.is_empty())
+        .then(|| carriers.clone());
+    let mut resolved = match capabilities {
         Some(capabilities) => resolve_quantity_capability(
             capabilities,
             spec,
@@ -257,26 +346,250 @@ pub(crate) fn resolved_quantity_capability_for_snapshot(
                 carriers,
             },
         ),
-        None => fullmag_runner::ResolvedQuantityCapability {
-            quantity_id: spec.id.as_str().to_string(),
-            provider: fullmag_runner::QuantityProviderCapability::Unavailable,
-            request: fullmag_runner::QuantityRequestCapability::Unavailable,
-            materialization: QuantityMaterializationCapability::Unavailable,
-            render: fullmag_runner::QuantityRenderCapability::Unavailable,
-            publication: if spec.ui_exposed && spec.interactive_preview {
-                fullmag_runner::QuantityPublicationCapability::Interactive
-            } else if spec.supports_export {
-                fullmag_runner::QuantityPublicationCapability::ExportOnly
-            } else {
-                fullmag_runner::QuantityPublicationCapability::Hidden
-            },
-            scope: scope.to_string(),
-            reason_code: Some("runtime_capabilities_unavailable".to_string()),
-            lane: "unresolved".to_string(),
-            precision: precision.to_string(),
-            carriers: Vec::new(),
+        None if materialization == QuantityMaterializationCapability::Materialized
+            && !carriers.is_empty()
+            && spec.domain != fullmag_quantities::QuantityDomain::MagneticOnly
+            && field_only =>
+        {
+            // A validated stored field is a read provider, not a solver provider.
+            // No BackendCapabilities or ComputeFields availability is fabricated.
+            fullmag_runner::ResolvedQuantityCapability {
+                quantity_id: spec.id.as_str().to_string(),
+                provider: fullmag_runner::QuantityProviderCapability::Available,
+                request: fullmag_runner::QuantityRequestCapability::FieldVector,
+                materialization,
+                render: match spec.shape {
+                    fullmag_quantities::QuantityShape::VectorField
+                    | fullmag_quantities::QuantityShape::SpatialScalar
+                        if spec.ui_exposed && spec.interactive_preview && spec.supports_preview_3d =>
+                    { fullmag_runner::QuantityRenderCapability::Renderable },
+                    fullmag_quantities::QuantityShape::TensorField => {
+                        fullmag_runner::QuantityRenderCapability::UnsupportedShape
+                    },
+                    _ => fullmag_runner::QuantityRenderCapability::Unavailable,
+                },
+                publication: if spec.ui_exposed && spec.interactive_preview {
+                    fullmag_runner::QuantityPublicationCapability::Interactive
+                } else if spec.supports_export {
+                    fullmag_runner::QuantityPublicationCapability::ExportOnly
+                } else { fullmag_runner::QuantityPublicationCapability::Hidden },
+                scope: scope.to_string(), reason_code: Some("saved_field_read_only".into()),
+                lane: "stored_field_read_only".into(), precision: precision.to_string(),
+                projections: fullmag_runner::resolve_quantity_projection_capabilities(spec,
+                    fullmag_runner::QuantityProviderCapability::Available,
+                    fullmag_runner::QuantityRequestCapability::FieldVector, materialization, &carriers),
+                carriers,
+            }
         },
+        None => {
+            let mut unavailable = fullmag_runner::ResolvedQuantityCapability {
+                quantity_id: spec.id.as_str().to_string(),
+                provider: fullmag_runner::QuantityProviderCapability::Unavailable,
+                request: fullmag_runner::QuantityRequestCapability::Unavailable,
+                materialization: QuantityMaterializationCapability::Unavailable,
+                render: fullmag_runner::QuantityRenderCapability::Unavailable,
+                publication: if spec.ui_exposed && spec.interactive_preview {
+                    fullmag_runner::QuantityPublicationCapability::Interactive
+                } else if spec.supports_export {
+                    fullmag_runner::QuantityPublicationCapability::ExportOnly
+                } else {
+                    fullmag_runner::QuantityPublicationCapability::Hidden
+                },
+                scope: scope.to_string(),
+                reason_code: Some("runtime_capabilities_unavailable".to_string()),
+                lane: "unresolved".to_string(),
+                precision: precision.to_string(),
+                carriers: Vec::new(),
+                projections: Vec::new(),
+            };
+            if let Some(prepared_carriers) =
+                (!field_only).then(|| prepared_initial_state_m_carriers(snapshot, spec, scope)).flatten()
+            {
+                unavailable.request = fullmag_runner::QuantityRequestCapability::FieldVector;
+                unavailable.materialization = QuantityMaterializationCapability::Materialized;
+                unavailable.render = fullmag_runner::QuantityRenderCapability::Renderable;
+                unavailable.reason_code = Some("prepared_initial_state".to_string());
+                unavailable.carriers = prepared_carriers;
+            }
+            unavailable
+        }
+    };
+    if !field_only && resolved.provider == fullmag_runner::QuantityProviderCapability::Unavailable {
+        if let Some(verified) = prepared_damping_carriers(snapshot, spec, scope) {
+            resolved.provider = fullmag_runner::QuantityProviderCapability::Available;
+            resolved.request = fullmag_runner::QuantityRequestCapability::FieldVector;
+            resolved.materialization = QuantityMaterializationCapability::Materialized;
+            resolved.render = fullmag_runner::QuantityRenderCapability::Renderable;
+            resolved.reason_code = Some(PREPARED_DAMPING_READ_ONLY.to_owned());
+            resolved.lane = PREPARED_DAMPING_READ_ONLY.to_owned();
+            resolved.carriers = requested_damping_carriers.unwrap_or(verified);
+            resolved.projections = fullmag_runner::resolve_quantity_projection_capabilities(spec,
+                resolved.provider, resolved.request, resolved.materialization, &resolved.carriers);
+        }
     }
+    resolved
+}
+
+/// Keep a prepared initial magnetization readable before a solver provider is
+/// selected, while requiring the field to remain the exact current publication
+/// bound to the prepared mesh workspace and current observation domain.
+fn legacy_prepared_m_binding(
+    snapshot: &SessionStateResponse,
+    raw: &serde_json::Value,
+) -> Option<()> {
+    let workspace = snapshot.mesh_workspace.as_ref()?;
+    if workspace.get("status").and_then(serde_json::Value::as_str) != Some("completed") {
+        return None;
+    }
+    let preparation_id = workspace
+        .get("preparation_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())?;
+    let plan_fingerprint = workspace
+        .get("plan_fingerprint")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())?;
+    let source_scene_revision = workspace
+        .get("source_scene_revision")
+        .and_then(serde_json::Value::as_u64)?;
+    if snapshot.scene_document.as_ref()?.revision != source_scene_revision {
+        return None;
+    }
+
+    let provenance = raw.get("provenance")?;
+    if provenance.get("source_kind").and_then(serde_json::Value::as_str)
+        != Some("prepared_initial_state")
+        || provenance
+            .get("preparation_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(preparation_id)
+        || provenance
+            .get("plan_fingerprint")
+            .and_then(serde_json::Value::as_str)
+            != Some(plan_fingerprint)
+        || raw
+            .get("source_revision")
+            .and_then(serde_json::Value::as_u64)
+            != Some(source_scene_revision)
+        || raw.get("source_step").and_then(serde_json::Value::as_u64) != Some(0)
+    {
+        return None;
+    }
+
+    Some(())
+}
+
+fn prepared_initial_state_m_carriers(
+    snapshot: &SessionStateResponse,
+    spec: &QuantitySpec,
+    scope: &str,
+) -> Option<Vec<FieldCarrierDescriptor>> {
+    if spec.id.as_str() != "m" || scope.trim().is_empty() || scope.trim() == "airbox" {
+        return None;
+    }
+
+    let raw = snapshot.latest_fields.get("m")?;
+    let source_time_seconds = raw.get("source_time_seconds").and_then(serde_json::Value::as_f64)
+        .filter(|time| time.is_finite() && *time >= 0.0)?;
+    let frame: crate::schemas::common::AcceptedObservationFrameRef =
+        serde_json::from_value(raw.get("observation_frame")?.clone()).ok()?;
+    if frame.source_step != 0 || frame.source_time_seconds != Some(source_time_seconds)
+        || raw.get("source_step").and_then(serde_json::Value::as_u64) != Some(0)
+    {
+        return None;
+    }
+    if frame.authored_initial_state.is_some() {
+        if !crate::live_authored_initial_state::qualifies_frame(snapshot, &frame) {
+            return None;
+        }
+    } else {
+        legacy_prepared_m_binding(snapshot, raw)?;
+        if frame != crate::session::accepted_observation_frame_ref(snapshot, 0, Some(source_time_seconds)) {
+            return None;
+        }
+    }
+
+    // A same-identity preview or legacy live field must not stand in for the
+    // prepared materialization. Pointer identity ties this check to `latest_fields.m`.
+    let Some(ResolvedCurrentFieldSource::Latest(selected)) =
+        resolved_current_field_source(snapshot, "m", usize::from(spec.n_comp))
+    else {
+        return None;
+    };
+    if !std::ptr::eq(selected, raw) {
+        return None;
+    }
+
+    let field = resolve_current_spatial_field_metadata(snapshot, "m", usize::from(spec.n_comp))
+        .ok()??;
+    if field.source_kind != SpatialFieldSourceKind::Materialized {
+        return None;
+    }
+    let value_count = super::field_resolution::json_field_value_count(raw);
+    if value_count == 0 || value_count % usize::from(spec.n_comp) != 0 {
+        return None;
+    }
+    let point_count = value_count / usize::from(spec.n_comp);
+    field.validate_metadata_contract(point_count).ok()?;
+
+    // The preparation publisher already rejects non-finite vectors. This
+    // metadata-only resolution checks the current spatial layout without
+    // decoding a large field a second time during catalog/capability reads;
+    // the field resource decoder validates values before returning them.
+    let layout = raw.get("layout")?;
+    let layout_matches = match &field.carrier {
+        SpatialFieldCarrier::FdmCells {
+            cells,
+            multilayer_scope,
+            ..
+        } => {
+            if let Some(multilayer_scope) = multilayer_scope {
+                layout == multilayer_scope.artifact_layout
+                    && layout
+                        .get("backend")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("fdm_multilayer")
+            } else {
+                layout
+                    .get("backend")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("fdm")
+                    && super::field_resolution::json_field_grid(raw) == Some(*cells)
+            }
+        }
+        SpatialFieldCarrier::FemNodes { topology, .. } => {
+            layout
+                .get("backend")
+                .and_then(serde_json::Value::as_str)
+                == Some("fem")
+                && layout
+                    .get("location")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("node")
+                && layout.get("node_count").and_then(serde_json::Value::as_u64)
+                    == u64::try_from(topology.nodes.len()).ok()
+                && point_count == topology.nodes.len()
+        }
+        _ => false,
+    };
+    if !layout_matches {
+        return None;
+    }
+
+    Some(
+        full_field_publication_carrier_identity(&field)
+            .map(|identity| {
+                current_field_carriers(
+                    spec,
+                    &identity.scope_kind,
+                    identity.scope_id.as_deref(),
+                    &identity.carrier_id,
+                    Some(&identity.carrier_fingerprint),
+                    None,
+                )
+            })
+            .unwrap_or_default(),
+    )
 }
 
 #[cfg(test)]
@@ -327,6 +640,131 @@ mod tests {
             .expect("catalog quantity")
     }
 
+    fn snapshot_with_prepared_initial_m() -> SessionStateResponse {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "prepared-initial-m-contract"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": {
+                "backend_plan": {
+                    "kind": "fdm",
+                    "grid": { "cells": [1, 1, 1] }
+                }
+            }
+        }).into());
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "preparation_id": "prep-current",
+            "plan_fingerprint": "plan-current",
+            "source_scene_revision": 7,
+            "status": "completed"
+        }).into());
+        let mut scene = fullmag_authoring::SceneDocument::default();
+        scene.revision = 7;
+        snapshot.scene_document = Some(scene);
+
+        let observation_frame = crate::session::accepted_observation_frame_ref(
+            &snapshot,
+            0,
+            Some(0.0),
+        );
+        let mut latest_fields = crate::types::LatestFields::default();
+        latest_fields.insert(
+            "m".into(),
+            serde_json::json!({
+                "values": [[0.0, 0.0, 1.0]],
+                "layout": { "backend": "fdm", "grid_cells": [1, 1, 1] },
+                "source_step": 0,
+                "source_time_seconds": 0.0,
+                "source_revision": 7,
+                "provenance": {
+                    "source_kind": "prepared_initial_state",
+                    "preparation_id": "prep-current",
+                    "plan_fingerprint": "plan-current"
+                },
+                "observation_frame": observation_frame.clone()
+            }),
+        );
+        let session_id = snapshot.session.session_id.clone();
+        crate::session::apply_current_live_accepted_field_frame(
+            &mut snapshot,
+            crate::types::CurrentLiveFieldFrameRequest {
+                session_id,
+                latest_fields: Some(latest_fields),
+                replace_latest_fields: false,
+                field_generation: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+            observation_frame,
+        )
+        .expect("prepared initial magnetization should bind to the current frame");
+        snapshot
+    }
+
+    fn resolve_without_runtime_capabilities(
+        snapshot: &SessionStateResponse,
+        quantity_id: &str,
+        scope: &str,
+    ) -> fullmag_runner::ResolvedQuantityCapability {
+        let spec = quantity_spec(quantity_id).expect("canonical quantity");
+        resolved_quantity_capability_for_snapshot(
+            snapshot,
+            spec,
+            QuantityMaterializationCapability::Unmaterialized,
+            Vec::new(),
+            scope,
+        )
+    }
+
+    #[test]
+    fn field_only_stored_carrier_is_readable_without_solver_capabilities() {
+        let mut snapshot = snapshot_with_field_provider("V_electric");
+        snapshot.capabilities = None;
+        snapshot.metadata = Some(serde_json::json!({"magnetic_state_present":false}).into());
+        for id in ["V_electric", "J_charge"] {
+            let spec = quantity_spec(id).unwrap();
+            let carriers = current_field_carriers(spec, "object", Some("antenna"), "source-mesh",
+                Some("source-fingerprint"), None);
+            let resolved = resolved_quantity_capability_for_snapshot(&snapshot, spec,
+                QuantityMaterializationCapability::Materialized, carriers, "object");
+            assert_eq!(resolved.provider, fullmag_runner::QuantityProviderCapability::Available);
+            assert_eq!(resolved.render, fullmag_runner::QuantityRenderCapability::Renderable);
+            assert_eq!(resolved.publication, fullmag_runner::QuantityPublicationCapability::Interactive);
+            assert_eq!(resolved.reason_code.as_deref(), Some("saved_field_read_only"));
+            assert!(snapshot.capabilities.is_none());
+            assert!(!spec.cached_preview);
+            let unmaterialized = resolved_quantity_capability_for_snapshot(&snapshot, spec,
+                QuantityMaterializationCapability::Unmaterialized, vec![], "object");
+            assert_eq!(unmaterialized.request, fullmag_runner::QuantityRequestCapability::Unavailable);
+        }
+        for id in ["m", "H_ex", "mat_ms"] {
+            let magnetic = quantity_spec(id).unwrap();
+            assert_eq!(magnetic.domain, fullmag_quantities::QuantityDomain::MagneticOnly);
+            let carriers = current_field_carriers(magnetic, "object", Some("antenna"), "source-mesh",
+                Some("source-fingerprint"), None);
+            let resolved = resolved_quantity_capability_for_snapshot(&snapshot, magnetic,
+                QuantityMaterializationCapability::Materialized, carriers, "object");
+            assert_eq!(resolved.provider, fullmag_runner::QuantityProviderCapability::Unavailable);
+            assert_eq!(resolved.request, fullmag_runner::QuantityRequestCapability::Unavailable);
+            assert_eq!(resolved.render, fullmag_runner::QuantityRenderCapability::Unavailable);
+        }
+        let tensor = quantity_spec("spin_current_tensor").unwrap();
+        let carriers = current_field_carriers(tensor, "object", Some("antenna"), "source-mesh",
+            Some("source-fingerprint"), None);
+        let resolved = resolved_quantity_capability_for_snapshot(&snapshot, tensor,
+            QuantityMaterializationCapability::Materialized, carriers, "object");
+        assert_eq!(resolved.request, fullmag_runner::QuantityRequestCapability::FieldVector);
+        assert_eq!(resolved.render, fullmag_runner::QuantityRenderCapability::UnsupportedShape);
+        assert_eq!(resolved.publication, fullmag_runner::QuantityPublicationCapability::ExportOnly);
+        snapshot.capabilities = snapshot_with_field_provider("H_ex").capabilities;
+        let magnetic = quantity_spec("H_ex").unwrap();
+        let resolved = resolved_quantity_capability_for_snapshot(&snapshot, magnetic,
+            QuantityMaterializationCapability::Materialized, vec![], "object");
+        assert_eq!(resolved.provider, fullmag_runner::QuantityProviderCapability::Unavailable);
+    }
+
     #[test]
     fn global_scalar_capability_comes_from_scalar_outputs_only() {
         let total_energy = entry("E_total");
@@ -342,12 +780,131 @@ mod tests {
     }
 
     #[test]
+    fn exact_prepared_initial_m_remains_readable_without_solver_capabilities() {
+        let snapshot = snapshot_with_prepared_initial_m();
+        let spec = quantity_spec("m").expect("magnetization quantity");
+        let resolved = resolve_without_runtime_capabilities(&snapshot, "m", spec.domain.as_str());
+
+        assert_eq!(
+            resolved.provider,
+            fullmag_runner::QuantityProviderCapability::Unavailable
+        );
+        assert_eq!(
+            resolved.request,
+            fullmag_runner::QuantityRequestCapability::FieldVector
+        );
+        assert_eq!(
+            resolved.materialization,
+            QuantityMaterializationCapability::Materialized
+        );
+        assert_eq!(
+            resolved.render,
+            fullmag_runner::QuantityRenderCapability::Renderable
+        );
+        assert_eq!(resolved.lane, "unresolved");
+        assert_eq!(resolved.reason_code.as_deref(), Some("prepared_initial_state"));
+    }
+
+    #[test]
+    fn prepared_initial_m_catalog_is_readable_but_not_materializable() {
+        let snapshot = snapshot_with_prepared_initial_m();
+        let mut response = QuantityCatalogResponse::build();
+        annotate_runtime_quantity_state(&mut response, &snapshot);
+
+        let magnetization = response
+            .quantities
+            .iter()
+            .find(|entry| entry.id == "m")
+            .expect("magnetization catalog entry");
+        assert_eq!(magnetization.capability_state, "unsupported");
+        assert_eq!(magnetization.solver_capability, "unsupported");
+        assert!(magnetization.requestable);
+        assert!(magnetization.renderable);
+        assert!(!magnetization.materializable);
+        let resolved = magnetization
+            .resolved_capability
+            .as_ref()
+            .expect("prepared initial magnetization capability");
+        assert_eq!(
+            resolved.provider,
+            crate::schemas::quantities::QuantityProviderCapability::Unavailable
+        );
+        assert_eq!(resolved.lane, "unresolved");
+        assert_eq!(resolved.reason_code.as_deref(), Some("prepared_initial_state"));
+
+        let demag = response
+            .quantities
+            .iter()
+            .find(|entry| entry.id == "H_demag")
+            .expect("demagnetizing field catalog entry");
+        assert_eq!(demag.capability_state, "unknown");
+        assert!(demag.resolved_capability.is_none());
+    }
+
+    #[test]
+    fn prepared_initial_m_rejects_stale_identity_frame_airbox_and_other_quantities() {
+        let mut stale_identity = snapshot_with_prepared_initial_m();
+        stale_identity
+            .mesh_workspace
+            .as_mut()
+            .expect("current mesh workspace")["plan_fingerprint"] =
+            serde_json::json!("different-plan");
+        let spec = quantity_spec("m").expect("magnetization quantity");
+        assert_eq!(
+            resolve_without_runtime_capabilities(
+                &stale_identity,
+                "m",
+                spec.domain.as_str()
+            )
+            .request,
+            fullmag_runner::QuantityRequestCapability::Unavailable
+        );
+
+        let mut missing_identity = snapshot_with_prepared_initial_m();
+        missing_identity
+            .mesh_workspace
+            .as_mut()
+            .expect("current mesh workspace")
+            .as_object_mut()
+            .expect("mesh workspace object")
+            .remove("preparation_id");
+        assert_eq!(
+            resolve_without_runtime_capabilities(
+                &missing_identity,
+                "m",
+                spec.domain.as_str()
+            )
+            .request,
+            fullmag_runner::QuantityRequestCapability::Unavailable
+        );
+
+        let mut stale_frame = snapshot_with_prepared_initial_m();
+        stale_frame.mesh_revision = stale_frame.mesh_revision.saturating_add(1);
+        assert_eq!(
+            resolve_without_runtime_capabilities(&stale_frame, "m", spec.domain.as_str())
+                .request,
+            fullmag_runner::QuantityRequestCapability::Unavailable
+        );
+        let current = snapshot_with_prepared_initial_m();
+        assert_eq!(
+            resolve_without_runtime_capabilities(&current, "m", "airbox").request,
+            fullmag_runner::QuantityRequestCapability::Unavailable
+        );
+        let demag = quantity_spec("H_demag").expect("demagnetizing field quantity");
+        assert_eq!(
+            resolve_without_runtime_capabilities(&current, "H_demag", demag.domain.as_str())
+                .request,
+            fullmag_runner::QuantityRequestCapability::Unavailable
+        );
+    }
+
+    #[test]
     fn standalone_without_magnetic_capabilities_resolves_catalog_unavailable() {
         let mut snapshot = snapshot_with_field_provider("m");
         snapshot.capabilities = None;
         snapshot.metadata = Some(serde_json::json!({
             "execution_plan": { "backend_plan": { "kind": "antenna_external_lead_inspection" } }
-        }));
+        }).into());
         let mut response = QuantityCatalogResponse::build();
         annotate_runtime_quantity_state(&mut response, &snapshot);
 

@@ -43,8 +43,10 @@ import {
 } from "./model/viewport3DTargetFieldBuffer";
 import { buildViewport3DTopologyIndexBundle } from "./viewport3dTopologyIndexModel";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
+import { scalarColorRgb } from "@/shared/visualization/scalarColorPalette";
 import { resolveViewport3DAdaptiveVectorGlyphLength } from "./model/viewport3DVectorGlyphScale";
 import { resolveViewport3DTargetSurfaceLayerInput } from "./layers/viewport3DLayerPassInputs";
+import { createLivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
 
 type TargetFieldBufferOptions = Parameters<
   typeof buildViewport3DTargetFieldBufferWithResourceKey
@@ -1557,7 +1559,7 @@ describe("viewport3dRenderModel", () => {
     expect(model?.modeOverlay).toBeNull();
   });
 
-  it("projects complex analysis fields locally using visualization phase", () => {
+  it("keeps complex analysis data phase-independent and binds the live phase uniform", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       topologyFixture(),
       [],
@@ -1577,71 +1579,117 @@ describe("viewport3dRenderModel", () => {
         7, 8, 0, 0, 0, 0,
       ]),
     };
+    const phaseUniform = createLivePhaseUniform(0);
 
-    const phaseZero = buildViewport3DFieldRenderModel(topologyModel, null, 0.5, {
+    const first = buildViewport3DFieldRenderModel(topologyModel, null, 0.5, {
       complexFieldVector,
+      complexPhaseUniform: phaseUniform,
       scalarColorModes: new Set(["x"]),
-      visualizationPhaseRad: 0,
     });
-    const phaseQuarter = buildViewport3DFieldRenderModel(
-      topologyModel,
-      null,
-      0.5,
-      {
-        complexFieldVector,
-        scalarColorModes: new Set(["x"]),
-        visualizationPhaseRad: Math.PI / 2,
-      },
-    );
+    phaseUniform.value = Math.PI / 2;
+    const second = buildViewport3DFieldRenderModel(topologyModel, null, 0.5, {
+      complexFieldVector,
+      complexPhaseUniform: phaseUniform,
+      scalarColorModes: new Set(["x"]),
+    });
+    const firstX = first?.scalarColorsByMode.get("x");
+    const secondX = second?.scalarColorsByMode.get("x");
 
-    expect(
-      Array.from(phaseZero?.scalarColorsByMode.get("x")?.scalarValues ?? []),
-    ).toEqual([
-      0,
-      expect.closeTo(1 / 3, 4),
-      expect.closeTo(2 / 3, 4),
-      1,
-    ]);
-    expect(
-      Array.from(phaseQuarter?.scalarColorsByMode.get("x")?.scalarValues ?? []),
-    ).toEqual([
-      1,
-      expect.closeTo(2 / 3, 4),
-      expect.closeTo(1 / 3, 4),
-      0,
-    ]);
-    expect(
-      Array.from(
-        phaseQuarter?.scalarColorsByMode.get("x")?.complexRealValues ?? [],
-      ),
-    ).toEqual([
+    // The shader reads the phase from the shared cell; nothing in the model
+    // is rebuilt or reallocated for a different phase.
+    expect(firstX?.complexPhaseUniform).toBe(phaseUniform);
+    expect(secondX?.complexPhaseUniform).toBe(phaseUniform);
+    expect(secondX?.complexRealValues).toBe(firstX?.complexRealValues);
+    expect(secondX?.complexImagValues).toBe(firstX?.complexImagValues);
+    expect(secondX?.scalarValues).toBe(firstX?.scalarValues);
+    expect(Array.from(secondX?.complexRealValues ?? [])).toEqual([
       1, 0, 0,
       3, 0, 0,
       5, 0, 0,
       7, 0, 0,
     ]);
-    expect(
-      Array.from(
-        phaseQuarter?.scalarColorsByMode.get("x")?.complexImagValues ?? [],
-      ),
-    ).toEqual([
+    expect(Array.from(secondX?.complexImagValues ?? [])).toEqual([
       2, 0, 0,
       4, 0, 0,
       6, 0, 0,
       8, 0, 0,
     ]);
-    expect(phaseQuarter?.scalarColorsByMode.get("x")?.complexPhaseRad).toBe(
-      Math.PI / 2,
+    // One color scale for the whole cycle: +/- max |Re_x + i Im_x|.
+    expect(secondX?.range.max).toBeCloseTo(Math.hypot(7, 8));
+    expect(secondX?.range.min).toBeCloseTo(-Math.hypot(7, 8));
+    const projectionItems = (model: typeof first) =>
+      model?.derivedWorkItems.filter(
+        (item) => item.outputKind === "complex-phase-projection",
+      ) ?? [];
+    expect(projectionItems(second)).toHaveLength(1);
+    expect(projectionItems(second)[0]?.workId).toBe(projectionItems(first)[0]?.workId);
+    expect(projectionItems(second)[0]).toMatchObject({
+      lane: "field-color",
+      passId: "complex-field:phase-projection",
+      status: "ready",
+      targetId: "complex-field",
+    });
+    expect(projectionItems(second)[0]?.workId).toContain("phase=shader-uniform");
+  });
+
+  it("builds GPU-phased glyphs for complex analysis vectors", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [],
     );
-    expect(phaseQuarter?.derivedWorkItems).toContainEqual(
-      expect.objectContaining({
-        lane: "field-color",
-        outputKind: "complex-phase-projection",
-        passId: "complex-field:phase-projection",
-        status: "ready",
-        targetId: "complex-field",
-      }),
-    );
+    const complexFieldVector = {
+      componentCount: 3,
+      dtype: "complex128" as const,
+      grid: [4, 1, 1] as [number, number, number],
+      pointCount: 4,
+      quantityId: "analysis:eigen:sample-0000:mode-0002",
+      valueCount: 24,
+      values: new Float64Array([
+        1, 0, 0, 1, 0, 0,
+        0, 2, 0, 0, 0, 0,
+        0, 0, 0, 0, 3, 4,
+        0, 0, 0, 0, 0, 0,
+      ]),
+    };
+    const phaseUniform = createLivePhaseUniform(0.25);
+    const options = {
+      complexFieldVector,
+      complexPhaseUniform: phaseUniform,
+      fullVectorBudget: 8,
+      vectorColorMode: "orientation",
+    };
+
+    const model = buildViewport3DFieldRenderModel(topologyModel, null, 0.5, options);
+    const pass = model?.targetPasses.get("full")?.vectors;
+    const glyphPass = pass?.complexGlyphs;
+
+    // Node 3 has zero complex amplitude, so it has no glyph at any phase.
+    expect(glyphPass?.glyphs.count).toBe(3);
+    expect(glyphPass?.phase.uniform).toBe(phaseUniform);
+    expect(glyphPass?.colorMode).toBe("orientation");
+    expect(Array.from(glyphPass?.glyphs.complexReal ?? [])).toEqual([
+      1, 0, 0,
+      0, 0, 0,
+      0, 0, 3,
+    ]);
+    expect(Array.from(glyphPass?.glyphs.complexImag ?? [])).toEqual([
+      0, 1, 0,
+      2, 0, 0,
+      0, 0, 4,
+    ]);
+    expect(glyphPass?.glyphs.magnitudeEnvelopeMax).toBeCloseTo(5);
+    const numericPass = buildViewport3DFieldRenderModel(topologyModel, null, 0.5, {
+      ...options,
+      vectorColorMode: "z",
+    })?.targetPasses.get("full")?.vectors;
+    expect(numericPass?.complexGlyphs?.colorRange).toEqual({ min: -5, max: 5 });
+    expect(numericPass?.colorScale?.range).toEqual(numericPass?.complexGlyphs?.colorRange);
+    phaseUniform.value = 1.5;
+    expect(
+      buildViewport3DFieldRenderModel(topologyModel, null, 0.5, options)
+        ?.targetPasses.get("full")?.vectors.complexGlyphs?.glyphs,
+    ).toBe(glyphPass?.glyphs);
   });
 
   it("projects complete modal fields within each target membership", () => {
@@ -1800,12 +1848,15 @@ describe("viewport3dRenderModel", () => {
     expect(secondSurface?.degradation).toBeNull();
     expect(airboxSurface?.degradation).toBeNull();
 
-    expect(firstSurface?.scalarColors?.range.min).toBeCloseTo(17 / 3);
-    expect(firstSurface?.scalarColors?.range.max).toBeCloseTo(17 / 3);
-    expect(secondSurface?.scalarColors?.range.min).toBeCloseTo(950 / 3);
-    expect(secondSurface?.scalarColors?.range.max).toBeCloseTo(950 / 3);
-    expect(airboxSurface?.scalarColors?.range.min).toBeCloseTo(14_000 / 3);
-    expect(airboxSurface?.scalarColors?.range.max).toBeCloseTo(14_000 / 3);
+    // Each target keeps its own color scale, now the cycle envelope of its
+    // projected values (|Re + i Im| = |Re| * sqrt(101) here) instead of the
+    // phase-0 snapshot, so the scale does not change during animation.
+    expect(firstSurface?.scalarColors?.range.min).toBeCloseTo(-17 / 3 * Math.sqrt(101));
+    expect(firstSurface?.scalarColors?.range.max).toBeCloseTo(17 / 3 * Math.sqrt(101));
+    expect(secondSurface?.scalarColors?.range.min).toBeCloseTo(-950 / 3 * Math.sqrt(101));
+    expect(secondSurface?.scalarColors?.range.max).toBeCloseTo(950 / 3 * Math.sqrt(101));
+    expect(airboxSurface?.scalarColors?.range.min).toBeCloseTo(-14_000 / 3 * Math.sqrt(101));
+    expect(airboxSurface?.scalarColors?.range.max).toBeCloseTo(14_000 / 3 * Math.sqrt(101));
     expect(
       firstSurface?.scalarColors?.complexRealValues?.[0],
     ).toBeCloseTo(17 / 3);
@@ -1837,11 +1888,11 @@ describe("viewport3dRenderModel", () => {
     expect(
       changedMembershipModel?.targetPasses.get("body-a")?.surface.scalarColors
         ?.range?.min,
-    ).toBeCloseTo(16 / 3);
+    ).toBeCloseTo(-16 / 3 * Math.sqrt(101));
     expect(
       changedMembershipModel?.targetPasses.get("body-a")?.surface.scalarColors
         ?.range?.max,
-    ).toBeCloseTo(16 / 3);
+    ).toBeCloseTo(16 / 3 * Math.sqrt(101));
     expect(
       changedMembershipModel?.targetPasses.get("body-a")?.surface.scalarColors
         ?.complexRealValues?.[0],
@@ -4490,4 +4541,33 @@ describe("viewport3dRenderModel", () => {
       ),
     ).toBe(0);
   });
+});
+
+
+it("uses Airbox vector mode and palette with exact scoped samples independently of global orientation", () => {
+  const topology = buildViewport3DTopologyRenderModel(topologyFixture(), [
+    { id: "magnetic", node_indices: [0] },
+  ], [
+    { id: "airbox", role: "air", node_indices: [1, 2, 3] },
+  ]);
+  const source = {
+    ...fieldVectorFixture(), quantityId: "H_demag", pointCount: 3, valueCount: 9,
+    grid: [3, 1, 1] as [number, number, number],
+    nodeIndices: new Uint32Array([3, 1, 2]),
+    values: new Float64Array([0, 0, 10, 3, 4, 0, 0, 0, 0]),
+  };
+  const render = (palette: string) => buildViewport3DFieldRenderModel(topology, null, 1, {
+    vectorColorMode: "orientation",
+    partVectorColorModes: new Map([["airbox", "magnitude"]]),
+    partScalarColorPalettes: new Map([["airbox", palette]]),
+    partScalarRangesByMode: new Map([["airbox", new Map([["magnitude", { min: 0, max: 10 }]])]]),
+    partVectorBudgets: new Map([["airbox", 3]]),
+    partFieldVectors: new Map([["airbox", source]]),
+    scalarColorsVisible: false,
+  })?.targetPasses.get("airbox")?.vectors;
+  const gray = render("grayscale");
+  expect(gray?.nodeIndices).toEqual(new Uint32Array([3, 1]));
+  expect(gray?.glyphColors).toEqual(new Float32Array([...scalarColorRgb(1, "grayscale"), ...scalarColorRgb(.5, "grayscale")]));
+  expect(gray?.colorScale).toEqual({ colorMode: "magnitude", colorPalette: "grayscale", quantityId: "H_demag", range: { min: 0, max: 10 } });
+  expect(render("turbo")?.glyphColors).not.toEqual(gray?.glyphColors);
 });

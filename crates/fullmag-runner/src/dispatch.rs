@@ -3482,13 +3482,26 @@ pub(crate) fn apply_native_fem_runtime_contract(
     }
 }
 
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
 fn native_fem_requires_initial_snapshot(
     live_present: bool,
     direct_minimization: bool,
     scheduled_fields_present: bool,
+    stage_autosave_initial_table_requested: bool,
 ) -> bool {
-    live_present || direct_minimization || scheduled_fields_present
+    live_present
+        || direct_minimization
+        || scheduled_fields_present
+        || stage_autosave_initial_table_requested
+}
+
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
+fn native_fem_should_initialize_stage_autosave_table(
+    physical_time_table_present: bool,
+    direct_minimization: bool,
+    stage_start_time_s: f64,
+) -> bool {
+    physical_time_table_present && !direct_minimization && stage_start_time_s == 0.0
 }
 
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
@@ -3593,11 +3606,19 @@ fn execute_native_fem(
         native_relaxation_step.is_none(),
     );
     let mut field_schedules = collect_field_schedules(outputs)?;
+    let stage_autosave_initial_table_requested = native_fem_should_initialize_stage_autosave_table(
+        artifact_writer
+            .as_ref()
+            .is_some_and(ArtifactPipelineSender::has_physical_time_stage_autosave_table),
+        native_relaxation_step.is_some(),
+        plan.time_stage.start_time_s,
+    );
     let needs_initial_snapshot = native_fem_requires_initial_snapshot(
         live.as_ref()
             .is_some_and(|consumer| consumer.initial_snapshot),
         native_relaxation_step.is_some(),
         !field_schedules.is_empty(),
+        stage_autosave_initial_table_requested,
     );
 
     let eager_initial_effective_field = needs_initial_snapshot
@@ -3817,6 +3838,12 @@ fn execute_native_fem(
     if native_relaxation_step.is_some() && current_stats.step == 0 {
         artifacts.record_scalar(&current_stats)?;
     }
+    if stage_autosave_initial_table_requested
+        && current_stats.step == 0
+        && current_stats.time == 0.0
+    {
+        artifacts.record_stage_autosave_scalar(&current_stats)?;
+    }
     if needs_initial_snapshot && current_stats.step == 0 {
         record_native_fem_initial_field_snapshots(
             &mut backend,
@@ -3838,7 +3865,10 @@ fn execute_native_fem(
     let paused: bool;
     let preview_handoff: crate::fem::relax::preview::FemPreviewHandoff;
 
-    let requires_gpu_rk_execution_receipt = native_relaxation_step.is_none();
+    let requires_gpu_execution_receipt = native_relaxation_step.is_none()
+        || native_relaxation_step.is_some_and(|control| {
+            crate::fem::relax::algorithm::is_direct_minimizer(control.algorithm)
+        });
     if let Some(native_step_control) = native_relaxation_step {
         let outcome = crate::fem::relax::direct_minimizer::execute_direct_minimizer(
             &mut backend,
@@ -3912,7 +3942,7 @@ fn execute_native_fem(
             cancelled,
             paused,
             preview_handoff,
-            fem_gpu_receipt_request: requires_gpu_rk_execution_receipt.then(|| {
+            fem_gpu_receipt_request: requires_gpu_execution_receipt.then(|| {
                 if execution_mode == ExecutionMode::Strict {
                     "strict_device".to_string()
                 } else if native_execution_mode == "hybrid_legacy_sparse" {
@@ -4505,18 +4535,24 @@ mod tests {
         );
 
         let final_output_body = &artifacts[body_end..];
-        assert!(
-            final_output_body.contains("backend.apply_average_m_to_step_stats(&mut final_stats)?")
-                && final_output_body.contains("artifacts.record_scalar(&final_stats)?"),
-            "native CUDA final scalar rows must reduce M before recording"
-        );
+        let reduced = final_output_body
+            .find("backend.apply_average_m_to_step_stats(&mut final_stats)?")
+            .expect("final scalar row must reduce M");
+        let canonical = final_output_body
+            .find("canonical_fdm_publication_stats(plan, final_stats)")
+            .expect("final scalar row must canonicalize its physical clock");
+        let recorded = final_output_body
+            .find("artifacts.record_scalar(&published)?")
+            .expect("final scalar row must record the canonical publication copy");
+        assert!(reduced < canonical && canonical < recorded,
+            "native CUDA final scalar rows must reduce M before clock normalization and recording");
 
         let execution_start = execute
             .find("pub(crate) fn execute_cuda_fdm(")
             .expect("active CUDA execution body should be present");
         let execution = &execute[execution_start..];
         assert!(
-            execution.contains("let heavy_payload_due = stats.step % heavy_payload_every == 0;")
+            execution.contains("let heavy_payload_due = live.field_cadence.heavy_payload_due(stats.step);")
                 && execution.contains("if heavy_payload_due && !due_scalar_row")
                 && execution.contains("let magnetization = if heavy_payload_due"),
             "native CUDA live rows carrying a full magnetization payload must use the averaged stats"
@@ -4866,6 +4902,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
             charge_transport_plans: Vec::new(),
@@ -5214,13 +5251,39 @@ mod tests {
         assert_eq!(provenance.robin_beta, None);
     }
 
-    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_stage_autosave_initial_table_is_t0_only_and_skips_direct_minimizer() {
+        assert!(native_fem_should_initialize_stage_autosave_table(
+            true, false, 0.0
+        ));
+        assert!(!native_fem_should_initialize_stage_autosave_table(
+            true, false, 1.0e-12
+        ));
+        assert!(!native_fem_should_initialize_stage_autosave_table(
+            true, true, 0.0
+        ));
+        assert!(!native_fem_should_initialize_stage_autosave_table(
+            false, false, 0.0
+        ));
+    }
+
     #[test]
     fn native_fem_initial_snapshot_is_lazy_for_headless_time_domain() {
-        assert!(!native_fem_requires_initial_snapshot(false, false, false));
-        assert!(native_fem_requires_initial_snapshot(true, false, false));
-        assert!(native_fem_requires_initial_snapshot(false, true, false));
-        assert!(native_fem_requires_initial_snapshot(false, false, true));
+        assert!(!native_fem_requires_initial_snapshot(
+            false, false, false, false
+        ));
+        assert!(native_fem_requires_initial_snapshot(
+            true, false, false, false
+        ));
+        assert!(native_fem_requires_initial_snapshot(
+            false, true, false, false
+        ));
+        assert!(native_fem_requires_initial_snapshot(
+            false, false, true, false
+        ));
+        assert!(native_fem_requires_initial_snapshot(
+            false, false, false, true
+        ));
     }
 
     #[test]
@@ -10119,9 +10182,7 @@ mod tests {
 
         assert!(
             source.contains("artifacts.record_scalar(&accepted_stats)?;")
-                && source.contains(
-                    "let magnetization = if current_stats.step % heavy_payload_every == 0"
-                )
+                && source.contains("let magnetization = if heavy_payload_due && !full_catalog_due {")
                 && source.contains("stats: live_stats,")
                 && source.contains("magnetization,")
                 && source.contains("let action = (live.on_step)(StepUpdate {")
@@ -10171,5 +10232,5 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "fem-gpu"))]
+#[cfg(all(test, any(feature = "fem-gpu", feature = "fem-native")))]
 pub(crate) use tests::tiny_fem_plan as test_tiny_fem_plan;

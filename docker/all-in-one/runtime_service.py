@@ -135,7 +135,11 @@ CONTAINER_RECOVERY_AUTHORIZATION_SCHEMA = (
 )
 CONTAINER_RECOVERY_AUTHORIZATION_SCHEMAS = frozenset({CONTAINER_RECOVERY_AUTHORIZATION_SCHEMA})
 CONTAINER_RECOVERY_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v1"
+CONTAINER_RECOVERY_TERMINAL_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v3"
+CONTAINER_RECOVERY_HELD_MANUAL_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v4"
+CONTAINER_RECOVERY_CAPABILITIES_SCHEMA = "runtime_service_container_recovery_capabilities.v1"
 CONTAINER_RECOVERY_ATTESTATION_SCHEMA = "docker_namespace_teardown_attestation.v1"
+CONTAINER_RECOVERY_ABSENCE_ATTESTATION_SCHEMA = "docker_namespace_absence_attestation.v1"
 CONTAINER_RECOVERY_RECEIPT_SCHEMA = "runtime_service_container_recovery.v1"
 CONTAINER_RECOVERY_ARCHIVE_SCHEMA = "runtime_service_container_recovery_archive.v1"
 CONTAINER_RECOVERY_RELATIVE = PurePosixPath("runtime-services/container-recovery")
@@ -188,6 +192,15 @@ class RuntimeServiceUnknown(RuntimeServiceError):
 
 class RuntimeServiceTransient(RuntimeServiceUnknown):
     """A bounded supervision observation could not prove liveness yet."""
+
+
+class RuntimeServiceOwnerStartupFailure(RuntimeServiceUnknown):
+    """The API was verified, but native service ownership was not confirmed."""
+
+    def __init__(self, detail: str, *, api_identity: Mapping[str, Any], api_port: int):
+        super().__init__(detail)
+        self.api_identity = dict(api_identity)
+        self.api_port = api_port
 
 
 class RuntimeServiceTransportError(RuntimeServiceError):
@@ -727,6 +740,7 @@ def process_environment(
     if service:
         for name in SERVICE_MODE_VARIABLES:
             environment.pop(name, None)
+        environment.pop("FULLMAG_DEVELOPMENT_TERMINAL_OBSERVATION_STDIN", None)
     return environment
 
 
@@ -3403,6 +3417,7 @@ def _run_cli(
     *,
     timeout: float,
     cli: Path | None = None,
+    raw_output: list[bytes] | None = None,
 ) -> dict[str, Any]:
     executable = _cli_path(paths, cli)
     if timeout <= 0:
@@ -3414,7 +3429,7 @@ def _run_cli(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        text=raw_output is None,
     )
     try:
         stdout, stderr = process.communicate(timeout=timeout)
@@ -3422,6 +3437,15 @@ def _run_cli(
         raise RuntimeServiceUnknown(
             "runtime CLI timed out; outcome is unknown and no retry is allowed"
         ) from error
+    if isinstance(stdout, bytes):
+        raw_stdout = stdout
+        try:
+            stdout = stdout.decode("utf-8", "strict")
+        except UnicodeDecodeError as error:
+            _fail(f"runtime CLI returned invalid UTF-8: {error}")
+        stderr = stderr.decode("utf-8", "replace")
+    else:
+        raw_stdout = stdout.encode("utf-8")
     if process.returncode != 0:
         detail = (stderr or stdout or "runtime CLI failed").strip()
         raise RuntimeServiceError(f"runtime CLI failed: {detail[-4096:]}")
@@ -3433,6 +3457,8 @@ def _run_cli(
         _fail(f"runtime CLI returned invalid JSON: {error}")
     if not isinstance(value, dict):
         _fail("runtime CLI must return a JSON object")
+    if raw_output is not None:
+        raw_output.append(raw_stdout)
     return value
 
 
@@ -3773,14 +3799,99 @@ def _container_recovery_owner_digest(paths: RuntimePaths) -> tuple[dict[str, Any
     return owner, raw, _sha256_bytes(raw)
 
 
+def _container_recovery_expected_outcome(request: Mapping[str, Any]) -> str:
+    if request.get("schema_version") == CONTAINER_RECOVERY_HELD_MANUAL_REQUEST_SCHEMA:
+        if "retained_cancelled_runs" in request:
+            _fail("v4 container recovery cannot carry cancelled-run pins")
+        terminal_pins = request.get("retained_terminal_runs")
+        held_pins = request.get("retained_held_manual_runs")
+        if not isinstance(terminal_pins, list) or not 0 <= len(terminal_pins) <= 128:
+            _fail("v4 container recovery requires 0..128 retained terminal run pins")
+        if not isinstance(held_pins, list) or not 1 <= len(held_pins) <= 128:
+            _fail("v4 container recovery requires 1..128 retained held-manual run pins")
+        if len(terminal_pins) + len(held_pins) > 128:
+            _fail("v4 container recovery retained run pins exceed the combined limit")
+        seen: set[str] = set()
+        for pin in terminal_pins:
+            if not isinstance(pin, dict) or set(pin) != {
+                "run_id", "run_intent_sha256", "run_catalog_sha256", "artifact_catalog_sha256"
+            }:
+                _fail("invalid v4 retained terminal run pin")
+            run_id = _recovery_store_id(pin.get("run_id"), "retained terminal run id")
+            if run_id in seen:
+                _fail("duplicate v4 retained run pin")
+            seen.add(run_id)
+            for key in ("run_intent_sha256", "run_catalog_sha256"):
+                _container_recovery_hex(pin.get(key), key)
+            if pin["artifact_catalog_sha256"] is not None:
+                _container_recovery_hex(pin["artifact_catalog_sha256"], "artifact catalog digest")
+        for pin in held_pins:
+            if not isinstance(pin, dict) or set(pin) != {
+                "run_id", "run_intent_sha256", "run_catalog_sha256", "start_release"
+            } or pin.get("start_release") != "absent":
+                _fail("invalid retained held-manual run pin")
+            run_id = _recovery_store_id(pin.get("run_id"), "retained held-manual run id")
+            if run_id in seen:
+                _fail("duplicate v4 retained run pin")
+            seen.add(run_id)
+            _container_recovery_hex(pin.get("run_intent_sha256"), "held-manual run intent digest")
+            _container_recovery_hex(pin.get("run_catalog_sha256"), "held-manual run catalog digest")
+        return "retained_manual_held_runs_recovered"
+    if "retained_held_manual_runs" in request:
+        _fail("held-manual run pins require container recovery v4")
+    if request.get("schema_version") == CONTAINER_RECOVERY_TERMINAL_REQUEST_SCHEMA:
+        if request.get("retained_cancelled_runs") is not None:
+            _fail("v3 container recovery cannot carry cancelled-only pins")
+        pins = request.get("retained_terminal_runs")
+        if not isinstance(pins, list) or not 1 <= len(pins) <= 128:
+            _fail("v3 container recovery requires 1..128 retained terminal run pins")
+        seen = set()
+        for pin in pins:
+            if not isinstance(pin, dict) or set(pin) != {
+                "run_id", "run_intent_sha256", "run_catalog_sha256", "artifact_catalog_sha256"}:
+                _fail("invalid retained terminal run pin")
+            run_id = _recovery_store_id(pin.get("run_id"), "retained terminal run id")
+            if run_id in seen:
+                _fail("duplicate retained terminal run pin")
+            seen.add(run_id)
+            for key in ("run_intent_sha256", "run_catalog_sha256"):
+                _container_recovery_hex(pin.get(key), key)
+            if pin["artifact_catalog_sha256"] is not None:
+                _container_recovery_hex(pin["artifact_catalog_sha256"], "artifact catalog digest")
+        return "retained_terminal_runs_recovered"
+    if request.get("retained_terminal_runs") is not None:
+        _fail("terminal run pins require container recovery v3")
+    if request.get("schema_version") == CONTAINER_RECOVERY_REQUEST_SCHEMA:
+        if request.get("retained_cancelled_runs") is not None:
+            _fail("v1 container recovery cannot retain cancelled runs")
+        return "empty_namespace_recovered"
+    if request.get("schema_version") != "runtime_service_container_recovery_request.v2":
+        _fail("container recovery request schema is unsupported")
+    pins = request.get("retained_cancelled_runs")
+    if not isinstance(pins, list) or not 1 <= len(pins) <= 128:
+        _fail("v2 container recovery requires 1..128 retained run pins")
+    seen = set()
+    for pin in pins:
+        if not isinstance(pin, dict) or set(pin) != {
+            "run_id", "run_intent_sha256", "run_catalog_sha256"
+        }:
+            _fail("invalid retained cancelled run pin")
+        run_id = _recovery_store_id(pin.get("run_id"), "retained run id")
+        if run_id in seen:
+            _fail("duplicate retained cancelled run pin")
+        seen.add(run_id)
+        _container_recovery_hex(pin.get("run_intent_sha256"), "retained run intent digest")
+        _container_recovery_hex(pin.get("run_catalog_sha256"), "retained run catalog digest")
+    return "retained_cancelled_runs_recovered"
+
+
 def _container_recovery_request_sources(
     request: Mapping[str, Any], name: str
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     expected_owner = request.get("expected_owner")
     if not isinstance(expected_owner, dict):
         _fail(f"{name} has no typed expected owner")
-    if request.get("schema_version") != CONTAINER_RECOVERY_REQUEST_SCHEMA:
-        _fail(f"{name} schema is unsupported")
+    _container_recovery_expected_outcome(request)
     request_id = request.get("request_id")
     if not isinstance(request_id, str) or UUID_RE.fullmatch(request_id) is None:
         _fail(f"{name} has an invalid request id")
@@ -3839,12 +3950,119 @@ def _container_recovery_request_sources(
     return by_service, expected_owner
 
 
+def _container_recovery_mapping(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        _fail(f"{name} must contain an object")
+    return value
+
+
 def _validate_container_recovery_attestation_document(
     request: Mapping[str, Any],
     request_sha256: str,
     attestation: Mapping[str, Any],
     attestation_sha256: str,
 ) -> None:
+    if attestation.get("schema_version") == CONTAINER_RECOVERY_ABSENCE_ATTESTATION_SCHEMA:
+        if (
+            (request.get("schema_version") != "runtime_service_container_recovery_request.v2"
+             or not isinstance(request.get("retained_cancelled_runs"), list))
+            and (request.get("schema_version") != CONTAINER_RECOVERY_TERMINAL_REQUEST_SCHEMA
+                 or not isinstance(request.get("retained_terminal_runs"), list))
+            and (request.get("schema_version") != CONTAINER_RECOVERY_HELD_MANUAL_REQUEST_SCHEMA
+                 or not isinstance(request.get("retained_terminal_runs"), list)
+                 or not isinstance(request.get("retained_held_manual_runs"), list))
+        ):
+            _fail("container namespace absence proof requires a retained-run v2, v3 or v4 request")
+        if set(attestation) != {
+            "schema_version",
+            "request_sha256",
+            "docker_engine_id_sha256",
+            "containers",
+            "device_release",
+            "manifest_sha256",
+            "result",
+        }:
+            _fail("container namespace absence attestation has unexpected fields")
+        if attestation.get("request_sha256") != request_sha256:
+            _fail("container namespace absence attestation targets another request")
+        if attestation.get("docker_engine_id_sha256") != request.get("docker_engine_id_sha256"):
+            _fail("container namespace absence attestation engine differs from request")
+        if attestation.get("manifest_sha256") != request.get("docker_manifest_sha256"):
+            _fail("container namespace absence manifest differs from request")
+        if attestation.get("result") != "authoritative_namespace_absence":
+            _fail("container namespace absence proof is not authoritative")
+        for field in ("request_sha256", "docker_engine_id_sha256", "manifest_sha256"):
+            _container_recovery_hex(attestation.get(field), f"container namespace absence {field}")
+        requested, _ = _container_recovery_request_sources(
+            request, "container recovery request"
+        )
+        observations = attestation.get("containers")
+        if not isinstance(observations, list) or len(observations) != len(requested):
+            _fail("container namespace absence observation count differs from request")
+        seen: set[str] = set()
+        for raw in observations:
+            observed = _container_recovery_mapping(raw, "container namespace absence observation")
+            if set(observed) != {
+                "container_id", "image_id", "config_sha256", "service", "absence"
+            }:
+                _fail("container namespace absence observation has unexpected fields")
+            container_id = _container_recovery_hex(
+                observed.get("container_id"), "absence container id"
+            )
+            if container_id in seen:
+                _fail("container namespace absence attestation repeats a container")
+            seen.add(container_id)
+            pin = next(
+                (item for item in requested.values() if item.get("container_id") == container_id),
+                None,
+            )
+            if pin is None or any(
+                observed.get(field) != pin.get(field)
+                for field in ("image_id", "config_sha256", "service")
+            ):
+                _fail("container namespace absence identity differs from request")
+            absence = _container_recovery_mapping(observed.get("absence"), "container absence evidence")
+            if set(absence) != {"inspect", "ps_all"}:
+                _fail("container namespace absence evidence has unexpected fields")
+            inspect = _container_recovery_mapping(absence.get("inspect"), "container inspect absence")
+            if set(inspect) != {"outcome", "matched_container_id", "output_sha256"}:
+                _fail("container inspect absence has unexpected fields")
+            if (
+                inspect.get("outcome") != "no_such_object"
+                or inspect.get("matched_container_id") != container_id
+            ):
+                _fail("container inspect absence does not target the exact pinned ID")
+            _container_recovery_hex(
+                inspect.get("output_sha256"), "container inspect absence output SHA-256"
+            )
+            ps_all = _container_recovery_mapping(absence.get("ps_all"), "container ps-all absence")
+            if set(ps_all) != {"outcome", "output_sha256"}:
+                _fail("container ps-all absence has unexpected fields")
+            if ps_all.get("outcome") != "empty":
+                _fail("Docker ps -a still lists a container in the namespace")
+            _container_recovery_hex(
+                ps_all.get("output_sha256"), "container ps-all output SHA-256"
+            )
+        if len(seen) != len(requested):
+            _fail("container namespace absence attestation omitted a pinned container")
+        release = _container_recovery_mapping(
+            attestation.get("device_release"), "container absence device release"
+        )
+        release_fields = {"resource_id", "mapping_sha256", "mapping_detached"}
+        if request.get("device_release_gpu_uuid") is not None:
+            release_fields.add("gpu_uuid")
+        if set(release) != release_fields:
+            _fail("container absence device release has unexpected fields")
+        if (
+            release.get("resource_id") != request.get("device_release_resource_id")
+            or release.get("gpu_uuid") != request.get("device_release_gpu_uuid")
+            or release.get("mapping_sha256") != request.get("device_release_mapping_sha256")
+            or release.get("mapping_detached") is not True
+        ):
+            _fail("container absence device release differs from request")
+        _container_recovery_hex(attestation_sha256, "container absence attestation SHA-256")
+        return
+
     if attestation.get("schema_version") != CONTAINER_RECOVERY_ATTESTATION_SCHEMA:
         _fail("container recovery teardown attestation schema is unsupported")
     if attestation.get("request_sha256") != request_sha256:
@@ -4198,7 +4416,8 @@ def _validate_container_recovery_successor(
         "container recovery successor configuration",
         MAX_CONTAINER_RECOVERY_REQUEST_BYTES,
     )
-    if _container_recovery_successor_config_profile(current_config) != _container_recovery_successor_config_profile(historical_config):
+    if (_canonical_container_recovery_json(_container_recovery_successor_config_profile(current_config))
+            != _canonical_container_recovery_json(_container_recovery_successor_config_profile(historical_config))):
         _fail("container recovery successor configuration changed its operator profile")
     if current_config.get("target_id") != successor_owner.get("target_id"):
         _fail("container recovery successor configuration targets a different service")
@@ -4289,7 +4508,8 @@ def _validate_container_recovery_successor(
         ):
             _fail(f"container recovery successor pool record differs from owner {source}")
         expected_resources = current_config.get(config_key)
-        if not isinstance(expected_resources, list) or record.get("resources") != expected_resources:
+        if (not isinstance(expected_resources, list)
+                or _canonical_container_recovery_json(record.get("resources")) != _canonical_container_recovery_json(expected_resources)):
             _fail(f"container recovery successor pool resources differ from configuration {source}")
 
     for source in (
@@ -4394,6 +4614,14 @@ def _validate_container_recovery_archive(
         _fail("container recovery archive is not a directory")
     successor_sources = set()
     successor_optional_sources: set[str] = set()
+    if authenticated_drained_owner_sha256 is not None and authenticated_successor_owner is None:
+        drain = _read_authenticated_terminal_drain(paths)
+        current_owner, _, current_sha256 = _container_recovery_owner_digest(paths)
+        if (current_sha256 != authenticated_drained_owner_sha256
+                or current_owner != drain["owner"]
+                or _owner_identity(current_owner) == _owner_identity(context["expected_owner"])):
+            _fail("container recovery replay has no authenticated new drained generation")
+        authenticated_successor_owner = drain["pin"]
     if authenticated_successor_owner is not None:
         if authenticated_drained_owner_sha256 is None:
             _fail("container recovery successor is missing its drained-owner proof")
@@ -4448,7 +4676,7 @@ def _validate_container_recovery_archive(
                 result["owner_sha256_after"],
             }
             if authenticated_drained_owner_sha256 is not None:
-                allowed_owner_sha256.add(authenticated_drained_owner_sha256)
+                allowed_owner_sha256 = {authenticated_drained_owner_sha256}
             live_owner_sha256 = _sha256_bytes(live_bytes)
             if live_owner_sha256 not in allowed_owner_sha256:
                 _fail("container recovery live owner changed outside its pinned transition")
@@ -4481,7 +4709,8 @@ def _validate_container_recovery_receipt(
         _fail("native container recovery returned a non-object")
     if result.get("schema_version") != CONTAINER_RECOVERY_RECEIPT_SCHEMA:
         _fail("native container recovery receipt schema is unsupported")
-    if result.get("status") != "recovered" or result.get("outcome") != "empty_namespace_recovered":
+    if (result.get("status") != "recovered"
+            or result.get("outcome") != _container_recovery_expected_outcome(request)):
         _fail("native container recovery did not return a completed recovery")
     for field, expected in (
         ("request_id", request["request_id"]),
@@ -4635,18 +4864,165 @@ def container_recovery_configuration_override(
             os.environ["FULLMAG_DOCKER_PREVIOUS_CONFIG_SHA256"] = previous
 
 
+def _container_recovery_binary_sha(paths: RuntimePaths, cli: Path | None) -> str:
+    """Hash the canonical lifecycle ELF through a stable no-follow descriptor."""
+    executable = _cli_path(paths, cli)
+    canonical_executable = _absolute(paths.package / "bin" / "fullmag-bin", "native recovery binary")
+    if executable != canonical_executable:
+        _fail("v3 container recovery must probe the actual native package executable")
+    _assert_no_links(executable, "native recovery binary")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(executable, flags)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 2 * GIB:
+            _fail("native recovery binary is not a bounded regular file")
+        digest = hashlib.sha256()
+        count = 0
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            count += len(chunk)
+            if count > before.st_size:
+                _fail("native recovery binary grew during identity observation")
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        named = os.stat(executable, follow_symlinks=False)
+        def identity(value):
+            return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+        if count != before.st_size or identity(before) != identity(after) or identity(after) != identity(named):
+            _fail("native recovery binary changed during identity observation")
+        return digest.hexdigest()
+    finally:
+        os.close(descriptor)
+
+
+def _publish_container_capability_proof(paths: RuntimePaths, context, proof) -> None:
+    # This explicit runtime-services view is the named control volume. Never
+    # fall back to the host-backed store to publish technical build evidence.
+    if paths.runtime_services is None:
+        _fail("v3 native capability proof requires the explicit runtime-control volume")
+    root = runtime_services_root(paths) / "container-recovery" / context["request_sha256"] / "native-capabilities"
+    _ensure_directory(root, "native container recovery capability proof directory")
+    path = root / (proof["binary_sha256"] + "-" + proof["capabilities_raw_sha256"] + ".json")
+    raw = _canonical_container_recovery_json(proof) + b"\n"
+    try:
+        existing = _read_stable_container_recovery_file(path, "native capability proof", MAX_JSON_BYTES * 2)
+    except FileNotFoundError:
+        existing = None
+    if existing is not None:
+        if existing != raw:
+            _fail("native capability proof history already contains different bytes")
+        return
+    # A partial write must never occupy the deterministic immutable name.
+    # Only this invocation's disposable temporary is cleaned up. A hard link
+    # publishes flushed bytes atomically and refuses to replace any history.
+    temporary = root / ("." + path.name + "." + uuid.uuid4().hex + ".tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o660)
+    try:
+        try:
+            view = memoryview(raw)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    _fail("native capability proof write was incomplete")
+                view = view[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        _assert_no_links(root, "native capability publication directory")
+        try:
+            os.link(temporary, path, follow_symlinks=False)
+        except FileExistsError:
+            if _read_stable_container_recovery_file(path, "native capability proof", MAX_JSON_BYTES * 2) != raw:
+                _fail("native capability proof history already contains different bytes")
+    finally:
+        temporary.unlink()
+    directory = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def _probe_container_recovery_capabilities(paths: RuntimePaths, context, *, cli, timeout):
+    """Pure native introspection precedes every first v3/v4 native mutation.
+
+    This gate qualifies the newly built executable inside the backend. It is
+    deliberately not evidence about the earlier host container-removal step.
+    """
+    binary_sha = _container_recovery_binary_sha(paths, cli)
+    provenance_raw = _read_stable_container_recovery_file(paths.provenance, "native package provenance", MAX_JSON_BYTES)
+    try:
+        provenance = json.loads(provenance_raw, object_pairs_hook=_reject_duplicate_keys)
+    except (ValueError, UnicodeDecodeError) as error:
+        _fail(f"native package provenance is invalid: {error}")
+    if not isinstance(provenance, dict):
+        _fail("native package provenance must be an object")
+    commit, snapshot = _source_identity(paths)
+    raw_output: list[bytes] = []
+    try:
+        capability = _run_cli(paths, ("runtime", "service-container-recovery-capabilities"),
+                              timeout=min(timeout, 30.0), cli=cli, raw_output=raw_output)
+    except RuntimeServiceError as error:
+        _fail("native container recovery capabilities are unavailable; no mutator was invoked: " + str(error))
+    if _container_recovery_binary_sha(paths, cli) != binary_sha:
+        _fail("native container recovery binary changed during capability probe")
+    if _read_stable_container_recovery_file(paths.provenance, "native package provenance", MAX_JSON_BYTES) != provenance_raw:
+        _fail("native package provenance changed during capability probe")
+    if not isinstance(capability, dict) or set(capability) != {"schema_version", "supported_recovery_schemas", "build_identity"} or capability.get("schema_version") != CONTAINER_RECOVERY_CAPABILITIES_SCHEMA:
+        _fail("native container recovery capability document has an unsupported schema")
+    supported = capability.get("supported_recovery_schemas")
+    if (not isinstance(supported, list) or not 1 <= len(supported) <= 16
+            or any(not isinstance(item, str) or len(item) > 128
+                   or re.fullmatch(r"runtime_service_container_recovery_request\.v[1-9][0-9]*", item) is None
+                   for item in supported)
+            or len(set(supported)) != len(supported)
+            or context["request"]["schema_version"] not in supported):
+        _fail("actual native executable does not support the requested container recovery schema")
+    build = capability.get("build_identity")
+    if not isinstance(build, dict) or set(build) != {"version", "built_at_utc", "git_commit", "worktree_state", "source_snapshot_sha256"}:
+        _fail("native recovery capabilities have an invalid build identity")
+    _container_recovery_text(build["version"], "native capability version", 128)
+    if (not isinstance(build["built_at_utc"], str)
+            or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", build["built_at_utc"]) is None
+            or not isinstance(build["worktree_state"], str)
+            or build["worktree_state"] not in {"clean", "dirty", "unknown"}
+            or build["git_commit"] != commit or build["source_snapshot_sha256"] != snapshot):
+        _fail("native capability build identity differs from pinned package provenance")
+    if len(raw_output) != 1 or not isinstance(raw_output[0], bytes):
+        _fail("native capability probe has no exact raw stdout evidence")
+    try:
+        raw_document = json.loads(raw_output[0], object_pairs_hook=_reject_duplicate_keys)
+    except (ValueError, UnicodeDecodeError) as error:
+        _fail(f"native capability stdout evidence is invalid: {error}")
+    if raw_document != capability:
+        _fail("native capability parsed result differs from its raw stdout")
+    proof = {"schema_version": "fullmag.native-container-recovery-capability-proof.v1",
+             "request_sha256": context["request_sha256"], "request_schema": context["request"]["schema_version"],
+             "binary_path": str(_cli_path(paths, cli)), "binary_sha256": binary_sha,
+             "capabilities_raw_sha256": _sha256_bytes(raw_output[0]), "capabilities_raw_utf8": raw_output[0].decode("utf-8"),
+             "provenance_sha256": _sha256_bytes(provenance_raw), "build_identity": dict(build)}
+    _publish_container_capability_proof(paths, context, proof)
+    return proof
+
+
 def _run_container_recovery_cli(
     paths: RuntimePaths,
     arguments: Sequence[str],
     *,
     timeout: float,
     cli: Path | None,
+    binary_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Retry only the transient native descriptor conflict for this recovery."""
 
     deadline = time.monotonic() + CONTAINER_RECOVERY_WRITER_BUSY_RETRY_SECONDS
     while True:
         try:
+            if binary_sha256 is not None and _container_recovery_binary_sha(paths, cli) != binary_sha256:
+                _fail("native container recovery binary changed before mutator invocation")
             return _run_cli(paths, arguments, timeout=timeout, cli=cli)
         except RuntimeServiceError as error:
             message = str(error).removeprefix("runtime CLI failed: ").strip()
@@ -4755,12 +5131,25 @@ def recover_container_namespace(
         "--attestation-sha256",
         context["attestation_sha256"],
     )
+    capability = None
+    if request.get("schema_version") in {
+        CONTAINER_RECOVERY_TERMINAL_REQUEST_SCHEMA,
+        CONTAINER_RECOVERY_HELD_MANUAL_REQUEST_SCHEMA,
+    }:
+        capability = _probe_container_recovery_capabilities(paths, context, cli=cli, timeout=timeout)
     result = _run_container_recovery_cli(
         paths,
         recovery_arguments,
         timeout=timeout,
         cli=cli,
+        **({"binary_sha256": capability["binary_sha256"]} if capability is not None else {}),
     )
+    if capability is not None and (
+        not isinstance(result, dict)
+        or result.get("executor_build_commit") != capability["build_identity"]["git_commit"]
+        or result.get("executor_build_snapshot") != capability["build_identity"]["source_snapshot_sha256"]
+    ):
+        _fail("native container recovery receipt executor differs from the capability-qualified binary")
     validated = _validate_container_recovery_receipt(paths, context, result)
     _, _, published_owner_sha256 = _container_recovery_owner_digest(paths)
     if published_owner_sha256 != validated.get("owner_sha256_after"):
@@ -4889,6 +5278,24 @@ def _probe_api_identity(
         port, "/v2/platform/compute/profiles?limit=100", timeout=request_timeout()
     )
     if profile_status != 200:
+        health_status, health_headers, health = _http_json(
+            port, "/v2/platform/health", timeout=request_timeout()
+        )
+        if (health_status == 200 and health.get("status") == "degraded"
+                and _single_header(health_headers, "x-fullmag-api-instance") == instance
+                and _single_header(health_headers, "x-api-contract-version") == contract_version):
+            # The API has already fenced its failed startup. Keep its verified
+            # identity without requiring a compute route or starting an owner.
+            raise RuntimeServiceOwnerStartupFailure(
+                "API startup entered diagnostic-only mode; inspect API startup logs for the cause",
+                api_identity={
+                    "api_instance_id": instance,
+                    "api_contract_version": contract_version,
+                    "build_identity": build_identity,
+                    "runtime_store_binding": store_binding,
+                },
+                api_port=port,
+            )
         _fail("API compute profile route is unavailable")
     return (
         {
@@ -5040,6 +5447,10 @@ def wait_for_api(
                     "API identity validation exceeded startup deadline"
                 )
             return {**identity, "profiles": profile}
+        except RuntimeServiceOwnerStartupFailure:
+            # Diagnostic availability is a definitive startup outcome, not a
+            # transport retry and not evidence of a ready native service.
+            raise
         except (RuntimeServiceError, OSError) as error:
             last_error = error
             if api_process_poll is not None and api_process_poll() is not None:
@@ -5477,15 +5888,25 @@ def start(
             "runtime_store_binding",
         )
     }
-    ensured = _owner_from_cli(
-        _run_cli(
-            paths,
-            ("runtime", "service-ensure", "--config", str(paths.config)),
-            timeout=timeout,
-            cli=cli,
-        ),
-        "service-ensure",
-    )
+    try:
+        ensured = _owner_from_cli(
+            _run_cli(
+                paths,
+                ("runtime", "service-ensure", "--config", str(paths.config)),
+                timeout=timeout,
+                cli=cli,
+            ),
+            "service-ensure",
+        )
+    except Exception as error:
+        # API liveness and native ownership are different facts. Preserve the
+        # verified API identity for fenced diagnostics without inventing an
+        # owner handle or retrying an operation with an unknown outcome.
+        raise RuntimeServiceOwnerStartupFailure(
+            f"runtime service ownership was not confirmed: {error}",
+            api_identity=api_identity,
+            api_port=port,
+        ) from error
     pinned = RuntimeHandle(paths, configuration, ensured, port, api_identity)
     owner_pin_durable = False
     try:
@@ -5627,3 +6048,225 @@ def check(handle: RuntimeHandle, *, full_api_probe: bool = True) -> None:
     # Recheck after the liveness request so a pin change during the request
     # cannot be mistaken for a healthy observation on the next cycle.
     _assert_pinned_ready_owner(handle)
+
+
+# Private terminal observation transport. This grants no admission/recovery
+# authority and never activates a script or dispatches a Compute command.
+TERMINAL_OBSERVATION_REQUEST_ENV = "FULLMAG_TERMINAL_OBSERVATION_REQUEST"
+TERMINAL_OBSERVATION_DIGEST_ENV = "FULLMAG_TERMINAL_OBSERVATION_REQUEST_SHA256"
+TERMINAL_OBSERVATION_STDIN_ENV = "FULLMAG_DEVELOPMENT_TERMINAL_OBSERVATION_STDIN"
+
+
+def _terminal_observation_documents(paths):
+    environment = process_environment(paths)
+    relative = environment.get(TERMINAL_OBSERVATION_REQUEST_ENV)
+    digest = environment.get(TERMINAL_OBSERVATION_DIGEST_ENV)
+    if TERMINAL_OBSERVATION_STDIN_ENV in environment:
+        _fail("terminal observation stdin switch is owned by PID 1")
+    if relative is None and digest is None:
+        return environment, None
+    if (not isinstance(relative, str)
+            or re.fullmatch(r"terminal-observation/[0-9a-f]{64}/request\.json", relative) is None
+            or not isinstance(digest, str) or HEX64.fullmatch(digest) is None):
+        _fail("terminal observation requires exact private request path and digest")
+    if (environment.get("FULLMAG_STARTUP_ENABLED") == "1"
+            or any(environment.get(key) is not None for key in (
+                "FULLMAG_DEVELOPMENT_RESTORE_STDIN", ACCEPTED_REATTACH_STDIN_ENV,
+                ACCEPTED_REATTACH_REQUEST_ENV, ACCEPTED_REATTACH_DIGEST_ENV))):
+        _fail("terminal observation cannot combine with startup, authoring or accepted reattach")
+    raw = _bounded_regular(_reattach_relative(paths.state_root, relative, "terminal request"),
+                           "terminal observation request", 64 * 1024)
+    if _sha256_bytes(raw) != digest:
+        _fail("terminal observation request CAS differs")
+    request = _accepted_reattach_json(raw, "terminal observation request")
+    if (set(request) != {"schema", "proof_path", "proof_sha256"}
+            or request.get("schema") != "fullmag.terminal-observation-request.v1"
+            or request.get("proof_path") != str(PurePosixPath(relative).parent / "proof.json")
+            or request.get("proof_sha256") != PurePosixPath(relative).parent.name):
+        _fail("terminal observation request fields or proof identity differ")
+    proof_raw = _bounded_regular(
+        _reattach_relative(paths.state_root, request["proof_path"], "terminal proof"),
+        "terminal observation proof", 256 * 1024)
+    if _sha256_bytes(proof_raw) != request["proof_sha256"]:
+        _fail("terminal observation proof CAS differs")
+    proof = _accepted_reattach_json(proof_raw, "terminal observation proof")
+    if proof.get("schema") not in ("fullmag.development-terminal-observation-proof.v1",
+                                   "fullmag.development-terminal-observation-proof.v2"):
+        _fail("terminal observation proof schema differs")
+    for key in ("run_id", "session_id", "source_root", "compose_project", "control_volume"):
+        if not isinstance(proof.get(key), str) or not proof[key] or len(proof[key]) > 4096:
+            _fail("terminal observation proof is missing " + key)
+    for key in ("native_config_sha256", "terminal_evidence_sha256"):
+        if not isinstance(proof.get(key), str) or HEX64.fullmatch(proof[key]) is None:
+            _fail("terminal observation proof has invalid " + key)
+    return environment, {
+        "request_relative": relative, "request_sha256": digest,
+        "proof_relative": request["proof_path"], "proof_sha256": request["proof_sha256"],
+        "proof": proof,
+    }
+
+
+def terminal_observation_preflight(paths):
+    # Read only. Ordinary startup, native admission and namespace recovery keep
+    # their existing gates; this value is not a substitute for any native proof.
+    return _terminal_observation_documents(paths)[1]
+
+
+@contextmanager
+def terminal_observation_api_input(paths, *, terminal_preflight=None, accepted_preflight=None):
+    environment, observation = _terminal_observation_documents(paths)
+    if observation is None:
+        if terminal_preflight is not None:
+            _fail("terminal observation disappeared after preflight")
+        with accepted_reattach_api_input(paths, preflight=accepted_preflight) as pair:
+            yield pair[0], pair[1], None
+        return
+    if observation != terminal_preflight or accepted_preflight is not None:
+        _fail("terminal observation preflight changed or conflicts with accepted reattach")
+    proof = observation["proof"]
+    parent = PurePosixPath(observation["proof_relative"]).parent
+    lock_path = _reattach_relative(paths.state_root, str(parent / "launch.lock"),
+                                  "terminal observation launch mutex")
+    import fcntl
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            _fail("terminal observation launch mutex is not a private regular file")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            _fail("terminal observation launch is already owned")
+        if environment.get("FULLMAG_RUNTIME_PROVENANCE") != str(ACCEPTED_REATTACH_PROVENANCE):
+            _fail("terminal observation requires fixed Docker runtime provenance")
+        provenance = _read_json(ACCEPTED_REATTACH_PROVENANCE, "terminal target provenance")
+        commit, snapshot, image = (provenance.get(key) for key in
+                                  ("commit", "source_snapshot_sha256", "image_id"))
+        if (provenance.get("schema") != "fullmag.docker-all-image.v1"
+                or provenance.get("state") != "succeeded"
+                or not isinstance(commit, str) or HEX40.fullmatch(commit) is None
+                or not isinstance(snapshot, str) or HEX64.fullmatch(snapshot) is None
+                or not isinstance(image, str) or re.fullmatch("sha256:[0-9a-f]{64}", image) is None
+                or environment.get("FULLMAG_RUNTIME_IMAGE_ID") != image):
+            _fail("terminal observation target provenance is not the current succeeded build")
+        configuration = _bounded_regular(paths.config, "terminal target native config", 64 * 1024)
+        config_sha = _sha256_bytes(configuration)
+        inspected = _run_cli(paths, [
+            "runtime", "service-inspect-terminal-run", "--config", str(paths.config),
+            "--config-sha256", config_sha, "--run-id", proof["run_id"],
+        ], timeout=30.0)
+        if (set(inspected) != {"schema_version", "run_id", "terminal_evidence_sha256",
+                              "mutations_applied", "solve_replayed"}
+                or inspected.get("schema_version") != "runtime_service_terminal_run_evidence.v1"
+                or inspected.get("run_id") != proof["run_id"]
+                or inspected.get("terminal_evidence_sha256") != proof["terminal_evidence_sha256"]
+                or inspected.get("mutations_applied") is not False
+                or inspected.get("solve_replayed") is not False
+                or _bounded_regular(paths.config, "terminal target native config", 64 * 1024)
+                   != configuration):
+            _fail("terminal observation native evidence changed at target launch")
+        binding = {
+            "schema": "fullmag.terminal-observation-launch.v1",
+            "source_proof_sha256": observation["proof_sha256"],
+            "source_native_config_sha256": proof["native_config_sha256"],
+            "target_build_id": commit, "target_source_sha256": snapshot,
+            "target_image_id": image, "native_config_sha256": config_sha,
+            "terminal_evidence_sha256": proof["terminal_evidence_sha256"],
+        }
+        binding_raw = json.dumps(binding, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        binding_sha = _sha256_bytes(binding_raw)
+        binding_relative = str(parent / ("launch-" + binding_sha + ".json"))
+        binding_path = _reattach_relative(paths.state_root, binding_relative, "terminal launch")
+        _publish_accepted_reattach_raw(binding_path, binding_raw, "terminal observation launch binding")
+        if _terminal_observation_documents(paths)[1] != observation:
+            _fail("terminal observation controls changed before API launch")
+        payload = {
+            "schema": "fullmag.development-terminal-observation-input.v1",
+            "target_build_id": commit, "target_source_sha256": snapshot,
+            "target_image_id": image, "proof_path": observation["proof_relative"],
+            "proof_sha256": observation["proof_sha256"],
+            "launch_path": binding_relative, "launch_sha256": binding_sha,
+        }
+        launch = {"relative": binding_relative, "sha256": binding_sha, "binding": binding}
+        with tempfile.TemporaryFile(mode="w+b", dir=paths.state_root) as stream:
+            raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+            if len(raw) > 64 * 1024:
+                _fail("terminal observation stdin exceeds its bound")
+            stream.write(raw)
+            stream.seek(0)
+            environment[TERMINAL_OBSERVATION_STDIN_ENV] = "1"
+            yield environment, stream, launch
+    finally:
+        os.close(fd)
+
+
+def terminal_observation_runtime_receipt(paths, *, preflight, launch, handle):
+    if _terminal_observation_documents(paths)[1] != preflight:
+        _fail("terminal observation controls changed before native receipt")
+    proof = preflight["proof"]
+    # Match the outcome already authenticated by the native installation to
+    # its immutable public preflight. The v1 proof stays byte-compatible.
+    original = proof.get("original_iteration")
+    preflight_sha = proof.get("preflight_raw_sha256")
+    if (not isinstance(original, str) or re.fullmatch(r"[0-9a-f]{32}", original) is None
+            or not isinstance(preflight_sha, str) or HEX64.fullmatch(preflight_sha) is None):
+        _fail("terminal observation source preflight identity is invalid")
+    source_raw = _bounded_regular(
+        _reattach_relative(BUILD_CONTROL_ROOT,
+            "iteration/attempts/" + original + "/terminal-session-preflight.json", "terminal source preflight"),
+        "terminal source preflight", 8 * 1024 * 1024)
+    if _sha256_bytes(source_raw) != preflight_sha:
+        _fail("terminal observation source preflight CAS differs")
+    source = _accepted_reattach_json(source_raw, "terminal source preflight")
+    source_run = source.get("run")
+    if not isinstance(source_run, dict):
+        _fail("terminal observation source run is invalid")
+    outcome = source_run.get("status")
+    if (not isinstance(outcome, str) or outcome not in {"failed", "completed"}
+            or source_run.get("run_id") != proof["run_id"]
+            or source.get("session_id") != proof["session_id"]):
+        _fail("terminal observation source outcome differs")
+    if not isinstance(launch, dict) or set(launch) != {"relative", "sha256", "binding"}:
+        _fail("terminal observation has no exact launch binding")
+    binding = launch["binding"]
+    if _sha256_bytes(_bounded_regular(
+            _reattach_relative(paths.state_root, launch["relative"], "terminal launch"),
+            "terminal launch", 64 * 1024)) != launch["sha256"]:
+        _fail("terminal observation launch binding CAS differs")
+    identity = handle.api_identity
+    if not isinstance(identity, Mapping):
+        _fail("terminal observation has no authenticated API identity")
+    api_id = _accepted_reattach_api_id(identity.get("api_instance_id"), "terminal observation API")
+    relative = str(PurePosixPath(preflight["proof_relative"]).parent / ("installed-" + api_id + ".json"))
+    raw = _bounded_regular(_reattach_relative(paths.state_root, relative, "terminal installed receipt"),
+                           "terminal observation installed receipt", 64 * 1024)
+    receipt = _accepted_reattach_json(raw, "terminal observation installed receipt")
+    expected = {
+        "schema": "fullmag.terminal-observation-restored.v1", "api_instance_id": api_id,
+        "run_id": proof["run_id"], "session_id": proof["session_id"],
+        "session_epoch": proof["session_epoch"], "scene_revision": proof["scene_revision"],
+        "terminal_outcome": outcome, "proof_sha256": preflight["proof_sha256"],
+        "launch_sha256": launch["sha256"], "source_image_id": proof["image_id"],
+        "source_config_sha256": proof["config_sha256"],
+        "target_build_id": binding["target_build_id"],
+        "target_source_sha256": binding["target_source_sha256"],
+        "target_image_id": binding["target_image_id"],
+        "native_config_sha256": binding["native_config_sha256"],
+        "terminal_evidence_sha256": proof["terminal_evidence_sha256"],
+    }
+    if receipt != expected:
+        _fail("terminal observation receipt differs from the real target installation")
+    code, headers, run = _http_json(8081, "/v2/sessions/current/simulation/runs/current")
+    if (code != 200 or _single_header(headers, "x-fullmag-api-instance") != api_id
+            or run.get("run_id") != proof["run_id"] or run.get("session_id") != proof["session_id"]
+            or run.get("status") != outcome):
+        _fail("terminal observation live readback differs from its native receipt")
+    return {
+        "schema": "fullmag.terminal-observation-runtime.v1", "api_instance_id": api_id,
+        "run_id": proof["run_id"], "session_id": proof["session_id"],
+        "proof_sha256": preflight["proof_sha256"], "launch_sha256": launch["sha256"],
+        "installed_relative": relative, "installed_sha256": _sha256_bytes(raw),
+        "target_build_id": binding["target_build_id"],
+        "target_source_sha256": binding["target_source_sha256"],
+        "target_image_id": binding["target_image_id"],
+    }

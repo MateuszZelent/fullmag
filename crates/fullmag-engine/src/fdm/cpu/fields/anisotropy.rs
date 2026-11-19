@@ -113,7 +113,6 @@ impl ExchangeLlgProblem {
         if !has_uni && !has_cub {
             return;
         }
-        let ms_safe = self.material.saturation_magnetisation.max(1e-30);
 
         let uni_data = self.terms.uniaxial_anisotropy.as_ref().map(|uni| {
             let n = norm(uni.axis).max(1e-30);
@@ -133,6 +132,7 @@ impl ExchangeLlgProblem {
             if !self.is_active(i) {
                 continue;
             }
+            let ms_safe = self.ms_at(i).max(1e-30);
             let mx = magnetization.x[i];
             let my = magnetization.y[i];
             let mz = magnetization.z[i];

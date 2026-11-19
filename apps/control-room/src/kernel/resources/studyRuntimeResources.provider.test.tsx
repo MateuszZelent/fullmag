@@ -6,6 +6,7 @@ import {
   MESHING_PERIODIC_PAIRS_PATH,
   MODEL_READINESS_PATH,
   MODEL_SCENE_PATH,
+  SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
 } from "@/kernel/api/apiPaths";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
@@ -23,7 +24,10 @@ import {
 } from "@/kernel/realtime/communicationPolicy";
 import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
 import { MAGNETIZATION_TEXTURE_COMMANDS } from "@/kernel/authoring/magnetization-texture/commands";
-import type { StageExecutionResource } from "@/kernel/api/apiTypes";
+import type {
+  SolverEnergyCurrentResource,
+  StageExecutionResource,
+} from "@/kernel/api/apiTypes";
 import type { KernelApi } from "@/kernel/types";
 
 import {
@@ -34,6 +38,7 @@ import {
   useMeshPeriodicPairsResource,
   useModelReadinessResource,
   useRuntimeCommandControlResourceData,
+  useSolverEnergyCurrentResource,
   useStageExecutionResource,
 } from "./studyRuntimeResources";
 import {
@@ -66,6 +71,47 @@ function statusAt(
       session_epoch: "scratch-session@1700000000000",
       session_id: "scratch-session",
     },
+  };
+}
+
+function solverEnergyStatusAt({
+  available,
+  runId = "run-a",
+  scalarRevision = 7,
+  stageRevision = 1,
+}: {
+  available: boolean;
+  runId?: string;
+  scalarRevision?: number;
+  stageRevision?: number;
+}) {
+  return {
+    ...statusAt(stageRevision, { run_id: runId }),
+    energies: { total: available ? 0 : null },
+    resources: {
+      fields_revision: 0,
+      scalars_revision: scalarRevision,
+      scene_revision: stageRevision,
+      stages_revision: stageRevision,
+    },
+    solver_energy_current_available: available,
+  };
+}
+
+function solverEnergySample(
+  revision: number,
+  total: number,
+): SolverEnergyCurrentResource {
+  return {
+    anisotropy: 0,
+    demag: 0,
+    dmi: 0,
+    exchange: 0,
+    revision,
+    step: revision,
+    time_seconds: 0,
+    total,
+    zeeman: 0,
   };
 }
 
@@ -188,6 +234,247 @@ describe("production runtime command resource provider", () => {
         expect(readinessLoad).toHaveBeenCalledTimes(1);
         expect(container.textContent).toBe("7");
       });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it.each([
+    { label: "settled cache", pendingPriorRead: false },
+    { label: "in-flight prior read", pendingPriorRead: true },
+  ])(
+    "gates current energy through Stage B readiness with a $label",
+    async ({ pendingPriorRead }) => {
+      updateRealtimeCommunicationPolicy({ status_refresh_ms: 60_000 });
+      const lateSampleA = deferred<SolverEnergyCurrentResource>();
+      const sampleB = deferred<SolverEnergyCurrentResource>();
+      const statusLoad = vi.fn()
+        .mockResolvedValueOnce(solverEnergyStatusAt({ available: false }))
+        .mockResolvedValueOnce(solverEnergyStatusAt({ available: true }))
+        .mockResolvedValueOnce(
+          solverEnergyStatusAt({ available: false, stageRevision: 2 }),
+        )
+        .mockResolvedValueOnce(
+          solverEnergyStatusAt({
+            available: true,
+            scalarRevision: 8,
+            stageRevision: 2,
+          }),
+        );
+      const requestSignals: AbortSignal[] = [];
+      const currentEnergyLoad = vi.fn(
+        ({ signal }: { signal: AbortSignal }) => {
+          requestSignals.push(signal);
+          if (requestSignals.length === 1) {
+            return Promise.resolve(solverEnergySample(1, 11));
+          }
+          if (pendingPriorRead && requestSignals.length === 2) {
+            return lateSampleA.promise;
+          }
+          return sampleB.promise;
+        },
+      );
+      const bus = new EventBus<KernelEventMap>();
+      const resources = new ResourceInvalidationController(bus);
+      const kernel = {
+        api: {
+          sessions: {
+            ...sessionsApi,
+            current: { status: statusLoad },
+          },
+          simulation: {
+            solver: { energies: { current: currentEnergyLoad } },
+          },
+        },
+        bus,
+        diagnosticRecorder: new DiagnosticRecorderController({
+          config: { enabled: false },
+        }),
+        resources,
+      } as unknown as KernelApi;
+      const dom = installSimulationPreparationTestDom();
+      const container = dom.document.createElement("div");
+      dom.document.body.appendChild(container);
+      const root = createRoot(container as unknown as Element);
+      let refetchStatus: () => void = () => undefined;
+
+      function Harness() {
+        refetchStatus = useSessionStatusSelector((status) => status.refetch);
+        const energy = useSolverEnergyCurrentResource();
+        return <div>{energy.data?.total ?? "unavailable"}</div>;
+      }
+
+      try {
+        await act(async () => {
+          root.render(
+            <KernelContext.Provider value={kernel}>
+              <Harness />
+            </KernelContext.Provider>,
+          );
+        });
+        await vi.waitFor(() => expect(statusLoad).toHaveBeenCalledTimes(1));
+        expect(currentEnergyLoad).not.toHaveBeenCalled();
+        expect(container.textContent).toBe("unavailable");
+
+        await act(async () => refetchStatus());
+        await vi.waitFor(() => {
+          expect(statusLoad).toHaveBeenCalledTimes(2);
+          expect(currentEnergyLoad).toHaveBeenCalledTimes(1);
+          expect(container.textContent).toBe("11");
+        });
+        expect(requestSignals[0]?.aborted).toBe(false);
+
+        if (pendingPriorRead) {
+          await act(async () => {
+            resources.invalidate(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH, 2);
+          });
+          await vi.waitFor(() =>
+            expect(currentEnergyLoad).toHaveBeenCalledTimes(2),
+          );
+          expect(requestSignals[1]?.aborted).toBe(false);
+        }
+
+        const callsBeforeStageB = pendingPriorRead ? 2 : 1;
+        await act(async () => refetchStatus());
+        await vi.waitFor(() => expect(statusLoad).toHaveBeenCalledTimes(3));
+        await vi.waitFor(() => expect(container.textContent).toBe("unavailable"));
+        expect(currentEnergyLoad).toHaveBeenCalledTimes(callsBeforeStageB);
+        if (pendingPriorRead) {
+          await act(async () => {
+            resources.invalidate(
+              `${SCRATCH_SESSION_SCOPE_KEY}|${SIMULATION_SOLVER_ENERGIES_CURRENT_PATH}`,
+              3,
+            );
+          });
+        }
+
+        await act(async () => refetchStatus());
+        await vi.waitFor(() => {
+          expect(statusLoad).toHaveBeenCalledTimes(4);
+          expect(currentEnergyLoad).toHaveBeenCalledTimes(callsBeforeStageB + 1);
+        });
+        if (pendingPriorRead) {
+          expect(requestSignals[1]?.aborted).toBe(true);
+          expect(requestSignals[2]?.aborted).toBe(false);
+          await act(async () => {
+            lateSampleA.resolve(solverEnergySample(3, 17));
+            await lateSampleA.promise;
+          });
+          await act(async () => {});
+          expect(container.textContent).toBe("unavailable");
+        } else {
+          expect(requestSignals[1]?.aborted).toBe(false);
+        }
+
+        await act(async () => {
+          sampleB.resolve(solverEnergySample(2, 0));
+          await sampleB.promise;
+        });
+        await vi.waitFor(() => expect(container.textContent).toBe("0"));
+        expect(currentEnergyLoad).toHaveBeenCalledTimes(callsBeforeStageB + 1);
+        expect(currentEnergyLoad).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionScopeKey: SCRATCH_SESSION_SCOPE_KEY,
+          }),
+        );
+      } finally {
+        await act(async () => root.unmount());
+        dom.restore();
+      }
+    },
+  );
+
+  it("clears current energy after a readiness race returns 204, then loads a qualified zero sample", async () => {
+    updateRealtimeCommunicationPolicy({ status_refresh_ms: 60_000 });
+    const statusLoad = vi.fn()
+      .mockResolvedValueOnce(solverEnergyStatusAt({ available: true }))
+      .mockResolvedValueOnce(
+        solverEnergyStatusAt({
+          available: true,
+          scalarRevision: 8,
+          stageRevision: 2,
+        }),
+      );
+    const energyRequests: Array<{
+      sessionScopeKey?: string;
+      signal: AbortSignal;
+    }> = [];
+    const currentEnergyLoad = vi.fn(
+      ({
+        sessionScopeKey,
+        signal,
+      }: {
+        sessionScopeKey?: string;
+        signal: AbortSignal;
+      }) => {
+        energyRequests.push({ sessionScopeKey, signal });
+        return energyRequests.length === 1
+          ? Promise.resolve(null)
+          : Promise.resolve(solverEnergySample(8, 0));
+      },
+    );
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const kernel = {
+      api: {
+        sessions: {
+          ...sessionsApi,
+          current: { status: statusLoad },
+        },
+        simulation: {
+          solver: { energies: { current: currentEnergyLoad } },
+        },
+      },
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({
+        config: { enabled: false },
+      }),
+      resources,
+    } as unknown as KernelApi;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    let refetchStatus: () => void = () => undefined;
+    let energyState: ReturnType<typeof useSolverEnergyCurrentResource> | null = null;
+
+    function Harness() {
+      refetchStatus = useSessionStatusSelector((status) => status.refetch);
+      const energy = useSolverEnergyCurrentResource();
+      energyState = energy;
+      return <div>{energy.data?.total ?? "unavailable"}</div>;
+    }
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Harness />
+          </KernelContext.Provider>,
+        );
+      });
+
+      await vi.waitFor(() => {
+        expect(statusLoad).toHaveBeenCalledTimes(1);
+        expect(currentEnergyLoad).toHaveBeenCalledTimes(1);
+        expect(container.textContent).toBe("unavailable");
+      });
+      expect(energyState).toMatchObject({ data: null, error: null, status: "ready" });
+      expect(energyRequests[0]?.sessionScopeKey).toBe(SCRATCH_SESSION_SCOPE_KEY);
+
+      await act(async () => refetchStatus());
+      await vi.waitFor(() => {
+        expect(statusLoad).toHaveBeenCalledTimes(2);
+        expect(currentEnergyLoad).toHaveBeenCalledTimes(2);
+        expect(container.textContent).toBe("0");
+      });
+      expect(energyState?.data?.total).toBe(0);
+      expect(energyState?.error).toBeNull();
+      expect(energyRequests.map((request) => request.sessionScopeKey)).toEqual([
+        SCRATCH_SESSION_SCOPE_KEY,
+        SCRATCH_SESSION_SCOPE_KEY,
+      ]);
     } finally {
       await act(async () => root.unmount());
       dom.restore();

@@ -95,10 +95,7 @@ function ProjectRunsPage({ projectId }: { projectId: string }) {
         </div>
       ))}
       {selectedRunId ? (
-        <div
-          aria-live="polite"
-          className="grid min-w-0 gap-2 rounded-md border border-fm-subtle p-2"
-        >
+        <div className="grid min-w-0 gap-2 rounded-md border border-fm-subtle p-2">
           {selectedRun.status === "loading" && !selectedRun.data ? <p>Loading run details…</p> : null}
           {selectedRun.error ? <p role="alert">Could not load run details: {selectedRun.error.message}</p> : null}
           {selectedRun.data ? (

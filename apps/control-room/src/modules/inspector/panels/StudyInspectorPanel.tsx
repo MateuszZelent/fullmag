@@ -1,20 +1,18 @@
 "use client";
 
 import {
-  Download,
-  Info,
-  Pause,
-  Play,
-  RotateCcw,
-  Save,
-  Scissors,
-  SkipForward,
-  Square,
-  Upload,
-} from "lucide-react";
-import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
-
+  useCallback,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import { flushSync } from "react-dom";
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import type { CommandResult } from "@/kernel/commands/commandTypes";
+import { studyComputeDraftBlockedReason } from "@/kernel/authoring/studyComputeDraftGuard";
+import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import { runFdmGridRefreshOperation } from "@/kernel/authoring/geometryLifecycleCommandContributions";
 import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import {
@@ -29,21 +27,19 @@ import {
   SIMULATION_COMMANDS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
+  SIMULATION_STAGES_RESULTS_PATH,
 } from "@/kernel/api/apiPaths";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
+  AuthoringTransactionResponse,
   CheckpointEntry,
   FrequencyDomainManifestResource,
-  JsonObject,
-  LiveStatusResource,
   MeshPeriodicPairsResource,
   MeshSharedDomainManifestResource,
   SceneResource,
-  SessionImportInspectResponse,
   SolverStatusResource,
   StageExecutionResource,
 } from "@/kernel/api/apiTypes";
-import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import {
   shouldLoadRuntimeCurrentRun,
   shouldLoadRuntimeCommandQueue,
@@ -81,62 +77,36 @@ import {
   useSessionResourceIdentity,
   useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
-import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
-import { Button } from "@/shared/ui/Button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/shared/ui/Dialog";
-
 import type { InspectorPanelProps } from "../inspectorTypes";
-import { useRegisterInspectorEditSession } from "../InspectorEditSession";
-import { FieldRow } from "../primitives/FieldRow";
-import { FeedbackBanner } from "../primitives/FeedbackBanner";
-import { FormField } from "../primitives/FormField";
-import { InspectorGroup } from "../primitives/InspectorGroup";
+import { useRegisterInspectorEditSession, type InspectorEditSession } from "../InspectorEditSession";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import { ProjectRunsSection } from "./ProjectRunsSection";
 import { ProjectBatchesSection } from "./ProjectBatchesSection";
-
 import {
   buildStudyGlobalMergePatch,
   createStudyGlobalDraft,
   isExplicitFdmStudy,
-  normalizeDemagRealizationForLane,
-  resolveFdmGridPreview,
   validateStudyGlobalDraft,
-  type StudyGlobalDraft,
 } from "./StudyGlobalAuthoringModel";
 import {
+  buildStudyPipelineStageMergePatch,
   buildStudyStagesMergePatch,
-  createStudyStageDraft,
-  createDefaultStudyStageDraft,
   createStudyStageDrafts,
+  readStageTextureAssignments,
   validateStudyStageDraft,
   type StudyStageDraft,
-  type StudyStageDraftKind,
 } from "./StudyStageAuthoringModel";
 import { readStudyStageSource } from "@/shared/domain/study/studyStageSource";
+import { createPipelineStudyStageDrafts } from "./studyPipelineStageDrafts";
 import {
   resolveStudyInspectorModel,
   stageExecutionForCurrentScope,
   studySnapshotFromScene,
-  type StudyInspectorModel,
-  type StudyInspectorSnapshot,
 } from "./StudyInspectorPanelModel";
-import {
-  StudyPipelineSection,
-  StudySolverPolicyFields,
-} from "./StudyPipelineSection";
-import {
-  StudyExecutionProfileSection,
-  type StudyExecutionProfileEditSession,
-} from "./StudyExecutionProfileSection";
+import { StudyPipelineSection } from "./StudyPipelineSection";
+import { StudyExecutionProfileSection, type StudyExecutionProfileEditSession } from "./StudyExecutionProfileSection";
 import {
   buildStudyExecutionProfileAssignmentMergePatch,
   hasChangeDeviceStudyStage,
@@ -145,332 +115,53 @@ import {
 } from "./StudyExecutionProfileModel";
 import type { K0ModalExecutionReadiness } from "./StudyStageAuthoringModel";
 import { validateStudyWorkflow } from "./stages/studyWorkflowState";
-import { StudyProgressBar } from "./StudyProgressBar";
-
+import type { StageInitialStateChoice } from "@/kernel/runtime/studyStageInitialState";
+import { captureStudyComputeInput } from "@/kernel/runtime/studyComputeInput";
+import { executeStageAfterApply, type StageApplyRunPin } from "./studyStageApplyAndRun";
 export { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
-
-interface StudyInspectorPanelState {
-  authoringBusy: boolean;
-  authoringDraftsInitialized: boolean;
-  authoringFeedback: {
-    kind: "error" | "success" | "warning";
-    message: string;
-  } | null;
-  authoringFeedbackScope: "global" | "stages" | null;
-  baselineGlobalDraft: StudyGlobalDraft;
-  baselineStageDrafts: StudyStageDraft[];
-  draftSceneRevision: number | string | null;
-  draftSceneSignature: string;
-  globalDraft: StudyGlobalDraft;
-  importDialogOpen: boolean;
-  importError: string | null;
-  importFileName: string | null;
-  importFmsBase64: string | null;
-  importInspection: SessionImportInspectResponse["inspection"] | null;
-  importInspecting: boolean;
-  importRestoreMode: string;
-  restoreDialogOpen: boolean;
-  selectedDraftIndex: number;
-  selectedCommandId: string | null;
-  selectedRestoreCheckpointId: string | null;
-  stageDrafts: StudyStageDraft[];
-}
-
-type StudyInspectorPanelAction =
-  | {
-      type: "resetStageDrafts";
-      drafts: StudyStageDraft[];
-      globalDraft: StudyGlobalDraft;
-      preserveGlobalDraft?: StudyGlobalDraft;
-      preserveStageDrafts?: StudyStageDraft[];
-      revision: number | string | null;
-      selectedIndex: number;
-      signature: string;
-    }
-  | { type: "acceptGlobalDraft" }
-  | { type: "acceptStageDrafts" }
-  | { type: "revertGlobalDraft" }
-  | { type: "revertStageDrafts" }
-  | {
-      type: "updateGlobalDraft";
-      patch: Partial<StudyGlobalDraft>;
-    }
-  | { type: "selectStageDraft"; index: number }
-  | {
-      type: "updateStageDraft";
-      index: number;
-      patch: Partial<StudyStageDraft>;
-    }
-  | { type: "addStageDraft"; kind: StudyStageDraftKind }
-  | { type: "duplicateStageDraft"; index: number }
-  | { type: "removeStageDraft"; index: number }
-  | { type: "moveStageDraft"; direction: -1 | 1; index: number }
-  | { type: "setAuthoringBusy"; busy: boolean }
-  | {
-      type: "setAuthoringFeedback";
-      feedback: StudyInspectorPanelState["authoringFeedback"];
-      scope: StudyInspectorPanelState["authoringFeedbackScope"];
-    }
-  | { type: "setImportDialogOpen"; open: boolean }
-  | { type: "setImportRestoreMode"; mode: string }
-  | { type: "setRestoreDialogOpen"; open: boolean }
-  | { type: "setSelectedCommandId"; commandId: string | null }
-  | { type: "setSelectedRestoreCheckpointId"; checkpointId: string | null }
-  | { type: "prepareImportFile"; fileName: string | null }
-  | {
-      type: "importInspectSuccess";
-      fmsBase64: string;
-      inspection: SessionImportInspectResponse["inspection"];
-    }
-  | { type: "importInspectFailure"; message: string };
-
-const STUDY_INSPECTOR_INITIAL_STATE: StudyInspectorPanelState = {
-  authoringBusy: false,
-  authoringDraftsInitialized: false,
-  authoringFeedback: null,
-  authoringFeedbackScope: null,
-  baselineGlobalDraft: createStudyGlobalDraft(null),
-  baselineStageDrafts: [],
-  draftSceneRevision: null,
-  draftSceneSignature: "",
-  globalDraft: createStudyGlobalDraft(null),
-  importDialogOpen: false,
-  importError: null,
-  importFileName: null,
-  importFmsBase64: null,
-  importInspection: null,
-  importInspecting: false,
-  importRestoreMode: "resume",
-  restoreDialogOpen: false,
-  selectedDraftIndex: 0,
-  selectedCommandId: null,
-  selectedRestoreCheckpointId: null,
-  stageDrafts: [],
-};
-
-function studyInspectorPanelReducer(
-  state: StudyInspectorPanelState,
-  action: StudyInspectorPanelAction,
-): StudyInspectorPanelState {
-  switch (action.type) {
-    case "resetStageDrafts":
-      if (
-        state.authoringDraftsInitialized &&
-        state.draftSceneRevision === action.revision &&
-        state.draftSceneSignature === action.signature
-      ) {
-        return state;
-      }
-      return {
-        ...state,
-        authoringBusy: false,
-        authoringDraftsInitialized: true,
-        authoringFeedback: null,
-        authoringFeedbackScope: null,
-        baselineGlobalDraft: action.globalDraft,
-        baselineStageDrafts: action.drafts,
-        draftSceneRevision: action.revision,
-        draftSceneSignature: action.signature,
-        globalDraft: action.preserveGlobalDraft ?? action.globalDraft,
-        selectedDraftIndex:
-          action.preserveStageDrafts === undefined
-            ? action.selectedIndex
-            : clampIndex(state.selectedDraftIndex, action.preserveStageDrafts),
-        stageDrafts: action.preserveStageDrafts ?? action.drafts,
-      };
-    case "acceptGlobalDraft":
-      return { ...state, baselineGlobalDraft: state.globalDraft };
-    case "acceptStageDrafts":
-      return { ...state, baselineStageDrafts: state.stageDrafts };
-    case "revertGlobalDraft":
-      return {
-        ...state,
-        authoringFeedback: null,
-        authoringFeedbackScope: null,
-        globalDraft: state.baselineGlobalDraft,
-      };
-    case "revertStageDrafts":
-      return {
-        ...state,
-        authoringFeedback: null,
-        authoringFeedbackScope: null,
-        selectedDraftIndex: clampIndex(
-          state.selectedDraftIndex,
-          state.baselineStageDrafts,
-        ),
-        stageDrafts: state.baselineStageDrafts,
-      };
-    case "updateGlobalDraft":
-      return {
-        ...state,
-        authoringFeedback: null,
-        authoringFeedbackScope: null,
-        globalDraft: { ...state.globalDraft, ...action.patch },
-      };
-    case "selectStageDraft":
-      return {
-        ...state,
-        selectedDraftIndex: clampIndex(action.index, state.stageDrafts),
-      };
-    case "updateStageDraft":
-      return {
-        ...state,
-        authoringFeedback: null,
-        authoringFeedbackScope: null,
-        stageDrafts: state.stageDrafts.map((draft, index) =>
-          index === action.index ? { ...draft, ...action.patch } : draft,
-        ),
-      };
-    case "addStageDraft": {
-      const draft = createDefaultStudyStageDraft(
-        action.kind,
-        state.stageDrafts.length,
-      );
-      return {
-        ...state,
-        authoringFeedback: null,
-        authoringFeedbackScope: null,
-        selectedDraftIndex: state.stageDrafts.length,
-        stageDrafts: [...state.stageDrafts, draft],
-      };
-    }
-    case "duplicateStageDraft": {
-      const source = state.stageDrafts[action.index];
-      if (!source) return state;
-      // The immutable definition reference cannot be renamed into a second solve.
-      if (source.kind === "antenna_field_solve") return state;
-      const draft = {
-        ...source,
-        stageId: `${source.stageId || source.kind}-copy`,
-      };
-      const stageDrafts = [...state.stageDrafts];
-      stageDrafts.splice(action.index + 1, 0, draft);
-      return {
-        ...state,
-        authoringFeedback: null,
-        authoringFeedbackScope: null,
-        selectedDraftIndex: action.index + 1,
-        stageDrafts,
-      };
-    }
-    case "removeStageDraft": {
-      const stageDrafts = state.stageDrafts.filter(
-        (_, index) => index !== action.index,
-      );
-      return {
-        ...state,
-        authoringFeedback: null,
-        authoringFeedbackScope: null,
-        selectedDraftIndex: clampIndex(action.index, stageDrafts),
-        stageDrafts,
-      };
-    }
-    case "moveStageDraft": {
-      const targetIndex = action.index + action.direction;
-      if (
-        action.index < 0 ||
-        targetIndex < 0 ||
-        action.index >= state.stageDrafts.length ||
-        targetIndex >= state.stageDrafts.length
-      ) {
-        return state;
-      }
-      const stageDrafts = [...state.stageDrafts];
-      const [draft] = stageDrafts.splice(action.index, 1);
-      stageDrafts.splice(targetIndex, 0, draft);
-      return {
-        ...state,
-        authoringFeedback: null,
-        authoringFeedbackScope: null,
-        selectedDraftIndex: targetIndex,
-        stageDrafts,
-      };
-    }
-    case "setAuthoringBusy":
-      return { ...state, authoringBusy: action.busy };
-    case "setAuthoringFeedback":
-      return {
-        ...state,
-        authoringFeedback: action.feedback,
-        authoringFeedbackScope: action.scope,
-      };
-    case "setImportDialogOpen":
-      return { ...state, importDialogOpen: action.open };
-    case "setImportRestoreMode":
-      return { ...state, importRestoreMode: action.mode };
-    case "setRestoreDialogOpen":
-      return { ...state, restoreDialogOpen: action.open };
-    case "setSelectedCommandId":
-      return { ...state, selectedCommandId: action.commandId };
-    case "setSelectedRestoreCheckpointId":
-      return {
-        ...state,
-        selectedRestoreCheckpointId: action.checkpointId,
-      };
-    case "prepareImportFile":
-      return {
-        ...state,
-        importError: null,
-        importFileName: action.fileName,
-        importFmsBase64: null,
-        importInspection: null,
-        importInspecting: action.fileName !== null,
-      };
-    case "importInspectSuccess":
-      return {
-        ...state,
-        importError: null,
-        importFmsBase64: action.fmsBase64,
-        importInspection: action.inspection,
-        importInspecting: false,
-        importRestoreMode: action.inspection.restore_class ?? "resume",
-      };
-    case "importInspectFailure":
-      return {
-        ...state,
-        importError: action.message,
-        importInspecting: false,
-      };
-  }
-}
-
-function clampIndex(index: number, drafts: readonly StudyStageDraft[]): number {
-  if (drafts.length === 0) return 0;
-  return Math.max(0, Math.min(index, drafts.length - 1));
-}
-
-function rawStudyStages(scene: unknown): unknown[] {
-  const sceneRecord = asRecord(scene);
-  const study = asRecord(sceneRecord?.study);
-  return readStudyStageSource(study).entries.map((entry) => entry.payload);
-}
-
-function magneticObjectCount(scene: unknown): number {
-  const objects = asRecord(scene)?.objects;
-  if (!Array.isArray(objects)) return 0;
-  return objects.filter((object) => asRecord(object)?.role === "magnet").length;
-}
-
-function magneticObjectIds(scene: unknown): string[] {
-  const objects = asRecord(scene)?.objects;
-  if (!Array.isArray(objects)) return [];
-  return objects
-    .map((object) => asRecord(object))
-    .filter((object) => object?.role === "magnet")
-    .map((object) => (typeof object?.id === "string" ? object.id.trim() : ""))
-    .filter(Boolean);
-}
-
-function numericSceneRevision(value: number | string | null): number | null {
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value !== "string" || !value.trim()) return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function formatGridVector(values: readonly number[]): string {
-  return values.map((value) => value.toExponential(3)).join(" × ");
-}
+import {
+  RestoreCheckpointDialog,
+  ImportStateDialog,
+  readFileAsBase64,
+} from "./StudyInspectorDialogs";
+import {
+  StudyRuntimeSection,
+  StudySelectedStageSection,
+  StudyBoundarySection,
+  StudyRecoverySection,
+  StudyHistorySection,
+} from "./StudyInspectorSections";
+import {
+  STUDY_INSPECTOR_INITIAL_STATE,
+  studyInspectorPanelReducer,
+} from "./studyInspectorPanelState";
+import {
+  selectStudyInspectorRuntimeStatus,
+  studyInspectorRuntimeStatusEquals,
+} from "./studyInspectorRuntimeStatus";
+import {
+  rawStudyStages,
+  magneticObjectCount,
+  magneticObjectIds,
+  numericSceneRevision,
+  asRecord,
+} from "./studyInspectorShared";
+export {
+  studyInspectorPanelReducer,
+} from "./studyInspectorPanelState";
+export {
+  studyInspectorRuntimeStatusEquals,
+} from "./studyInspectorRuntimeStatus";
+export {
+  StudyRuntimeSection,
+  StudySelectedStageSection,
+  StudyBoundarySection,
+  StudyCommandButton,
+} from "./StudyInspectorSections";
+export {
+  RestoreCheckpointDialog,
+  ImportStateDialog,
+} from "./StudyInspectorDialogs";
 
 function sceneRevisionValue(scene: unknown): number | string | null {
   const revision = asRecord(scene)?.revision;
@@ -495,12 +186,6 @@ function sceneHasAuthoringPayload(scene: unknown): boolean {
         "version" in record ||
         "current_modules" in record),
   );
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 const PRODUCTION_CAPABILITY_STATUSES = new Set([
@@ -587,113 +272,56 @@ export function deriveK0ModalExecutionReadiness({
   };
 }
 
-type StudyInspectorRuntimeStatus = {
-  capabilities: Pick<
-    LiveStatusResource["capabilities"],
-    "active_lane" | "algorithms_available" | "binary_fields" | "explicit_topology"
-  >;
-  domain: Pick<LiveStatusResource["domain"], "discretization">;
-  resources: Pick<
-    LiveStatusResource["resources"],
-    | "mesh_build_revision"
-    | "mesh_revision"
-    | "commands_revision"
-    | "scalars_revision"
-    | "scene_revision"
-    | "stages_revision"
-  >;
-  session: Pick<LiveStatusResource["session"], "session_epoch" | "session_id">;
-  run: LiveStatusResource["run"];
-};
+const PARTIAL_STUDY_APPLY_MESSAGE =
+  "Global Study settings were committed. The Pipeline stage save could not be confirmed. Review the current scene and Pipeline feedback before retrying Apply.";
 
-function selectStudyInspectorRuntimeStatus(status: {
-  data: LiveStatusResource | null;
-}): StudyInspectorRuntimeStatus | null {
-  if (!status.data) return null;
-  return {
-    capabilities: {
-      active_lane: status.data.capabilities.active_lane,
-      algorithms_available: status.data.capabilities.algorithms_available,
-      binary_fields: status.data.capabilities.binary_fields,
-      explicit_topology: status.data.capabilities.explicit_topology,
-    },
-    domain: {
-      discretization: status.data.domain.discretization,
-    },
-    resources: {
-      mesh_build_revision: status.data.resources.mesh_build_revision,
-      mesh_revision: status.data.resources.mesh_revision,
-      commands_revision: status.data.resources.commands_revision,
-      scalars_revision: status.data.resources.scalars_revision,
-      scene_revision: status.data.resources.scene_revision,
-      stages_revision: status.data.resources.stages_revision,
-    },
-    session: {
-      session_epoch: status.data.session.session_epoch,
-      session_id: status.data.session.session_id,
-    },
-    run: status.data.run,
-  };
+function partialStudyApplyError(cause?: unknown): Error {
+  const detail = cause instanceof Error ? " Stage save error: " + cause.message : "";
+  return new Error(PARTIAL_STUDY_APPLY_MESSAGE + detail);
 }
 
-function studyInspectorRunEquals(
-  previous: LiveStatusResource["run"],
-  next: LiveStatusResource["run"],
-): boolean {
-  if (previous === next) return true;
-  if (!previous || !next) return previous === next;
-  return (
-    previous.run_id === next.run_id &&
-    previous.solver_steps === next.solver_steps &&
-    previous.solver_time === next.solver_time &&
-    previous.stage_count === next.stage_count &&
-    previous.stage_index === next.stage_index &&
-    previous.stage_label === next.stage_label &&
-    previous.started_at === next.started_at
-  );
-}
+export async function applyStudyDraftsWithPartialFailure({
+  globalDirty,
+  stagesDirty,
+  commitGlobal,
+  commitStages,
+}: {
+  globalDirty: boolean;
+  stagesDirty: boolean;
+  commitGlobal: () => Promise<boolean>;
+  commitStages: () => Promise<boolean>;
+}): Promise<boolean> {
+  let globalCommitted = false;
+  if (globalDirty) {
+    globalCommitted = await commitGlobal();
+    if (!globalCommitted) return false;
+  }
 
-export function studyInspectorRuntimeStatusEquals(
-  previous: StudyInspectorRuntimeStatus | null,
-  next: StudyInspectorRuntimeStatus | null,
-): boolean {
-  if (previous === next) return true;
-  if (!previous || !next) return previous === next;
-  const previousAlgorithms = previous.capabilities.algorithms_available ?? [];
-  const nextAlgorithms = next.capabilities.algorithms_available ?? [];
-  if (
-    previousAlgorithms.length !== nextAlgorithms.length ||
-    previousAlgorithms.some((algorithm, index) => algorithm !== nextAlgorithms[index])
-  ) {
-    return false;
+  if (stagesDirty) {
+    let stagesCommitted: boolean;
+    try {
+      stagesCommitted = await commitStages();
+    } catch (error) {
+      if (globalCommitted) throw partialStudyApplyError(error);
+      throw error;
+    }
+    if (!stagesCommitted) {
+      if (globalCommitted) throw partialStudyApplyError();
+      return false;
+    }
   }
-  if (
-    previous.session.session_id !== next.session.session_id ||
-    previous.session.session_epoch !== next.session.session_epoch
-  ) {
-    return false;
-  }
-  return (
-    previous.capabilities.binary_fields === next.capabilities.binary_fields &&
-    previous.capabilities.active_lane === next.capabilities.active_lane &&
-    previous.capabilities.explicit_topology ===
-      next.capabilities.explicit_topology &&
-    previous.domain.discretization === next.domain.discretization &&
-    previous.resources.mesh_build_revision ===
-      next.resources.mesh_build_revision &&
-    previous.resources.mesh_revision === next.resources.mesh_revision &&
-    previous.resources.commands_revision === next.resources.commands_revision &&
-    previous.resources.scalars_revision === next.resources.scalars_revision &&
-    previous.resources.scene_revision === next.resources.scene_revision &&
-    previous.resources.stages_revision === next.resources.stages_revision &&
-    studyInspectorRunEquals(previous.run, next.run)
-  );
+
+  return true;
 }
 
 export function useStudyInspectorPanelController(
   selection: InspectorPanelProps["selection"],
 ) {
   const kernel = useKernel();
+  const commands = kernel.commands;
+  const subscribeCommands = useCallback((listener: () => void) => commands.subscribe(listener), [commands]);
+  const getCommandVersion = useCallback(() => commands.getVersion(), [commands]);
+  useSyncExternalStore(subscribeCommands, getCommandVersion, getCommandVersion);
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const [state, dispatch] = useReducer(
     studyInspectorPanelReducer,
@@ -701,6 +329,15 @@ export function useStudyInspectorPanelController(
   );
   const importInspectionGeneration = useRef(0);
   const importScopeRef = useRef(sessionScopeKey);
+  const selectedAuthoringTargetKey = selection.ref?.type === "study-stage"
+    ? JSON.stringify(["study-stage", selection.ref.nodeId, selection.ref.stageId])
+    : JSON.stringify(["node", selection.nodeId]);
+  const selectedAuthoringTargetRef = useRef(selectedAuthoringTargetKey);
+  useEffect(() => {
+    if (selectedAuthoringTargetRef.current === selectedAuthoringTargetKey) return;
+    selectedAuthoringTargetRef.current = selectedAuthoringTargetKey;
+    dispatch({ type: "clearStageAuthoringFeedback" });
+  }, [dispatch, selectedAuthoringTargetKey]);
   useEffect(() => {
     if (importScopeRef.current === sessionScopeKey) return;
     importScopeRef.current = sessionScopeKey;
@@ -761,9 +398,12 @@ export function useStudyInspectorPanelController(
   const energyCurrent = useSolverEnergyCurrentResource({
     enabled: shouldLoadRuntimeScalars(true, runtimeStatus),
   });
+  // The Inspector stays mounted while hidden; its 120-row energy window would
+  // otherwise refetch on every scalar row of a running solve.
+  const inspectorVisible = useLayoutSelector((layout) => layout.panelVisible.right);
   const energyHistory = useSolverEnergyHistoryResource(
     120,
-    { enabled: shouldLoadRuntimeScalars(true, runtimeStatus) },
+    { enabled: inspectorVisible && shouldLoadRuntimeScalars(true, runtimeStatus) },
   );
   const commandDetail = useCommandDetailResource(state.selectedCommandId);
   const checkpoints = checkpointCatalog.data?.checkpoints ?? [];
@@ -812,6 +452,11 @@ export function useStudyInspectorPanelController(
   const sceneRevision = sceneRevisionValue(scene.data);
   const authoringScopeKey = `${sessionScopeKey ?? "no-session"}:${kernel.api.resourceCacheScope}`;
   const acknowledgedSceneRevisionRef = useRef<number | null>(null);
+  const stageSaveInFlight = useRef(false);
+  const stageApplyRun = useRef<{
+    pin: StageApplyRunPin;
+    receipt: AuthoringTransactionResponse | null;
+  } | null>(null);
   const authoritativeSceneRef = useRef<SceneResource | null>(scene.data);
   const authoritativeScopeRef = useRef(authoringScopeKey);
   const authoritativeSnapshotScopeRef = useRef<string | null>(
@@ -848,17 +493,7 @@ export function useStudyInspectorPanelController(
     const rawStages = rawStudyStages(scene.data);
     const source = readStudyStageSource(asRecord(scene.data)?.study);
     const stageDrafts = source.kind === "flat" ? createStudyStageDrafts(rawStages)
-      : source.entries.map((entry, index): StudyStageDraft => ({
-        ...createStudyStageDraft(entry.stageKind === "antenna_field_solve" ? entry.payload : {
-          kind: "unsupported",
-        }, index),
-        kind: entry.stageKind === "antenna_field_solve" ? "antenna_field_solve" : "unsupported",
-        rawStage: structuredClone(entry.payload) as JsonObject,
-        stageId: entry.queueId ?? `stage-${index + 1}`,
-        pipelineNodeId: entry.queueId ?? undefined,
-        pipelineEnabled: entry.enabled,
-        pipelineGroupIds: [...entry.groupIds],
-      }));
+      : createPipelineStudyStageDrafts(source.entries);
     dispatch({
       type: "resetStageDrafts",
       drafts: stageDrafts,
@@ -1015,22 +650,51 @@ export function useStudyInspectorPanelController(
       ? null
       : kernel.commands.get(commandId)?.disabledReason?.(commandContext) ??
         "Command is unavailable.";
+  const buildStudyProgress = commands.isActive("study.build-and-run", commandContext)
+    ? commandDisabledReason("study.build-and-run") ?? "An existing Build + Study is pending. Check it again to continue."
+    : null;
   const commitStageDraftsImpl = async () => {
+    const feedbackTargetAtSave = selectedAuthoringTargetKey;
+    const launch = stageApplyRun.current;
+    const submittedDrafts = state.stageDrafts;
+    const textureEdits = submittedDrafts.filter((draft, index) =>
+      JSON.stringify(draft.stageMagnetizationAssignments) !==
+        JSON.stringify(state.baselineStageDrafts[index]?.stageMagnetizationAssignments),
+    );
     const currentScene = await readAuthoritativeScene();
-    if (!currentScene) {
+    const expectedRevision = launch?.pin.scene_revision ??
+      (textureEdits.length > 0 ? numericSceneRevision(sceneRevision) : undefined);
+    if (!currentScene || (expectedRevision !== undefined && currentScene.revision !== expectedRevision)) {
       dispatch({
         type: "setAuthoringFeedback",
         scope: "stages",
         feedback: {
           kind: "error",
-          message: "Could not read the current scene revision. Refresh the scene before saving stages.",
+          message: launch || textureEdits.length > 0
+            ? "The Study changed before saving. Review the stage draft and try again."
+            : "Could not read the current scene revision. Refresh the scene before saving stages.",
         },
       });
       return false;
     }
+    const isCanonical = readStudyStageSource(asRecord(currentScene.scene)?.study).kind === "pipeline";
+    const changed = isCanonical
+      ? submittedDrafts.filter((draft, index) =>
+          JSON.stringify(draft) !== JSON.stringify(state.baselineStageDrafts[index]),
+        )
+      : [];
+    const pipelineDraft = changed.length === 1 ? changed[0] : null;
+    if (isCanonical && !pipelineDraft) {
+      dispatch({
+        type: "setAuthoringFeedback",
+        scope: "stages",
+        feedback: { kind: "error", message: "Save one edited canonical Run or Relax stage at a time." },
+      });
+      return false;
+    }
     if (
-      hasStudyExecutionProfile(currentScene.scene) &&
-      hasChangeDeviceStudyStage(currentScene.scene, state.stageDrafts)
+      !isCanonical && hasStudyExecutionProfile(currentScene.scene) &&
+      hasChangeDeviceStudyStage(currentScene.scene, submittedDrafts)
     ) {
       dispatch({
         type: "setAuthoringFeedback",
@@ -1043,8 +707,9 @@ export function useStudyInspectorPanelController(
       });
       return false;
     }
-    const localIssues = state.stageDrafts.flatMap((draft, index) =>
-      validateStudyStageDraft(draft, {
+    const localIssues = submittedDrafts.flatMap((draft, index) => {
+      if (pipelineDraft && pipelineDraft !== draft) return [];
+      return validateStudyStageDraft(draft, {
         activeLane: runtimeStatus?.capabilities.active_lane ?? null,
         algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
         backend: model.requested.backend,
@@ -1056,15 +721,28 @@ export function useStudyInspectorPanelController(
       }).map((issue) => ({
         ...issue,
         message: `Stage ${index + 1}: ${issue.message}`,
-      })),
-    );
-    const workflowIssues = validateStudyWorkflow(state.stageDrafts).map(
-      (issue) => ({
+      }));
+    });
+    const workflowIssues = validateStudyWorkflow(submittedDrafts)
+      .filter((issue) => !pipelineDraft || submittedDrafts[issue.index] === pipelineDraft)
+      .map((issue) => ({
         ...issue,
         message: `Stage ${issue.index + 1}: ${issue.message}`,
+      }));
+    const textureTargetsValid = textureEdits.every((draft) =>
+      (readStageTextureAssignments(draft.stageMagnetizationAssignments) ?? []).every((assignment) => {
+        const object = currentScene.scene.objects?.find((candidate) =>
+          candidate.id === assignment.object_id && candidate.role === "magnet",
+        );
+        return object && (assignment.region_id === null ||
+          object.regions?.some((region) => region.region_id === assignment.region_id));
       }),
     );
     const issues = [...localIssues, ...workflowIssues];
+    if (!textureTargetsValid) issues.push({
+      message: "A stage texture target is no longer present in the saved scene.",
+      severity: "error",
+    });
     const errors = issues.filter((issue) => issue.severity === "error");
     if (errors.length > 0) {
       dispatch({
@@ -1087,28 +765,64 @@ export function useStudyInspectorPanelController(
         mutationContext,
         "Edit study stages",
         () => kernel.api.model.commitTransaction(
-          buildStudyStagesMergePatch(state.stageDrafts, baseRevision, currentScene.scene),
+          pipelineDraft
+            ? buildStudyPipelineStageMergePatch(pipelineDraft, baseRevision, currentScene.scene)
+            : buildStudyStagesMergePatch(submittedDrafts, baseRevision, currentScene.scene),
           sessionScopeKey ? { sessionScopeKey } : undefined,
         ),
       );
       if (mutationContext.isCurrentSessionScope() === false) return false;
       const revision = response.scene_revision;
+      const acknowledgedSource = pipelineDraft
+        ? readStudyStageSource(asRecord(response.committed_scene)?.study)
+        : null;
+      const committedEntry = acknowledgedSource?.kind === "pipeline"
+        ? acknowledgedSource.entries.find((entry) => entry.queueId === pipelineDraft?.pipelineNodeId)
+        : undefined;
+      const committedPipelineDraft = committedEntry && committedEntry.stageKind === pipelineDraft?.kind
+        ? createPipelineStudyStageDrafts([committedEntry])[0]
+        : undefined;
+      if (pipelineDraft && (!committedPipelineDraft || response.committed_scene?.revision !== revision)) {
+        scene.refetch();
+        throw new Error("The save response did not confirm the edited canonical stage. Review the refreshed scene before retrying.");
+      }
       acknowledgedSceneRevisionRef.current = revision;
+      if (response.committed_scene?.revision === revision) {
+        authoritativeSceneRef.current = response.committed_scene;
+        authoritativeSnapshotScopeRef.current = authoringScopeKey;
+      }
       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
       kernel.resources.invalidate(MODEL_READINESS_PATH, revision);
       kernel.resources.invalidate(MODEL_STUDY_PATH, revision);
       kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
       kernel.resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
       kernel.resources.invalidate(SIMULATION_COMMANDS_PATH, revision);
-      dispatch({
-        type: "setAuthoringFeedback",
-        scope: "stages",
-        feedback: {
-          kind: "success",
-          message: `Committed ${state.stageDrafts.length} study stage${state.stageDrafts.length === 1 ? "" : "s"}.`,
-        },
-      });
-      dispatch({ type: "acceptStageDrafts" });
+      kernel.resources.invalidate(SIMULATION_STAGES_RESULTS_PATH, revision);
+      kernel.resources.invalidatePrefix?.(`${SIMULATION_STAGES_RESULTS_PATH}?`, revision);
+      if (selectedAuthoringTargetRef.current === feedbackTargetAtSave) {
+        dispatch({
+          type: "setAuthoringFeedback",
+          scope: "stages",
+          feedback: {
+            kind: "success",
+            message: pipelineDraft
+              ? `Saved stage ${pipelineDraft.stageId}.`
+              : `Committed ${submittedDrafts.length} study stage${submittedDrafts.length === 1 ? "" : "s"}.`,
+            sceneRevision: revision,
+          },
+        });
+      }
+      if (launch) {
+        launch.receipt = response;
+        // Make the submitted baseline visible to the shared guard before the
+        // explicit Apply-and-Run gesture continues. Newer edits remain dirty.
+        flushSync(() => {
+          dispatch({ type: "acceptStageDrafts", submittedDrafts, committedPipelineDraft });
+          dispatch({ type: "setAuthoringBusy", busy: false });
+        });
+      } else {
+        dispatch({ type: "acceptStageDrafts", submittedDrafts, committedPipelineDraft });
+      }
       return true;
     } catch (error) {
       if (mutationContext.isCurrentSessionScope() === false) return false;
@@ -1194,6 +908,7 @@ export function useStudyInspectorPanelController(
         () => kernel.api.model.commitTransaction(
           buildStudyGlobalMergePatch(state.globalDraft, {
             baseRevision,
+            baselineDraft: state.baselineGlobalDraft,
             executionProfileBound: profileBound,
             sessionDiscretization: resolveSessionDiscretization(runtimeStatus),
           }),
@@ -1403,11 +1118,126 @@ export function useStudyInspectorPanelController(
     commitGlobalDraft: commitGlobalDraftImpl,
     commitExecutionProfile: commitExecutionProfileImpl,
   };
-  const commitStageDrafts = owner.commitStageDrafts;
+  const commitStageDrafts = async () => {
+    if (stageSaveInFlight.current) return false;
+    stageSaveInFlight.current = true;
+    try {
+      return await owner.commitStageDrafts();
+    } finally {
+      stageSaveInFlight.current = false;
+    }
+  };
+
+  const stageRunDisabledReason = (
+    stageId: string,
+    applyDraft: boolean,
+    form: InspectorEditSession | null,
+  ): string | null => {
+    if (stageApplyRun.current || stageSaveInFlight.current || state.authoringBusy) {
+      return "Wait for the stage save to finish.";
+    }
+    if (!applyDraft) {
+      const context = { ...commandContext, input: { stageId } };
+      return commands.isEnabled("study.execute-stage", context)
+        ? null
+        : commands.get("study.execute-stage")?.disabledReason?.(context) ?? "Stage execution is unavailable.";
+    }
+
+    const selectedCount = state.stageDrafts.filter((draft) => draft.stageId === stageId).length;
+    const baselineCount = state.baselineStageDrafts.filter((draft) => draft.stageId === stageId).length;
+    if (selectedCount !== 1 || baselineCount !== 1) {
+      return "Save the Study first so the selected stage has a unique committed ID.";
+    }
+    const otherDraftsChanged = state.stageDrafts.length !== state.baselineStageDrafts.length ||
+      state.stageDrafts.some((draft, index) => {
+        const baseline = state.baselineStageDrafts[index];
+        return (draft.stageId !== stageId || baseline.stageId !== stageId) &&
+          JSON.stringify(draft) !== JSON.stringify(baseline);
+      });
+    if (otherDraftsChanged) return "Apply or discard changes to other Study stages first.";
+    const geometryReason = studyComputeDraftBlockedReason({ ...commandContext, pendingForms: undefined });
+    if (geometryReason) return geometryReason;
+
+    const forms = kernel.pendingForms;
+    const pending = forms?.getTransitionSnapshot();
+    if (!form || !forms || !pending || forms.current() !== form || !form.dirty) {
+      return "Wait for the stage draft to be available.";
+    }
+    if (pending.dirtyOwnerCount !== 1) return "Apply or discard the other Inspector changes first.";
+    if (!forms.canApply()) {
+      return pending.blockedReason ?? "Resolve stage draft validation errors before applying.";
+    }
+    if (!runtimeStatus || numericSceneRevision(sceneRevision) !== runtimeStatus.resources.scene_revision) {
+      return "Wait for the displayed Study to refresh before saving and starting.";
+    }
+    return null;
+  };
+
+  const runStage = async (
+    stageId: string,
+    applyDraft: boolean,
+    form: InspectorEditSession | null,
+    initialState?: StageInitialStateChoice,
+  ): Promise<CommandResult> => {
+    const reason = stageRunDisabledReason(stageId, applyDraft, form);
+    if (reason) return { message: reason, status: "failed" };
+    if (!applyDraft) {
+      return commands.execute("study.execute-stage", commandContext, {
+        stageId,
+        initialState: initialState ?? { kind: "default_for_target" },
+      });
+    }
+
+    if (initialState?.kind === "prepared") {
+      return { message: "Save the stage first, then choose a prepared magnetization for the saved scene.", status: "failed" };
+    }
+    const baseRevision = numericSceneRevision(sceneRevision);
+    const forms = kernel.pendingForms;
+    if (!forms || !runtimeStatus || baseRevision === null) {
+      return { message: "The stage draft has no committed Study revision.", status: "failed" };
+    }
+    const launch = {
+      pin: {
+        ...captureStudyComputeInput(runtimeStatus),
+        scene_revision: baseRevision,
+      },
+      receipt: null as AuthoringTransactionResponse | null,
+    };
+    stageApplyRun.current = launch;
+    let scopeCurrent = true;
+    const unsubscribe = commands.subscribeSessionScope(() => {
+      if (commandContext.isCurrentSessionScope?.() === false) scopeCurrent = false;
+    });
+    try {
+      return await executeStageAfterApply({
+        api: kernel.api,
+        apply: async () => {
+          const result = await forms.apply();
+          return result.status === "completed" ? launch.receipt : null;
+        },
+        execute: (input, resources) => commands.execute("study.execute-stage", {
+          ...commandContext,
+          resourceData: { ...commandContext.resourceData, ...resources },
+        }, input),
+        isCurrent: () => scopeCurrent &&
+          commandContext.isCurrentSessionScope?.() !== false &&
+          kernel.selection.get().nodeId === selection.nodeId &&
+          forms.current() === form,
+        initialState,
+        pin: launch.pin,
+        requestOptions: sessionScopeKey ? { sessionScopeKey } : undefined,
+        stageId,
+      });
+    } finally {
+      unsubscribe();
+      stageApplyRun.current = null;
+    }
+  };
   const commitGlobalDraft = owner.commitGlobalDraft;
   const commitExecutionProfile = owner.commitExecutionProfile;
   return {
     activeStageIndex,
+    buildStudyProgress,
     checkpointCatalog,
     checkpoints,
     commandDetail,
@@ -1423,8 +1253,11 @@ export function useStudyInspectorPanelController(
     latestCheckpoint,
     k0ModalReadinessFor,
     model,
+    modelReadiness,
     runtimeStatus,
     runCommand,
+    runStage,
+    stageRunDisabledReason,
     scene,
     sceneHasPayload,
     sceneMagneticObjectCount,
@@ -1439,8 +1272,21 @@ export function useStudyInspectorPanelController(
   };
 }
 
-export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
+export type StudyInspectorSectionScope =
+  | "all"
+  | "overview"
+  | "stages"
+  | "execution"
+  | "recovery";
+
+export function StudyInspectorPanel({
+  selection,
+  sectionScope = "all",
+}: InspectorPanelProps & {
+  sectionScope?: StudyInspectorSectionScope;
+}) {
   const {
+    buildStudyProgress,
     activeStageIndex,
     checkpointCatalog,
     checkpoints,
@@ -1533,9 +1379,12 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
       if (globalDirty || stagesDirty) return false;
       return (await profileEditSessionRef.current?.apply()) === true;
     }
-    if (globalDirty && !(await commitGlobalDraft())) return false;
-    if (stagesDirty && !(await commitStageDrafts())) return false;
-    return true;
+    return applyStudyDraftsWithPartialFailure({
+      globalDirty,
+      stagesDirty,
+      commitGlobal: commitGlobalDraft,
+      commitStages: commitStageDrafts,
+    });
   }, [commitGlobalDraft, commitStageDrafts, globalDirty, profileEditState.dirty, stagesDirty]);
   const resetInspectorDraft = useCallback(() => {
     dispatch({ type: "revertGlobalDraft" });
@@ -1560,6 +1409,33 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     },
   );
 
+  const showRuntime =
+    sectionScope === "all" ||
+    sectionScope === "overview" ||
+    sectionScope === "execution";
+  const showRunsAndBatches =
+    sectionScope === "all" || sectionScope === "execution";
+  const showSelectedStage =
+    sectionScope === "all" || sectionScope === "stages";
+  const showBoundaryAndProfile =
+    sectionScope === "all" ||
+    sectionScope === "overview" ||
+    sectionScope === "execution";
+  const showPipeline =
+    sectionScope === "all" ||
+    sectionScope === "overview" ||
+    sectionScope === "stages";
+  const showRecovery =
+    sectionScope === "all" || sectionScope === "recovery";
+  const showHistory =
+    sectionScope === "all" ||
+    sectionScope === "execution" ||
+    sectionScope === "recovery";
+  const resolvedDiscretization =
+    resolveSessionDiscretization(runtimeStatus) ??
+    snapshot.requested.backend ??
+    "auto";
+
   return (
     <>
       <div
@@ -1570,133 +1446,176 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
         data-scene-status={scene.status}
         data-stage-draft-count={state.stageDrafts.length}
       >
-        <StudyRuntimeSection
-          commandDisabledReason={commandDisabledReason}
-          model={model}
-          onOpenCommand={(commandId) =>
-            dispatch({ type: "setSelectedCommandId", commandId })
-          }
-          runCommand={runCommand}
-          stageExecution={stageExecution}
-          stepValue={
-            solverStatus.data?.step_index ?? currentRun.data?.total_steps ?? "n/a"
-          }
+        <InspectorMetricStrip
+          metrics={[
+            {
+              label: "Workflow",
+              value:
+                model.selectedStage?.kind ??
+                state.stageDrafts[0]?.kind ??
+                "authoring",
+            },
+            {
+              label: "Discretization",
+              value: resolvedDiscretization.toUpperCase(),
+            },
+            {
+              label: "Stages",
+              value: String(state.stageDrafts.length),
+            },
+            {
+              label: "State",
+              value: model.runtime.state,
+            },
+          ]}
         />
 
-        <ProjectRunsSection />
-        <ProjectBatchesSection />
+        {showRuntime ? (
+          <StudyRuntimeSection
+            buildStudyProgress={buildStudyProgress}
+            commandDisabledReason={commandDisabledReason}
+            model={model}
+            onOpenCommand={(commandId) =>
+              dispatch({ type: "setSelectedCommandId", commandId })
+            }
+            runCommand={runCommand}
+            stageExecution={stageExecution}
+            stepValue={
+              solverStatus.data?.step_index ?? currentRun.data?.total_steps ?? "n/a"
+            }
+          />
+        ) : null}
 
-        <StudySelectedStageSection
-          model={model}
-          stageExecutionRevision={stageExecution.data?.revision ?? null}
-        />
+        {showRunsAndBatches ? (
+          <>
+            <ProjectRunsSection />
+            <ProjectBatchesSection />
+          </>
+        ) : null}
 
-        <StudyBoundarySection
-          activeLane={runtimeStatus?.capabilities.active_lane ?? null}
-          algorithmsAvailable={runtimeStatus?.capabilities.algorithms_available}
-          authoringBusy={state.authoringBusy}
-          authoringFeedback={
-            state.authoringFeedbackScope === "global"
-              ? state.authoringFeedback
-              : null
-          }
-          draft={state.globalDraft}
-          executionProfileBound={
-            hasStudyExecutionProfile(scene.data) || profileEditState.profileBound
-          }
-          executionProfileDraftDirty={profileEditState.dirty}
-          model={model}
-          magneticObjectCount={sceneMagneticObjectCount}
-          magneticObjectIds={sceneMagneticObjectIds}
-          scene={scene.data}
-          sceneRevision={sceneRevision}
-          sceneStatus={scene.status}
-          sessionDiscretization={resolveSessionDiscretization(runtimeStatus)}
-          snapshot={snapshot}
-          onCommit={() => void commitGlobalDraft()}
-          onUpdate={(patch) =>
-            dispatch({ type: "updateGlobalDraft", patch })
-          }
-        />
+        {showSelectedStage ? (
+          <StudySelectedStageSection
+            model={model}
+            stageExecutionRevision={stageExecution.data?.revision ?? null}
+          />
+        ) : null}
 
-        <StudyExecutionProfileSection
-          authoringBusy={state.authoringBusy}
-          otherAuthoringDirty={globalDirty || stagesDirty}
-          scene={scene.data}
-          sceneRevision={sceneRevision}
-          sceneStatus={scene.status}
-          sessionScopeKey={sessionScopeKey}
-          stages={[...rawStudyStages(scene.data), ...state.stageDrafts]}
-          onApply={commitExecutionProfile}
-          onEditSessionChange={onProfileEditSessionChange}
-        />
+        {showBoundaryAndProfile ? (
+          <>
+            <StudyBoundarySection
+              activeLane={runtimeStatus?.capabilities.active_lane ?? null}
+              algorithmsAvailable={runtimeStatus?.capabilities.algorithms_available}
+              authoringBusy={state.authoringBusy}
+              authoringFeedback={
+                state.authoringFeedbackScope === "global"
+                  ? state.authoringFeedback
+                  : null
+              }
+              draft={state.globalDraft}
+              executionProfileBound={
+                hasStudyExecutionProfile(scene.data) || profileEditState.profileBound
+              }
+              executionProfileDraftDirty={profileEditState.dirty}
+              model={model}
+              magneticObjectCount={sceneMagneticObjectCount}
+              magneticObjectIds={sceneMagneticObjectIds}
+              scene={scene.data}
+              sceneRevision={sceneRevision}
+              sceneStatus={scene.status}
+              sessionDiscretization={resolveSessionDiscretization(runtimeStatus)}
+              snapshot={snapshot}
+              onCommit={() => void commitGlobalDraft()}
+              onUpdate={(patch) =>
+                dispatch({ type: "updateGlobalDraft", patch })
+              }
+            />
 
-        <StudyPipelineSection
-          readOnlyReason={readStudyStageSource(asRecord(scene.data)?.study).kind !== "flat"
-            ? readStudyStageSource(asRecord(scene.data)?.study).error ?? "Canonical pipeline inspection is read-only. Flat-stage editing cannot preserve its groups and references."
-            : null}
-          activeStageIndex={activeStageIndex}
-          activeLane={runtimeStatus?.capabilities.active_lane ?? null}
-          algorithmsAvailable={runtimeStatus?.capabilities.algorithms_available}
-          authoringBusy={state.authoringBusy}
-          authoringFeedback={
-            state.authoringFeedbackScope === "stages"
-              ? state.authoringFeedback
-              : null
-          }
-          commandDisabledReason={commandDisabledReason}
-          demagEnabled={state.globalDraft.demagEnabled}
-          executionProfileBound={
-            hasStudyExecutionProfile(scene.data) || profileEditState.profileBound
-          }
-          executionProfileDraftDirty={profileEditState.dirty}
-          k0ModalReadinessFor={k0ModalReadinessFor}
-          draft={state.stageDrafts[state.selectedDraftIndex] ?? null}
-          draftIndex={state.selectedDraftIndex}
-          drafts={state.stageDrafts}
-          model={model}
-          onAddStage={(kind) => dispatch({ type: "addStageDraft", kind })}
-          onCommit={() => void commitStageDrafts()}
-          onDuplicateStage={(index) =>
-            dispatch({ type: "duplicateStageDraft", index })
-          }
-          onMoveStage={(index, direction) =>
-            dispatch({ type: "moveStageDraft", index, direction })
-          }
-          onRemoveStage={(index) => dispatch({ type: "removeStageDraft", index })}
-          onSelectDraft={(index) => dispatch({ type: "selectStageDraft", index })}
-          onUpdateDraft={(index, patch) =>
-            dispatch({ type: "updateStageDraft", index, patch })
-          }
-          runCommand={runCommand}
-          showDraftEditor={state.stageDrafts.length === 0 || stagesDirty}
-        />
+            <StudyExecutionProfileSection
+              authoringBusy={state.authoringBusy}
+              otherAuthoringDirty={globalDirty || stagesDirty}
+              scene={scene.data}
+              sceneRevision={sceneRevision}
+              sceneStatus={scene.status}
+              sessionScopeKey={sessionScopeKey}
+              stages={[...rawStudyStages(scene.data), ...state.stageDrafts]}
+              onApply={commitExecutionProfile}
+              onEditSessionChange={onProfileEditSessionChange}
+            />
+          </>
+        ) : null}
 
-        <StudyRecoverySection
-          checkpointCount={checkpointCatalog.data?.checkpoints.length ?? 0}
-          commandDisabledReason={commandDisabledReason}
-          latestCheckpoint={latestCheckpoint}
-          onImport={() => dispatch({ type: "setImportDialogOpen", open: true })}
-          onRestore={() => {
-            dispatch({
-              type: "setSelectedRestoreCheckpointId",
-              checkpointId: latestCheckpoint?.checkpoint_id ?? null,
-            });
-            dispatch({ type: "setRestoreDialogOpen", open: true });
-          }}
-          runCommand={runCommand}
-        />
+        {showPipeline ? (
+          <StudyPipelineSection
+            readOnlyReason={readStudyStageSource(asRecord(scene.data)?.study).kind !== "flat"
+              ? readStudyStageSource(asRecord(scene.data)?.study).error ?? "Canonical pipeline inspection is read-only. Flat-stage editing cannot preserve its groups and references."
+              : null}
+            activeStageIndex={activeStageIndex}
+            activeLane={runtimeStatus?.capabilities.active_lane ?? null}
+            algorithmsAvailable={runtimeStatus?.capabilities.algorithms_available}
+            authoringBusy={state.authoringBusy}
+            authoringFeedback={
+              state.authoringFeedbackScope === "stages"
+                ? state.authoringFeedback
+                : null
+            }
+            commandDisabledReason={commandDisabledReason}
+            demagEnabled={state.globalDraft.demagEnabled}
+            executionProfileBound={
+              hasStudyExecutionProfile(scene.data) || profileEditState.profileBound
+            }
+            executionProfileDraftDirty={profileEditState.dirty}
+            k0ModalReadinessFor={k0ModalReadinessFor}
+            draft={state.stageDrafts[state.selectedDraftIndex] ?? null}
+            draftIndex={state.selectedDraftIndex}
+            drafts={state.stageDrafts}
+            model={model}
+            onAddStage={(kind) => dispatch({ type: "addStageDraft", kind })}
+            onCommit={() => void commitStageDrafts()}
+            onDuplicateStage={(index) =>
+              dispatch({ type: "duplicateStageDraft", index })
+            }
+            onMoveStage={(index, direction) =>
+              dispatch({ type: "moveStageDraft", index, direction })
+            }
+            onRemoveStage={(index) => dispatch({ type: "removeStageDraft", index })}
+            onSelectDraft={(index) => dispatch({ type: "selectStageDraft", index })}
+            onUpdateDraft={(index, patch) =>
+              dispatch({ type: "updateStageDraft", index, patch })
+            }
+            runCommand={runCommand}
+            showDraftEditor={state.stageDrafts.length === 0 || stagesDirty}
+          />
+        ) : null}
 
-        <StudyHistorySection
-          energyStep={energyCurrent.data?.step ?? "not available"}
-          returnedRows={energyHistory.data?.returned_rows ?? "not available"}
-          totalEnergy={
-            typeof energyCurrent.data?.total === "number"
-              ? energyCurrent.data.total.toExponential(4)
-              : "not available"
-          }
-          totalRows={energyHistory.data?.total_rows ?? "not available"}
-        />
+        {showRecovery ? (
+          <StudyRecoverySection
+            checkpointCount={checkpointCatalog.data?.checkpoints.length ?? 0}
+            commandDisabledReason={commandDisabledReason}
+            latestCheckpoint={latestCheckpoint}
+            onImport={() => dispatch({ type: "setImportDialogOpen", open: true })}
+            onRestore={() => {
+              dispatch({
+                type: "setSelectedRestoreCheckpointId",
+                checkpointId: latestCheckpoint?.checkpoint_id ?? null,
+              });
+              dispatch({ type: "setRestoreDialogOpen", open: true });
+            }}
+            runCommand={runCommand}
+          />
+        ) : null}
+
+        {showHistory ? (
+          <StudyHistorySection
+            energyStep={energyCurrent.data?.step ?? "not available"}
+            returnedRows={energyHistory.data?.returned_rows ?? "not available"}
+            totalEnergy={
+              typeof energyCurrent.data?.total === "number"
+                ? energyCurrent.data.total.toExponential(4)
+                : "not available"
+            }
+            totalRows={energyHistory.data?.total_rows ?? "not available"}
+          />
+        ) : null}
       </div>
       <CommandDetailDialog
         commandId={state.selectedCommandId}
@@ -1756,1367 +1675,4 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
       />
     </>
   );
-}
-
-type StudyCommandRunner = (commandId: string, input?: unknown) => void;
-type StudyCommandDisabledReason = (commandId: string) => string | null;
-type StageExecutionResourceState = Pick<
-  ResourceResult<StageExecutionResource | null>,
-  "data" | "error" | "refreshError" | "status"
->;
-
-function stageExecutionFeedback(
-  resource: StageExecutionResourceState | null | undefined,
-): { kind: "error" | "warning"; message: string } | null {
-  if (!resource) return null;
-  const hasScopedSnapshot = resource.data !== null;
-  const errorMessage = resource.error?.message ?? resource.refreshError?.message;
-  const detail = errorMessage ? ` ${errorMessage}` : "";
-
-  if (resource.status === "error") {
-    return hasScopedSnapshot
-      ? {
-          kind: "warning",
-          message: `Stage telemetry refresh failed. Showing the last confirmed telemetry for the current session/run scope.${detail}`,
-        }
-      : {
-          kind: "error",
-          message: `Stage telemetry refresh failed. No snapshot is available for the current session/run scope.${detail}`,
-        };
-  }
-
-  if (resource.status === "stale") {
-    if (resource.error || resource.refreshError) {
-      return hasScopedSnapshot
-        ? {
-            kind: "warning",
-            message: `Stage telemetry refresh failed. Showing the last confirmed telemetry for the current session/run scope.${detail}`,
-          }
-        : {
-            kind: "error",
-            message: `Stage telemetry refresh failed. No snapshot is available for the current session/run scope.${detail}`,
-          };
-    }
-
-    return hasScopedSnapshot
-      ? {
-          kind: "warning",
-          message:
-            "Stage telemetry is stale. Showing the last confirmed snapshot while refresh is pending.",
-        }
-      : {
-          kind: "warning",
-          message:
-            "Stage telemetry is stale, but no snapshot matches the current session/run scope.",
-        };
-  }
-
-  return null;
-}
-
-export function StudyRuntimeSection({
-  commandDisabledReason,
-  model,
-  onOpenCommand,
-  runCommand,
-  stageExecution,
-  stepValue,
-}: {
-  commandDisabledReason: StudyCommandDisabledReason;
-  model: StudyInspectorModel;
-  onOpenCommand: (commandId: string) => void;
-  runCommand: StudyCommandRunner;
-  stageExecution?: StageExecutionResourceState | null;
-  stepValue: ReactNode;
-}) {
-  const telemetryFeedback = stageExecutionFeedback(stageExecution);
-  return (
-    <InspectorGroup title="Runtime" badge={model.runtime.state}>
-      {telemetryFeedback ? (
-        <FeedbackBanner
-          kind={telemetryFeedback.kind}
-          message={telemetryFeedback.message}
-        />
-      ) : null}
-      <FieldRow label="Run" value={model.runtime.runId} />
-      <FieldRow label="Active stage" value={model.runtime.activeStageLabel} />
-      {model.runtime.runtimeProvenance ? (
-        <StudyRuntimeProvenanceRows provenance={model.runtime.runtimeProvenance} />
-      ) : null}
-      <FieldRow
-        label="Command"
-        value={
-          model.runtime.commandId ? (
-            <button
-              type="button"
-              className="fm-study-command-link"
-              onClick={() => onOpenCommand(model.runtime.commandId ?? "")}
-              title="Open command detail"
-            >
-              <span>{model.runtime.commandLabel}</span>
-              <Info size={12} aria-hidden="true" />
-            </button>
-          ) : (
-            model.runtime.commandLabel
-          )
-        }
-      />
-      {model.runtime.commandError ? (
-        <FieldRow label="Command error" value={model.runtime.commandError} />
-      ) : null}
-      {model.runtime.backendDiagnostic ? (
-        <FieldRow label="Backend failure" value={model.runtime.backendDiagnostic} />
-      ) : null}
-      {model.runtime.warnings?.map((warning, index) => (
-        <FieldRow key={`${index}:${warning}`} label="Runtime warning" value={warning} />
-      ))}
-      <FieldRow label="Max torque" value={model.runtime.maxTorque} />
-      {model.runtime.torqueDiagnostic ? (
-        <FieldRow label="Torque diagnostic" value={model.runtime.torqueDiagnostic} />
-      ) : null}
-      <FieldRow
-        label="Max RHS norm"
-        value={model.runtime.maxRhsNorm ?? "unavailable"}
-      />
-      <FieldRow
-        label="Converged"
-        value={model.runtime.converged ?? "not reported"}
-      />
-      {model.runtime.relaxTorqueStop ? (
-        <>
-          <FieldRow
-            label="Relax torque"
-            value={model.runtime.relaxTorqueStop.current}
-          />
-          <FieldRow
-            label="Relax threshold"
-            value={model.runtime.relaxTorqueStop.threshold}
-          />
-          <FieldRow
-            label="Relax stop"
-            value={model.runtime.relaxTorqueStop.status}
-          />
-        </>
-      ) : null}
-      {model.runtime.relaxEnergyStop ? (
-        <>
-          <FieldRow
-            label="Energy plateau"
-            value={model.runtime.relaxEnergyStop.current}
-          />
-          <FieldRow
-            label="Energy threshold"
-            value={model.runtime.relaxEnergyStop.threshold}
-          />
-          <FieldRow
-            label="Energy stop"
-            value={model.runtime.relaxEnergyStop.status}
-          />
-        </>
-      ) : null}
-      {model.runtime.relaxTimeStop ? (
-        <>
-          <FieldRow
-            label="Physical time"
-            value={model.runtime.relaxTimeStop.elapsed}
-          />
-          <FieldRow
-            label="Time budget"
-            value={model.runtime.relaxTimeStop.budget}
-          />
-          <FieldRow
-            label="Time status"
-            value={model.runtime.relaxTimeStop.status}
-          />
-        </>
-      ) : null}
-      <FieldRow label="Step" value={stepValue} />
-      <StudyProgressBar
-        label="Current study progress"
-        value={model.runtime.progressPercent}
-      />
-      <div className="fm-inspector-toolbar">
-        <StudyCommandButton
-          commandId="study.run"
-          disabledReason={commandDisabledReason("study.run")}
-          icon={<Play size={13} />}
-          label="Compute"
-          onRun={runCommand}
-        />
-        <StudyCommandButton
-          commandId="study.pause"
-          disabledReason={commandDisabledReason("study.pause")}
-          icon={<Pause size={13} />}
-          label="Pause"
-          onRun={runCommand}
-          variant="ghost"
-        />
-        <StudyCommandButton
-          commandId="study.resume"
-          disabledReason={commandDisabledReason("study.resume")}
-          icon={<Play size={13} />}
-          label="Resume"
-          onRun={runCommand}
-          variant="ghost"
-        />
-        <StudyCommandButton
-          commandId="study.skip"
-          disabledReason={commandDisabledReason("study.skip")}
-          icon={<SkipForward size={13} />}
-          label="Skip"
-          onRun={runCommand}
-          variant="ghost"
-        />
-        <StudyCommandButton
-          commandId="study.stop"
-          disabledReason={commandDisabledReason("study.stop")}
-          icon={<Square size={13} />}
-          label="Stop"
-          onRun={runCommand}
-          variant="danger"
-        />
-      </div>
-    </InspectorGroup>
-  );
-}
-
-function StudyRuntimeProvenanceRows({
-  provenance,
-}: {
-  provenance: NonNullable<StudyInspectorModel["runtime"]["runtimeProvenance"]>;
-}) {
-  return (
-    <div className="fm-study-runtime-provenance" data-provenance-status={provenance.fallback.status}>
-      <FieldRow label="Authored intent backend" value={provenance.authored.backend} mono />
-      <FieldRow label="Authored intent device" value={provenance.authored.device} mono />
-      <FieldRow label="Authored intent mode" value={provenance.authored.mode} mono />
-      <FieldRow label="Authored intent precision" value={provenance.authored.precision} mono />
-      <FieldRow label="Authored intent provenance" value={provenance.sources.authored} mono />
-      <FieldRow label="Effective request backend" value={provenance.effective.backend} mono />
-      <FieldRow label="Effective request device" value={provenance.effective.device} mono />
-      <FieldRow label="Effective request mode" value={provenance.effective.mode} mono />
-      <FieldRow label="Effective request precision" value={provenance.effective.precision} mono />
-      <FieldRow label="Effective request provenance" value={provenance.sources.effective} mono />
-      <FieldRow label="Resolved backend" value={provenance.resolved.backend} mono />
-      <FieldRow label="Resolved device" value={provenance.resolved.device} mono />
-      <FieldRow label="Resolved mode" value={provenance.resolved.mode} mono />
-      <FieldRow label="Resolved precision" value={provenance.resolved.precision} mono />
-      <FieldRow label="Resolved runtime family" value={provenance.resolved.runtimeFamily} mono />
-      <FieldRow label="Resolved engine" value={provenance.resolved.engine} mono />
-      <FieldRow label="Fallback status" value={provenance.fallback.status} status={provenance.fallback.status} />
-      <FieldRow label="Fallback reason" value={provenance.fallback.reason} />
-      <FieldRow label="Fallback engines" value={`${provenance.fallback.originalEngine} → ${provenance.fallback.fallbackEngine}`} mono />
-      <FieldRow label="Fallback message" value={provenance.fallback.message} />
-    </div>
-  );
-}
-
-export function StudySelectedStageSection({
-  model,
-  stageExecutionRevision,
-}: {
-  model: StudyInspectorModel;
-  stageExecutionRevision?: number | null;
-}) {
-  const selectedStage = model.selectedStage;
-  const eigenmodeSolving =
-    selectedStage !== null &&
-    selectedStage.kind.toLowerCase().includes("eigen") &&
-    ["accepted", "dispatched", "materializing", "pending", "queued", "running"].includes(
-      selectedStage.status.toLowerCase(),
-    );
-  const selectedStageHasProgress =
-    selectedStage !== null &&
-    (selectedStage.progressLabel != null ||
-      selectedStage.progressDetail != null ||
-      selectedStage.progressPercent > 0);
-  const selectedStageProgressValue =
-    eigenmodeSolving && !selectedStageHasProgress
-      ? null
-      : (selectedStage?.progressPercent ?? null);
-  const selectedStageProgressLabel =
-    selectedStage?.progressLabel ??
-    (eigenmodeSolving ? "waiting for solver progress telemetry" : undefined);
-
-  return (
-    <InspectorGroup
-      title="Selected Stage"
-      badge={selectedStage?.status ?? "none"}
-    >
-      <FieldRow label="Kind" value={selectedStage?.kind ?? "none"} />
-      <FieldRow label="Status" value={selectedStage?.status ?? "none"} />
-      {eigenmodeSolving ? (
-        <FieldRow
-          label="Eigenmode solve progress"
-          value={selectedStageProgressLabel}
-        />
-      ) : null}
-      {selectedStage?.progressDetail ? (
-        <FieldRow label="Progress detail" value={selectedStage.progressDetail} />
-      ) : null}
-      <FieldRow
-        label="Stop reason"
-        value={selectedStage?.stopReason ?? "not available"}
-      />
-      <FieldRow
-        label="Completed"
-        value={selectedStage?.completedAtIso ?? "not completed"}
-      />
-      <FieldRow
-        label="Command"
-        value={selectedStage?.commandId ?? "not linked"}
-      />
-      <FieldRow
-        label="Mesh generation"
-        value={selectedStage?.meshGenerationId ?? "unknown"}
-        mono
-      />
-      <FieldRow
-        label="Mesh revision"
-        value={
-          selectedStage?.meshRevision === null ||
-          selectedStage?.meshRevision === undefined
-            ? "unknown"
-            : String(selectedStage.meshRevision)
-        }
-      />
-      <FieldRow
-        label="Topology fingerprint"
-        value={selectedStage?.meshTopologyFingerprint ?? "unknown"}
-        mono
-      />
-      {selectedStage?.transition ? (
-        <>
-          <FieldRow
-            label="State transition"
-            value={selectedStage.transition.label ?? "declared"}
-          />
-          <FieldRow
-            label="Transition kind"
-            value={selectedStage.transition.kind ?? "not available"}
-          />
-          <FieldRow
-            label="Transition reason"
-            value={selectedStage.transition.reason ?? "not available"}
-          />
-          <FieldRow
-            label="Transfer operator"
-            value={selectedStage.transition.transferOperator ?? "not available"}
-          />
-        </>
-      ) : null}
-      {selectedStage?.runtimeMetric ? (
-        <>
-          <FieldRow
-            label="Stop metric"
-            value={selectedStage.runtimeMetric.name}
-          />
-          <FieldRow
-            label="Metric value"
-            value={selectedStage.runtimeMetric.value}
-          />
-          <FieldRow
-            label="Metric threshold"
-            value={selectedStage.runtimeMetric.threshold}
-          />
-        </>
-      ) : null}
-      <FieldRow
-        label="Torque stop"
-        value={selectedStage?.torqueToleranceFormatted ?? "not set"}
-      />
-      <FieldRow
-        label="Energy stop"
-        value={selectedStage?.energyTolerance ?? "not set"}
-      />
-      <FieldRow
-        label="Step budget"
-        value={selectedStage?.maxSteps ?? "not set"}
-      />
-      <FieldRow
-        label="Time budget"
-        value={selectedStage?.untilSeconds ?? "not set"}
-        unit={selectedStage?.untilSeconds ? "s" : undefined}
-      />
-      <FieldRow
-        label="Checkpoint"
-        value={selectedStage?.checkpointRef ?? "not available"}
-      />
-      <FieldRow
-        label="Artifacts"
-        value={
-          selectedStage?.artifactRefs.length
-            ? selectedStage.artifactRefs.join(", ")
-            : "none"
-        }
-      />
-      <FieldRow
-        label="Stage resource"
-        value={
-          stageExecutionRevision === undefined || stageExecutionRevision === null
-            ? "not loaded"
-            : `simulation/stages/execution@${stageExecutionRevision}`
-        }
-      />
-      <StudyProgressBar
-        indeterminate={eigenmodeSolving && !selectedStageHasProgress}
-        label={
-          eigenmodeSolving
-            ? "Eigenmode solve progress"
-            : "Selected stage progress"
-        }
-        statusLabel={selectedStage?.progressLabel ?? undefined}
-        value={selectedStageProgressValue}
-      />
-    </InspectorGroup>
-  );
-}
-
-export function StudyBoundarySection({
-  activeLane,
-  algorithmsAvailable,
-  authoringBusy,
-  authoringFeedback,
-  draft,
-  executionProfileBound = false,
-  executionProfileDraftDirty = false,
-  magneticObjectIds: _magneticObjectIds,
-  model,
-  magneticObjectCount,
-  onCommit,
-  onUpdate,
-  sessionDiscretization,
-  requestedDiscretization,
-  scene,
-  sceneRevision,
-  sceneStatus,
-  snapshot,
-}: {
-  activeLane?: ActiveLaneCapabilitySnapshot | null;
-  algorithmsAvailable?: readonly string[];
-  authoringBusy: boolean;
-  authoringFeedback: {
-    kind: "error" | "success" | "warning";
-    message: string;
-  } | null;
-  draft: StudyGlobalDraft;
-  executionProfileBound?: boolean;
-  executionProfileDraftDirty?: boolean;
-  magneticObjectIds?: readonly string[];
-  model: StudyInspectorModel;
-  magneticObjectCount?: number;
-  onCommit: () => void;
-  onUpdate: (patch: Partial<StudyGlobalDraft>) => void;
-  requestedDiscretization?: string | null;
-  sessionDiscretization?: string | null;
-  scene?: unknown;
-  sceneRevision?: number | string | null;
-  sceneStatus?: string;
-  snapshot: StudyInspectorSnapshot;
-}) {
-  const laneRequestedBackend = executionProfileBound
-    ? null
-    : draft.requestedBackend;
-  const explicitFdm = isExplicitFdmStudy({
-    requestedBackend: laneRequestedBackend,
-    requestedDiscretization,
-    sessionDiscretization,
-  });
-  const demagRealization = normalizeDemagRealizationForLane(
-    draft.demagRealization,
-    {
-      requestedBackend: laneRequestedBackend,
-      requestedDiscretization,
-      sessionDiscretization,
-    },
-  );
-  const fdm = draft.fdm ?? {
-    boundaryCorrection: "",
-    boundaryDeltaMin: "",
-    boundaryPhiFloor: "",
-    commonCells: "",
-    commonCellsXy: "",
-    defaultCell: "",
-    demagExplain: true,
-    demagMode: "auto",
-    demagStrategy: demagRealization,
-    perMagnet: "",
-  };
-  const validation = validateStudyGlobalDraft(draft, {
-    studyStages: rawStudyStages(scene),
-    activeLane,
-    algorithmsAvailable,
-    executionProfileBound,
-    magneticObjectCount,
-    magneticObjectIds: _magneticObjectIds,
-    requestedDiscretization,
-    sessionDiscretization,
-  });
-  const hasErrors = validation.some((issue) => issue.severity === "error");
-  const singleGridUnsupported = explicitFdm && (magneticObjectCount ?? 0) > 1;
-  const gridPreview = explicitFdm
-    ? resolveFdmGridPreview(scene, draft)
-    : null;
-  const gridApplyDisabled =
-    authoringBusy ||
-    executionProfileDraftDirty ||
-    hasErrors ||
-    (sceneStatus !== undefined && sceneStatus !== "ready");
-  return (
-    <InspectorGroup
-      title="Global Study Settings"
-      badge={executionProfileBound ? "Profile bound" : snapshot.requested.backend}
-    >
-      <FieldRow label="Current exchange" value={model.boundary.exchangeEnabled} />
-      <FieldRow label="Current demag term" value={model.boundary.demagEnabled} />
-      <FieldRow label="Current demag" value={model.boundary.demagRealization} />
-      <FieldRow label="Current field" value={model.boundary.externalField} />
-      <FieldRow label="Current solver" value={model.boundary.solver} />
-      <FieldRow
-        label={explicitFdm ? "Current FDM demag strategy" : "Current FEM demag policy"}
-        value={
-          explicitFdm
-            ? model.boundary.demagRealization
-            : model.boundary.femDemagSolverPolicy
-        }
-      />
-      <FieldRow label="Current CPU threads" value={model.requested.cpuThreads} />
-      <FieldRow
-        label="Parallel execution"
-        value={
-          draft.parallelExecution.mode === "serial"
-            ? "serial (adaptive targets unused)"
-            : draft.parallelExecution.mode === "adaptive"
-              ? `adaptive, CPU ${draft.parallelExecution.maxCpuPercent}%`
-              : `invalid mode: ${draft.parallelExecution.mode}`
-        }
-      />
-      {executionProfileBound ? (
-        <p role="status">
-          An immutable execution profile is bound. Legacy backend, device, precision, mode, and CPU thread fields are inactive; edit them in Study Execution Profile.
-        </p>
-      ) : null}
-      {executionProfileDraftDirty ? (
-        <FeedbackBanner
-          kind="warning"
-          message="Apply or cancel the Study execution profile draft before saving global Study settings."
-        />
-      ) : null}
-      <FormField
-        disabled={executionProfileBound}
-        label="Backend"
-        type="select"
-        value={draft.requestedBackend}
-        onChange={(event) =>
-          onUpdate({ requestedBackend: event.target.value })
-        }
-      >
-        <option value="auto">Auto</option>
-        <option value="fdm">FDM</option>
-        <option value="fem">FEM</option>
-        <option value="hybrid">Hybrid</option>
-      </FormField>
-      <FormField
-        disabled={executionProfileBound}
-        label="Device"
-        type="select"
-        value={draft.requestedDevice}
-        onChange={(event) => onUpdate({ requestedDevice: event.target.value })}
-      >
-        <option value="auto">Auto</option>
-        <option value="cpu">CPU</option>
-        <option value="gpu">GPU</option>
-      </FormField>
-      <FormField
-        disabled={executionProfileBound}
-        label="Precision"
-        type="select"
-        value={draft.requestedPrecision}
-        onChange={(event) =>
-          onUpdate({ requestedPrecision: event.target.value })
-        }
-      >
-        <option value="double">Double</option>
-        <option value="single">Single</option>
-      </FormField>
-      <FormField
-        disabled={executionProfileBound}
-        label="Mode"
-        type="select"
-        value={draft.requestedMode}
-        onChange={(event) => onUpdate({ requestedMode: event.target.value })}
-      >
-        <option value="strict">Strict</option>
-        <option value="extended">Extended</option>
-        <option value="hybrid">Hybrid</option>
-      </FormField>
-      <FormField
-        disabled={executionProfileBound}
-        label="CPU threads"
-        hint="Blank keeps automatic runtime thread selection."
-        value={draft.requestedCpuThreads}
-        onChange={(event) =>
-          onUpdate({ requestedCpuThreads: event.target.value })
-        }
-      />
-      <FormField
-        label="Independent k points"
-        hint="Adaptive schedules independent k points for FEM CPU with soft CPU and memory targets; serial mode ignores these targets. Settings apply on the next run."
-        type="select"
-        value={draft.parallelExecution.mode}
-        onChange={(event) =>
-          onUpdate({
-            parallelExecution: {
-              ...draft.parallelExecution,
-              mode: event.target.value,
-            },
-          })
-        }
-      >
-        {draft.parallelExecution.mode !== "serial" &&
-        draft.parallelExecution.mode !== "adaptive" ? (
-          <option value={draft.parallelExecution.mode}>
-            Invalid imported mode: {draft.parallelExecution.mode}
-          </option>
-        ) : null}
-        <option value="serial">Serial</option>
-        <option value="adaptive">Adaptive</option>
-      </FormField>
-      <FormField
-        label="Maximum CPU target (%)"
-        hint="Adaptive only: target within the CPU allocation; brief peaks can exceed it. Serial mode ignores this field."
-        value={draft.parallelExecution.maxCpuPercent}
-        onChange={(event) =>
-          onUpdate({
-            parallelExecution: {
-              ...draft.parallelExecution,
-              maxCpuPercent: event.target.value,
-            },
-          })
-        }
-      />
-      <FormField
-        label="Maximum memory target (%)"
-        hint="Adaptive only: target within allocated memory; the reserve is kept in addition. Serial mode ignores this field."
-        value={draft.parallelExecution.maxMemoryPercent}
-        onChange={(event) =>
-          onUpdate({
-            parallelExecution: {
-              ...draft.parallelExecution,
-              maxMemoryPercent: event.target.value,
-            },
-          })
-        }
-      />
-      <FormField
-        label="Memory reserve (MiB)"
-        hint="Adaptive only: the reserve is kept in addition to the memory target. Values must convert exactly to safe API bytes; serial mode ignores this field."
-        value={draft.parallelExecution.memoryReserveMiB}
-        onChange={(event) =>
-          onUpdate({
-            parallelExecution: {
-              ...draft.parallelExecution,
-              memoryReserveMiB: event.target.value,
-            },
-          })
-        }
-      />
-      <FormField
-        label="Maximum workers"
-        hint="Adaptive only: blank lets the scheduler choose from available capacity. Serial mode ignores this field."
-        value={draft.parallelExecution.maxWorkers}
-        onChange={(event) =>
-          onUpdate({
-            parallelExecution: {
-              ...draft.parallelExecution,
-              maxWorkers: event.target.value,
-            },
-          })
-        }
-      />
-      <FormField
-        label="Threads per worker"
-        hint="Adaptive only: applies to each independent k worker. Serial mode ignores this field."
-        value={draft.parallelExecution.threadsPerWorker}
-        onChange={(event) =>
-          onUpdate({
-            parallelExecution: {
-              ...draft.parallelExecution,
-              threadsPerWorker: event.target.value,
-            },
-          })
-        }
-      />
-      <FormField
-        label="Exchange enabled"
-        checked={draft.exchangeEnabled}
-        type="checkbox"
-        onChange={(event) => onUpdate({ exchangeEnabled: event.target.checked })}
-      />
-      <FormField
-        label="Demag enabled"
-        checked={draft.demagEnabled}
-        type="checkbox"
-        onChange={(event) => onUpdate({ demagEnabled: event.target.checked })}
-      />
-      <FormField
-        label={explicitFdm ? "FDM demag" : "Demag"}
-        type="select"
-        value={demagRealization}
-        onChange={(event) =>
-          onUpdate({
-            demagRealization: event.target.value,
-            ...(explicitFdm
-              ? {
-                  fdm: {
-                    ...fdm,
-                    demagStrategy: event.target.value,
-                  },
-                }
-              : {}),
-          })
-        }
-      >
-        {explicitFdm ? (
-          <>
-            <option value="auto">Auto</option>
-            <option disabled={singleGridUnsupported} value="single_grid">
-              FDM single grid
-              {singleGridUnsupported ? " (unsupported for multiple magnets)" : ""}
-            </option>
-            <option value="multilayer_convolution">
-              FDM multilayer convolution
-            </option>
-          </>
-        ) : (
-          <>
-            <option value="auto">Auto</option>
-            <option value="poisson_robin">Poisson Robin</option>
-            <option value="poisson_dirichlet">Poisson Dirichlet</option>
-            <option value="fredkin_koehler">Fredkin Koehler</option>
-            <option value="bem">BEM</option>
-            <option value="fmm">FMM</option>
-            <option value="airbox_robin">Airbox Robin</option>
-          </>
-        )}
-      </FormField>
-      {explicitFdm ? (
-        <>
-          <FormField
-            label="FDM default cell"
-            hint="dx, dy, dz in metres. Leave blank when every magnet has a per-object grid."
-            unit="m"
-            value={fdm.defaultCell}
-            onChange={(event) =>
-              onUpdate({ fdm: { ...fdm, defaultCell: event.target.value } })
-            }
-          />
-          <InspectorGroup title="FDM Grid Preview" badge={gridPreview ? "derived" : "not available"}>
-            <FieldRow label="Base scene revision" value={sceneRevision ?? "not available"} />
-            {gridPreview && gridPreview.entries.length > 0 ? (
-              <>
-                {gridPreview.entries.map((entry) => (
-                  <div className="fm-inspector-grid-preview" key={entry.objectId}>
-                    <FieldRow label={`${entry.objectId} cells`} value={entry.counts.join(" × ")} />
-                    <FieldRow
-                      label={`${entry.objectId} covered extent`}
-                      value={`${formatGridVector(entry.extent)} m`}
-                    />
-                  </div>
-                ))}
-                <FieldRow label="Total cells (preview)" value={String(gridPreview.totalCellCount)} />
-              </>
-            ) : (
-              <FieldRow
-                label="Grid preview"
-                value="Add a valid FDM cell and magnetic object geometry."
-              />
-            )}
-            <FieldRow
-              label="Topology after Apply Grid"
-              value={sceneStatus === "ready" ? "queued for the next FDM realization" : "waiting for current scene"}
-            />
-          </InspectorGroup>
-          <FormField
-            label="FDM per-magnet grids"
-            hint='JSON object keyed by canonical magnet object_id, for example {"free":{"cell":[2e-9,2e-9,1e-9]}}.'
-            rows={3}
-            type="textarea"
-            value={fdm.perMagnet}
-            onChange={(event) =>
-              onUpdate({ fdm: { ...fdm, perMagnet: event.target.value } })
-            }
-          />
-          <FormField
-            label="FDM demag mode"
-            type="select"
-            value={fdm.demagMode}
-            onChange={(event) =>
-              onUpdate({ fdm: { ...fdm, demagMode: event.target.value } })
-            }
-          >
-            <option value="auto">Auto</option>
-            <option value="two_d_stack">2-D stack</option>
-            <option value="three_d">3-D</option>
-          </FormField>
-          <FormField
-            label="Common convolution cells"
-            hint="Nx, Ny, Nz; mutually exclusive with common XY cells."
-            value={fdm.commonCells}
-            onChange={(event) =>
-              onUpdate({ fdm: { ...fdm, commonCells: event.target.value } })
-            }
-          />
-          <FormField
-            label="Common convolution cells XY"
-            hint="Nx, Ny for the two-dimensional stack path."
-            value={fdm.commonCellsXy}
-            onChange={(event) =>
-              onUpdate({ fdm: { ...fdm, commonCellsXy: event.target.value } })
-            }
-          />
-          <FormField
-            label="Explain FDM demag plan"
-            checked={fdm.demagExplain}
-            type="checkbox"
-            onChange={(event) =>
-              onUpdate({ fdm: { ...fdm, demagExplain: event.target.checked } })
-            }
-          />
-          <FormField
-            label="Boundary correction"
-            type="select"
-            value={fdm.boundaryCorrection}
-            onChange={(event) =>
-              onUpdate({ fdm: { ...fdm, boundaryCorrection: event.target.value } })
-            }
-          >
-            <option value="">Backend default</option>
-            <option value="none">None</option>
-            <option value="volume">Volume (T0)</option>
-            <option value="full">Full (T1)</option>
-          </FormField>
-          <FormField
-            label="Boundary phi floor"
-            hint="Effective volume fraction in (0, 1)."
-            value={fdm.boundaryPhiFloor}
-            onChange={(event) =>
-              onUpdate({ fdm: { ...fdm, boundaryPhiFloor: event.target.value } })
-            }
-          />
-          <FormField
-            label="Boundary delta minimum"
-            hint="Minimum intersection distance in metres."
-            unit="m"
-            value={fdm.boundaryDeltaMin}
-            onChange={(event) =>
-              onUpdate({ fdm: { ...fdm, boundaryDeltaMin: event.target.value } })
-            }
-          />
-        </>
-      ) : null}
-      <FormField
-        label="External field"
-        hint="B_ext vector in T. Leave blank to remove the global field."
-        unit="T"
-        value={draft.externalField}
-        onChange={(event) => onUpdate({ externalField: event.target.value })}
-      />
-      <StudySolverPolicyFields
-        algorithmsAvailable={algorithmsAvailable}
-        draft={draft.solver}
-        onUpdate={(patch) =>
-          onUpdate({ solver: { ...draft.solver, ...patch } })
-        }
-        requestedBackend={draft.requestedBackend}
-        requestedDevice={draft.requestedDevice}
-        requestedPrecision={draft.requestedPrecision}
-      />
-      {explicitFdm ? (
-        <FieldRow
-          label="FEM demag policy"
-          value="Not applicable for an explicit FDM lane"
-        />
-      ) : (
-        <FormField
-          label="FEM demag policy"
-          hint="FEM demag solver policy JSON object."
-          rows={4}
-          type="textarea"
-          value={draft.femDemagSolverPolicy}
-          onChange={(event) =>
-            onUpdate({ femDemagSolverPolicy: event.target.value })
-          }
-        />
-      )}
-      {validation.length > 0 ? (
-        <ul className="fm-inspector-validation-list">
-          {validation.map((issue) => (
-            <li key={`${issue.severity}:${issue.message}`}>
-              {issue.severity}: {issue.message}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {authoringFeedback ? (
-        <FeedbackBanner
-          kind={authoringFeedback.kind}
-          message={authoringFeedback.message}
-        />
-      ) : null}
-      <div className="fm-inspector-toolbar">
-        <Button
-          disabled={gridApplyDisabled}
-          size="sm"
-          title={
-            executionProfileDraftDirty
-              ? "Apply or cancel the Study execution profile draft first."
-              : hasErrors
-              ? "Fix global study validation errors before applying the grid."
-              : explicitFdm
-                ? "Apply the FDM grid policy to the canonical scene"
-                : "Save global study settings"
-          }
-          type="button"
-          variant="primary"
-          onClick={onCommit}
-        >
-          <Save size={13} aria-hidden="true" />
-          {authoringBusy ? "Saving" : explicitFdm ? "Apply Grid" : "Save globals"}
-        </Button>
-      </div>
-    </InspectorGroup>
-  );
-}
-
-function StudyRecoverySection({
-  checkpointCount,
-  commandDisabledReason,
-  latestCheckpoint,
-  onImport,
-  onRestore,
-  runCommand,
-}: {
-  checkpointCount: number;
-  commandDisabledReason: StudyCommandDisabledReason;
-  latestCheckpoint: CheckpointEntry | null;
-  onImport: () => void;
-  onRestore: () => void;
-  runCommand: StudyCommandRunner;
-}) {
-  return (
-    <InspectorGroup
-      title="Recovery"
-      badge={`${checkpointCount}`}
-    >
-      <FieldRow
-        label="Latest checkpoint"
-        value={latestCheckpoint?.checkpoint_id ?? "not available"}
-      />
-      <FieldRow
-        label="Resume class"
-        value={latestCheckpoint?.resume_class ?? "not available"}
-      />
-      <FieldRow
-        label="Checkpoint step"
-        value={latestCheckpoint?.step ?? "not available"}
-      />
-      <div className="fm-inspector-toolbar">
-        <StudyCommandButton
-          commandId="study.save-checkpoint"
-          disabledReason={commandDisabledReason("study.save-checkpoint")}
-          icon={<Save size={13} />}
-          label="Save"
-          onRun={runCommand}
-          variant="ghost"
-        />
-        <StudyCommandButton
-          commandId="study.restore-checkpoint"
-          disabledReason={commandDisabledReason("study.restore-checkpoint")}
-          icon={<RotateCcw size={13} />}
-          label="Restore"
-          onRun={onRestore}
-          variant="ghost"
-        />
-        <StudyCommandButton
-          commandId="study.import-state"
-          disabledReason={commandDisabledReason("study.import-state")}
-          icon={<Upload size={13} />}
-          label="Import"
-          onRun={onImport}
-          variant="ghost"
-        />
-        <StudyCommandButton
-          commandId="study.export-state"
-          disabledReason={commandDisabledReason("study.export-state")}
-          icon={<Download size={13} />}
-          label="Export"
-          onRun={runCommand}
-          variant="ghost"
-        />
-        <StudyCommandButton
-          commandId="study.discard-paused-state"
-          disabledReason={commandDisabledReason("study.discard-paused-state")}
-          icon={<Scissors size={13} />}
-          label="Discard"
-          onRun={runCommand}
-          variant="danger"
-        />
-      </div>
-    </InspectorGroup>
-  );
-}
-
-function StudyHistorySection({
-  energyStep,
-  returnedRows,
-  totalEnergy,
-  totalRows,
-}: {
-  energyStep: ReactNode;
-  returnedRows: ReactNode;
-  totalEnergy: ReactNode;
-  totalRows: ReactNode;
-}) {
-  return (
-    <InspectorGroup
-      title="Run History"
-      badge={`${returnedRows}`}
-    >
-      <FieldRow label="Energy step" value={energyStep} />
-      <FieldRow label="Total energy" value={totalEnergy} unit="J" />
-      <FieldRow label="Returned rows" value={returnedRows} />
-      <FieldRow label="Total rows" value={totalRows} />
-    </InspectorGroup>
-  );
-}
-
-export function StudyCommandButton({
-  commandId,
-  disabledReason,
-  icon,
-  label,
-  onRun,
-  variant,
-}: {
-  commandId: string;
-  disabledReason: string | null;
-  icon: ReactNode;
-  label: string;
-  onRun: (commandId: string) => void;
-  variant?: "danger" | "ghost" | "primary" | "secondary";
-}) {
-  const enabled = disabledReason === null;
-  const title = disabledReason ?? label;
-
-  return (
-    <Button
-      size="sm"
-      type="button"
-      variant={variant}
-      disabled={!enabled}
-      aria-label={enabled ? label : `${label}: ${disabledReason}`}
-      title={title}
-      onClick={() => onRun(commandId)}
-    >
-      {icon}
-      {label}
-    </Button>
-  );
-}
-
-export function RestoreCheckpointDialog({
-  checkpoints,
-  onConfirm,
-  onOpenChange,
-  onSelectCheckpoint,
-  open,
-  selectedCheckpointId,
-}: {
-  checkpoints: CheckpointEntry[];
-  onConfirm: (checkpointId: string) => void;
-  onOpenChange: (open: boolean) => void;
-  onSelectCheckpoint: (checkpointId: string) => void;
-  open: boolean;
-  selectedCheckpointId: string | null;
-}) {
-  const checkpoint =
-    checkpoints.find((entry) => entry.checkpoint_id === selectedCheckpointId) ??
-    checkpoints[0] ??
-    null;
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="fm-study-command-dialog" aria-describedby="fm-restore-checkpoint-description">
-        <DialogHeader>
-          <DialogTitle>Restore checkpoint</DialogTitle>
-          <DialogDescription id="fm-restore-checkpoint-description">
-            {checkpoint
-              ? `${checkpoint.resume_class} resume from ${checkpoint.checkpoint_id}`
-              : "No checkpoint selected."}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="fm-dialog__body">
-          {checkpoints.length > 0 ? (
-            <div className="fm-study-checkpoint-list" role="listbox">
-              {checkpoints.map((entry) => (
-                <button
-                  key={entry.checkpoint_id}
-                  className="fm-study-checkpoint-list__item"
-                  data-selected={
-                    entry.checkpoint_id === checkpoint?.checkpoint_id
-                      ? "true"
-                      : undefined
-                  }
-                  type="button"
-                  role="option"
-                  aria-selected={entry.checkpoint_id === checkpoint?.checkpoint_id}
-                  onClick={() => onSelectCheckpoint(entry.checkpoint_id)}
-                >
-                  <span>{entry.checkpoint_id}</span>
-                  <small>
-                    {entry.resume_class} · step {entry.step}
-                  </small>
-                </button>
-              ))}
-            </div>
-          ) : null}
-          <dl className="fm-dialog__details">
-            <CommandDetailRow
-              label="Checkpoint"
-              value={checkpoint?.checkpoint_id ?? "—"}
-            />
-            <CommandDetailRow
-              label="Resume class"
-              value={checkpoint?.resume_class ?? "—"}
-            />
-            <CommandDetailRow label="Source" value={checkpoint?.source ?? "—"} />
-            <CommandDetailRow
-              label="Step"
-              value={
-                checkpoint?.step === null || checkpoint?.step === undefined
-                  ? "—"
-                  : String(checkpoint.step)
-              }
-            />
-            <CommandDetailRow
-              label="Stage ID"
-              value={checkpoint?.stage_id ?? "—"}
-            />
-            <CommandDetailRow
-              label="Command ID"
-              value={checkpoint?.command_id ?? "—"}
-            />
-            <CommandDetailRow label="Run ID" value={checkpoint?.run_id ?? "—"} />
-            <CommandDetailRow
-              label="Backend"
-              value={checkpoint?.backend_family ?? "—"}
-            />
-            <CommandDetailRow
-              label="Mesh revision"
-              value={
-                checkpoint?.mesh_revision == null
-                  ? "—"
-                  : String(checkpoint.mesh_revision)
-              }
-            />
-            <CommandDetailRow
-              label="Field revision"
-              value={
-                checkpoint?.field_revision == null
-                  ? "—"
-                  : String(checkpoint.field_revision)
-              }
-            />
-            <CommandDetailRow
-              label="Scene revision"
-              value={
-                checkpoint?.scene_revision == null
-                  ? "—"
-                  : String(checkpoint.scene_revision)
-              }
-            />
-            <CommandDetailRow
-              label="Vector count"
-              value={checkpoint ? String(checkpoint.vector_count) : "—"}
-            />
-            <CommandDetailRow
-              label="Artifact"
-              value={checkpoint?.artifact_ref ?? "—"}
-            />
-            <CommandDetailRow
-              label="Checksum"
-              value={checkpoint?.checksum ?? "—"}
-            />
-          </dl>
-        </div>
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            disabled={!checkpoint}
-            onClick={() => {
-              if (checkpoint) onConfirm(checkpoint.checkpoint_id);
-            }}
-          >
-            Restore
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-export function ImportStateDialog({
-  error,
-  fileName,
-  inspection,
-  inspecting,
-  onConfirm,
-  onFileSelected,
-  onOpenChange,
-  onRestoreModeChange,
-  open,
-  restoreMode,
-}: {
-  error: string | null;
-  fileName: string | null;
-  inspection: SessionImportInspectResponse["inspection"] | null;
-  inspecting: boolean;
-  onConfirm: () => void;
-  onFileSelected: (file: File | null) => void;
-  onOpenChange: (open: boolean) => void;
-  onRestoreModeChange: (mode: string) => void;
-  open: boolean;
-  restoreMode: string;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="fm-study-command-dialog" aria-describedby="fm-import-state-description">
-        <DialogHeader>
-          <DialogTitle>Import state</DialogTitle>
-          <DialogDescription id="fm-import-state-description">
-            {fileName ?? "Choose a .fms file before committing import."}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="fm-dialog__body">
-          <input
-            aria-label="FMS file"
-            accept=".fms,application/octet-stream"
-            className="fm-study-file-input"
-            type="file"
-            onChange={(event) => {
-              onFileSelected(event.currentTarget.files?.[0] ?? null);
-            }}
-          />
-          {inspecting ? (
-            <p className="fm-dialog__description">Inspecting .fms file…</p>
-          ) : null}
-          {error ? <pre className="fm-dialog__error">{error}</pre> : null}
-          {inspection ? (
-            <>
-              <dl className="fm-dialog__details">
-                <CommandDetailRow label="Session" value={inspection.session_id} />
-                <CommandDetailRow label="Name" value={inspection.name} />
-                <CommandDetailRow
-                  label="Restore class"
-                  value={inspection.restore_class}
-                />
-                <CommandDetailRow label="Profile" value={inspection.profile} />
-                <CommandDetailRow
-                  label="Runs"
-                  value={String(inspection.run_count)}
-                />
-                <CommandDetailRow
-                  label="Size"
-                  value={`${inspection.total_size_bytes} bytes`}
-                />
-                <CommandDetailRow label="Saved" value={inspection.saved_at} />
-                <CommandDetailRow
-                  label="Latest checkpoint"
-                  value={inspection.latest_checkpoint?.checkpoint_id ?? "—"}
-                />
-                <CommandDetailRow
-                  label="Checkpoint step"
-                  value={
-                    inspection.latest_checkpoint?.step == null
-                      ? "—"
-                      : String(inspection.latest_checkpoint.step)
-                  }
-                />
-                <CommandDetailRow
-                  label="Warnings"
-                  value={
-                    inspection.warnings.length > 0
-                      ? inspection.warnings.join("; ")
-                      : "—"
-                  }
-                />
-              </dl>
-              <label className="fm-study-select">
-                <span>Restore mode</span>
-                <select
-                  value={restoreMode}
-                  onChange={(event) => onRestoreModeChange(event.target.value)}
-                >
-                  <option value="resume">resume</option>
-                  <option value="initial_condition">initial_condition</option>
-                  <option value="config_only">config_only</option>
-                </select>
-              </label>
-            </>
-          ) : null}
-        </div>
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            disabled={!inspection || inspecting}
-            onClick={onConfirm}
-          >
-            Import
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function CommandDetailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="fm-dialog__details-row">
-      <dt className="fm-dialog__details-label">{label}</dt>
-      <dd className="fm-dialog__details-value">{value}</dd>
-    </div>
-  );
-}
-
-function readFileAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => {
-      reject(reader.error ?? new Error("Failed to read file."));
-    };
-    reader.onload = () => {
-      const value = reader.result;
-      if (typeof value !== "string") {
-        reject(new Error("Failed to read file as base64."));
-        return;
-      }
-      resolve(value.includes(",") ? value.split(",").pop() ?? "" : value);
-    };
-    reader.readAsDataURL(file);
-  });
 }

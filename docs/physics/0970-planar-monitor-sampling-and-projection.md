@@ -3,13 +3,14 @@
 - Status: accepted scientific contract; implemented surfaces remain
   end-to-end unqualified
 - Owners: Fullmag physics, runtime, API, and control-room maintainers
-- Last updated: 2026-08-13
+- Last updated: 2026-11-12 (sampling window and nearest-node probe contracts)
 - Audited Task 7A implementation delta: `9c3a779571c2815dec8279dbd56d5604b09ab784`
 - Historical Task 0 evidence source: `5138078f7fd7b65dfc231faa4aa11c02d8ebf52d`
 - Related ADRs:
   - `docs/adr/0011-resource-first-api.md`
   - `docs/adr/0016-center-viewport-tabbed-surfaces.md`
   - `docs/adr/0020-planar-field-map-and-monitor.md`
+  - `docs/adr/0080-planar-field-layers-crop-and-node-probe.md`
 - Related specs:
   - `docs/specs/resource-first-control-room-api-v2.md`
   - `docs/specs/frontend-v2/15-viewport-2d-module.md`
@@ -119,6 +120,59 @@ v_j+\frac{\Delta v}{2},0\right)\right\}\cap\Omega_T .
 Here $\Omega_T$ is the resolved physical target after any legal runtime scope
 has intersected it. A point sample has occupancy but no volume or surface
 measure.
+
+(planar-monitor-sampling-window)=
+### Sampling window (crop)
+
+A sampling window restricts the raster of one sample to a rectangle of the
+resolved frame without changing the frame, the target, the operator, or the
+authored monitor. Let $B=[u_0,u_1]\times[v_0,v_1]$ be the full resolved frame
+bounds and let the request carry the window
+$W^{\mathrm{req}}=[\tilde u_0,\tilde u_1]\times[\tilde v_0,\tilde v_1]$. The
+sampled window is their intersection,
+
+```{math}
+:label: eq-planar-sampling-window
+W=W^{\mathrm{req}}\cap B=[\hat u_0,\hat u_1]\times[\hat v_0,\hat v_1],\qquad
+\hat u_0=\max(\tilde u_0,u_0),\ \hat u_1=\min(\tilde u_1,u_1),\
+\hat v_0=\max(\tilde v_0,v_0),\ \hat v_1=\min(\tilde v_1,v_1),
+\qquad
+\Delta u=\frac{\hat u_1-\hat u_0}{N_u},\quad
+\Delta v=\frac{\hat v_1-\hat v_0}{N_v},
+```
+
+where $N_u\times N_v$ is chosen by the existing raster-resolution policy
+applied to the window extent $(\hat u_1-\hat u_0)\times(\hat v_1-\hat v_0)$
+instead of the full extent. Pixels, supports, and reductions are then exactly
+{eq}`eq-planar-pixel`–{eq}`eq-planar-components` with $[u_0,u_1]\times[v_0,v_1]$
+replaced by $W$; a window is a resampling of the same physical operator on a
+smaller footprint, never a crop or interpolation of an already sampled raster.
+Without a window, $W=B$ and the sample is unchanged.
+
+Rules:
+
+- The four window bounds are supplied together or not at all. A partial set,
+  a non-finite bound, $\tilde u_0\ge\tilde u_1$, or $\tilde v_0\ge\tilde v_1$
+  rejects with `invalid_planar_window`.
+- An empty or degenerate intersection, $\hat u_0\ge\hat u_1$ or
+  $\hat v_0\ge\hat v_1$, rejects with
+  `invalid_planar_window: window does not intersect the frame`; the sampler
+  never returns an empty raster for it.
+- The resolved window $W$ enters the sample identity (`PlanarSampleIdentity`).
+  A request with a window and a request without one are distinct samples, so
+  their `sample_token`, scalar/vector/mask/mesh-overlay ETags and cached
+  gathers are never shared. The metadata publishes $W$ as `frame.bounds_uv_m`
+  and $B$ as `frame.full_bounds_uv_m`; `pixel_size_m` is
+  $(\Delta u,\Delta v)$ of {eq}`eq-planar-sampling-window`.
+- Every derived resource of a windowed sample (scalar, vectors, empty mask,
+  mesh overlay, `render.png`, CSV export) is addressed with the same window.
+  Probe and profile requests carry the window only to name the sample they
+  belong to; their point evaluation and their `outside` status use the full
+  bounds $B$, so a point inside $B$ but outside $W$ is still evaluated.
+- The window applies to the `Default` source and to authored monitors alike
+  and never changes the authored monitor extent. It is session presentation
+  state (`visualization/state.planar.crop`) mapped to request parameters; it is
+  not part of `PlanarMonitor`, canonical Python, or `ProblemIR`.
 
 ### Slab, depth, and surface support
 
@@ -234,6 +288,16 @@ $\operatorname{atan2}(q_v,q_u)/(2\pi)\bmod 1$. Vectors whose norm does not
 exceed $10^{-12}$ times the maximum raster vector norm receive
 `undefined_orientation` and a non-finite scalar.
 
+Because every component is a function of the reduced vector $\bar{\mathbf q}$
+alone, `x`, `y`, `z` and `magnitude` computed from the published vector raster
+of a sample equal the backend scalar raster of that component exactly
+(component-of-average; for the linear components this also equals the average
+of the component, for `magnitude` it does not, $|\bar{\mathbf q}|\le\overline{|\mathbf q|}$).
+The Control Room therefore switches among these four components of a
+three-component, non-tensor `plane_sample` without requesting a new sample; it
+uses the backend path for every other case, including slab, depth and surface
+operators, although the identity above would also hold there.
+
 (planar-monitor-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -277,6 +341,7 @@ exceed $10^{-12}$ times the maximum raster vector norm receive
 | $c$ | FDM cell index | $1$ |
 | $q_c$ | Cell-constant FDM value | $[q]$ |
 | $V_{c,ij}$ | Cell/pixel-support intersection volume | $\mathrm{m^3}$ |
+| $A_{c,ij}$ | Area of the cell section inside the pixel footprint | $\mathrm{m^2}$ |
 | $a$ | Local FEM node index | $1$ |
 | $N_a$ | Tet4 barycentric or Prism6 triangle-P1 tensor-product interval-P1 basis function | $1$ |
 | $r$ | First Prism6 triangle reference coordinate | $1$ |
@@ -286,7 +351,44 @@ exceed $10^{-12}$ times the maximum raster vector norm receive
 | $q_a$ | Nodal P1 value | $[q]$ |
 | $N$ | Number of nodes in an arithmetic average | $1$ |
 | $q_{\mathrm{nodes}}$ | Illegal unweighted nodal mean | $[q]$ |
+| $W_{pa}$ | Sampling-operator weight of carrier degree of freedom $a$ in pixel $p$ | $1\ \text{(plane)}\ \text{or}\ \mathrm{m^3}\ \text{(slab, depth)}$ |
+| $M_p$ | Sampling-operator measure of pixel $p$ ($1$ for occupied plane pixels) | $1\ \text{or}\ \mathrm{m^3}$ |
+| $\Pi_p$ | Pixel prism of pixel $p$ for slab/depth operators | $\mathrm{m^3}$ |
+| $\boldsymbol\xi_e$ | Reference coordinates of a point in element $e$ | $1$ |
+| $\xi,\eta$ | Hex8/Pyramid5 in-plane reference coordinates | $1$ |
+| $\tau$ | Hex8/Pyramid5 vertical reference coordinate | $1$ |
+| $h_e$ | Diameter of element $e$ | $\mathrm{m}$ |
+| $\varepsilon_x$ | Scale-relative geometric tolerance | $\mathrm{m}$ |
+| $\varepsilon_\xi$ | Reference-space containment tolerance | $1$ |
+| $\mathbf x_\star$ | Probe world position | $\mathrm{m}$ |
+| $p_n^{\mathrm{req}}$ | Requested coordinate along the default-slice normal | $\mathrm{m}$ |
+| $p_n^{\mathrm{res}}$ | Resolved coordinate along the default-slice normal | $\mathrm{m}$ |
+| $k$ | FDM cell-layer index along the normal | $1$ |
+| $N_n$ | FDM cell count along the normal | $1$ |
+| $h_n$ | FDM cell edge along the normal | $\mathrm{m}$ |
+| $h_\perp$ | Navigation step of a continuous FEM section: median normal extent of the cut target elements | $\mathrm{m}$ |
+| $\mathbf h$ | Shared native cell spacing of all FDM multilayer grids | $\mathrm{m}$ |
+| $\mathbf o_l$ | Edge origin of native multilayer grid l | $\mathrm{m}$ |
+| $\mathbf s_l$ | Integral cell shift of native grid l in the composite lattice | $1$ |
+| $\mathcal C$ | Composite cells covered by a native multilayer cell | $1$ |
 | $\pi$ | Circle constant | $1$ |
+| $B$ | Full resolved frame bounds rectangle | $\mathrm{m^2}$ |
+| $W^{\mathrm{req}}$ | Requested sampling window rectangle | $\mathrm{m^2}$ |
+| $\tilde u_0,\tilde u_1,\tilde v_0,\tilde v_1$ | Requested sampling-window bounds | $\mathrm{m}$ |
+| $W$ | Resolved sampling window, intersection of the request with the frame bounds | $\mathrm{m^2}$ |
+| $\hat u_0,\hat u_1,\hat v_0,\hat v_1$ | Resolved sampling-window bounds | $\mathrm{m}$ |
+| $e_\star$ | FEM element assigned to the probe point by the locator | $1$ |
+| $\mathcal N(e_\star)$ | Global mesh node indices of the vertices of the probe element | $1$ |
+| $\nu,\mu$ | Global mesh node indices | $1$ |
+| $\nu_\star$ | Selected nearest global node index | $1$ |
+| $\mathbf x_\nu$ | World position of mesh node $\nu$ | $\mathrm{m}$ |
+| $q_{\nu_\star}$ | Nodal degree-of-freedom value at the selected node | $[q]$ |
+| $q_{\mathrm{node}}$ | Nearest-node reading reported by the probe | $[q]$ |
+| $u_\nu,v_\nu$ | Projection of the selected node or cell centre on the frame | $\mathrm{m}$ |
+| $\delta_\parallel$ | In-plane distance between the probe point and the projected node | $\mathrm{m}$ |
+| $\delta_n$ | Signed offset of the node or cell centre along the frame normal | $\mathrm{m}$ |
+| $c_\star$ | FDM cell containing the probe point | $1$ |
+| $\mathbf x_c$ | World position of the centre of FDM cell $c$ | $\mathrm{m}$ |
 
 `[q]` denotes the canonical SI unit of the selected source quantity. Unit
 conversion is presentation-only and never mutates the monitor or source
@@ -426,10 +528,15 @@ backend before the common sampler is called.
 | `default_slice.position_fraction` | `float` | `0.5` | $1$ | finite and in $[0,1]$; public out-of-range values reject | Dimensionless position between the published bounds along the selected normal | planned typed session contract; no qualification yet | none |
 | resolved `position_m` | `float` | resolved from domain bounds | $\mathrm{m}$ | finite and within `[normal_min_m, normal_max_m]`; read-only resolved value | Physical coordinate used to construct the default frame | planned typed session contract; no qualification yet | none |
 | `default_slice.operator.thickness_m` | `float` | absent for `plane_sample` | $\mathrm{m}$ | required and strictly positive for `slab_average`; absent for `plane_sample` | Full slab thickness passed to the common measure-weighted sampler | planned typed session contract; no qualification yet | none |
+| `planar.crop.{u_min_m,u_max_m,v_min_m,v_max_m}` | `PlanarCropState \| null` | `null` (no crop) | $\mathrm{m}$ | all finite, `u_min_m < u_max_m`, `v_min_m < v_max_m`; otherwise `400 invalid_planar_crop`; PATCH `crop: null` clears; a plane or source change without a new crop clears it | Persisted session crop; becomes $W^{\mathrm{req}}$ of {eq}`eq-planar-sampling-window` for every request of the 2D view | planned (ADR 0080); FDM/FEM CPU sampler; unqualified | none: session presentation state, not in ProblemIR |
+| query `window_u_min_m`, `window_u_max_m`, `window_v_min_m`, `window_v_max_m` | `float` (all four or none) | absent ($W=B$) | $\mathrm{m}$ | all four or none, finite and ordered; empty intersection with $B$ rejects; `400 invalid_planar_window` | Requested window $W^{\mathrm{req}}$ on planar field, probe, and profile requests | planned (ADR 0080); FDM/FEM CPU sampler; unqualified | none: session presentation state, not in ProblemIR |
+| query `nearest` | `"node" \| absent` | absent (`not_requested`) | $1$ | only `node`; any other value `400 invalid_planar_probe` | Requests the nearest-node reading of {eq}`eq-planar-nearest-node` on `/probe` | planned (ADR 0080); `plane_sample` only; unqualified | none: session presentation state, not in ProblemIR |
 
 These fields do not add a second numerical method. `position_fraction` and
 `position_m` select the target/frame provenance for `Default`; `thickness_m`
-selects the same slab operator already documented for authored monitors.
+selects the same slab operator already documented for authored monitors. The
+crop/window resamples the same operator on a smaller footprint, and the
+nearest-node reading reports an existing carrier degree of freedom.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | `ProblemIR` destination |
 |---|---|---|---|---|---|---|---|
@@ -555,7 +662,15 @@ thickness. Unsupported combinations fail explicitly:
   `planar_scope_unsupported`;
 - absent field: `quantity_not_materialized`;
 - stale target/scope/revision: the corresponding stable stale or empty-scope
-  reason.
+  reason;
+- partial, non-finite, inverted, or non-intersecting sampling window:
+  `invalid_planar_window` ({ref}`planar-monitor-sampling-window`); invalid
+  persisted crop in a visualization PATCH: `invalid_planar_crop`;
+- unknown `nearest` value on a probe: `invalid_planar_probe`; a nearest-node
+  request with a non-`plane_sample` operator or a quantity without nodal/cell
+  values is not an error but reports `unsupported_operator` or
+  `unsupported_quantity` next to the unchanged point value
+  ({ref}`planar-monitor-nearest-node`).
 
 `strict` and `extended` preserve the same monitor semantics. `extended` does
 not authorize a hidden substitute. Future `hybrid` execution must be explicit
@@ -571,13 +686,39 @@ currently implemented sampling kernels execute on CPU.
 |---|---|---|---|---|---|---|
 | FDM CPU | `domain`: full rectangular carrier; `magnetic_domain`: all active cells; `region`: exact numeric membership; `object`: only conditionally correct for single-object/all-active-equivalent grids and incorrect for general multi-object grids; `mesh_part`/`airbox`: unsupported; every dynamic extent tag is unqualified because all three reuse post-target selected-mask bounds | Published cell-centred structured-grid field plus matching membership for non-domain targets; explicit extent required for authored monitors | plane, slab, depth; surface unsupported | CPU binary64 | `Default` resolves a full-domain target and axis-preset frame, then reuses these operators; it adds no qualification to the lane | managed science artifact passed only for its explicit/fixture extent; multi-object object targeting, all dynamic extent policies, default-source runtime/browser/production, and end-to-end runtime remain unqualified because the same recipe ended RED in the browser |
 | FDM GPU | Same target and dynamic-extent restrictions as FDM CPU after compatible field transport | Compatible transported cell-centred structured-grid field; source device/precision is absent from planar metadata; explicit extent required for authored monitors | plane, slab, depth; surface unsupported | CPU binary64 | `Default` is source-compatible with the same CPU sampler only; no device identity or native GPU sampler is implied | no fresh GPU-source/device proof, no correct distinct dynamic-policy proof, no multi-object object-target proof, and no native GPU sampling |
-| FEM CPU | Authored target plus optional intersecting `mesh_part`/`airbox` element scope | Complete or explicitly mapped nodal P1 field on Tet4/Prism6; Pyramid5/Hex8 reject | plane, slab, depth, `object_boundary` surface | CPU binary64 | `Default` selects `magnetic_domain` for `magnetic_only` quantities and `domain` for full-domain quantities | focused Tet4 and Prism6 numerical/target tests pass; managed FEM and browser qualification remain separate gates |
-| FEM GPU | Same target, scope, and surface rules as FEM CPU after compatible field transport | Transported nodal P1 Tet4/Prism6 field; source device/precision is absent from planar metadata | same CPU P1 postprocessor | CPU binary64 | quantity-domain-aware target selection is identical; no native GPU sampler is implied | source-compatible only until fresh managed GPU-source/browser proof |
+| FEM CPU | Authored target plus optional intersecting `mesh_part`/`airbox` element scope | Complete or explicitly mapped nodal first-order field on Tet4/Prism6/Pyramid5/Hex8 (Pyramid5 basis equality with MFEM is gate PM-N19) | plane, slab, depth, `object_boundary` surface | CPU binary64 | `Default` selects `magnetic_domain` for `magnetic_only` quantities and `domain` for full-domain quantities | focused Tet4 and Prism6 numerical/target tests pass; managed FEM and browser qualification remain separate gates |
+| FEM GPU | Same target, scope, and surface rules as FEM CPU after compatible field transport | Transported nodal first-order Tet4/Prism6/Pyramid5/Hex8 field; source device/precision is absent from planar metadata | same CPU P1 postprocessor | CPU binary64 | quantity-domain-aware target selection is identical; no native GPU sampler is implied | source-compatible only until fresh managed GPU-source/browser proof |
 
 ### FDM realization
 
-`plane_sample` returns the cell-constant value of the selected cell at the
-pixel centre. Slab and depth operators decompose every selected grid cell into
+`plane_sample` on an FDM carrier averages the cell-constant field over the
+in-plane footprint of each pixel. With $A_{c,ij}$ the area of
+$(c\cap\{s=0\})\cap P_{ij}$ for selected cells $c$,
+
+```{math}
+:label: eq-planar-fdm-plane-area
+\bar q_{ij}^{\mathrm{FDM,plane}}
+=\frac{\sum_{c}q_c A_{c,ij}}{\sum_c A_{c,ij}} ,
+```
+
+which removes the aliasing of a pixel-centre point sample when the raster is
+coarser than the grid. The occupied fraction $\sum_c A_{c,ij}/|P_{ij}|$ only
+decides occupancy (any positive area occupies the pixel); empty area does not
+enter the mean, consistent with `mean_occupied` for slabs. The realization is a
+midpoint quadrature with $m_u\times m_v$ sub-points per pixel,
+$m_u=\min(32,\lceil\Delta u/p_u\rceil)$ and likewise for $v$, where
+$p_u=\min_k h_k/|e_{u,k}|$ is the distance between successive cell faces met
+along $\mathbf e_u$ ($h_k$ is the cell edge along world axis $k$). For an axis-aligned frame whose pixel
+edges coincide with cell faces (raster dimensions dividing the cell counts) the
+quadrature hits every covered cell centre exactly once and equals
+{eq}`eq-planar-fdm-plane-area` exactly. When pixels are not larger than cells
+($m_u=m_v=1$) it reduces to the cell-constant value at the pixel centre, i.e.
+the previous point sample. The sample method is reported as
+`fdm_cell_area_plane`. This differs deliberately from the MuMax3 fork preview,
+whose layer average is an arithmetic mean that also counts empty cells as
+zero.
+
+Slab and depth operators decompose every selected grid cell into
 six tetrahedra, clip them against the pixel prism, and accumulate physical
 intersection volume:
 
@@ -632,18 +773,25 @@ N_4&=(1-r-s)\zeta,     & N_5&=r\zeta,     & N_6&=s\zeta,\\
 
 The sampler solves the isoparametric inverse map with a bounded Newton solve
 and rejects singular Jacobians or reference coordinates outside the prism.
+Hex8 and Pyramid5 use the bases of {ref}`planar-monitor-mixed-element-bases`
+with the same inversion.
 The basis has partition of unity and reproduces constant and affine physical
 fields because geometry and field use the same $N_a$.
 
-Slab/depth integration clips each native convex cell against the pixel prism.
+Slab/depth integration clips each native convex cell against the pixel prism;
+Tet4 integrates the clipped linear field exactly, Prism6, Hex8 and Pyramid5
+integrate their own basis with the clipped-element quadrature.
 The Prism6 carrier supplies two triangular and three quadrilateral faces;
 surface projection extracts those native exterior faces, clips them in
 $(u,v)$, integrates their P1 trace with physical area, and applies the requested
-visibility policy. Spatial lookup is currently a direct element traversal.
+visibility policy. Plane sampling rasterizes element by element (only pixel
+centres inside an element's bounding box are inverted) and caches the
+resulting operator per geometry identity; sub-pixel elements are evaluated in
+their own parent element, never by a scan of the whole mesh.
 
 The API admits this realization only when the flattened field has exactly
 $n_{\mathrm{comp}}$ values for every node of the complete published mesh and
-the mesh uses Tet4 or Prism6. Target and runtime scope alter element markers after loading;
+every cell is Tet4, Prism6, Pyramid5 or Hex8. Target and runtime scope alter element markers after loading;
 they do not narrow the field carrier. Moreover, all three FEM dynamic extent
 tags currently derive bounds from the complete `fem.nodes` array. Thus
 `target_bounds`, `magnetic_domain`, and `universe` resolve to the same global
@@ -662,6 +810,379 @@ q_{\mathrm{nodes}}=\frac{1}{N}\sum_{a=1}^{N}q_a ,
 changes under local refinement even when the represented continuous field does
 not. The FEM regression refines a skew tetrahedral P1 field and requires the
 measure-weighted result to remain invariant.
+
+(planar-monitor-sampling-operator)=
+### Linear sampling operator and field gather
+
+Plane sampling and the `mean`/`integral` slab and depth reductions are linear
+in the carrier degrees of freedom. For a fixed geometry identity (carrier
+topology, resolved target and runtime scope, frame, operator, raster
+resolution, sampler version) every pixel $p$ is
+
+```{math}
+:label: eq-planar-sampling-operator
+\bar q_p=\frac{\sum_a W_{pa}\,q_a}{M_p},\qquad
+W_{pa}=
+\begin{cases}
+N_a\!\left(\boldsymbol\xi_e(\mathbf x_p)\right), & \text{plane sample},\ \mathbf x_p\in e,\\[2pt]
+\displaystyle\int_{e\cap\Pi_p} N_a\,dV, & \text{slab / depth},
+\end{cases}
+\qquad
+M_p=
+\begin{cases}
+1, & \text{plane sample},\\
+|\Omega_T\cap\Pi_p|, & \text{slab / depth}.
+\end{cases}
+```
+
+For FDM the degrees of freedom are cells: plane sampling has the area weights
+$W_{pc}=A_{c,p}$ with $M_p=\sum_c A_{c,p}$ of {eq}`eq-planar-fdm-plane-area`,
+and slab/depth the volume weights $W_{pc}=V_{c,p}$ with $M_p=\sum_c V_{c,p}$ of
+{eq}`eq-planar-fdm-discrete`. The weights depend only on geometry, so the
+implementation may compute $(W,M)$ once per geometry identity and evaluate a
+new field revision by the sparse product {eq}`eq-planar-sampling-operator`
+(a gather of at most eight entries per plane pixel). This changes only the
+cost, not the definition: the cached and direct evaluations of the same
+operator must agree within a relative tolerance of $10^{-13}$ of the occupied
+range (summation order differs), and two constructions of the same operator
+must be bitwise identical. RMS, minimum, maximum and surface projection with a
+visibility policy are not linear in $q_a$ and keep direct evaluation; the
+metadata reports `operator_cache: none` for them.
+
+Element location uses a spatial index over element bounding boxes (an
+interval list per world axis for axis-aligned frames and a bounding-volume
+hierarchy for arbitrary frames). Elements are rasterized element by element:
+only pixels whose centres lie in the element section are inverted. A pixel
+centre on a shared face belongs to exactly one element by a deterministic
+top-left rule on the section polygon; two candidates with different values
+increase `overlap_count` instead of being resolved silently. All geometric
+tolerances are scale-relative, $\varepsilon_x=c\,h_e$ with a fixed
+dimensionless $c$, and reference containment uses $\varepsilon_\xi$; the same
+mesh expressed in nm, µm or mm yields the same weights after rescaling.
+
+(planar-monitor-mixed-element-bases)=
+### Hex8 and Pyramid5 bases
+
+Hex8 uses the trilinear reference basis on $[0,1]^3$,
+
+```{math}
+:label: eq-planar-fem-hex8
+N_{abc}(\xi,\eta,\tau)=\ell_a(\xi)\,\ell_b(\eta)\,\ell_c(\tau),\qquad
+\ell_0(x)=1-x,\ \ell_1(x)=x,\qquad a,b,c\in\{0,1\},
+```
+
+and Pyramid5 the first-order rational basis of the reference pyramid with base
+$[0,1]^2\times\{0\}$ and apex $(0,0,1)$,
+
+```{math}
+:label: eq-planar-fem-pyramid5
+\begin{aligned}
+N_1&=\frac{(1-\xi-\tau)(1-\eta-\tau)}{1-\tau}, &
+N_2&=\frac{\xi\,(1-\eta-\tau)}{1-\tau}, &
+N_3&=\frac{\xi\,\eta}{1-\tau}, \\
+N_4&=\frac{(1-\xi-\tau)\,\eta}{1-\tau}, &
+N_5&=\tau, &&
+\end{aligned}
+```
+
+with $N_1=\dots=N_4=0$ at the apex $\tau=1$. The sampler must use the basis of
+the solver that produced the nodal field; for the MFEM-backed runtime this is
+the first-order pyramid element of the linked MFEM release, and the equality
+of {eq}`eq-planar-fem-pyramid5` with that element is a release gate
+(PM-N19), not an assumption. Geometry and field share the basis, so constant
+and affine fields are reproduced. Points are located by a damped Newton
+inversion of $\mathbf x(\boldsymbol\xi)=\sum_a N_a\mathbf x_a$ with a
+scale-relative stopping rule and rejection of singular Jacobians. Splitting
+Hex8 or Pyramid5 into tetrahedra is not a legal realization: it replaces the
+trilinear or rational interpolant by a different piecewise-linear field.
+
+Slab and depth weights of Prism6, Hex8 and Pyramid5 integrate the element's
+own basis over the clipped region; tensor-product Gauss quadrature on the
+reference image of $e\cap\Pi_p$ is used. Linear interpolation of vertex
+values along clipped edges is exact only for affine fields and is therefore
+insufficient for these elements.
+
+(planar-monitor-fdm-multilayer-composite)=
+### FDM multilayer composite carrier
+
+A `multilayer_convolution` plan realizes each magnetic object $l$ on its own
+native grid $G_l$ with origin $\mathbf o_l$, spacing $\mathbf h_l$ and counts
+$\mathbf N_l$; the published field concatenates the native cell values layer by
+layer. The common transform layout of that plan is FFT scratch, not a physical
+mesh, so neither it nor the concatenated array is a structured carrier for a
+`monitor_target` or `region` scope. Those scopes sample the composite carrier
+$G$ defined below; `layer` scope keeps sampling one native grid.
+
+When every $\mathbf h_l$ equals one spacing $\mathbf h$ (componentwise relative
+difference at most $10^{-9}$) and every shift
+
+```{math}
+:label: eq-planar-multilayer-shift
+\mathbf s_l=\frac{\mathbf o_l-\mathbf o}{\mathbf h},\qquad
+\mathbf o=\min_l \mathbf o_l\ \text{(componentwise)},
+```
+
+is integral within $10^{-6}$ cells, the native grids embed into the lattice
+$G$ with origin $\mathbf o$, spacing $\mathbf h$ and counts
+$\mathbf N=\max_l(\mathbf s_l+\mathbf N_l)$. A composite cell $c$ covered by
+native cell $c-\mathbf s_l$ of layer $l$ carries
+
+```{math}
+:label: eq-planar-multilayer-embedding
+q_c=q_{l,\,c-\mathbf s_l},\qquad
+\mathcal C=\bigcup_l\left(\mathbf s_l+G_l\right).
+```
+
+The embedding is a bijection between $\mathcal C$ and the native cells, so
+every FDM operator evaluated on $G$ equals the same operator on the native
+grids; no value is interpolated. Cells outside $\mathcal C$ carry no value:
+they are excluded from every target, `domain` included, and are not air with a
+zero field. Membership on $\mathcal C$ is the native region mask of the
+covering layer (inactive native cells stay non-magnetic). The planner numbers
+regions per magnet, so each layer's legend is renumbered into its own range of
+composite ids before merging; 0 (magnetic, no region) and the inactive marker
+keep their meaning. The `Default` section and
+its bounds use $G$ instead of the common transform layout.
+
+The carrier fails closed with `planar_scope_unsupported` when spacings differ,
+when a shift is not integral, when two native grids cover the same composite
+cell, or when two layers claim the same object region; `layer` scope remains
+available in each case.
+
+(planar-monitor-default-section)=
+### Default-section publication
+
+The resolved `Default` slice publishes its section in the sample metadata:
+plane, normal axis, requested fraction $\phi$, requested coordinate
+$p_n^{\mathrm{req}}=b_{\min}+\phi\,(b_{\max}-b_{\min})$, resolved coordinate
+$p_n^{\mathrm{res}}$ and, on a structured FDM grid, the snapped layer
+
+```{math}
+:label: eq-planar-default-layer
+k=\min\!\left(N_n-1,\ \max\!\left(0,\lceil\phi N_n\rceil-1\right)\right),\qquad
+p_n^{\mathrm{res}}=b_{\min}+\left(k+\tfrac12\right)h_n .
+```
+
+On a swept FEM mesh whose mixed-layer topology certificate lists the magnetic
+node-plane coordinates $z_0<\dots<z_{L}$ along the sweep axis, and when the
+section normal is that axis, the request snaps to the nearest plane
+$z_k$ only within a relative window
+$|z_k-p_n^{\mathrm{req}}|\le\max(\varepsilon_{\mathrm{cert}},10^{-9}(z_L-z_0))$.
+Outside the window the plane is sampled at $p_n^{\mathrm{req}}$ itself, which
+is legal because the Prism6 interpolant is linear along the sweep within each
+layer. A node plane is a geometric stop, not a data layer: the sampled field on
+$z_k$ is the nodal trace, and between planes it is the element interpolant.
+
+On other FEM meshes the section is continuous. Its navigation step is the
+median normal extent of the elements cut by the current plane,
+
+```{math}
+:label: eq-planar-navigation-step
+h_\perp=\operatorname{median}\{\max_a n_a-\min_a n_a : e\in\mathcal T,\ \min_a n_a\le p_n^{\mathrm{res}}\le\max_a n_a\},
+```
+
+where $\mathcal T$ is the sampled target and $n_a=(\mathbf x_a-\mathbf o)\cdot\mathbf n$ are the projected element
+vertices. $h_\perp$ is a navigation aid that depends on the current plane; it
+does not define layers and does not enter any sampled value. It is computed in
+the geometry pass of the cached `plane_sample` operator and published with the
+number of cut elements; when no operator was built (slab and depth operators,
+or no cut element) the step stays one hundredth of the normal extent.
+
+A slab-average Default slice is centred at $p_n^{\mathrm{req}}$ itself:
+neither {eq}`eq-planar-default-layer` nor the node-plane snap applies, because
+moving the centre of a slab of thickness $t$ to a cell centre would shift
+$[p_n-t/2,\,p_n+t/2]$ by up to $h_n/2$ into the neighbouring material. A named
+object layer is such a slab with $p_n$ and $t$ taken from the realized
+geometry bounds $[a,b]$ of the object along the normal, $p_n=(a+b)/2$ and
+$t=b-a$; its value is the occupied-measure mean of the slab, which also
+contains any other material inside $[a,b]$ in the sampled target. Restricting
+it to one object or region is a scope (`scope_kind=region`, or an object
+monitor target), not a different reduction.
+
+`stops_kind` is `fdm_cell_layers` when {eq}`eq-planar-default-layer` applies,
+`fem_node_planes` or `fem_node_planes_between` on a certified swept mesh, and
+`continuous` otherwise; `navigation_step_m` is $h_n$, the mean node-plane
+spacing, $h_\perp$, or one hundredth of the normal extent, and
+`navigation_step_kind` names which. The user interface shows
+$p_n^{\mathrm{req}}$ and $p_n^{\mathrm{res}}$ together and never hides the snap.
+
+(planar-monitor-probe-evaluation)=
+### Probe evaluation
+
+A pinned probe is a point evaluation at the exact world position
+$\mathbf x_\star=\mathbf o+u\,\mathbf e_u+v\,\mathbf e_v$ with the same
+locator and basis as the raster: $q_h(\mathbf x_\star)=\sum_a N_a(\boldsymbol\xi_e(\mathbf x_\star))\,q_a$
+for FEM and the containing cell value for FDM. Its status is `occupied`
+(value, cell or element identity), `outside` (outside the frame bounds; no
+value), `empty` (inside the frame, outside the selected target; no value) or
+`stale` (the field revision advanced). The position is never clamped to the
+raster edge, and the reported position and value always refer to the same
+point.
+
+(planar-monitor-nearest-node)=
+### Nearest-node probe
+
+A probe request may additionally ask for the nearest carrier degree of freedom
+(`nearest=node`; no other value is legal and any other value rejects with
+`invalid_planar_probe`). The point value above is unchanged; the node is an
+additional, separately labelled reading. Let $e_\star$ be the element that the
+probe locator assigns to $\mathbf x_\star$ (the same locator and the same
+ascending-index rule for shared faces as the point evaluation), let
+$\mathcal N(e_\star)$ be the set of global mesh node indices of its vertices,
+and let $\mathbf x_\nu$ be the world position of node $\nu$. On FEM carriers
+
+```{math}
+:label: eq-planar-nearest-node
+\nu_\star=\min\Bigl\{\nu\in\mathcal N(e_\star):
+\lVert\mathbf x_\nu-\mathbf x_\star\rVert_2
+=\min_{\mu\in\mathcal N(e_\star)}\lVert\mathbf x_\mu-\mathbf x_\star\rVert_2\Bigr\},
+\qquad q_{\mathrm{node}}=q_{\nu_\star},
+\qquad
+u_\nu=(\mathbf x_{\nu_\star}-\mathbf o)\cdot\mathbf e_u,\quad
+v_\nu=(\mathbf x_{\nu_\star}-\mathbf o)\cdot\mathbf e_v,\quad
+\delta_n=(\mathbf x_{\nu_\star}-\mathbf o)\cdot\mathbf n,\quad
+\delta_\parallel=\sqrt{(u_\nu-u)^2+(v_\nu-v)^2}.
+```
+
+The distance is the 3D Euclidean distance to the probe point on the plane
+$s=0$; a tie selects the lower global node index. The value is the nodal
+degree-of-freedom value $q_{\nu_\star}$ of the published carrier, without
+interpolation; scalar and vector components are derived from it by the same
+component request as the point value ({eq}`eq-planar-components`, applied to
+the nodal vector). The node is reported with `kind=fem_node`, its global index,
+world position, its projection $(u_\nu,v_\nu)$ on the frame, the in-plane
+distance $\delta_\parallel$ and the signed normal offset $\delta_n$; a node off
+the plane is never projected silently onto it.
+
+On FDM carriers the cell-constant reconstruction has one degree of freedom per
+cell: the reading is the cell $c_\star$ containing $\mathbf x_\star$, reported
+with `kind=fdm_cell_center`, its linear carrier cell index, its centre
+$\mathbf x_c$, the projection, distances and signed offset of
+{eq}`eq-planar-nearest-node` with $\mathbf x_{\nu_\star}$ replaced by
+$\mathbf x_c$, and the cell value $q_c$. On the FDM multilayer composite the
+cell is the composite cell of {eq}`eq-planar-multilayer-embedding`.
+
+`nearest_node_status` is one of:
+
+| Status | Condition |
+|---|---|
+| `not_requested` | the request has no `nearest=node` |
+| `ok` | a node or cell was found and carries a value |
+| `empty` | the probe point is outside the frame bounds $B$ or outside the sampled target |
+| `unsupported_operator` | the operator is not `plane_sample`; a slab, depth, or surface reduction has no single source degree of freedom |
+| `unsupported_quantity` | the quantity has neither nodal nor cell values on the carrier |
+
+Only `plane_sample` is supported. For `slab_average` and `depth_projection`
+the point value remains available, but the reduced value is a measure-weighted
+integral over many degrees of freedom and no node can represent it.
+The nearest-node reading is a presentation of carrier data at the probe; it
+does not enter the sample identity, does not resample the raster, and has no
+Python or `ProblemIR` representation.
+
+(planar-monitor-line-profile)=
+### Line profile sampling
+
+A line profile is a sequence of point evaluations along the straight segment
+from $\mathbf a=(u_0,v_0)$ to $\mathbf b=(u_1,v_1)$ in the frame of one planar
+sample. With $L=\lVert\mathbf b-\mathbf a\rVert$ and the arc length $s\in[0,L]$,
+
+```{math}
+:label: eq-planar-line-profile
+\mathbf p(s)=\mathbf o+\bigl(u_0+\tfrac{s}{L}(u_1-u_0)\bigr)\mathbf e_u+\bigl(v_0+\tfrac{s}{L}(v_1-v_0)\bigr)\mathbf e_v,\qquad
+q_h(s)=\sum_a N_a\bigl(\boldsymbol\xi_e(\mathbf p(s))\bigr)\,q_a ,
+```
+
+evaluated with the same locator, basis and component derivation as the probe
+({ref}`planar-monitor-probe-evaluation`). The sample set is $N\ge 2$ uniform
+arc lengths $s_k=kL/(N-1)$ and, on FEM carriers, every arc length at which the
+segment crosses an edge of the published section polygons, i.e. an element
+face inside the plane. Because the P1/Prism6 interpolant is linear along a
+straight segment inside one element section (and smooth for Hex8/Pyramid5),
+the profile drawn through these points is the exact trace on affine elements
+rather than a resampling. On FDM carriers the value is the cell value of the
+containing cell (piecewise constant); no smoothing or interpolation across
+cells is applied. Points outside the frame are `outside`, points outside the
+sampled target are `empty`, and neither carries a value. A profile is a derived
+resource of one sample (`sample_token`); it never resamples the raster.
+
+### Spatial index for point location
+
+Point evaluations of a FEM sample ({ref}`planar-monitor-probe-evaluation`,
+{eq}`eq-planar-line-profile`) locate the element that contains a world point.
+For a batch of points (a line profile, from 32 points on) the locator first
+builds a bounding-volume hierarchy over the axis-aligned boxes of the selected
+elements (median split on the longest centroid axis, leaves of at most 8
+elements) and tests only the elements whose box, padded by $10^{-9}$ of the
+mesh diagonal to cover the $10^{-11}$ weight tolerance of the containment
+test, contains the point. Candidates are tested in ascending element index,
+the order of the direct scan (gate PM-N28), so a point on a shared face resolves to the same
+element and the value, entity id and occupancy are identical to the direct
+traversal; the index changes cost, never results. For point batches it is built per request and discarded with it; a single
+probe keeps the direct scan, which is cheaper than building the index. The
+plane operator (gate PM-N17) uses the same hierarchy, cached by the carrier's
+topology fingerprint (nodes, connectivity, markers; four most recent
+carriers), and rasterizes only the elements whose box meets the plane, in
+ascending element order: the box test is conservative because an element's
+nodes lie in its box, and the exact node-distance test that follows is the
+direct traversal's, so pixel claims, weights and cut extents are unchanged.
+Gathering the cached operator on the device for the FEM GPU lane is not
+implemented.
+
+### In-plane streamlines (presentation)
+
+Streamlines are a presentation of the in-plane projection of one vector
+sample; they are not 3D trajectories, not field lines of $\mathbf B$, and not
+a resampling. Let $\mathbf w_{ij}=(\mathbf q_{ij}\cdot\mathbf e_u,\,
+\mathbf q_{ij}\cdot\mathbf e_v)$ be the frame components of the published
+vector raster at pixel centre $(u_i,v_j)$. The continuous direction field is
+the bilinear interpolant of $\mathbf w$ between the four surrounding pixel
+centres, and a streamline is the curve $\mathbf x(s)$ in $(u,v)$ with
+
+```{math}
+:label: eq-planar-streamlines
+\frac{\mathrm d\mathbf x}{\mathrm ds}=\frac{\tilde{\mathbf w}(\mathbf x)}{\lVert\tilde{\mathbf w}(\mathbf x)\rVert},\qquad
+\tilde{\mathbf w}(\mathbf x)=\sum_{a=1}^{4}\lambda_a(\mathbf x)\,\mathbf w_a ,
+```
+
+integrated by classical RK4 in physical length with the step
+$h=\tfrac12\min(\Delta u,\Delta v)$. Integration runs in both directions from
+a seed and stops when a corner pixel of the interpolation cell is not
+renderable (empty, outside or masked), when $\lVert\tilde{\mathbf w}\rVert<
+\varepsilon\max_{ij}\lVert\mathbf w_{ij}\rVert$ with $\varepsilon=10^{-3}$
+(out-of-plane or vanishing projection), when the curve leaves the sample
+bounds, when it comes closer than $d_\mathrm{test}=\tfrac12 d_\mathrm{sep}$
+to another accepted line, or when the per-line point budget is reached.
+Seeds follow Jobard and Lefer [4]: candidates at
+distance $d_\mathrm{sep}$ on both sides of accepted lines, then a fixed
+row-major lattice of pitch $d_\mathrm{sep}$; a seed is accepted only at
+distance $\ge d_\mathrm{sep}$ from every accepted point. The order is fixed,
+so the same sample gives the same lines. Line and point counts are bounded;
+reaching a bound marks the result truncated instead of dropping lines
+silently. The FDM raster is piecewise constant per cell; the bilinear
+interpolant is a presentation device for drawing a continuous curve and is
+not used for any value, probe or export. Streamlines live in the browser
+worker on the vector raster of the displayed sample and are recomputed for a
+new `sample_token`; they never enter the sampling query or its identity.
+
+### Multislice panels
+
+A multislice view shows $N\in\{2,3,4\}$ samples of the `Default` source that
+differ only in the position fraction $\phi_k$ along the current plane normal.
+Each panel resolves its section exactly as the single default section does
+({ref}`planar-monitor-default-section`) with $\phi_k$ in place of the session
+fraction, so the published coordinate, the FDM layer of
+{eq}`eq-planar-default-layer` and the FEM node-plane stop follow the same rules,
+and the panel carries its own `sample_token`. The override is a query
+parameter (`position_fraction`) of the sampling request, valid only for the
+`Default` source; the source hash, and with it the sample identity, is
+computed from the overridden slice, so panels never share or alias a cached
+operator or a field gather. Plane, operator, quantity, component, view scope,
+resolution and palette are common to all panels. The colour range is common
+too: in `auto` mode it is the union of the occupied extrema of all panels,
+$[\min_k q^{\min}_k,\max_k q^{\max}_k]$ of the per-panel extrema over
+renderable samples (the same reduction as the single view); `symmetric` uses
+$a=\max_k\max(|q^{\min}_k|,|q^{\max}_k|)$ and `manual` applies unchanged. Multislice is presentation: it does not alter any panel's values,
+and a panel whose sample fails shows its own error without hiding the others.
 
 (planar-monitor-implementation-mapping)=
 ## Implementation mapping
@@ -733,6 +1254,7 @@ silent clamp. New HTTP and OpenAPI payloads expose only `range` and
 | PM-N03 | arbitrary plane through skew P1 tetrahedron | barycentric value within declared tolerance |
 | PM-N04 | P1 slab/depth on skew tetrahedra | analytic integral and refinement invariance |
 | PM-N05 | partial and empty support under both empty policies | occupancy remains `empty`; metadata extrema and automatic ranges exclude empty bins even when the serialized payload is zero; current `include_air_as_zero` metadata path fails this gate |
+| PM-N15 | FDM `plane_sample` with raster dimensions dividing the cell counts (e.g. $8\times4$ cells on a $2\times2$ raster) | each pixel equals the arithmetic mean of its covered cells (eq. {eq}`eq-planar-fdm-plane-area`); a raster equal to the grid reproduces the cell values exactly |
 | PM-N06 | zero and non-zero vector raster | correct `u/v/normal` components and undefined orientation |
 | PM-N07 | planar FEM boundary | analytic physical-area weighted value |
 | PM-N08 | overlapping/folded FEM surface | explicit ambiguity and fold diagnostics |
@@ -742,6 +1264,22 @@ silent clamp. New HTTP and OpenAPI payloads expose only `range` and
 | PM-N12 | FEM target/scope dynamic extents | each dynamic extent follows its named target/scope rather than all mesh nodes; the current distinct-bounds source path requires fresh per-lane qualification |
 | PM-N13 | FDM target × dynamic-extent cross-product | `target_bounds`, `magnetic_domain`, and `universe` resolve independently of target masking for `domain`, `magnetic_domain`, `object`, and `region`; the current distinct-bounds source path requires fresh per-lane qualification |
 | PM-N14 | FDM procedural grid overlay | `FMFG v1` zawiera skończone, nieduplikowane segmenty przecięcia wybranych komórek z $s=0$, zachowuje sample identity i odrzuca przekroczenie budżetu zamiast zwracać uciętą geometrię |
+| PM-N16 | cached operator vs. direct evaluation on Tet4, Prism6 and FDM | relative agreement $\le 10^{-13}$ of the occupied range; two operator builds bitwise identical |
+| PM-N17 | spatial index on 10k, 200k and 2M Tet4 elements | identical raster to the direct traversal; bounded candidate count per plane |
+| PM-N18 | Hex8 linear and trilinear manufactured fields, axis and oblique planes | reproduction within $10^{-12}$ relative; no tetrahedral split |
+| PM-N19 | Pyramid5 basis against the linked MFEM first-order pyramid | pointwise agreement of all five shape functions at interior and face points |
+| PM-N20 | Prism6/Hex8/Pyramid5 slab of the element interpolant ($q=\xi\tau$) | integral exact to quadrature tolerance; linear clipping fails this gate |
+| PM-N21 | probe on the raster edge, outside the frame and outside the target | `occupied`, `outside` and `empty` respectively; no clamped value |
+| PM-N22 | default section on even/odd FDM grids at $\phi\in\{0,0.5,1\}$ | published $k$ and $p_n^{\mathrm{res}}$ follow {eq}`eq-planar-default-layer`; requested coordinate preserved |
+| PM-N23 | continuous FEM section through a graded Tet4 film (fine film, coarse air) | published $h_\perp$ equals {eq}`eq-planar-navigation-step` over the cut elements and changes with the plane; raster bitwise unchanged by the step |
+| PM-N24 | FDM stack of two objects, object-layer slab on an even cell count; region scope on one object with two regions of opposite $\mathbf m$ | slab centre equals the object centre (no half-cell shift); the two region maps differ and each is empty outside its region |
+| PM-N25 | line profile through an affine FEM field across several elements, and through an FDM field | FEM values equal the affine field at uniform and face-crossing points within $10^{-12}$ relative; every in-plane element-face crossing is present; FDM values equal the containing cell values; outside/empty points carry no value |
+| PM-N28 | batched point location through the element AABB hierarchy (structured Tet4 with unselected elements; interior, face, edge and outside points; runtime profile on a mixed FEM carrier) | located element, value and occupancy identical to the direct scan for every point; candidate count bounded by the elements around a node |
+| PM-N26 | in-plane streamlines on a uniform field, a vortex raster and a masked raster | uniform field gives straight parallel lines along $\mathbf w$ within $10^{-9}$ of the pixel pitch; vortex lines close or stay within the disk; no point lies in a non-renderable cell; repeated runs are identical; budget overflow is reported as truncated |
+| PM-N27 | multislice of an FDM stack at $\phi\in\{0.25,0.5,0.75\}$ and of an FEM film | each panel equals the single default section at the same $\phi$ (same resolved coordinate and bitwise-equal raster); the panels' sample tokens differ; the auto range is the union of the panels' renderable extrema; a monitor source with `position_fraction` is rejected |
+| PM-N29 | FDM multilayer composite of two native grids with equal spacing, integral shifts and a gap between them; fixtures with unequal spacing, a half-cell shift and overlapping grids | composite plane samples equal the native cell values of the covering layer bitwise; gap cells are empty under the `domain` target; the default section spans the composite lattice of {eq}`eq-planar-multilayer-shift`; two layers that both number a region 1 keep distinct composite regions; the three invalid fixtures fail with `planar_scope_unsupported` |
+| PM-N30 | sampling window on a $[0,2]\times[0,1]$ frame: no window, window $[-1,1]\times[0.25,3]$, window $[3,4]\times[0,1]$, a partial window, and a probe inside $B$ outside $W$ | no window gives $W=B$; the clamp gives $[0,1]\times[0.25,1]$ per {eq}`eq-planar-sampling-window`; the outside window and the partial set reject with `invalid_planar_window`; metadata publishes $W$ as `bounds_uv_m`, $B$ as `full_bounds_uv_m` and `pixel_size_m` from the window extent; windowed and unwindowed `sample_token` differ; the probe outside $W$ is still `occupied`. Rust tests `window_none_returns_full_bounds`, `window_is_clamped_to_frame`, `window_outside_frame_is_rejected`, `partial_window_is_rejected`, `windowed_meta_reports_window_and_full_bounds`, `window_changes_sample_token`, `probe_inside_frame_outside_window_is_occupied` (`crates/fullmag-api/src/router_v2/tests_planar_composition.rs`): **NOT RUN** (unit-test compilation banned) |
+| PM-N31 | nearest node on a Tet4 with known vertices, a point on an edge midpoint, an FDM cell, a node 1 nm above the plane, and unsupported requests | the closest vertex of the containing element is returned with its nodal (not interpolated) value; the edge midpoint tie selects the lower index; FDM returns `fdm_cell_center` at the cell centre; $\delta_n=10^{-9}\,\mathrm m$ with sign; statuses `not_requested`, `empty`, `unsupported_operator` follow {eq}`eq-planar-nearest-node`; `nearest=cell` rejects with `invalid_planar_probe`. Rust tests `fem_nearest_node_picks_closest_vertex_of_containing_element`, `fem_nearest_node_tie_prefers_lower_index`, `fdm_nearest_node_is_cell_centre`, `probe_without_nearest_reports_not_requested`, `probe_outside_target_reports_empty`, `probe_with_slab_average_reports_unsupported_operator`, `nearest_node_reports_signed_normal_offset`, `probe_rejects_unknown_nearest_value` (`crates/fullmag-api/src/planar_sampling/`): **NOT RUN** (unit-test compilation banned) |
 | PM-D01 | default source identity | `Default` resolves from session state and domain metadata without creating a monitor, changing `ProblemIR`, or changing canonical Python |
 | PM-D02 | default position validation | `position_fraction` is finite and in $[0,1]$; resolved `position_m` is finite and inside the selected normal bounds |
 | PM-D03 | default/authored sampler parity | after source resolution, both source identities use the same interpolation and measure-weighted reduction; source provenance remains distinct |
@@ -795,9 +1333,13 @@ Structural validation does not prove scientific correctness.
   implementing distinct target, magnetic-domain, and universe policies;
   explicit extents are required until PM-N13 passes.
 - FEM region-boundary and named-surface topology are absent.
-- FEM planar carriers support nodal P1 Tet4 and Prism6 with identity or explicit
-  local-to-global mapping. Pyramid5, Hex8, discontinuous, cell-centred, and
-  higher-order carriers reject explicitly.
+- FEM planar carriers support nodal first-order Tet4, Prism6, Pyramid5 and
+  Hex8 with identity or explicit local-to-global mapping. The Pyramid5 basis
+  is the rational first-order basis of {eq}`eq-planar-fem-pyramid5`; it is
+  identical to `mfem::LinearPyramidFiniteElement::CalcShape` of the linked
+  MFEM sources (only the apex tolerance differs), so gate PM-N19 holds at the
+  source level; a pointwise runtime comparison remains to be recorded. Discontinuous, cell-centred and higher-order carriers reject
+  explicitly.
 - FEM dynamic extents ignore target/scope markers and use all mesh nodes, so
   scoped dynamic extents are incorrect and unqualified.
 - `include_air_as_zero` currently contributes empty-bin zeros to API metadata
@@ -806,8 +1348,22 @@ Structural validation does not prove scientific correctness.
 - Planar target-boundary rendering is only contract-implemented after the
   `FMCS v4` codec, route, and frontend decoder tests; it remains browser and
   runtime unqualified until the requested backend/mode evidence is captured.
-- Scale-aware clipping tolerances and a spatial index remain required for
-  production performance and scale invariance.
+- FEM plane-sampling and Newton tolerances are scale-relative; the polygon
+  clipping de-duplication distance in `geometry.rs` is still absolute
+  ($10^{-12}\,\mathrm{m}$). Plane sampling is element-driven without a
+  bounding-volume hierarchy; the cached operator removes repeated geometry
+  work across field revisions, but the first build is $O(E)$ per plane.
+- The probe is a point evaluation with `occupied`, `outside` and `empty`
+  statuses; FEM point location for the probe is a linear element scan.
+- The nearest-node reading ({eq}`eq-planar-nearest-node`) and the sampling
+  window ({eq}`eq-planar-sampling-window`) are contracts of ADR 0080 whose
+  implementation is in progress; until gates PM-N30 and PM-N31 run they are
+  unqualified on every lane. The nearest-node reading exists only for
+  `plane_sample`.
+- `vector_budget` is a presentation parameter: it sets the screen-space glyph
+  density of the 2D view and is not part of the sample identity. The vector
+  resource always carries the full raster, so changing the budget never
+  resamples.
 - The failed current browser smoke blocks visible-canvas, lifecycle,
   accessibility, performance, and 3D/2D preservation qualification.
 - The session-resolved `Default` source is contract-only until its typed state,
@@ -830,6 +1386,9 @@ Structural validation does not prove scientific correctness.
 3. I. E. Sutherland and G. W. Hodgman, “Reentrant polygon clipping,”
    *Communications of the ACM* 17(1), 1974,
    [doi:10.1145/360767.360802](https://doi.org/10.1145/360767.360802).
+4. B. Jobard and W. Lefer, “Creating evenly-spaced streamlines of arbitrary
+   density,” in *Visualization in Scientific Computing '97*, Springer, 1997,
+   pp. 43–55, [doi:10.1007/978-3-7091-6876-9_5](https://doi.org/10.1007/978-3-7091-6876-9_5).
 
 (planar-monitor-source-code-index)=
 ## Source-code index
@@ -864,4 +1423,11 @@ symbols, not line-number claims.
 | Metadata extrema | `crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs` | `meta_resource` | Compute finite-value metadata extrema without consulting occupancy; currently includes serialized empty-air zero | FDM/FEM source | PM-N05 terminal gate required | known contract divergence for `include_air_as_zero` | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs) |
 | Frontend request plan | `apps/control-room/src/modules/field-map/model/fieldMapDataPlan.ts` | `buildFieldMapDataPlan` | Bound resource requests and reject illegal FDM scopes | browser | `fieldMapDataPlan.test.ts` | component tests; browser RED | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/apps/control-room/src/modules/field-map/model/fieldMapDataPlan.ts) |
 | Revisioned frontend resources | `apps/control-room/src/kernel/resources/planarFieldResources.ts` | `usePlanarFieldMetaResource` | Typed resource hook and revision identity | browser | `planarFieldResources.test.ts` | component tests; browser RED | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/apps/control-room/src/kernel/resources/planarFieldResources.ts) |
+| Sampling window contract {eq}`eq-planar-sampling-window` | `docs/physics/0970-planar-monitor-sampling-and-projection.md` | `DOC-ANCHOR:planar-monitor-sampling-window` | Define window intersection, pixel size from the window extent, sample identity and rejections before implementation | all sampling lanes | PM-N30 | planned contract (ADR 0080) | this page |
+| Nearest-node contract {eq}`eq-planar-nearest-node` | `docs/physics/0970-planar-monitor-sampling-and-projection.md` | `DOC-ANCHOR:planar-monitor-nearest-node` | Define FEM nearest vertex with tie rule, FDM cell centre, statuses and operator restriction before implementation | all sampling lanes | PM-N31 | planned contract (ADR 0080) | this page |
+| Window query and frame bounds | `crates/fullmag-api/src/schemas/planar_fields.rs` | `PlanarFieldQuery`; `PlanarFieldProbeQuery`; `PlanarFieldProfileQuery`; `PlanarFieldFrameResource`; `PlanarProbeNodeResource` | `window_*`, `full_bounds_uv_m`, `nearest`, nearest-node resource | API data plane | PM-N30, PM-N31; tests **NOT RUN** | planned (plan Tasks 3–4) | pending integration |
+| Window resolution and sample identity | `crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs`; `crates/fullmag-api/src/planar_sampling/target.rs` | `resolve_planar_window`; `build_planar_field_from_source`; `PlanarSampleIdentity` | Intersect the window with the frame, resample, include $W$ in identity | FDM/FEM CPU sampler | PM-N30; tests **NOT RUN** | planned (plan Task 3) | pending integration |
+| Windowed profile | `crates/fullmag-api/src/router_v2/handlers/data/planar_profile.rs` | `planar_profile_response` | Carry the window as sample identity of a profile | FDM/FEM CPU sampler | PM-N30; tests **NOT RUN** | planned (plan Task 3) | pending integration |
+| Nearest node | `crates/fullmag-api/src/planar_sampling/target.rs`; `crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs` | `PlanarTarget::nearest_node`; `PlanarNearestNode`; `planar_probe_response` | FEM nearest vertex / FDM cell centre, projection, distances, status | FDM/FEM CPU sampler | PM-N31; tests **NOT RUN** | planned (plan Task 4) | pending integration |
+| Session crop and layer model | `crates/fullmag-api/src/schemas/visualization_state.rs`; `crates/fullmag-api/src/router_v2/handlers/visualization/display.rs`; `crates/fullmag-api/src/session_persistence.rs` | `PlanarCropState`; `PlanarLayerModel`; `migrate_planar_layer_model` | Persisted crop (source of $W^{\mathrm{req}}$), crop validation, legacy-to-layers migration | API visualization | plan Task 2 tests; **NOT RUN** | planned (plan Task 2) | pending integration |
 | Canvas renderer | `apps/control-room/src/modules/field-map/renderer/PlanarSurface.tsx` | `PlanarSurface` | Render sampled raster and overlays | browser | `PlanarSurface.test.tsx`; Task 0 visible-canvas timeout | browser RED | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/apps/control-room/src/modules/field-map/renderer/PlanarSurface.tsx) |

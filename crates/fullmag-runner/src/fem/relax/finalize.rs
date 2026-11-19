@@ -389,7 +389,8 @@ pub(crate) fn finalize_native_fem_relaxation(
     });
     // Construct the one final provenance value before any terminal success
     // side effect. The same value is published to open stores and returned in
-    // ExecutedRun; no later provenance mutation is permitted.
+    // ExecutedRun. Cumulative CPU transfer diagnostics are read again after
+    // final field refreshes, without changing this scientific state identity.
     let mut final_provenance = artifacts.provenance_snapshot();
     final_provenance.fem_poisson_demag = fem_poisson_demag_provenance(plan, Some(&final_stats));
     if plan.demag_realization == Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler) {
@@ -407,18 +408,27 @@ pub(crate) fn finalize_native_fem_relaxation(
         Some(&gpu_rk_plan_info),
     );
     if engine == FemEngine::NativeGpu {
-        // The backend receipt describes the resolved RK execution plan. Direct
-        // minimizers publish their own policy and realization provenance.
         if let Some(receipt_request) = finalization.fem_gpu_receipt_request.as_deref() {
-            let receipt = backend
-                .gpu_execution_receipt()?
-                .into_provenance(receipt_request);
-            run_after_strict_receipt_gate(&receipt, receipt_request, || {
-                final_provenance.fem_gpu_execution_receipt = Some(receipt.clone())
-            })?;
+            let native_receipt = backend.gpu_execution_receipt()?;
+            if plan.relaxation.as_ref().is_some_and(|control| {
+                super::algorithm::is_direct_minimizer(control.algorithm)
+            }) {
+                let receipt = native_receipt.into_minimizer_provenance(receipt_request)?;
+                if receipt_request == "strict_device" {
+                    receipt.validate_strict_device().map_err(|error| RunError {
+                        message: format!("strict native FEM GPU minimizer receipt rejected: {error}"),
+                    })?;
+                }
+                final_provenance.fem_gpu_minimizer_execution_receipt = Some(receipt);
+            } else {
+                let receipt = native_receipt.into_provenance(receipt_request);
+                run_after_strict_receipt_gate(&receipt, receipt_request, || {
+                    final_provenance.fem_gpu_execution_receipt = Some(receipt.clone())
+                })?;
+            }
         }
     }
-    artifacts.replace_provenance_synchronously(final_provenance)?;
+    artifacts.replace_provenance_synchronously(final_provenance.clone())?;
     if let Some(mut terminal_stats) = finalization.terminal_stats {
         // Retain a terminal torque-confirmation observation for final-state
         // provenance. The artifact writer marks same-step observations as
@@ -882,6 +892,18 @@ pub(crate) fn finalize_native_fem_relaxation(
     finalization_field_copy_bytes =
         finalization_field_copy_bytes.saturating_add(vector3_f64_bytes(final_magnetization.len()));
     let mut diagnostic_steps = artifacts.take_solver_steps();
+    let final_cpu_fixed_coupling = backend.cpu_fixed_coupling_telemetry()?;
+    if final_cpu_fixed_coupling.is_some() {
+        final_stats.cpu_fixed_coupling = final_cpu_fixed_coupling.clone();
+        if let Some(last) = steps.last_mut() {
+            last.cpu_fixed_coupling = final_cpu_fixed_coupling.clone();
+        }
+        if let Some(last) = diagnostic_steps.last_mut() {
+            last.cpu_fixed_coupling = final_cpu_fixed_coupling.clone();
+        }
+        final_provenance.cpu_fixed_coupling = final_cpu_fixed_coupling;
+        artifacts.replace_provenance_synchronously(final_provenance)?;
+    }
     let (mut field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let mut auxiliary_artifacts = Vec::new();
     let node_map_bytes = serde_json::to_vec(&final_node_map).map_err(|error| RunError {

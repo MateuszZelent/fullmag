@@ -167,7 +167,7 @@
       },
       {
         "python": "study.pbc.demag",
-        "type": "Literal[open, truncated_images, periodic_airbox_k0]",
+        "type": "Literal[\"open\", \"truncated_images\", \"periodic_airbox_k0\"]",
         "default": "open",
         "si_unit": "1",
         "validation": "With any true axis, `FdmPbc` applies `strip().lower()` and accepts `open`, `truncated_images`, or `periodic_airbox_k0`; with no true axis, `world.pbc` compares raw `demag` to exact `\"open\"` before `FdmPbc`; unknown values are rejected",

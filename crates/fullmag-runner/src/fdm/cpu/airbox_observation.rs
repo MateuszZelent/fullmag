@@ -118,6 +118,93 @@ impl AirboxObservationTarget {
             source_spacing_m: [0.0; 3],
         })
     }
+
+    fn from_study_universe(value: &Value, plan: &FdmMultilayerPlanIR) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "runtime_metadata.study_universe must be an object".to_string())?;
+        let mode = match object.get("mode") {
+            None | Some(Value::Null) => "auto",
+            Some(Value::String(mode)) => mode.as_str(),
+            Some(_) => return Err("Airbox target study universe mode must be a string".into()),
+        };
+        let mode = if mode == "box" { "manual" } else { mode };
+        if !matches!(mode, "manual" | "auto") {
+            return Err(format!(
+                "Airbox target cannot use unsupported study universe mode '{mode}'"
+            ));
+        }
+        let size = parse_finite3(object.get("size"), "study_universe.size", true)?;
+        let center = match object.get("center") {
+            None | Some(Value::Null) => [0.0; 3],
+            Some(value) => parse_finite3(Some(value), "study_universe.center", false)?,
+        };
+
+        let first_layer = plan
+            .layers
+            .first()
+            .ok_or_else(|| "Airbox observation requires at least one source layer".to_string())?;
+        let spacing_m = first_layer.convolution_cell_size;
+        if plan
+            .layers
+            .iter()
+            .any(|layer| layer.convolution_cell_size != spacing_m)
+        {
+            return Err(
+                "Airbox target requires one immutable common convolution cell size".to_string(),
+            );
+        }
+        validate_grid("planned common convolution", [1; 3], spacing_m, [0.0; 3])?;
+
+        let mut shape = [0usize; 3];
+        let mut grid = [0u32; 3];
+        for axis in 0..3 {
+            let cells = size[axis] / spacing_m[axis];
+            if !cells.is_finite() || cells < 1.0 || cells > f64::from(u32::MAX) {
+                return Err(format!(
+                    "Airbox target study universe size[{axis}] is outside the supported common-cell grid range"
+                ));
+            }
+            let nearest = cells.round();
+            let rounded_extent = nearest * spacing_m[axis];
+            let tolerance = 8.0
+                * f64::EPSILON
+                * size[axis]
+                    .abs()
+                    .max(rounded_extent.abs())
+                    .max(spacing_m[axis].abs());
+            if nearest < 1.0
+                || !rounded_extent.is_finite()
+                || (size[axis] - rounded_extent).abs() > tolerance
+            {
+                return Err(format!(
+                    "Airbox target study universe size[{axis}] is not an integer multiple of the planned common convolution cell size within floating-point roundoff"
+                ));
+            }
+            grid[axis] = nearest as u32;
+            shape[axis] = usize::try_from(grid[axis]).map_err(|_| {
+                format!("Airbox target cell count on axis {axis} is not addressable")
+            })?;
+        }
+        fullmag_plan::checked_fdm_grid_cost(grid, fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL)
+            .map_err(|error| {
+                format!("Airbox derived target grid budget rejected before allocation: {error}")
+            })?;
+        let origin_m = [
+            center[0] - size[0] / 2.0,
+            center[1] - size[1] / 2.0,
+            center[2] - size[2] / 2.0,
+        ];
+        validate_grid("derived target", shape, spacing_m, origin_m)?;
+        Ok(Self {
+            shape,
+            spacing_m,
+            origin_m,
+            padding_cells_above_below: [0, 0],
+            source_shape: [0; 3],
+            source_spacing_m: [0.0; 3],
+        })
+    }
 }
 
 /// Materialize the optional CPU target-only carrier from an executed run.
@@ -157,7 +244,7 @@ pub(crate) fn materialize_airbox_observation(
         "run_status": executed.result.status,
         "build_identity": build_identity,
     });
-    build_airbox_observation_artifacts(problem, plan, &target, &field, source_runtime_identity)
+    build_airbox_observation_artifacts(problem, plan, &target, &field, source_runtime_identity, None)
 }
 
 /// Resolve the immutable target-only Airbox descriptor shared by CPU and GPU
@@ -167,19 +254,35 @@ pub(crate) fn airbox_observation_target(
     problem: &ProblemIR,
     plan: &FdmMultilayerPlanIR,
 ) -> Result<Option<AirboxObservationTarget>, String> {
-    let Some(metadata) = problem
-        .problem_meta
-        .runtime_metadata
-        .get("airbox_observation")
-    else {
+    let runtime_metadata = &problem.problem_meta.runtime_metadata;
+    let mut target = if let Some(metadata) = runtime_metadata.get("airbox_observation") {
+        AirboxObservationTarget::from_runtime_metadata(metadata)?
+    } else if let Some(universe) = runtime_metadata.get("study_universe") {
+        let Some(object) = universe.as_object() else {
+            return Ok(None);
+        };
+        if !object.get("size").is_some_and(|size| !size.is_null()) {
+            return Ok(None);
+        }
+        AirboxObservationTarget::from_study_universe(universe, plan)?
+    } else {
         return Ok(None);
     };
-    let mut target = AirboxObservationTarget::from_runtime_metadata(metadata)?;
     let (source_shape, source_spacing) = source_grid_summary(plan)?;
     target.source_shape = source_shape;
     target.source_spacing_m = source_spacing;
     validate_grid("target", target.shape, target.spacing_m, target.origin_m)?;
     Ok(Some(target))
+}
+
+pub(crate) fn airbox_observation_requested(problem: &ProblemIR) -> bool {
+    let runtime_metadata = &problem.problem_meta.runtime_metadata;
+    runtime_metadata.contains_key("airbox_observation")
+        || runtime_metadata
+            .get("study_universe")
+            .and_then(Value::as_object)
+            .and_then(|object| object.get("size"))
+            .is_some_and(|size| !size.is_null())
 }
 
 /// Encode target-only fields and per-quantity manifests after either a CPU or
@@ -192,6 +295,7 @@ pub(crate) fn build_airbox_observation_artifacts(
     target: &AirboxObservationTarget,
     h_demag: &[[f64; 3]],
     mut source_runtime_identity: Value,
+    periodic_workspace: Option<&fullmag_ir::ResolvedPeriodicImagesIR>,
 ) -> Result<Vec<AuxiliaryArtifact>, String> {
     validate_grid("target", target.shape, target.spacing_m, target.origin_m)?;
     let expected_samples = target
@@ -222,7 +326,14 @@ pub(crate) fn build_airbox_observation_artifacts(
     } else {
         identity.insert("problem_source_hash_origin".into(), json!("authored_source"));
     }
-    identity.insert("observation_boundary_policy".into(), json!("open"));
+    if let Some(workspace) = periodic_workspace {
+        identity.insert("observation_boundary_policy".into(), json!("periodic_xy_truncated_images"));
+        identity.insert("observation_requested_image_counts".into(), json!(workspace.requested_image_counts));
+        identity.insert("observation_resolved_image_counts".into(), json!(workspace.resolved_image_counts));
+        identity.insert("observation_fft_shape".into(), json!(workspace.padded_counts));
+    } else {
+        identity.insert("observation_boundary_policy".into(), json!("open"));
+    }
     let source_grid_fingerprints = plan
         .layers
         .iter()
@@ -285,7 +396,9 @@ pub(crate) fn build_airbox_observation_artifacts(
             "grid": target_grid,
             "values": values,
         });
-        let field_bytes = serde_json::to_vec_pretty(&field_payload)
+        // Compact JSON: indentation of millions of vector samples tripled the
+        // artifact (308 MB for a 3.45 M-cell target grid) and its hashing time.
+        let field_bytes = serde_json::to_vec(&field_payload)
             .map_err(|error| format!("Airbox {quantity_id} field serialization failed: {error}"))?;
         let field_hash = sha256_hex(&field_bytes);
         let field_generation_seed = json!({
@@ -829,6 +942,7 @@ mod tests {
 
     fn tiny_plan() -> FdmMultilayerPlanIR {
         let layer = FdmLayerPlanIR {
+            rotated_interfacial_dmi: None,
             magnet_name: "layer".to_string(),
             layer_id: "layer:layer".to_string(),
             object_id: "layer".to_string(),
@@ -937,6 +1051,41 @@ mod tests {
             sha256_hex_revision(&carrier_a).unwrap(),
             sha256_hex_revision(&carrier_b).unwrap()
         );
+    }
+
+    #[test]
+    fn periodic_airbox_provenance_identifies_boundary_images_and_fft_shape() {
+        use fullmag_ir::{AxisBoundary, ExecutionPrecision, FdmDemagPeriodicityIR, FdmPeriodicityIR};
+
+        let plan = tiny_plan();
+        let problem = ProblemIR::bootstrap_example();
+        let target = AirboxObservationTarget::from_support(
+            [4, 4, 1], [1e-9; 3], [0.0; 3], [1, 1],
+        ).unwrap();
+        let workspace = FdmPeriodicityIR {
+            axes: [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open],
+            demag: FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([2, 3, 0]),
+        }
+        .resolve_periodic_images([4, 4, 3], ExecutionPrecision::Double)
+        .unwrap().unwrap();
+        let manifest = |periodic| {
+            let artifacts = super::build_airbox_observation_artifacts(
+                &problem, &plan, &target, &[[0.0; 3]; 48], json!({}), periodic,
+            ).unwrap();
+            let artifact = artifacts.iter().find(|artifact| {
+                artifact.relative_path == "fields/H_demag/airbox/manifest.json"
+            }).unwrap();
+            serde_json::from_slice::<serde_json::Value>(&artifact.bytes).unwrap()
+        };
+        let periodic = manifest(Some(&workspace));
+        let open = manifest(None);
+        let identity = &periodic["source_runtime_identity"];
+        assert_eq!(identity["observation_boundary_policy"], "periodic_xy_truncated_images");
+        assert_eq!(identity["observation_resolved_image_counts"], json!([2, 3, 0]));
+        assert_eq!(identity["observation_fft_shape"], json!([4, 4, 6]));
+        assert_eq!(open["source_runtime_identity"]["observation_boundary_policy"], "open");
+        assert_ne!(periodic["carrier_fingerprint"], open["carrier_fingerprint"]);
     }
 
     #[test]

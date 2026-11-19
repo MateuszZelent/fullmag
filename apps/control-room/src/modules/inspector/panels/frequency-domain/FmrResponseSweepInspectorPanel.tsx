@@ -1,5 +1,6 @@
 "use client";
 
+import { EmptyState } from "@/shared/ui/EmptyState";
 import { useState } from "react";
 import { Activity, Eye } from "lucide-react";
 
@@ -285,9 +286,7 @@ function FmrResponsePointBrowser({
 }) {
   if (points.length === 0) {
     return (
-      <div className="fm-frequency-domain-table-empty" role="status">
-        No driven FMR response points available.
-      </div>
+      <EmptyState className="fm-frequency-domain-table-empty" role="status" size="compact" heading="No driven FMR response points available." />
     );
   }
 

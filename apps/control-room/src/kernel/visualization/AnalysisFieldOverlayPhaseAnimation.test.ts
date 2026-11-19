@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { instanceTabVisibility } from "../layout/instanceTabVisibility";
 import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
 import {
   startAnalysisFieldOverlayPhaseAnimation,
@@ -45,6 +46,7 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    instanceTabVisibility.resetForTests();
   });
 
   it("advances phase only while eigen mode animation is active", () => {
@@ -56,12 +58,15 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
       intervalMs: 100,
     });
 
+    const overlayListener = vi.fn();
+    controller.subscribe(overlayListener);
     vi.advanceTimersByTime(100);
 
+    // Frames move the phase clock only; the overlay state is untouched.
+    expect(overlayListener).not.toHaveBeenCalled();
     expect(controller.getSnapshot()?.query.phase_rad).toBe(0);
-    expect(controller.getSnapshot()?.visualizationPhaseRad).toBeCloseTo(
-      0.2 * Math.PI,
-    );
+    expect(controller.getSnapshot()?.visualizationPhaseRad).toBeUndefined();
+    expect(controller.getDisplayedPhaseRad()).toBeCloseTo(0.2 * Math.PI);
 
     controller.update({
       animation: {
@@ -71,10 +76,12 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
     });
     vi.advanceTimersByTime(500);
 
+    // Pausing commits the last displayed phase into the overlay state.
     expect(controller.getSnapshot()?.query.phase_rad).toBe(0);
     expect(controller.getSnapshot()?.visualizationPhaseRad).toBeCloseTo(
       0.2 * Math.PI,
     );
+    expect(controller.getDisplayedPhaseRad()).toBeCloseTo(0.2 * Math.PI);
 
     handle.stop();
   });
@@ -110,8 +117,8 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
         view: "phase_rotated_real",
       },
       source: "frequency-response",
-      visualizationPhaseRad: 0.2 * Math.PI,
     });
+    expect(controller.getDisplayedPhaseRad()).toBeCloseTo(0.2 * Math.PI);
 
     handle.stop();
   });
@@ -125,13 +132,11 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
 
     vi.advanceTimersByTime(100);
     expect(controller.getSnapshot()?.query.phase_rad).toBe(0);
-    expect(controller.getSnapshot()?.visualizationPhaseRad).toBeUndefined();
+    expect(controller.getDisplayedPhaseRad()).toBe(0);
 
     vi.advanceTimersByTime(150);
     expect(controller.getSnapshot()?.query.phase_rad).toBe(0);
-    expect(controller.getSnapshot()?.visualizationPhaseRad).toBeCloseTo(
-      0.5 * Math.PI,
-    );
+    expect(controller.getDisplayedPhaseRad()).toBeCloseTo(0.5 * Math.PI);
 
     handle.stop();
   });
@@ -301,6 +306,35 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
     expect(callbacks).toHaveLength(1);
   });
 
+  it("cancels a browser frame when its instance tab is hidden on the host page", () => {
+    const callbacks: FrameRequestCallback[] = [];
+    const requestFrame = vi.fn((callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    const cancelFrame = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
+    vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+    const controller = new AnalysisFieldOverlayController();
+    setEigenOverlay(controller);
+    controller.update({ visualizationPhaseRad: 1.5 });
+
+    const handle = startAnalysisFieldOverlayPhaseAnimation(controller);
+    expect(requestFrame).toHaveBeenCalledTimes(1);
+
+    instanceTabVisibility.setVisible(false);
+
+    expect(cancelFrame).toHaveBeenCalledWith(1);
+    expect(controller.getSnapshot()).toMatchObject({
+      animation: { animatePhase: false },
+      visualizationPhaseRad: 1.5,
+    });
+
+    handle.stop();
+    instanceTabVisibility.setVisible(true);
+    expect(requestFrame).toHaveBeenCalledTimes(1);
+  });
+
   it("uses frame timestamps for smooth browser animation and cancels the owned frame", () => {
     const callbacks: FrameRequestCallback[] = [];
     const requestFrame = vi.fn((callback: FrameRequestCallback) => {
@@ -317,9 +351,9 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
     callbacks.shift()?.(1000);
     callbacks.shift()?.(1016);
 
-    expect(controller.getSnapshot()?.visualizationPhaseRad).toBeCloseTo(
-      2 * Math.PI * 0.016,
-    );
+    expect(controller.getDisplayedPhaseRad()).toBeCloseTo(2 * Math.PI * 0.016);
+    expect(controller.phaseClock.uniform.value).toBeCloseTo(2 * Math.PI * 0.016);
+    expect(controller.getSnapshot()?.visualizationPhaseRad).toBeUndefined();
     expect(requestFrame).toHaveBeenCalledTimes(3);
 
     handle.stop();

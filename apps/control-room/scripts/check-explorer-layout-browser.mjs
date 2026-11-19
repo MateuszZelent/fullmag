@@ -6,7 +6,9 @@ import { chromium } from "playwright";
 const styles = await Promise.all(["tokens.css", "explorer.css", "inspector-mesh.css"].map(
   (name) => readFile(new URL(`../src/design/styles/${name}`, import.meta.url), "utf8"),
 ));
-const browser = await chromium.launch({ channel: "chrome" });
+// Same channel switch as check-start-screen-browser; the Playwright image uses "chromium".
+const browserChannel = process.env.CONTROL_ROOM_BROWSER_CHANNEL ?? "chrome";
+const browser = await chromium.launch(browserChannel === "chromium" ? {} : { channel: browserChannel });
 try {
   const page = await browser.newPage();
   await page.setContent(`
@@ -16,7 +18,14 @@ try {
         <div class="fm-explorer-tabs">Model / Results</div>
         <div class="fm-result-context">Result context</div>
         <div class="fm-analysis-field-context">Active analysis overlay</div>
-        <label class="fm-explorer-filter">Filter</label>
+        <div class="fm-explorer-filter-row">
+          <label class="fm-explorer-filter">Filter</label>
+          <div class="fm-explorer-toolbar" role="group" aria-label="Explorer tree actions">
+            <button class="fm-explorer-toolbar__action" aria-label="Expand all explorer nodes">+</button>
+            <button class="fm-explorer-toolbar__action" aria-label="Collapse all explorer nodes">-</button>
+            <button class="fm-explorer-toolbar__action" aria-label="Reset explorer filter and expand nodes">↻</button>
+          </div>
+        </div>
         <div class="fm-explorer-tree" role="tree">
           <div class="fm-explorer-tree-row" role="treeitem" style="--fm-tree-depth:6">
             <span class="fm-explorer-tree-row__branch">+</span>
@@ -38,11 +47,6 @@ try {
             </span>
           </div>
         </div>
-        <footer class="fm-explorer-toolbar">
-          <button class="fm-explorer-toolbar__action" aria-label="Expand all explorer nodes">+<span>Expand All</span></button>
-          <button class="fm-explorer-toolbar__action" aria-label="Collapse all explorer nodes">-<span>Collapse All</span></button>
-          <button class="fm-explorer-toolbar__action" aria-label="Refresh explorer">↻<span>Refresh</span></button>
-        </footer>
       </section>
     </div>
     <div class="fm-inspector-colorbar__ramp"></div>
@@ -59,10 +63,12 @@ try {
         const tree = document.querySelector(".fm-explorer-tree");
         const treeRect = tree.getBoundingClientRect();
         const toolbar = document.querySelector(".fm-explorer-toolbar").getBoundingClientRect();
+        const filter = document.querySelector(".fm-explorer-filter").getBoundingClientRect();
         const label = document.querySelector(".fm-explorer-tree-row__label");
         return {
           treeHeight: treeRect.height,
-          toolbarInside: toolbar.bottom <= root.bottom + 1 && toolbar.top >= treeRect.bottom - 1,
+          // Tree actions share the filter row above the tree; no footer row remains.
+          toolbarInside: toolbar.right <= root.right + 1 && toolbar.bottom <= treeRect.top + 1 && Math.abs(toolbar.top + toolbar.height / 2 - (filter.top + filter.height / 2)) <= 1 && filter.width > 80,
           labelWidth: label.clientWidth,
           horizontalScroll: tree.scrollWidth > tree.clientWidth,
           rows: [...tree.querySelectorAll("[role=treeitem]")].map(row => {
@@ -77,17 +83,16 @@ try {
           buttons: [...document.querySelectorAll(".fm-explorer-toolbar__action")].map((button) => ({
             accessibleName: button.getAttribute("aria-label"),
             inside: button.getBoundingClientRect().right <= root.right + 1,
-            textVisible: getComputedStyle(button.querySelector("span")).display !== "none",
           })),
           colorbarShadow: getComputedStyle(document.querySelector(".fm-inspector-colorbar__ramp")).boxShadow,
         };
       }, { width, optionalHeaders });
       assert.ok(result.treeHeight > 350, "Tree must own the remaining panel height");
-      assert.ok(result.toolbarInside, "Optional headers must not displace the footer");
+      assert.ok(result.toolbarInside, "Tree actions sit beside a usable filter field");
+      assert.equal(result.buttons.length, 3);
       for (const button of result.buttons) {
         assert.ok(button.accessibleName);
         assert.ok(button.inside);
-        assert.equal(button.textVisible, width > 360);
       }
       assert.equal(result.horizontalScroll, false, "Metadata must not make the tree horizontally scroll");
       for (const row of result.rows) {

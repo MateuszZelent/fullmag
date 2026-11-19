@@ -325,10 +325,13 @@ impl ExecutionProfileIR {
 /// encoding used by execution profiles. Arrays retain their authored order;
 /// this identifies serialized inputs rather than physical equivalence.
 pub fn canonical_ir_json_sha256(value: &Value) -> Result<String, serde_json::Error> {
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(canonical_json_bytes(value)?)
-    ))
+    Ok(format!("{:x}", Sha256::digest(canonical_ir_json_bytes(value)?)))
+}
+
+/// Serialize IR JSON with the canonical sorted-key, UTF-8 encoding used by
+/// [`canonical_ir_json_sha256`]. Arrays retain their authored order.
+pub fn canonical_ir_json_bytes(value: &Value) -> Result<Vec<u8>, serde_json::Error> {
+    canonical_json_bytes(value)
 }
 
 fn validate_profile_identity(value: &str, field: &str) -> Result<(), String> {

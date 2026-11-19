@@ -56,6 +56,20 @@ pub enum PrescribedStrainField {
 /// Returns H_mel in [A/m].
 #[inline]
 pub fn h_mel_single(m: Vector3, strain: &StrainVoigt, params: &MagnetoelasticParams) -> Vector3 {
+    h_mel_single_with_ms(m, strain, params, params.ms)
+}
+
+/// Compute H_mel for a single cell with its local saturation magnetisation.
+///
+/// The energy density does not depend on Mₛ, so the field divides by the
+/// cell's own moment: H = −(1/(μ₀ Mₛ,ᵢ)) ∂e/∂m.
+#[inline]
+pub fn h_mel_single_with_ms(
+    m: Vector3,
+    strain: &StrainVoigt,
+    params: &MagnetoelasticParams,
+    ms: f64,
+) -> Vector3 {
     let [mx, my, mz] = m;
     let [e11, e22, e33, e23_2, e13_2, e12_2] = *strain;
 
@@ -64,7 +78,7 @@ pub fn h_mel_single(m: Vector3, strain: &StrainVoigt, params: &MagnetoelasticPar
     let e13 = e13_2 * 0.5;
     let e23 = e23_2 * 0.5;
 
-    let inv_mu0_ms = -1.0 / (MU0 * params.ms);
+    let inv_mu0_ms = -1.0 / (MU0 * ms);
 
     [
         inv_mu0_ms * (2.0 * params.b1 * mx * e11 + 2.0 * params.b2 * (my * e12 + mz * e13)),
@@ -76,12 +90,16 @@ pub fn h_mel_single(m: Vector3, strain: &StrainVoigt, params: &MagnetoelasticPar
 /// Compute the magnetoelastic effective field for the entire grid.
 ///
 /// Returns H_mel [A/m] per cell.
+///
+/// `ms_field` holds the per-cell Mₛ; `None` uses `params.ms` everywhere.
 pub fn h_mel_field(
     magnetization: &[Vector3],
     strain: &PrescribedStrainField,
     params: &MagnetoelasticParams,
     active_mask: Option<&[bool]>,
+    ms_field: Option<&[f64]>,
 ) -> Vec<Vector3> {
+    let ms_at = |i: usize| ms_field.map_or(params.ms, |values| values[i]);
     let n = magnetization.len();
 
     match strain {
@@ -89,7 +107,7 @@ pub fn h_mel_field(
             .map(|i| {
                 let active = active_mask.map_or(true, |mask| mask[i]);
                 if active {
-                    h_mel_single(magnetization[i], eps, params)
+                    h_mel_single_with_ms(magnetization[i], eps, params, ms_at(i))
                 } else {
                     [0.0, 0.0, 0.0]
                 }
@@ -105,7 +123,7 @@ pub fn h_mel_field(
                 .map(|i| {
                     let active = active_mask.map_or(true, |mask| mask[i]);
                     if active {
-                        h_mel_single(magnetization[i], &eps_field[i], params)
+                        h_mel_single_with_ms(magnetization[i], &eps_field[i], params, ms_at(i))
                     } else {
                         [0.0, 0.0, 0.0]
                     }
@@ -121,15 +139,17 @@ pub fn h_mel_field_add_into(
     strain: &PrescribedStrainField,
     params: &MagnetoelasticParams,
     active_mask: Option<&[bool]>,
+    ms_field: Option<&[f64]>,
     h_eff: &mut [Vector3],
 ) {
     let n = magnetization.len();
+    let ms_at = |i: usize| ms_field.map_or(params.ms, |values| values[i]);
     match strain {
         PrescribedStrainField::Uniform(eps) => {
             for i in 0..n {
                 let active = active_mask.map_or(true, |mask| mask[i]);
                 if active {
-                    let h = h_mel_single(magnetization[i], eps, params);
+                    let h = h_mel_single_with_ms(magnetization[i], eps, params, ms_at(i));
                     h_eff[i][0] += h[0];
                     h_eff[i][1] += h[1];
                     h_eff[i][2] += h[2];
@@ -145,7 +165,7 @@ pub fn h_mel_field_add_into(
             for i in 0..n {
                 let active = active_mask.map_or(true, |mask| mask[i]);
                 if active {
-                    let h = h_mel_single(magnetization[i], &eps_field[i], params);
+                    let h = h_mel_single_with_ms(magnetization[i], &eps_field[i], params, ms_at(i));
                     h_eff[i][0] += h[0];
                     h_eff[i][1] += h[1];
                     h_eff[i][2] += h[2];
@@ -219,9 +239,98 @@ pub fn e_mel_total(
     sum * cell_volume
 }
 
+/// Per-cell magnetoelastic energy density [J/m³]; inactive cells are zero.
+pub fn e_mel_density_field(
+    magnetization: &[Vector3],
+    strain: &PrescribedStrainField,
+    params: &MagnetoelasticParams,
+    active_mask: Option<&[bool]>,
+) -> Vec<f64> {
+    let n = magnetization.len();
+    if let PrescribedStrainField::PerCell(eps_field) = strain {
+        assert_eq!(
+            eps_field.len(),
+            n,
+            "strain field length must match magnetization"
+        );
+    }
+    (0..n)
+        .map(|i| {
+            if !active_mask.map_or(true, |mask| mask[i]) {
+                return 0.0;
+            }
+            let eps = match strain {
+                PrescribedStrainField::Uniform(eps) => eps,
+                PrescribedStrainField::PerCell(eps_field) => &eps_field[i],
+            };
+            e_mel_density_single(magnetization[i], eps, params)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn h_mel_divides_by_local_ms_in_each_region() {
+        // Two regions, Ms = 800 / 400 kA/m, equal m and strain: the field in
+        // the second region is twice the first, -2 B1 e11 / (mu0 Ms_i).
+        let params = MagnetoelasticParams { b1: -6.95e6, b2: -5.62e6, ms: 800e3 };
+        let m = vec![[1.0, 0.0, 0.0]; 2];
+        let strain = PrescribedStrainField::Uniform([1e-3, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        let ms_field = [800e3, 400e3];
+        let h = h_mel_field(&m, &strain, &params, None, Some(&ms_field));
+        for (i, ms) in ms_field.iter().enumerate() {
+            let expected = -2.0 * params.b1 * 1e-3 / (MU0 * ms);
+            assert!((h[i][0] - expected).abs() <= 1e-12 * expected.abs(), "cell {i}: {h:?}");
+        }
+        assert!((h[1][0] / h[0][0] - 2.0).abs() < 1e-14);
+        let mut h_add = vec![[0.0; 3]; 2];
+        h_mel_field_add_into(&m, &strain, &params, None, Some(&ms_field), &mut h_add);
+        assert_eq!(h_add, h);
+    }
+
+    #[test]
+    fn h_mel_is_minus_energy_gradient_per_local_moment() {
+        // H_i = -(1/(mu0 Ms_i)) de/dm_i, checked by central differences with
+        // normal and shear strain so the 2 B2 eps_jk shear term is covered.
+        let params = MagnetoelasticParams { b1: -6.95e6, b2: -5.62e6, ms: 800e3 };
+        let eps: StrainVoigt = [1.0e-3, -4.0e-4, 2.0e-4, 6.0e-4, -3.0e-4, 8.0e-4];
+        let m: Vector3 = [0.48, -0.6, 0.64];
+        for ms in [800e3, 400e3] {
+            let h = h_mel_single_with_ms(m, &eps, &params, ms);
+            for axis in 0..3 {
+                let step = 1e-6;
+                let mut plus = m;
+                let mut minus = m;
+                plus[axis] += step;
+                minus[axis] -= step;
+                let de = (e_mel_density_single(plus, &eps, &params)
+                    - e_mel_density_single(minus, &eps, &params))
+                    / (2.0 * step);
+                let expected = -de / (MU0 * ms);
+                assert!(
+                    (h[axis] - expected).abs() <= 1e-8 * expected.abs().max(1.0),
+                    "Ms={ms} axis {axis}: {} vs {expected}",
+                    h[axis]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rotating_m_from_x_to_y_changes_energy_by_b1_exx_v() {
+        let params = MagnetoelasticParams { b1: -6.95e6, b2: -5.62e6, ms: 800e3 };
+        let strain = PrescribedStrainField::Uniform([1e-3, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        let volume = 8e-27;
+        let along_x = e_mel_total(&[[1.0, 0.0, 0.0]], &strain, &params, volume, None);
+        let along_y = e_mel_total(&[[0.0, 1.0, 0.0]], &strain, &params, volume, None);
+        let expected = params.b1 * 1e-3 * volume;
+        assert!((along_x - along_y - expected).abs() <= 1e-12 * expected.abs());
+        let density = e_mel_density_field(&[[1.0, 0.0, 0.0]], &strain, &params, None);
+        assert!((density[0] * volume - along_x).abs() <= 1e-12 * along_x.abs());
+    }
 
     const PARAMS_FE: MagnetoelasticParams = MagnetoelasticParams {
         b1: -6.95e6, // Fe B₁ [Pa]
@@ -309,7 +418,7 @@ mod tests {
         let m: Vec<Vector3> = vec![[1.0, 0.0, 0.0]; n];
         let strain = PrescribedStrainField::Uniform([1e-3, 0.0, 0.0, 0.0, 0.0, 0.0]);
 
-        let h = h_mel_field(&m, &strain, &PARAMS_FE, None);
+        let h = h_mel_field(&m, &strain, &PARAMS_FE, None, None);
         assert_eq!(h.len(), n);
 
         // For m = [1,0,0] and ε₁₁ = 1e-3, H_mel,x = −2 B₁ ε₁₁ / (μ₀ Mₛ)
@@ -347,7 +456,7 @@ mod tests {
         let strain = PrescribedStrainField::Uniform([1e-3, 2e-3, 0.0, 0.0, 0.0, 0.0]);
         let mask = vec![true, false];
 
-        let h = h_mel_field(&m, &strain, &PARAMS_FE, Some(&mask));
+        let h = h_mel_field(&m, &strain, &PARAMS_FE, Some(&mask), None);
         assert!(h[1][0].abs() < 1e-30, "inactive cell must have zero H_mel");
 
         let cell_volume = 8e-27;

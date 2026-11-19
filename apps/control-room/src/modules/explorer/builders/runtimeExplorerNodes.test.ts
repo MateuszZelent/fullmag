@@ -8,6 +8,7 @@ import {
   SIMULATION_RUN_CURRENT_PATH,
 } from "@/kernel/api/apiPaths";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
+import { markResourceError, markResourceLoading, markResourceReady } from "@/kernel/resources/resourceState";
 import type { RuntimeCommandDetailEntry } from "@/kernel/resources/runtimeExplorerTypes";
 import type {
   CommandDetailResource,
@@ -32,6 +33,7 @@ import { buildRuntimeResourceTree } from "./resourceExplorerNodes";
 import {
   runtimeExplorerSnapshotFromResources,
   runtimeResourceSnapshot,
+  runtimeResourceSnapshotEquals,
   type RuntimeResourceSnapshot,
 } from "./runtimeExplorerSnapshot";
 
@@ -589,6 +591,48 @@ describe("runtime-backed Explorer tabs", () => {
           descriptor.detail.sourceStatus === "unavailable"
         ),
     ).toBe(true);
+  });
+
+  it.each([503, 404])("keeps a cached run's refresh failure visible while retrying HTTP %s", (status) => {
+    const failure = new ControlRoomApiError("Run refresh failed", status);
+    const lastGood = { data: currentRun, error: null, revision: 12, status: "ready" as const };
+    const retrying = markResourceLoading(
+      markResourceError(lastGood, failure),
+      13,
+    );
+    expect(retrying.error).toBeNull();
+    expect(retrying.refreshError).toBe(failure);
+    const source = runtimeResourceSnapshot(retrying);
+    const runtime = runtimeExplorerSnapshotFromResources({
+      ...snapshot().source,
+      currentRun: source,
+    });
+    expect(source).toMatchObject({ error: "Run refresh failed", missing: status === 404, status: "stale" });
+    expect(source.data).toBe(currentRun);
+    for (const descriptor of [
+      runtime.resources.find((entry) => entry.id === "resources:simulation:current-run"),
+      runtime.jobs.find((entry) => entry.kind === "run"),
+    ]) {
+      expect(descriptor?.detail).toMatchObject({
+        condition: status === 404 ? "unavailable" : "stale",
+        message: "Run refresh failed",
+        sourceStatus: "stale",
+      });
+      expect(descriptor?.state.status).not.toBe("ready");
+    }
+    const changedReason = runtimeResourceSnapshot({ ...retrying, refreshError: new Error("Retry timed out") });
+    expect(runtimeResourceSnapshotEquals(source, changedReason)).toBe(false);
+    const recovered = runtimeResourceSnapshot(markResourceReady(retrying, currentRun, 13));
+    expect(recovered).toMatchObject({ error: null, missing: false, status: "ready" });
+  });
+
+  it("keeps an ordinary cached refresh free of failure messages", () => {
+    const lastGood = { data: currentRun, error: null, revision: 12, status: "ready" as const };
+    const source = runtimeResourceSnapshot(markResourceLoading(lastGood, 13));
+    const runtime = runtimeExplorerSnapshotFromResources({ ...snapshot().source, currentRun: source });
+    expect(source).toMatchObject({ error: null, missing: false, status: "stale" });
+    expect(runtime.jobs.find((entry) => entry.kind === "run")?.detail)
+      .toMatchObject({ condition: "stale", message: null });
   });
 
   it("distinguishes a missing typed resource from a transport failure", () => {

@@ -48,4 +48,17 @@ describe("Viewport3DCameraDialog", () => {
     expect(html).toContain('aria-describedby="fm-viewport-camera-dialog-description"');
     expect(html).toContain("Inspect and edit the 3D viewport camera position");
   });
+  it("renders the same camera form inline without a modal or close action", () => {
+    const html = renderToStaticMarkup(<Viewport3DCameraDialog
+      cameraOrthographicScale={null} cameraProjection="perspective" cameraResource={null}
+      cameraState={{ position: [1, 2, 3], target: [0, 0, 0], up: [0, 0, 1] }}
+      onCameraPatch={() => undefined} onOpenChange={() => undefined} open inline
+    />);
+    expect(html).toContain('aria-label="3D camera parameters"');
+    expect(html).toContain("Apply");
+    expect(html).toContain("Reset");
+    expect(html).not.toContain('role="dialog"');
+    expect(html).not.toContain("Close camera parameters");
+  });
+
 });

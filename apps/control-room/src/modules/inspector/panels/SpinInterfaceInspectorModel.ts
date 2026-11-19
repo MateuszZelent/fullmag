@@ -1,7 +1,14 @@
+interface InterfaceSurfaceDraft {
+  objectId: string;
+  surfaceId: string;
+  orientation: string;
+}
+
 export interface InterfaceDraft {
   absorption: string;
   ferromagnetObject: string;
   ferromagnetRegion: string;
+  ferromagnetSurface: InterfaceSurfaceDraft | null;
   formulaVersion: string;
   gSml: string;
   smlFormulaVersion: string;
@@ -16,6 +23,7 @@ export interface InterfaceDraft {
   kind: "transparent" | "mixing_conductance";
   normalObject: string;
   normalRegion: string;
+  normalSurface: InterfaceSurfaceDraft | null;
   normalToFerromagnet: string;
   normalAToB: string;
   sideAObject: string;
@@ -24,10 +32,56 @@ export interface InterfaceDraft {
   sideBRegion: string;
 }
 
+
+/** Canonical oriented region traces; these are not realized CAD face IDs. */
+export const INTERFACE_TRACE_DIRECTIONS = [
+  { surfaceId: "x+", normal: [1, 0, 0], oppositeId: "x-", opposite: [-1, 0, 0] },
+  { surfaceId: "x-", normal: [-1, 0, 0], oppositeId: "x+", opposite: [1, 0, 0] },
+  { surfaceId: "y+", normal: [0, 1, 0], oppositeId: "y-", opposite: [0, -1, 0] },
+  { surfaceId: "y-", normal: [0, -1, 0], oppositeId: "y+", opposite: [0, 1, 0] },
+  { surfaceId: "z+", normal: [0, 0, 1], oppositeId: "z-", opposite: [0, 0, -1] },
+  { surfaceId: "z-", normal: [0, 0, -1], oppositeId: "z+", opposite: [0, 0, 1] },
+] as const;
+
+export function canBindInterfaceTraces(draft: InterfaceDraft): boolean {
+  return draft.kind === "mixing_conductance" &&
+    Boolean(draft.normalObject.trim() && draft.ferromagnetObject.trim()) &&
+    (draft.normalObject !== draft.ferromagnetObject || draft.normalRegion !== draft.ferromagnetRegion);
+}
+
+export function bindInterfaceTraces(draft: InterfaceDraft, surfaceId: string): Partial<InterfaceDraft> {
+  if (!canBindInterfaceTraces(draft)) throw new Error("Select two distinct interface scopes before binding their traces.");
+  const direction = INTERFACE_TRACE_DIRECTIONS.find((item) => item.surfaceId === surfaceId);
+  if (!direction) throw new Error("Select a canonical axis trace direction.");
+  return {
+    normalToFerromagnet: direction.normal.join(", "),
+    normalSurface: { objectId: draft.normalObject, surfaceId: direction.surfaceId, orientation: direction.normal.join(", ") },
+    ferromagnetSurface: { objectId: draft.ferromagnetObject, surfaceId: direction.oppositeId, orientation: direction.opposite.join(", ") },
+  };
+}
+
+export function interfaceTraceSelection(draft: InterfaceDraft): string {
+  const normal = draft.normalSurface;
+  const ferromagnet = draft.ferromagnetSurface;
+  if (!normal && !ferromagnet) return "";
+  if (!normal || !ferromagnet || normal.objectId !== draft.normalObject || ferromagnet.objectId !== draft.ferromagnetObject) return "stored";
+  try {
+    const same = (value: string, expected: readonly number[]) => vector(value, "Trace orientation").every((component, index) => component === expected[index]);
+    return INTERFACE_TRACE_DIRECTIONS.find((direction) =>
+      normal.surfaceId === direction.surfaceId && ferromagnet.surfaceId === direction.oppositeId &&
+      same(normal.orientation, direction.normal) && same(ferromagnet.orientation, direction.opposite) &&
+      same(draft.normalToFerromagnet, direction.normal)
+    )?.surfaceId ?? "stored";
+  } catch {
+    return "stored";
+  }
+}
+
 const DEFAULT_INTERFACE: InterfaceDraft = {
-  absorption: "transverse_absorption.fullmag.v1",
+  absorption: "full_absorption",
   ferromagnetObject: "",
   ferromagnetRegion: "",
+  ferromagnetSurface: null,
   formulaVersion: "magnetoelectronic.fullmag.v2",
   gSml: "",
   smlFormulaVersion: "sml_reservoir.fullmag.v2",
@@ -42,6 +96,7 @@ const DEFAULT_INTERFACE: InterfaceDraft = {
   kind: "transparent",
   normalObject: "",
   normalRegion: "",
+  normalSurface: null,
   normalToFerromagnet: "",
   normalAToB: "",
   sideAObject: "",
@@ -64,6 +119,16 @@ export function region(value: unknown) {
   return { object: text(item?.object_id), region: text(item?.region_id) };
 }
 
+function surfaceDraft(value: unknown): InterfaceSurfaceDraft | null {
+  const item = record(value);
+  return item ? { objectId: text(item.object_id), surfaceId: text(item.surface_id), orientation: vectorText(item.orientation) } : null;
+}
+
+function buildSurface(draft: InterfaceSurfaceDraft) {
+  if (!draft.objectId.trim() || !draft.surfaceId.trim()) throw new Error("Surface object and surface id are required.");
+  return { object_id: draft.objectId, surface_id: draft.surfaceId, orientation: vector(draft.orientation, "Surface orientation") };
+}
+
 export function interfaceDraft(value: unknown): InterfaceDraft {
   const item = record(value);
   if (!item || (item.kind !== "transparent" && item.kind !== "mixing_conductance")) return DEFAULT_INTERFACE;
@@ -75,6 +140,7 @@ export function interfaceDraft(value: unknown): InterfaceDraft {
     absorption: text(item.absorption),
     ferromagnetObject: ferromagnet.object,
     ferromagnetRegion: ferromagnet.region,
+    ferromagnetSurface: surfaceDraft(item.ferromagnet_surface),
     formulaVersion: text(item.formula_version),
     gSml: text(item.g_sml_Spm2),
     smlFormulaVersion: text(record(item.spin_memory_loss)?.formula_version) || "sml_reservoir.fullmag.v2",
@@ -89,6 +155,7 @@ export function interfaceDraft(value: unknown): InterfaceDraft {
     kind: item.kind,
     normalObject: normal.object,
     normalRegion: normal.region,
+    normalSurface: surfaceDraft(item.normal_surface),
     normalToFerromagnet: vectorText(item.normal_to_ferromagnet),
     normalAToB: vectorText(item.normal_a_to_b),
     sideAObject: sideA.object,
@@ -105,6 +172,9 @@ function regionRef(objectId: string, regionId: string) {
 
 export function buildInterface(draft: InterfaceDraft): unknown {
   if (!draft.id.trim()) throw new Error("Interface id is required.");
+  if (draft.kind === "mixing_conductance" && Boolean(draft.normalSurface) !== Boolean(draft.ferromagnetSurface)) {
+    throw new Error("Mixing interface requires both explicit surfaces or neither.");
+  }
   return draft.kind === "transparent" ? {
     id: draft.id,
     kind: draft.kind,
@@ -117,6 +187,10 @@ export function buildInterface(draft: InterfaceDraft): unknown {
     normal_side: regionRef(draft.normalObject, draft.normalRegion),
     ferromagnet_side: regionRef(draft.ferromagnetObject, draft.ferromagnetRegion),
     normal_to_ferromagnet: vector(draft.normalToFerromagnet, "Interface orientation"),
+    ...(draft.normalSurface && draft.ferromagnetSurface ? {
+      normal_surface: buildSurface(draft.normalSurface),
+      ferromagnet_surface: buildSurface(draft.ferromagnetSurface),
+    } : {}),
     ...(draft.gSml.trim() ? { g_sml_Spm2: finite(draft.gSml, "g_sml") } : {}),
     g_up_Spm2: finite(draft.gUp, "g_up"),
     g_down_Spm2: finite(draft.gDown, "g_down"),
@@ -139,9 +213,9 @@ export function reconcileInterfaceDraft(server: InterfaceDraft, local: Interface
   const draft = { ...server };
   const conflicts: Array<keyof InterfaceDraft> = [];
   for (const key of Object.keys(server) as Array<keyof InterfaceDraft>) {
-    if (local[key] === baseline[key]) continue;
+    if (JSON.stringify(local[key]) === JSON.stringify(baseline[key])) continue;
     Object.assign(draft, { [key]: local[key] });
-    if (server[key] !== baseline[key] && server[key] !== local[key]) conflicts.push(key);
+    if (JSON.stringify(server[key]) !== JSON.stringify(baseline[key]) && JSON.stringify(server[key]) !== JSON.stringify(local[key])) conflicts.push(key);
   }
   return { draft, conflicts };
 }

@@ -1,5 +1,9 @@
 "use client";
 
+import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
+import { Viewport3DWireframeGestureContext } from "./Viewport3DInteractionWireframe";
+import { Viewport3DComplexPhaseInvalidator } from "./Viewport3DComplexPhaseInvalidator";
+
 import type { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { PlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFramePreview";
@@ -44,9 +48,10 @@ import {
   type PerspectiveCamera as ThreePerspectiveCamera,
 } from "three";
 
-import type {
-  VisualizationTargetRef,
-  VisualizationTargetSettings,
+import {
+  AIRBOX_VISUALIZATION_TARGET,
+  type VisualizationTargetRef,
+  type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import type { ModeCompositionFieldLayerSnapshotMap } from "@/kernel/visualization/ModeCompositionFieldLayerController";
 import type { PeriodicOverlayModel } from "@/shared/domain/mesh/periodicOverlayModel";
@@ -70,7 +75,9 @@ import type {
   Viewport3DBounds,
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
+  Viewport3DTopologyPartRenderModel,
 } from "../viewport3dRenderModel";
+import { buildViewport3DRenderableMeshPartKey } from "../viewport3dRenderModel";
 import type { Viewport3DMeshSizeHighlightModel } from "../viewport3dMeshSizeHighlight";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import {
@@ -113,6 +120,7 @@ import {
   type Viewport3DOrbitDebugAngles,
 } from "./CameraControls";
 import { CanvasLifecycleProbe } from "./CanvasLifecycleProbe";
+import { resolveViewport3DCameraDepthRange } from "./viewport3DCameraClip";
 import {
   AirboxLayer,
   DomainBoxLayer,
@@ -121,6 +129,7 @@ import {
   SelectionHighlightLayer,
 } from "./BoundsLayers";
 import { FallbackTopologyMeshLayer } from "./FallbackTopologyMeshLayer";
+import type { Viewport3DVisibleColorScaleReport } from "../model/viewport3DVisibleColorScale";
 import { TopologyMeshLayer } from "./TopologyMeshLayer";
 import { MeshSizeHighlightLayer } from "./MeshSizeHighlightLayer";
 import {
@@ -148,6 +157,8 @@ import { ArtifactFieldLayer } from "./ArtifactFieldLayer";
 import type { ArtifactFieldOverlayModel } from "../model/artifactFieldOverlayModel";
 import { AntennaFieldLayer } from "./AntennaFieldLayer";
 import type { AntennaFieldOverlayModel } from "../model/antennaFieldOverlayModel";
+import type { SavedAntennaSourceModel } from "../model/savedAntennaSourceModel";
+import { SavedAntennaSourceLayer } from "./SavedAntennaSourceLayer";
 import { HysteresisReplayGlyphLayer } from "./HysteresisReplayGlyphLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
 import {
@@ -155,6 +166,9 @@ import {
   ClipPlaneLayer,
   PlanarMonitorFramePreviewLayer,
 } from "./ClipPlaneLayer";
+import { PlanarMonitorFacePicker } from "./PlanarMonitorFacePicker";
+import { PlanarMonitorNormalHandle } from "./PlanarMonitorNormalHandle";
+import { PlanarMonitorRotationRings } from "./PlanarMonitorRotationRings";
 import { pickRegionOverlayFromRay } from "./regionOverlayPicking";
 import type { ClipPlaneIntersectionMarkerBuffers } from "./clipPlaneModel";
 import {
@@ -194,6 +208,7 @@ const EMPTY_REGION_OVERLAYS: readonly RegionOverlayInput[] = [];
 interface Viewport3DSceneProps {
   artifactFieldOverlay?: ArtifactFieldOverlayModel | null;
   antennaFieldOverlay?: AntennaFieldOverlayModel | null;
+  savedAntennaSourceModel?: SavedAntennaSourceModel | null;
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   sessionIdentity?: SessionResourceIdentity | null;
   bounds: Viewport3DBounds | null;
@@ -221,6 +236,8 @@ interface Viewport3DSceneProps {
   fdmAirboxVectorBuildReference: Viewport3DVectorBuildReference | null;
   fdmAirboxVectorSegments: Float32Array | null;
   fdmMultilayerAirboxView: FdmMultilayerAirboxRenderView | null;
+  /** Authored Universe box, the multilayer Airbox extent until a carrier is published. */
+  fdmMultilayerAirboxAuthoredBounds: Viewport3DBounds | null;
   fdmMultilayerAirboxBuildError: string | null;
   fdmMultilayerAirboxBuildKey: string | null;
   fdmMultilayerAirboxBuildStatus: string;
@@ -253,7 +270,9 @@ interface Viewport3DSceneProps {
   meshQualityOverlayVisible: boolean;
   modeCompositionFieldLayers: ModeCompositionFieldLayerSnapshotMap;
   modeCompositionId: string | null;
-  modeCompositionPhaseByLayerId: ReadonlyMap<string, number>;
+  modeCompositionPhaseUniformByLayerId: ReadonlyMap<string, LivePhaseUniform>;
+  /** Notifies after every complex display phase change (overlay or mode layers). */
+  subscribeComplexPhaseFrames?: ((listener: () => void) => () => void) | null;
   meshRegionOverlayParts: readonly RegionMeshOverlayOwnerPart[];
   meshRegionOverlays: readonly RegionOverlayInput[];
   periodicOverlayModel: PeriodicOverlayModel | null;
@@ -292,6 +311,8 @@ interface Viewport3DSceneProps {
   orbitDebugRevision: number;
   fallbackSettings: VisualizationTargetSettings;
   savedViewportActive: boolean;
+  savedFieldIdentity?: string | null;
+  onVisibleColorScale?: (report: Viewport3DVisibleColorScaleReport) => void;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   resetCameraRevision: number;
   requestDiagnostics: RequestDiagnosticsController;
@@ -304,6 +325,7 @@ interface Viewport3DSceneProps {
   selectedRegionId: string | null;
   tracker: Viewport3DResourceTracker;
   topologyFreshness: Viewport3DTopologyFreshness;
+  topologyIndexStatus: "idle" | "building" | "ready" | "unavailable";
   topology: DecodedTopology | null | undefined;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
   topologyRevision: number | string | null;
@@ -322,6 +344,7 @@ interface Viewport3DSceneProps {
   scaleUnitMode: Viewport3DScaleUnitMode;
   viewCubeVisible: boolean;
   visualProfileId: Viewport3DVisualProfileId;
+  qualityProfileId?: Viewport3DVisualProfileId;
 }
 
 interface Viewport3DViewportSize {
@@ -412,33 +435,15 @@ export function resolveViewport3DProjectionCameraClip(
     fovDegrees = DEFAULT_VIEWPORT_3D_CAMERA_FOV_DEGREES,
   }: { aspect?: number; fovDegrees?: number } = {},
 ): Viewport3DCameraClip {
-  const fit = resolveViewport3DCameraFit(bounds, { aspect, fovDegrees });
-  if (!cameraState) return { near: fit.near, far: fit.far };
+  if (!cameraState) {
+    const fit = resolveViewport3DCameraFit(bounds, { aspect, fovDegrees });
+    return { near: fit.near, far: fit.far };
+  }
 
   const position = new Vector3(...cameraState.position);
   const forward = new Vector3(...cameraState.target).sub(position);
   const distance = forward.length();
-  const radius = Math.max(bounds?.radius ?? FALLBACK_GRID_SIZE / 2, 1e-12);
-  // FOV changes projection without moving the camera. A hypothetical fit must
-  // never push the near plane through geometry visible from the actual pose.
-  const minimumNear = 1e-12;
-  const centerDepth = bounds && Number.isFinite(distance) && distance > 0
-    ? new Vector3(...bounds.center).sub(position).dot(forward.divideScalar(distance))
-    : null;
-  const nearestDepth = centerDepth === null ? null : centerDepth - radius;
-  const poseNearLimit = nearestDepth !== null
-    ? nearestDepth > minimumNear ? nearestDepth * 0.5 : minimumNear
-    : Number.isFinite(distance) && distance > 0 ? distance / 100 : minimumNear;
-  const near = Math.max(minimumNear, Math.min(fit.near, poseNearLimit));
-  const orbitFar =
-    Number.isFinite(distance) && distance > 0
-      ? distance + radius * 4
-      : fit.far;
-
-  return {
-    near,
-    far: Math.max(fit.far, orbitFar, (centerDepth ?? 0) + radius * 4, near * 100, 1e-3),
-  };
+  return resolveViewport3DCameraDepthRange(bounds, position, forward, distance);
 }
 
 export function resolveViewport3DOrthographicZoom(
@@ -980,6 +985,7 @@ function Viewport3DOverlayLayerStack({
   dimensionFrameMode,
   fdmAirboxPassPlan,
   fdmDomain,
+  fdmMultilayerAirboxAuthoredBounds,
   fdmMultilayerAirboxView,
   fdmUniverseOutsideSupport,
   fdmSettings,
@@ -988,11 +994,12 @@ function Viewport3DOverlayLayerStack({
   onSelectFdmTarget,
   onSelectFdmUniverseOutsideSupport,
   onSelectPlanarMonitor,
+  onPlanarHandleGestureActiveChange,
   scaleLabelsVisible,
   scaleUnitMode,
   selectionBounds,
   tracker,
-}: Pick<
+}: { onPlanarHandleGestureActiveChange?: (active: boolean) => void } & Pick<
   Viewport3DSceneProps,
   | "airboxSettings"
   | "bounds"
@@ -1010,6 +1017,7 @@ function Viewport3DOverlayLayerStack({
   | "dimensionFrameMode"
   | "fdmAirboxPassPlan"
   | "fdmDomain"
+  | "fdmMultilayerAirboxAuthoredBounds"
   | "fdmMultilayerAirboxView"
   | "fdmUniverseOutsideSupport"
   | "fdmSettings"
@@ -1057,13 +1065,26 @@ function Viewport3DOverlayLayerStack({
       {viewport3DClipLayersEnabledFromBrowserConfig() &&
       planarMonitorFramePreview &&
       !clip?.enabled ? (
-        <PlanarMonitorFramePreviewLayer
-          colors={colors}
-          onSelect={onSelectPlanarMonitor}
-          preview={planarMonitorFramePreview}
-          tracker={tracker}
-        />
+        <>
+          <PlanarMonitorFramePreviewLayer
+            colors={colors}
+            onSelect={onSelectPlanarMonitor}
+            preview={planarMonitorFramePreview}
+            tracker={tracker}
+          />
+          <PlanarMonitorNormalHandle
+            colors={colors}
+            onGestureActiveChange={onPlanarHandleGestureActiveChange}
+            preview={planarMonitorFramePreview}
+          />
+          <PlanarMonitorRotationRings
+            colors={colors}
+            onGestureActiveChange={onPlanarHandleGestureActiveChange}
+            preview={planarMonitorFramePreview}
+          />
+        </>
       ) : null}
+      <PlanarMonitorFacePicker />
       {viewport3DBoundsLayersEnabledFromBrowserConfig() ? (
         <>
           <DomainBoxLayer
@@ -1089,11 +1110,13 @@ function Viewport3DOverlayLayerStack({
             tracker={tracker}
           />
           <FdmMultilayerAirboxBoundsLayer
+            authoredSettings={airboxSettings}
+            authoredUniverseBounds={fdmMultilayerAirboxAuthoredBounds}
             colors={colors}
             onSelect={() => {
-              if (fdmMultilayerAirboxView) {
-                onSelectFdmTarget(fdmMultilayerAirboxView.target);
-              }
+              onSelectFdmTarget(
+                fdmMultilayerAirboxView?.target ?? AIRBOX_VISUALIZATION_TARGET,
+              );
             }}
             tracker={tracker}
             view={fdmMultilayerAirboxView}
@@ -1155,9 +1178,45 @@ export function resolveViewport3DRealizedFdmObjectIds({
     ),
   );
   for (const view of fdmNativeLayerViews) {
-    objectIds.add(view.domain.objectId);
+    // The layout can arrive before the asynchronous native cuboid build. Keep
+    // the primitive preview until the replacement has a non-empty model to
+    // render; otherwise the primitive disappears during the build handoff.
+    if (view.model && view.model.count > 0) {
+      objectIds.add(view.domain.objectId);
+    }
   }
   return objectIds;
+}
+
+/** A manifest alone does not establish that replacement geometry can render. */
+export function resolveViewport3DRealizedTopologyObjectIds({
+  enabled,
+  committedParts,
+  primitiveModel,
+  topologyModel,
+  topologyFreshness,
+}: {
+  enabled: boolean;
+  committedParts: ReadonlySet<Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>>;
+  primitiveModel: Viewport3DPrimitiveRenderModel | null;
+  topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
+  topologyFreshness: Viewport3DTopologyFreshness;
+}): ReadonlySet<string> {
+  const ids = new Set<string>();
+  if (!enabled || topologyFreshness !== "current" || !topologyModel?.positions.length) return ids;
+  for (const object of primitiveModel?.objects ?? []) {
+    if (object.meshState !== "mesh-ready") continue;
+    const aliases = new Set([object.objectId, object.objectId.endsWith("_geom")
+      ? object.objectId.slice(0, -5) : object.objectId + "_geom"]);
+    const parts = topologyModel.magneticParts.filter(({ part }) =>
+      (part.object_id != null && aliases.has(part.object_id)) ||
+      (part.geometry_id != null && aliases.has(part.geometry_id)),
+    );
+    if (parts.length > 0 && parts.every((part) => committedParts.has(part) && (part.surfaceIndices?.length ?? 0) >= 3)) {
+      ids.add(object.objectId);
+    }
+  }
+  return ids;
 }
 
 function Viewport3DModelLayerStack({
@@ -1187,7 +1246,7 @@ function Viewport3DModelLayerStack({
   meshQualityOverlayVisible,
   modeCompositionFieldLayers,
   modeCompositionId,
-  modeCompositionPhaseByLayerId,
+  modeCompositionPhaseUniformByLayerId,
   meshRegionOverlayParts,
   meshRegionOverlays,
   periodicOverlayModel,
@@ -1224,6 +1283,8 @@ function Viewport3DModelLayerStack({
   sceneLayersEnabled,
   savedViewportActive,
   stageVisibility,
+  meshReadyFallbackObjectIds,
+  onRenderableMeshPartChange,
 }: Pick<
   Viewport3DSceneProps,
   | "adoptionRegistry"
@@ -1250,7 +1311,7 @@ function Viewport3DModelLayerStack({
   | "meshQualityOverlayVisible"
   | "modeCompositionFieldLayers"
   | "modeCompositionId"
-  | "modeCompositionPhaseByLayerId"
+  | "modeCompositionPhaseUniformByLayerId"
   | "meshRegionOverlayParts"
   | "meshRegionOverlays"
   | "periodicOverlayModel"
@@ -1285,6 +1346,11 @@ function Viewport3DModelLayerStack({
   | "vectorStyle"
   | "visualizationRevision"
 > & {
+  meshReadyFallbackObjectIds: ReadonlySet<string>;
+  onRenderableMeshPartChange: (
+    renderableGeometryKey: string,
+    ready: boolean,
+  ) => void;
   fdmCuboidLayerEnabled: boolean;
   materialProfile: ReturnType<typeof resolveViewport3DMaterialProfile>;
   savedViewportActive: boolean;
@@ -1313,14 +1379,38 @@ function Viewport3DModelLayerStack({
     ? realizedRegionOverlayModels.status
     : "disabled";
 
-  const realizedFdmObjectIds = useMemo(
-    () =>
-      resolveViewport3DRealizedFdmObjectIds({
-        fdmNativeLayerViews,
-        fdmTargetViews,
-      }),
-    [fdmNativeLayerViews, fdmTargetViews],
-  );
+  const [committedTopologyParts, setCommittedTopologyParts] = useState<
+    ReadonlySet<Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>>
+  >(() => new Set());
+  const onTopologyGeometryReady = useCallback((
+    part: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>, ready: boolean,
+  ) => {
+    setCommittedTopologyParts((previous) => {
+      if (previous.has(part) === ready) return previous;
+      const next = new Set(previous);
+      if (ready) next.add(part);
+      else next.delete(part);
+      return next;
+    });
+  }, []);
+  const topologyLayerEnabled = !savedViewportActive && !fdmLaneActive &&
+    viewport3DTopologyMeshLayerEnabledFromBrowserConfig();
+  const realizedObjectIds = useMemo(() => {
+    const ids = new Set(resolveViewport3DRealizedTopologyObjectIds({
+      enabled: topologyLayerEnabled && stageVisibility.baseGeometry,
+      committedParts: committedTopologyParts,
+      primitiveModel,
+      topologyModel,
+      topologyFreshness,
+    }));
+    if (fdmCuboidLayerEnabled && stageVisibility.baseGeometry) {
+      for (const id of resolveViewport3DRealizedFdmObjectIds({
+        fdmNativeLayerViews, fdmTargetViews,
+      })) ids.add(id);
+    }
+    return ids;
+  }, [committedTopologyParts, topologyLayerEnabled, stageVisibility.baseGeometry, primitiveModel, topologyModel,
+    topologyFreshness, fdmCuboidLayerEnabled, fdmNativeLayerViews, fdmTargetViews]);
 
   if (!sceneLayersEnabled) return null;
 
@@ -1434,7 +1524,7 @@ function Viewport3DModelLayerStack({
               onInspectSample={onInspectSample}
               onSelectDomain={onSelectDomain}
               onSelectTarget={() => onSelectFdmTarget(view.target)}
-              onSelectFdmCell={onSelectFdmCell}
+              onSelectFdmCell={view.target.kind === "object" && !inspectEnabled ? undefined : onSelectFdmCell}
               onSelectRegion={onSelectRegion}
               regionOverlays={
                 authoredRegionOverlaysVisible
@@ -1508,7 +1598,8 @@ function Viewport3DModelLayerStack({
           materialProfile={materialProfile}
           onSelectObject={onSelectObject}
           primitiveModel={primitiveModel}
-          realizedObjectIds={realizedFdmObjectIds}
+          meshReadyFallbackObjectIds={meshReadyFallbackObjectIds}
+          realizedObjectIds={realizedObjectIds}
           tracker={tracker}
         />
       ) : null}
@@ -1521,11 +1612,11 @@ function Viewport3DModelLayerStack({
         primitiveModel={primitiveModel}
         selectedObjectId={selectedObjectId}
       />
-      {!savedViewportActive &&
-      !fdmLaneActive &&
-      viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
+      {topologyLayerEnabled ? (
         <group visible={stageVisibility.baseGeometry}>
           <TopologyMeshLayer
+            onGeometryReady={onTopologyGeometryReady}
+            replacementObjectIds={realizedObjectIds}
             adoptionRegistry={adoptionRegistry}
             colors={colors}
             primitiveModel={primitiveModel}
@@ -1538,8 +1629,10 @@ function Viewport3DModelLayerStack({
             meshQualityOverlayVisible={stagedMeshQualityOverlayVisible}
             modeCompositionFieldLayers={modeCompositionFieldLayers}
             modeCompositionId={modeCompositionId}
-            modeCompositionPhaseByLayerId={modeCompositionPhaseByLayerId}
+            modeCompositionPhaseUniformByLayerId={modeCompositionPhaseUniformByLayerId}
             onSelectPart={onSelectPart}
+            onRenderableGeometryChange={onRenderableMeshPartChange}
+            renderableGeometryStageVisible={stageVisibility.baseGeometry}
             tracker={tracker}
             topologyFreshness={topologyFreshness}
             topologyModel={topologyModel}
@@ -1786,6 +1879,7 @@ function useViewport3DRenderAdoptionFrame({
 export function Viewport3DScene({
   artifactFieldOverlay,
   antennaFieldOverlay,
+  savedAntennaSourceModel,
   adoptionRegistry,
   sessionIdentity,
   bounds,
@@ -1813,6 +1907,7 @@ export function Viewport3DScene({
   fdmAirboxVectorGlyphColors,
   fdmAirboxVectorBuildReference,
   fdmAirboxVectorSegments,
+  fdmMultilayerAirboxAuthoredBounds,
   fdmMultilayerAirboxView,
   fdmNativeLayerViews,
   fdmTargetViews,
@@ -1831,7 +1926,8 @@ export function Viewport3DScene({
   meshQualityOverlayVisible,
   modeCompositionFieldLayers,
   modeCompositionId,
-  modeCompositionPhaseByLayerId,
+  modeCompositionPhaseUniformByLayerId,
+  subscribeComplexPhaseFrames,
   meshRegionOverlayParts,
   meshRegionOverlays,
   periodicOverlayModel,
@@ -1854,6 +1950,8 @@ export function Viewport3DScene({
   orbitDebugCommitRevision,
   orbitDebugRevision,
   savedViewportActive,
+  savedFieldIdentity,
+  onVisibleColorScale,
   primitiveModel,
   regionOverlayMode,
   regionOverlays,
@@ -1867,6 +1965,7 @@ export function Viewport3DScene({
   tracker,
   topology,
   topologyFreshness,
+  topologyIndexStatus,
   topologyModel,
   topologyRevision,
   vectorColorMode,
@@ -1886,6 +1985,7 @@ export function Viewport3DScene({
   scaleUnitMode,
   viewCubeVisible,
   visualProfileId,
+  qualityProfileId,
 }: Viewport3DSceneProps) {
   const appearance = useViewport3DAppearance();
   const invalidate = useBatchedInvalidate("camera");
@@ -1911,6 +2011,102 @@ export function Viewport3DScene({
     }
   }, [cameraGestureRef, onCameraInteractionEnd]);
   const [moveGestureActive, setMoveGestureActive] = useState(false);
+  const [renderableMeshPartKeys, setRenderableMeshPartKeys] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const onRenderableMeshPartChange = useCallback(
+    (key: string, ready: boolean) => {
+      setRenderableMeshPartKeys((current) => {
+        if (current.has(key) === ready) return current;
+        const next = new Set(current);
+        if (ready) next.add(key);
+        else next.delete(key);
+        return next;
+      });
+    },
+    [],
+  );
+  const meshReadyFallbackObjectParts = useMemo(() => {
+    const fallbackParts = new Map<string, readonly string[]>();
+    if (
+      savedViewportActive ||
+      fdmLaneActive ||
+      (topologyIndexStatus !== "building" && topologyIndexStatus !== "ready") ||
+      !isViewport3DTopologyRenderable(topologyFreshness) ||
+      !primitiveModel ||
+      !topologyModel
+    ) {
+      return fallbackParts;
+    }
+
+    const topologyPartsById = new Map(
+      topologyModel.magneticParts.map(
+        (partModel) => [partModel.part.id, partModel] as const,
+      ),
+    );
+    for (const object of primitiveModel.objects) {
+      if (!getObjectSettings(object).visible) continue;
+      const objectPartIds = femDomain.objectPartIds.get(object.objectId) ?? [];
+      const fallbackPartIds = new Set<string>();
+      for (const partId of objectPartIds) {
+        const partModel = topologyPartsById.get(partId);
+        if (!partModel) continue;
+        const partSettings = getPartSettings(partModel.part);
+        if (!partSettings.visible) continue;
+        const surfaceActive = partSettings.shaderVisible;
+        const wireframeActive = partSettings.wireframeVisible;
+        if (!surfaceActive && !wireframeActive) continue;
+        if (topologyIndexStatus === "ready") {
+          const wireframeIndices =
+            partSettings.wireframeGeometryScope === "full"
+              ? partModel.volumeEdgeIndices
+              : partModel.edgeIndices;
+          const matchingIndexReady =
+            (surfaceActive && Boolean(partModel.surfaceIndices?.length)) ||
+            (wireframeActive && Boolean(wireframeIndices?.length));
+          if (!matchingIndexReady) continue;
+        }
+        fallbackPartIds.add(partId);
+      }
+      if (fallbackPartIds.size > 0) {
+        fallbackParts.set(object.objectId, [...fallbackPartIds]);
+      }
+    }
+    return fallbackParts;
+  }, [
+    fdmLaneActive,
+    femDomain.objectPartIds,
+    getObjectSettings,
+    getPartSettings,
+    primitiveModel,
+    savedViewportActive,
+    topologyFreshness,
+    topologyIndexStatus,
+    topologyModel,
+  ]);
+  const meshReadyFallbackObjectIds = useMemo(() => {
+    const fallbackObjectIds = new Set<string>();
+    for (const [objectId, partIds] of meshReadyFallbackObjectParts) {
+      // A primitive represents the whole authored object. Remove it as soon
+      // as any matching active part has uploaded, avoiding surface overlap.
+      const hasUploadedPart = partIds.some((partId) =>
+        renderableMeshPartKeys.has(
+          buildViewport3DRenderableMeshPartKey(
+            partId,
+            topologyModel,
+            sessionIdentity,
+          ),
+        ),
+      );
+      if (!hasUploadedPart) fallbackObjectIds.add(objectId);
+    }
+    return fallbackObjectIds;
+  }, [
+    meshReadyFallbackObjectParts,
+    renderableMeshPartKeys,
+    sessionIdentity,
+    topologyModel,
+  ]);
   const handleMoveGestureActiveChange = useCallback((active: boolean) => {
     onMoveGestureActiveChange?.(active);
     setMoveGestureActive(active);
@@ -1966,8 +2162,8 @@ export function Viewport3DScene({
     [bounds, cameraOrthographicScale, effectiveCameraState, viewportSize],
   );
   const visualProfile = useMemo(
-    () => getViewport3DVisualProfile(visualProfileId),
-    [visualProfileId],
+    () => getViewport3DVisualProfile(qualityProfileId ?? visualProfileId),
+    [qualityProfileId, visualProfileId],
   );
   const materialProfile = useMemo(
     () => resolveViewport3DMaterialProfile(visualProfile, appearance),
@@ -2147,12 +2343,15 @@ export function Viewport3DScene({
   );
 
   return (
+    <Viewport3DWireframeGestureContext.Provider value={cameraGestureRef}>
     <VectorGlyphDerivedBufferCacheProvider tracker={tracker}>
       <ArtifactFieldLayer adoptionRegistry={adoptionRegistry} model={artifactFieldOverlay ?? null} colors={colors} tracker={tracker} sessionIdentity={sessionIdentity ?? null} />
       <AntennaFieldLayer model={antennaFieldOverlay ?? null} colors={colors} tracker={tracker} sessionIdentity={sessionIdentity ?? null} />
+      <SavedAntennaSourceLayer model={savedAntennaSourceModel ?? null} colors={colors} tracker={tracker} />
       <Viewport3DBackground colors={colors} mode={appearance.backgroundMode} strength={appearance.backgroundStrength} tracker={tracker} />
       <Viewport3DCaptureSource onFrameReady={onCaptureFrameReady} />
-      <Viewport3DLightingRig profileId={visualProfileId} appearance={appearance} />
+      <Viewport3DComplexPhaseInvalidator subscribe={subscribeComplexPhaseFrames} />
+      <Viewport3DLightingRig profileId={qualityProfileId ?? visualProfileId} appearance={appearance} bounds={bounds} tracker={tracker} />
       {viewport3DCanvasLifecycleProbeEnabledFromBrowserConfig() ? (
         <CanvasLifecycleProbe diagnostics={requestDiagnostics} tracker={tracker} />
       ) : null}
@@ -2188,6 +2387,7 @@ export function Viewport3DScene({
         dimensionFrameMode={visualProfileId === "capture" && !appearance.exportAnnotations ? "off" : dimensionFrameMode}
         fdmAirboxPassPlan={fdmAirboxPassPlan}
         fdmDomain={fdmDomain}
+        fdmMultilayerAirboxAuthoredBounds={fdmMultilayerAirboxAuthoredBounds}
         fdmMultilayerAirboxView={fdmMultilayerAirboxView}
         fdmUniverseOutsideSupport={fdmUniverseOutsideSupport}
         airboxSettings={airboxSettings}
@@ -2197,6 +2397,7 @@ export function Viewport3DScene({
         onSelectFdmTarget={onSelectFdmTarget}
         onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}
         onSelectPlanarMonitor={onSelectPlanarMonitor}
+        onPlanarHandleGestureActiveChange={handleMoveGestureActiveChange}
         scaleLabelsVisible={scaleLabelsVisible}
         scaleUnitMode={scaleUnitMode}
         selectionBounds={selectionBounds}
@@ -2230,7 +2431,7 @@ export function Viewport3DScene({
         meshQualityOverlayVisible={meshQualityOverlayVisible}
         modeCompositionFieldLayers={modeCompositionFieldLayers}
         modeCompositionId={modeCompositionId}
-        modeCompositionPhaseByLayerId={modeCompositionPhaseByLayerId}
+        modeCompositionPhaseUniformByLayerId={modeCompositionPhaseUniformByLayerId}
         meshRegionOverlayParts={meshRegionOverlayParts}
         meshRegionOverlays={meshRegionOverlays}
         periodicOverlayModel={periodicOverlayModel}
@@ -2262,6 +2463,8 @@ export function Viewport3DScene({
         topologyModel={topologyModel}
         topologyRevision={topologyRevision}
         tracker={tracker}
+        meshReadyFallbackObjectIds={meshReadyFallbackObjectIds}
+        onRenderableMeshPartChange={onRenderableMeshPartChange}
         vectorColorMode={vectorColorMode}
         vectorScale={vectorScale}
         vectorStyle={vectorStyle}
@@ -2274,6 +2477,8 @@ export function Viewport3DScene({
         <group>
           <FallbackTopologyMeshLayer
             colors={colors}
+            colorScopeKey={savedFieldIdentity}
+            onVisibleColorScale={onVisibleColorScale}
             femDomain={femDomain}
             fallbackSettings={fallbackSettings}
             fieldModel={fieldModel}
@@ -2322,5 +2527,6 @@ export function Viewport3DScene({
         moveGestureActive={moveGestureActive}
       />
     </VectorGlyphDerivedBufferCacheProvider>
+    </Viewport3DWireframeGestureContext.Provider>
   );
 }

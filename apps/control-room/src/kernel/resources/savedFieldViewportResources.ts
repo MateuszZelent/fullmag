@@ -96,6 +96,92 @@ function unavailable(reason: string): SavedFieldViewportEligibility {
   return { reason, status: "unavailable" };
 }
 
+/** Thin metadata admission shared by the Inspector and the binary viewport path. */
+export function resolveSavedFieldViewportMetadataEligibility(
+  dataset: MaterializedDatasetResource | null,
+): SavedFieldViewportEligibility {
+  if (!dataset) return unavailable("Pinned materialized dataset is unavailable.");
+  const descriptor = dataset.field.descriptor;
+  const coverage = dataset.field.coverage;
+  if (
+    dataset.integrity !== "verified" ||
+    dataset.field.plane !== "values" ||
+    descriptor.sample_location !== "node" ||
+    descriptor.complex_encoding !== "real" ||
+    descriptor.harmonic_convention !== null ||
+    descriptor.value_representation !== "physical_field" ||
+    descriptor.function_space?.ordering !== "by_node"
+  ) {
+    return unavailable(
+      "Saved field semantics are not a direct real nodal physical field.",
+    );
+  }
+
+  let totalElements: bigint;
+  let componentCount: bigint;
+  let totalBytes: bigint;
+  let chunkCount: bigint;
+  try {
+    totalElements = counter(coverage.total_elements, "Saved field element count");
+    componentCount = counter(coverage.component_count, "Saved field component count");
+    totalBytes = counter(coverage.total_bytes, "Saved field byte count");
+    chunkCount = counter(coverage.chunk_count, "Saved field chunk count");
+  } catch (error) {
+    return unavailable(error instanceof Error ? error.message : String(error));
+  }
+
+  const supportedQuantity =
+    (descriptor.quantity_id === "V_electric" && descriptor.unit === "V" && componentCount === BigInt(1))
+    || (descriptor.quantity_id === "J_charge" && descriptor.unit === "A/m^2" && componentCount === BigInt(3))
+    || (descriptor.quantity_id === "H_ant" && descriptor.unit === "A/m" && componentCount === BigInt(3))
+    || (descriptor.quantity_id === "m" && descriptor.unit === "1" && componentCount === BigInt(3));
+  if (
+    coverage.endian !== "little" ||
+    (coverage.dtype !== "f32" && coverage.dtype !== "f64") ||
+    !supportedQuantity ||
+    totalElements === ZERO ||
+    totalBytes === ZERO ||
+    totalBytes > BigInt(SAVED_VIEWPORT_FIELD_MAX_BYTES) ||
+    chunkCount === ZERO ||
+    chunkCount > BigInt(SAVED_VIEWPORT_FIELD_MAX_CHUNKS) ||
+    descriptor.function_space?.vector_dimension !== coverage.component_count
+  ) {
+    return unavailable(
+      "Saved viewport requires a supported real field with matching units and sample components.",
+    );
+  }
+
+  let elementCount: number;
+  let components: number;
+  let bytes: number;
+  try {
+    elementCount = safeCount(totalElements, "Saved field element count");
+    components = safeCount(componentCount, "Saved field component count");
+    bytes = safeCount(totalBytes, "Saved field byte count");
+  } catch (error) {
+    return unavailable(error instanceof Error ? error.message : String(error));
+  }
+  const scalarBytes = coverage.dtype === "f32" ? 4 : 8;
+  if (BigInt(elementCount) * BigInt(components) * BigInt(scalarBytes) !== totalBytes) {
+    return unavailable("Saved field byte count does not match its node layout.");
+  }
+  if (bytes > SAVED_VIEWPORT_FIELD_MAX_BYTES) {
+    return unavailable("Saved field payload exceeds the 64 MiB viewport cap.");
+  }
+
+  const range: MaterializedDatasetSliceRange = {
+    elementCount: coverage.total_elements,
+    elementOffset: "0",
+    maxResponseBytes: coverage.total_bytes,
+  };
+  try {
+    materializedDatasetSliceByteLimit(range);
+  } catch (error) {
+    return unavailable(error instanceof Error ? error.message : String(error));
+  }
+  return { range, status: "ready", totalBytes: bytes };
+}
+
 /**
  * Pure admission gate for the saved viewport path.  Every identity and
  * layout comparison is repeated here because this gate is also the boundary
@@ -130,29 +216,12 @@ export function resolveSavedFieldViewportEligibility(
   )) {
     return unavailable("Saved inspection samples differ from their exact dataset producer or descriptor.");
   }
-  if (
-    dataset.integrity !== "verified" ||
-    dataset.field.plane !== "values" ||
-    descriptor.sample_location !== "node" ||
-    descriptor.complex_encoding !== "real" ||
-    descriptor.harmonic_convention !== null ||
-    descriptor.value_representation !== "physical_field" ||
-    descriptor.function_space?.ordering !== "by_node"
-  ) {
-    return unavailable(
-      "Saved field semantics are not a direct real nodal physical field.",
-    );
+  const metadataEligibility = resolveSavedFieldViewportMetadataEligibility(dataset);
+  if (metadataEligibility.status !== "ready") return metadataEligibility;
+  if (!ownedSamples && (coverage.component_count !== "3" || descriptor.quantity_id !== "m" || descriptor.unit !== "1")) {
+    return unavailable("Saved viewport requires a supported real field with matching units and sample components.");
   }
-
-  let totalElements: bigint;
-  let componentCount: bigint;
-  let totalBytes: bigint;
-  let chunkCount: bigint;
   try {
-    totalElements = counter(coverage.total_elements, "Saved field element count");
-    componentCount = counter(coverage.component_count, "Saved field component count");
-    totalBytes = counter(coverage.total_bytes, "Saved field byte count");
-    chunkCount = counter(coverage.chunk_count, "Saved field chunk count");
     counter(geometry.node_count, "Saved geometry node count");
     counter(geometry.cell_count, "Saved geometry cell count");
     counter(geometry.facet_count, "Saved geometry facet count");
@@ -160,29 +229,11 @@ export function resolveSavedFieldViewportEligibility(
   } catch (error) {
     return unavailable(error instanceof Error ? error.message : String(error));
   }
-
-  if (
-    coverage.endian !== "little" ||
-    (coverage.dtype !== "f32" && coverage.dtype !== "f64") ||
-    (ownedSamples ? componentCount !== BigInt(descriptor.quantity_id === "V_electric" ? 1 : 3)
-      : componentCount !== BigInt(3) || descriptor.quantity_id !== "m" || descriptor.unit !== "1") ||
-    totalElements === ZERO ||
-    totalBytes === ZERO ||
-    totalBytes > BigInt(SAVED_VIEWPORT_FIELD_MAX_BYTES) ||
-    chunkCount === ZERO ||
-    chunkCount > BigInt(SAVED_VIEWPORT_FIELD_MAX_CHUNKS) ||
-    descriptor.function_space?.vector_dimension !== coverage.component_count
-  ) {
-    return unavailable(
-      "Saved viewport requires a supported real field with matching units and sample components.",
-    );
-  }
-
   const geometryNodeCount = counter(geometry.node_count, "Saved geometry node count");
   const geometryCellCount = counter(geometry.cell_count, "Saved geometry cell count");
   const geometryFacetCount = counter(geometry.facet_count, "Saved geometry facet count");
   if (
-    totalElements !== geometryNodeCount ||
+    counter(coverage.total_elements, "Saved field element count") !== geometryNodeCount ||
     BigInt(topology.nodeCount) !== geometryNodeCount ||
     BigInt(topology.cellCount ?? topology.elementCount) !== geometryCellCount ||
     BigInt(topology.facetCount ?? topology.boundaryFaceCount) !== geometryFacetCount ||
@@ -210,35 +261,7 @@ export function resolveSavedFieldViewportEligibility(
     }
   }
 
-  let elementCount: number;
-  let components: number;
-  let bytes: number;
-  try {
-    elementCount = safeCount(totalElements, "Saved field element count");
-    components = safeCount(componentCount, "Saved field component count");
-    bytes = safeCount(totalBytes, "Saved field byte count");
-  } catch (error) {
-    return unavailable(error instanceof Error ? error.message : String(error));
-  }
-  const scalarBytes = coverage.dtype === "f32" ? 4 : 8;
-  if (BigInt(elementCount) * BigInt(components) * BigInt(scalarBytes) !== totalBytes) {
-    return unavailable("Saved field byte count does not match its node layout.");
-  }
-  if (bytes > SAVED_VIEWPORT_FIELD_MAX_BYTES) {
-    return unavailable("Saved field payload exceeds the 64 MiB viewport cap.");
-  }
-
-  const range: MaterializedDatasetSliceRange = {
-    elementCount: coverage.total_elements,
-    elementOffset: "0",
-    maxResponseBytes: coverage.total_bytes,
-  };
-  try {
-    materializedDatasetSliceByteLimit(range);
-  } catch (error) {
-    return unavailable(error instanceof Error ? error.message : String(error));
-  }
-  return { range, status: "ready", totalBytes: bytes };
+  return metadataEligibility;
 }
 
 function savedFieldViewportResourceKey(

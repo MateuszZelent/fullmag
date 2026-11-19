@@ -11,8 +11,24 @@ impl ExchangeLlgProblem {
                 &config.strain,
                 &config.params,
                 self.active_mask.as_deref(),
+                self.ms_field.as_deref(),
             ),
             None => zero_vectors(self.grid.cell_count()),
+        }
+    }
+
+    pub fn magnetoelastic_energy_density_from_vectors(
+        &self,
+        magnetization: &[Vector3],
+    ) -> Vec<f64> {
+        match &self.terms.magnetoelastic {
+            Some(config) => magnetoelastic::e_mel_density_field(
+                magnetization,
+                &config.strain,
+                &config.params,
+                self.active_mask.as_deref(),
+            ),
+            None => vec![0.0; self.grid.cell_count()],
         }
     }
 
@@ -84,10 +100,11 @@ impl ExchangeLlgProblem {
                 if !self.is_active(i) {
                     return;
                 }
-                let h = magnetoelastic::h_mel_single(
+                let h = magnetoelastic::h_mel_single_with_ms(
                     [magnetization.x[i], magnetization.y[i], magnetization.z[i]],
                     strain,
                     &config.params,
+                    self.ms_at(i),
                 );
                 h_eff.x[i] += h[0];
                 h_eff.y[i] += h[1];
@@ -124,6 +141,7 @@ impl ExchangeLlgProblem {
                 &config.strain,
                 &config.params,
                 self.active_mask.as_deref(),
+                self.ms_field.as_deref(),
                 h_eff,
             );
         }

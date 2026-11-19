@@ -203,6 +203,10 @@ async function verifySemanticTargetExplorerInvariant({ browser, url }) {
       throw new Error(`Semantic target fixture WebGL is not renderable: ${JSON.stringify(webgl)}`);
     }
 
+    // Diagnostics is a portalled popover: dismiss it before real canvas picking
+    // so it cannot intercept the upper rows of the semantic target scan.
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog", { name: "Render diagnostics", exact: true }).waitFor({ state: "hidden" });
     const canvasBox = await canvas.boundingBox();
     if (!canvasBox) throw new Error("Semantic target fixture canvas has no bounds.");
     for (let row = 5; row < 20 && selectedNodeIds.size < expectedNodeIds.size; row += 1) {
@@ -666,7 +670,7 @@ function createSemanticTargetExplorerFixture() {
     domainMeta: {
       ...femDomainMetaFixture(),
       bounds: { max: [4, 2, 1], min: [-4, -2, -1] },
-      counts: { cells: 0, nodes: 12 },
+      counts: { cells: 3, nodes: 12 },
       generation_id: "semantic-target-fixture-v1",
     },
     expectedPositionBytes: 12 * 3 * Float32Array.BYTES_PER_ELEMENT,
@@ -761,8 +765,8 @@ function semanticFixturePart({ faceIndex, id, label, nodeStart, objectId = null,
     boundary_face_start: boundaryFaceStart,
     bounds_max: [4, 1, 0.5],
     bounds_min: [-4, -1, -0.5],
-    element_count: 0,
-    element_start: 0,
+    element_count: role === "outer_boundary" ? 0 : 1,
+    element_start: faceIndex,
     geometry_id: objectId,
     id,
     label,
@@ -797,14 +801,14 @@ function makeSemanticTargetTopologyBuffer() {
     ...tetraSurfaceFaces(8),
   ];
   const nodeCount = 12;
-  const elementCount = 0;
+  const elementCount = 3;
   const boundaryFaceCount = surfaceFaces.length;
-  const markerCount = boundaryFaceCount;
   const byteLength =
     32 +
     nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT +
+    elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT +
     boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT +
-    markerCount * Uint32Array.BYTES_PER_ELEMENT * 2;
+    (elementCount + boundaryFaceCount) * Uint32Array.BYTES_PER_ELEMENT;
   const buffer = new ArrayBuffer(byteLength);
   const view = new DataView(buffer);
   for (const [index, code] of [..."FMMT"].entries()) {
@@ -815,16 +819,20 @@ function makeSemanticTargetTopologyBuffer() {
   view.setUint32(8, nodeCount, true);
   view.setUint32(12, elementCount, true);
   view.setUint32(16, boundaryFaceCount, true);
-  view.setUint32(20, markerCount, true);
-  view.setUint32(24, markerCount, true);
+  view.setUint32(20, elementCount, true);
+  view.setUint32(24, boundaryFaceCount, true);
   let offset = 32;
   new Float64Array(buffer, offset, positions.length).set(positions);
   offset += positions.length * Float64Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, elementCount * 4).set([
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+  ]);
+  offset += elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT;
   new Uint32Array(buffer, offset, boundaryFaceCount * 3).set(surfaceFaces.flat());
   offset += boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT;
-  new Uint32Array(buffer, offset, markerCount).fill(1);
-  offset += markerCount * Uint32Array.BYTES_PER_ELEMENT;
-  new Uint32Array(buffer, offset, markerCount).fill(1);
+  new Uint32Array(buffer, offset, elementCount).set([0, 1, 2]);
+  offset += elementCount * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, boundaryFaceCount).fill(1);
   return buffer;
 }
 
@@ -1020,6 +1028,15 @@ async function installFemFixtureApi(page, fixture) {
         }],
       });
     }
+    if (requestPath === "/v2/platform/instances") {
+      return fulfillJson(route, {
+        first_port: 3197,
+        instances: [],
+        last_port: 3260,
+        schema_version: "1.0.0",
+        self_api_instance_id: "fixture-instance",
+      });
+    }
     if (requestPath === "/v2/platform/health") {
       return fulfillJson(route, {
         active_session: true,
@@ -1031,7 +1048,14 @@ async function installFemFixtureApi(page, fixture) {
     if (requestPath === "/v2/platform/capabilities") {
       return fulfillJson(route, { engines: [], profile_version: "fixture.v1" });
     }
-    if (requestPath === "/v2/sessions/current/status") return fulfillJson(route, femStatusFixture());
+    if (requestPath === "/v2/sessions/current/status") {
+      const status = femStatusFixture();
+      status.domain.generation_id = fixture.manifest.generation_id;
+      status.domain.cell_count = (fixture.domainMeta ?? femDomainMetaFixture()).counts.cells;
+      status.resources.domain_generation_id = fixture.manifest.generation_id;
+      status.resources.mesh_revision = fixture.manifest.revision;
+      return fulfillJson(route, status);
+    }
     if (requestPath === "/v2/sessions/current/visualization/state") return fulfillJson(route, fixture.visualizationState);
     if (requestPath === "/v2/sessions/current/visualization/mode-compositions/active") {
       return fulfillJson(route, {
@@ -1283,12 +1307,20 @@ async function installBrowserAuditInstrumentation(page) {
 }
 
 async function waitForViewportDiagnostics(page) {
-  const trigger = page.locator(".fm-viewport-3d").getByRole("button", { name: "Render details", exact: true });
-  if (await trigger.getAttribute("aria-expanded") !== "true") {
-    await trigger.click();
-  }
-  // Render diagnostics is portalled outside the viewport HUD.
+  const viewport = page.locator(".fm-viewport-3d");
+  // Render diagnostics is portalled from the View layers popover.
   const details = page.getByRole("dialog", { name: "Render diagnostics", exact: true });
+  if (!(await details.isVisible())) {
+    const layers = page.getByRole("dialog", { name: "View layers", exact: true });
+    if (!(await layers.isVisible())) {
+      await viewport.getByRole("button", { name: "Layers", exact: true }).click();
+      await layers.waitFor({ state: "visible", timeout: 20_000 });
+    }
+    const trigger = layers.getByRole("button", { name: "Render details", exact: true });
+    if (await trigger.getAttribute("aria-expanded") !== "true") {
+      await trigger.click();
+    }
+  }
   await details.waitFor({ state: "visible", timeout: 20_000 });
   await waitForCondition(
     async () => (await details.textContent())?.includes("geo:"),

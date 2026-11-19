@@ -6,11 +6,13 @@ import { BackSide, DoubleSide, FrontSide } from "three";
 
 import {
   DEFAULT_OBJECT_VISUALIZATION,
+  ObjectVisualizationController,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
   createMeshPartSurfaceGeometry,
+  hasMeshPartRenderableLayer,
   resolveMeshPartSurfacePickIdentity,
   resolveMeshPartBoundaryFaceIndexForPick,
   resolveMeshPartVisibleScalarColorState,
@@ -24,6 +26,7 @@ import {
   createMeshPartScalarShaderMaterials,
   MESH_PART_SURFACE_USER_DATA,
 } from "./MeshPartLayer";
+import { resolveMeshPartSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import {
   buildMeshPartScalarColorRetentionKey,
   resolveMeshPartCommittedScalarColorState,
@@ -37,8 +40,72 @@ import { resolveViewport3DScalarColorBufferKey } from "../viewport3dFieldMapping
 import { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { RENDER_POLICIES } from "./viewport3DRenderPolicy";
 import { updateScalarSurfaceShaderMaterial } from "../viewport3dScalarSurfaceShader";
+import {
+  resolveViewport3DPartVisualizationSettings,
+  resolveViewport3DPrimitiveVisualizationSettings,
+} from "../hooks/useViewport3DSceneModel";
+import { resolveViewport3DRealizedTopologyObjectIds } from "./Viewport3DScene";
+import { shouldRenderPrimitiveObject } from "./PrimitiveObjectLayerModel";
+import { resolveViewport3DTargetRenderPlan } from "./viewport3DTargetRenderPlan";
 
 describe("MeshPartLayer", () => {
+  it("keeps a nonmagnetic antenna preview after mesh upload until a visible replacement pass exists", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { kind: "object" as const, id: "object:antenna" };
+    const object = { id: "antenna", role: "antenna", physics_stack: [], magnetization_ref: null };
+    const primitive = { objectId: "antenna", role: "antenna", meshState: "mesh-ready" } as never;
+    const surface = {
+      part: { id: "signal", object_id: "antenna_geom" },
+      surfaceIndices: new Uint32Array([0, 1, 2]),
+    };
+    const profile = { featureEdges: { opacity: 1 }, glyphs: { opacityScale: 1 } };
+    const resolve = () => {
+      const snapshot = controller.getSnapshot();
+      const settings = resolveViewport3DPartVisualizationSettings({
+        objectVisualizationSnapshot: snapshot, part: surface.part as never,
+        sceneObjectIds: new Set([object.id]), sceneObjectsById: new Map([[object.id, object]]),
+        quantityCatalog: null,
+      });
+      const ready = hasMeshPartRenderableLayer({
+        renderPlan: resolveViewport3DTargetRenderPlan(settings, profile),
+        surfaceReady: true, wireframeReady: true, pointsReady: true, vectorsReady: false,
+      });
+      const realized = resolveViewport3DRealizedTopologyObjectIds({
+        enabled: true, committedParts: new Set(ready ? [surface] : []) as never,
+        primitiveModel: { objects: [primitive] } as never,
+        topologyModel: { positions: new Float32Array(9), magneticParts: [surface] } as never,
+        topologyFreshness: "current",
+      });
+      const primitiveSettings = resolveViewport3DPrimitiveVisualizationSettings({
+        snapshot, target, objectContext: { object, quantityCatalog: null },
+      });
+      return { settings, ready, primitiveVisible: shouldRenderPrimitiveObject(primitive,
+        primitiveSettings, realized.has(object.id), object.role === "antenna"),
+        previewWithoutAdmission: shouldRenderPrimitiveObject(primitive, primitiveSettings, realized.has(object.id)) };
+    };
+    expect(resolve()).toMatchObject({
+      settings: { activeQuantityId: "", shaderVisible: false },
+      ready: false, primitiveVisible: true, previewWithoutAdmission: false,
+    });
+    controller.patchTarget(target, { surfaceColorSource: "solid" });
+    expect(resolve()).toMatchObject({ ready: true, primitiveVisible: false });
+    controller.patchTarget(target, { visible: false });
+    expect(resolve()).toMatchObject({ ready: false, primitiveVisible: false });
+  });
+
+  it("does not replace geometry with an unuploaded or explicitly disabled pass", () => {
+    const profile = { featureEdges: { opacity: 1 }, glyphs: { opacityScale: 1 } };
+    const plan = resolveViewport3DTargetRenderPlan({ ...DEFAULT_OBJECT_VISUALIZATION,
+      shaderVisible: false, wireframeVisible: true }, profile);
+    const input = { renderPlan: plan, surfaceReady: true,
+      wireframeReady: false, pointsReady: false, vectorsReady: false };
+    expect(hasMeshPartRenderableLayer(input)).toBe(false);
+    expect(hasMeshPartRenderableLayer({ ...input, wireframeReady: true })).toBe(true);
+    expect(hasMeshPartRenderableLayer({ ...input, wireframeReady: true,
+      renderPlan: resolveViewport3DTargetRenderPlan({ ...DEFAULT_OBJECT_VISUALIZATION,
+        shaderVisible: false }, profile) })).toBe(false);
+  });
+
   it("maps both render triangles of a quad back to the same global facet", () => {
     const part = {
       boundary_face_count: 2,
@@ -443,15 +510,143 @@ describe("MeshPartLayer", () => {
     expect(source).not.toContain("applyScalarShaderColorBuffer");
   });
 
-  it("uses unlit materials for mesh part fallback surfaces", () => {
+  it("selects PBR only for uniform presentation surfaces and preserves quantitative color paths", () => {
+    const profile = {
+      magneticSurface: {
+        presentation: { roughness: 0.27, metalness: 0.64, shadows: true },
+        toneMapped: true,
+      },
+      uniformGeometry: {
+        lit: true,
+        pbr: true,
+        roughness: 0.27,
+        metalness: 0.64,
+        shadows: true,
+        toneMapped: true,
+      },
+    } as const;
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: false,
+      hasUploadedVertexScalarColors: false,
+      materialProfile: profile,
+    })).toEqual({
+      castShadow: true,
+      kind: "standard",
+      metalness: 0.64,
+      receiveShadow: true,
+      roughness: 0.27,
+      toneMapped: true,
+      vertexColors: false,
+    });
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: false,
+      hasUploadedVertexScalarColors: true,
+      materialProfile: profile,
+    })).toEqual({
+      castShadow: true,
+      kind: "standard",
+      metalness: 0.64,
+      receiveShadow: true,
+      roughness: 0.27,
+      toneMapped: true,
+      vertexColors: true,
+    });
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: true,
+      hasUploadedVertexScalarColors: false,
+      materialProfile: profile,
+    })).toEqual({
+      castShadow: true,
+      kind: "scalar-shader",
+      receiveShadow: true,
+      vertexColors: false,
+    });
+
+    const scientificProfile = {
+      ...profile,
+      magneticSurface: { presentation: null, toneMapped: false },
+      uniformGeometry: { ...profile.uniformGeometry, pbr: false },
+    };
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: false,
+      hasUploadedVertexScalarColors: false,
+      materialProfile: scientificProfile,
+    })).toMatchObject({ kind: "lambert", castShadow: false, receiveShadow: false });
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: false,
+      hasUploadedVertexScalarColors: true,
+      materialProfile: scientificProfile,
+    })).toEqual({
+      castShadow: false,
+      kind: "basic",
+      receiveShadow: false,
+      toneMapped: false,
+      vertexColors: true,
+    });
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: true,
+      hasUploadedVertexScalarColors: false,
+      materialProfile: scientificProfile,
+    })).toMatchObject({ kind: "scalar-shader", castShadow: false, receiveShadow: false });
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: true,
+      hasUploadedVertexScalarColors: false,
+      materialProfile: {
+        ...profile,
+        magneticSurface: {
+          ...profile.magneticSurface,
+          presentation: { ...profile.magneticSurface.presentation, shadows: false },
+        },
+      },
+    })).toMatchObject({ kind: "scalar-shader", castShadow: false, receiveShadow: false });
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: false,
+      hasUploadedVertexScalarColors: false,
+      materialProfile: {
+        ...profile,
+        uniformGeometry: { ...profile.uniformGeometry, shadows: false },
+      },
+    })).toMatchObject({
+      kind: "standard",
+      castShadow: false,
+      receiveShadow: false,
+    });
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: false,
+      hasUploadedVertexScalarColors: false,
+      materialProfile: {
+        ...profile,
+        magneticSurface: { presentation: null, toneMapped: false },
+        uniformGeometry: {
+          ...profile.uniformGeometry,
+          lit: false,
+          pbr: false,
+        },
+      },
+    })).toMatchObject({
+      kind: "basic",
+      castShadow: false,
+      receiveShadow: false,
+      toneMapped: false,
+    });
+
     const source = readFileSync(
       fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
       "utf8",
     );
 
+    expect(source).toContain("resolveMeshPartSurfaceMaterialPlan({");
+    expect(source).toContain("<meshStandardMaterial");
     expect(source).toContain("<meshBasicMaterial");
-    expect(source).not.toContain("<meshStandardMaterial");
-    expect(source).not.toContain("MeshStandardMaterial");
+    expect(source).toContain("castShadow={surfaceMaterialPlan.castShadow}");
     expect(source).toContain("computeVertexNormals");
   });
 
@@ -628,9 +823,13 @@ describe("MeshPartLayer", () => {
       "utf8",
     );
 
-    expect(source).toContain("buildModeCompositionVectorLayerInput");
-    expect(source.match(/identity: modal\.buffer\.identity,/g)).toHaveLength(2);
-    expect(source).toContain("modalVectorLayerInput?.segments ?? vectorLayerInput.segments");
+    // Modal glyphs are phase-independent GPU glyphs; the layer phase cell is
+    // bound into the glyph shader, never baked into segments.
+    expect(source).toContain("buildModeCompositionComplexGlyphInput");
+    expect(source).toContain("identity: modeRenderPlan.surfacePass.buffer.identity,");
+    expect(source).toContain("<ComplexVectorGlyphLayer");
+    expect(source).toContain("modeCompositionPhase ??");
+    expect(source).not.toContain("modeCompositionPhaseRad");
     expect(source).toContain("modalVectorsActive || renderPlan.vectors.visible");
   });
 

@@ -54,6 +54,7 @@ import {
   flattenExplorerNodes,
 } from "./builders/buildModelTree";
 import { buildPhysicsFirstResultsTree } from "./builders/resultsExplorerNodes";
+import { modelTreeSnapshotFromScene } from "./builders/sceneModelTreeAdapter";
 import { buildPhysicsGraphTree } from "./builders/physicsGraphTree";
 import {
   resolveCurrentExplorerSelectionNode,
@@ -136,6 +137,45 @@ function resultsTreeWithTables(
 }
 
 describe("selectExplorerNode", () => {
+  it("tracks the selected object's absorbing boundary across canonical scene revisions", () => {
+    const parentId = "model:object:film-b:magnetic-parameters";
+    const nodeId = parentId + ":absorbing-boundary";
+    const makeTree = (revision: number, absorbingBoundary: { total_width_m: number } | null) =>
+      buildModelTree(modelTreeSnapshotFromScene({
+        revision,
+        objects: [
+          { id: "film-a", name: "Film" },
+          { id: "film-b", name: "Film", absorbing_boundary: absorbingBoundary },
+        ],
+      }));
+
+    const configured = makeTree(1, { total_width_m: 2e-7 });
+    const boundaries = flattenExplorerNodes(configured)
+      .filter((node) => node.kind === "object.absorbing-boundary");
+    expect(boundaries).toHaveLength(1);
+    expect(boundaries[0]).toMatchObject({
+      id: nodeId,
+      parentId,
+      label: "Absorbing Boundary",
+      objectId: "film-b",
+    });
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, boundaries[0]!, "explorer");
+    const ref = kernel.selection.get().ref;
+    expect(ref).toEqual({
+      type: "scene-object",
+      kind: "object.absorbing-boundary",
+      nodeId,
+      objectId: "film-b",
+      visualizationTargetId: "object:film-b",
+    });
+
+    const removed = makeTree(2, null);
+    expect(flattenExplorerNodes(removed).some((node) => node.id === nodeId)).toBe(false);
+    expect(resolveCurrentExplorerSelectionNode(removed, nodeId, ref)?.id).toBe(parentId);
+    expect(resolveCurrentExplorerSelectionNode(buildModelTree(null), nodeId, ref)).toBeNull();
+  });
+
   it("preserves independent result status facets in a frequency selection ref", () => {
     const ref = selectionRefFromNode({
       availability: "partial",
@@ -361,6 +401,39 @@ describe("selectExplorerNode", () => {
     expect(resolveVisualizationTargetFromSelection(kernel.selection.get())).toEqual(
       AIRBOX_VISUALIZATION_TARGET,
     );
+  });
+
+  it("derives Airbox inspector state facets from the node mesh status", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "model:airbox",
+      kind: "airbox.root",
+      label: "Airbox",
+      parentId: "model:universe",
+      status: "mesh-ready",
+    }, "explorer");
+
+    expect(kernel.selection.get()?.ref).toMatchObject({
+      availability: "available",
+      executionState: "completed",
+      resourceState: "ready",
+      type: "airbox",
+    });
+
+    selectExplorerNode(kernel, {
+      availability: "partial",
+      id: "model:airbox:visualization",
+      kind: "airbox.visualization",
+      label: "Visualization",
+      parentId: "model:airbox",
+      status: "mesh-stale",
+    }, "explorer");
+
+    expect(kernel.selection.get()?.ref).toMatchObject({
+      availability: "partial",
+      resourceState: "stale",
+      type: "airbox",
+    });
   });
 
   it("routes a multilayer Airbox visualization child to the canonical target", () => {
@@ -612,10 +685,14 @@ describe("selectExplorerNode", () => {
   it("selects Airbox mesh policy nodes as inspector-only airbox selections", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {
+      availability: "partial",
       id: "model:airbox:mesh",
       kind: "airbox.mesh",
       label: "Airbox Mesh Policy",
       parentId: "model:universe",
+      executionState: "not_started",
+      resourceState: "loading",
+      statusReason: "Published mesh facts are loading.",
     };
 
     selectExplorerNode(kernel, node, "explorer");
@@ -628,6 +705,10 @@ describe("selectExplorerNode", () => {
       ref: {
         kind: "airbox.mesh",
         nodeId: "model:airbox:mesh",
+        availability: "partial",
+        contractGap: "Published mesh facts are loading.",
+        executionState: "not_started",
+        resourceState: "loading",
         type: "airbox",
         visualizationTargetId: "airbox",
       },

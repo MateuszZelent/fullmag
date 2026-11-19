@@ -692,7 +692,13 @@
 
 .fm-chart-control-bar__pulse--live {
   background: var(--fm-success);
-  animation: fm-pulse-live 2s ease-in-out infinite;
+}
+
+/* Persistent decorative pulse: opt-in only. */
+@media (prefers-reduced-motion: no-preference) {
+  .fm-chart-control-bar__pulse--live {
+    animation: fm-pulse-live 2s ease-in-out infinite;
+  }
 }
 
 .fm-chart-control-bar__pulse--paused {
@@ -704,11 +710,6 @@
   50% { opacity: 0.3; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .fm-chart-control-bar__pulse--live {
-    animation: none;
-  }
-}
 
 .fm-chart-control-bar__points {
   color: var(--fm-text-secondary);

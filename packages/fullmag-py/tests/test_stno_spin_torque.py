@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import unittest
 
+import fullmag as fm
+
 from fullmag.model.spin_torque import (
     DriftDiffusionSpinTorque,
     InterfaceCppSTT,
@@ -44,6 +46,42 @@ class TestSlonczewskiSTT(unittest.TestCase):
         stt = SlonczewskiSTT([0, 0, 1e10], [0, 0, 1])
         with self.assertRaises(AttributeError):
             stt.degree = 0.5  # type: ignore[misc]
+
+    def test_time_expression_preserves_current_scale_and_authored_constants(self) -> None:
+        drive = fm.TimeExpression(
+            "heaviside(t-on) * sin(2*pi*f*t)",
+            constants={"f": 4e9, "on": 70e-9},
+            event_times_s=(70e-9,),
+        )
+        stt = fm.SlonczewskiSTT(
+            current_density=(0, 0, -2.6e10),
+            id="torque",
+            target=fm.RegionRef("film"),
+            stack_normal=(0, 0, 1),
+            free_layer_thickness_m=1.7e-9,
+            time_expression=drive,
+        )
+        payload = stt.to_ir_module()
+        self.assertEqual(payload["current_density"], [0.0, 0.0, -2.6e10])
+        self.assertEqual(payload["time_expression"], {
+            "source": "heaviside(t-on) * sin(2*pi*f*t)",
+            "constants": {"f": 4e9, "on": 70e-9},
+            "event_times_s": [70e-9],
+        })
+        self.assertEqual(stt.to_ir_fields(), {})
+
+    def test_time_expression_rejects_ambiguous_or_nonfinite_bindings(self) -> None:
+        for name, value in (("t", 1.0), ("pi", 3.0), ("f", float("inf"))):
+            with self.subTest(name=name, value=value), self.assertRaises(ValueError):
+                fm.TimeExpression("sin(t)", constants={name: value})
+        with self.assertRaises(ValueError):
+            fm.TimeExpression("heaviside(t)", event_times_s=(5e-9, 3e-9))
+        with self.assertRaisesRegex(ValueError, "at most 4096 event times"):
+            fm.TimeExpression("sin(t)", event_times_s=tuple(float(i) for i in range(4097)))
+        with self.assertRaisesRegex(ValueError, "canonical thin-layer"):
+            fm.SlonczewskiSTT(
+                current_density=(0, 0, 1), time_expression=fm.TimeExpression("sin(t)"),
+            )
 
     # ── IR round-trip ───────────────────────────────────────────
     def test_to_ir_fields_keys(self) -> None:

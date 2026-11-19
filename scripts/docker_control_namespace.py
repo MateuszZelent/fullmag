@@ -23,6 +23,8 @@ from docker_build_control import (
 )
 
 SCHEMA = "fullmag.docker-control-namespace-quarantine.v1"
+SOURCE_TRANSFER_SCHEMA = "fullmag.docker-control-source-transfer.v1"
+SOURCE_TRANSFER_STATE = "source-transferred-not-replayed"
 REGISTRY_SCHEMA = "fullmag.docker-control-namespace-registry.v1"
 REGISTRY_PATH = "namespaces/current.json"
 HEX = re.compile(r"[0-9a-f]{32}\Z")
@@ -37,6 +39,107 @@ def _raw(control, relative, optional=False):
     if result.returncode:
         raise BuildControlError("Cannot authenticate control record: " + relative)
     return result.stdout
+
+
+def _safe_relative(control, value):
+    """Validate an explicit receipt path with the control-volume path rules."""
+    if not isinstance(value, str):
+        raise BuildControlError("Source-transfer receipt has an invalid archived path")
+    absolute = control.path(value)
+    if absolute != "/control/" + value:
+        raise BuildControlError("Source-transfer receipt path is not canonical")
+    return value
+
+
+def _is_quarantined_receipt(receipt, *, namespace, project, volume,
+                            worktree_id, project_id):
+    """Keep the original unknown-activation quarantine contract intact."""
+    return (
+        isinstance(receipt, dict)
+        and receipt.get("schema") == SCHEMA
+        and receipt.get("state") == "quarantined-not-replayed"
+        and receipt.get("namespace") == namespace
+        and receipt.get("compose_project") == project
+        and receipt.get("control_volume") == volume
+        and receipt.get("source_worktree_id") == worktree_id
+        and receipt.get("source_project_id") == project_id
+        and receipt.get("allow_new_requests") is True
+        and receipt.get("allow_old_request_replay") is False
+        and isinstance(receipt.get("old_request_id"), str)
+        and bool(receipt.get("old_request_id"))
+    )
+
+
+def _validate_source_transfer(control, receipt, *, namespace, receipt_path):
+    """Authenticate an imported namespace against its archived Windows state."""
+    identity = control.identity
+    if (receipt.get("schema") != SOURCE_TRANSFER_SCHEMA
+            or receipt.get("state") != SOURCE_TRANSFER_STATE
+            or receipt.get("namespace") != namespace
+            or receipt.get("compose_project") != control.project
+            or receipt.get("control_volume") != control.volume
+            or receipt.get("source_worktree_id") != identity["worktree_id"]
+            or receipt.get("source_project_id") != identity["project_id"]
+            or receipt.get("allow_new_requests") is not True
+            or receipt.get("allow_old_request_replay") is not False
+            or not isinstance(receipt.get("old_request_id"), str)
+            or not receipt.get("old_request_id")):
+        raise BuildControlError("Control namespace has no valid source-transfer authorization")
+
+    previous_registry_path = _safe_relative(control, receipt.get("previous_registry_path"))
+    previous_receipt_path = _safe_relative(control, receipt.get("previous_receipt_path"))
+    previous_registry_sha256 = receipt.get("previous_registry_sha256")
+    previous_receipt_sha256 = receipt.get("previous_receipt_sha256")
+    if (SHA.fullmatch(previous_registry_sha256 or "") is None
+            or SHA.fullmatch(previous_receipt_sha256 or "") is None
+            or previous_registry_path in {REGISTRY_PATH, receipt_path}
+            or previous_receipt_path in {REGISTRY_PATH, receipt_path, previous_registry_path}):
+        raise BuildControlError("Source-transfer archive references are invalid")
+
+    previous_registry_raw = _raw(control, previous_registry_path)
+    if hashlib.sha256(previous_registry_raw).hexdigest() != previous_registry_sha256:
+        raise BuildControlError("Archived source registry digest differs")
+    previous_registry = json.loads(previous_registry_raw)
+    if not isinstance(previous_registry, dict):
+        raise BuildControlError("Archived source registry is invalid")
+    previous_token = previous_registry.get("recovery_id", "")
+    if not isinstance(previous_token, str) or HEX.fullmatch(previous_token) is None:
+        raise BuildControlError("Archived source registry has an invalid identity")
+    previous_namespace = "namespaces/" + previous_token
+    expected_previous_receipt_path = "namespace-recovery/" + previous_token + "/terminal.json"
+    previous_worktree_id = previous_registry.get("source_worktree_id")
+    previous_project_id = previous_registry.get("source_project_id")
+    if (previous_registry.get("schema") != REGISTRY_SCHEMA
+            or previous_registry.get("namespace") != previous_namespace
+            or previous_registry.get("receipt_path") != expected_previous_receipt_path
+            or previous_registry.get("compose_project") != control.project
+            or previous_registry.get("control_volume") != control.volume
+            or not isinstance(previous_worktree_id, str) or not previous_worktree_id
+            or not isinstance(previous_project_id, str) or not previous_project_id
+            or previous_worktree_id == identity["worktree_id"]
+            or previous_project_id == identity["project_id"]
+            or previous_namespace == namespace
+            or previous_receipt_path != expected_previous_receipt_path
+            or SHA.fullmatch(previous_registry.get("receipt_sha256", "")) is None):
+        raise BuildControlError("Archived source registry does not bind a distinct prior source")
+
+    previous_receipt_raw = _raw(control, previous_receipt_path)
+    previous_receipt_digest = hashlib.sha256(previous_receipt_raw).hexdigest()
+    if (previous_receipt_digest != previous_receipt_sha256
+            or previous_receipt_digest != previous_registry["receipt_sha256"]):
+        raise BuildControlError("Archived source retirement receipt digest differs")
+    previous_receipt = json.loads(previous_receipt_raw)
+    if not _is_quarantined_receipt(
+            previous_receipt, namespace=previous_namespace, project=control.project,
+            volume=control.volume, worktree_id=previous_worktree_id,
+            project_id=previous_project_id):
+        raise BuildControlError("Archived source has no valid retirement quarantine")
+
+    if (receipt.get("old_request_id") != previous_receipt.get("old_request_id")
+            or receipt.get("activation_receipt_path")
+            != previous_receipt.get("activation_receipt_path")
+            or receipt.get("control_pins") != previous_receipt.get("control_pins")):
+        raise BuildControlError("Source-transfer authorization differs from archived quarantine")
 
 
 def resolve_namespace(control):
@@ -56,6 +159,8 @@ def resolve_namespace(control):
     if raw is None:
         return
     registry = json.loads(raw)
+    if not isinstance(registry, dict):
+        raise BuildControlError("Control namespace registry is invalid")
     token = registry.get("recovery_id", "")
     if not isinstance(token, str) or HEX.fullmatch(token) is None:
         raise BuildControlError("Control namespace registry has an invalid identity")
@@ -73,23 +178,45 @@ def resolve_namespace(control):
     if hashlib.sha256(receipt_raw).hexdigest() != registry.get("receipt_sha256"):
         raise BuildControlError("Control namespace retirement receipt digest differs")
     receipt = json.loads(receipt_raw)
-    if (receipt.get("schema") != SCHEMA or receipt.get("state") != "quarantined-not-replayed"
-            or receipt.get("namespace") != namespace
-            or receipt.get("compose_project") != control.project
-            or receipt.get("control_volume") != control.volume
-            or receipt.get("source_worktree_id") != control.identity["worktree_id"]
-            or receipt.get("source_project_id") != control.identity["project_id"]
-            or receipt.get("allow_new_requests") is not True
-            or receipt.get("allow_old_request_replay") is not False
-            or not isinstance(receipt.get("old_request_id"), str)
-            or not receipt.get("old_request_id")):
+    if not isinstance(receipt, dict):
+        raise BuildControlError("Control namespace retirement receipt is invalid")
+    if receipt.get("schema") == "fullmag.docker-failed-bootstrap-quarantine.v1":
+        from docker_volume_failed_bootstrap_quarantine import resolve_cold_namespace
+        resolve_cold_namespace(control, registry, raw, receipt)
+        return
+    if receipt.get("schema") == "fullmag.docker-isolated-session-snapshot.v1":
+        from docker_isolated_snapshot_namespace import resolve_snapshot_namespace
+        resolve_snapshot_namespace(control, registry, raw)
+        return
+    if _is_quarantined_receipt(
+            receipt, namespace=namespace, project=control.project, volume=control.volume,
+            worktree_id=control.identity["worktree_id"],
+            project_id=control.identity["project_id"]):
+        pass
+    elif _is_empty_stopped_quarantine_receipt(
+            receipt, namespace=namespace, project=control.project, volume=control.volume,
+            worktree_id=control.identity["worktree_id"],
+            project_id=control.identity["project_id"]):
+        _validate_empty_stopped_control_pins(control, receipt)
+    elif receipt.get("schema") == SOURCE_TRANSFER_SCHEMA:
+        _validate_source_transfer(control, receipt, namespace=namespace,
+                                  receipt_path=receipt_path)
+    else:
         raise BuildControlError("Control namespace has no explicit new-request authorization")
     # The original unknown marker remains the admission fence for old clients.
+    activation_path = _safe_relative(control, receipt.get("activation_receipt_path"))
+    control_pins = receipt.get("control_pins")
+    if not isinstance(control_pins, dict):
+        raise BuildControlError("Control namespace activation pins are invalid")
+    active_pin = control_pins.get("active")
+    activation_pin = control_pins.get(activation_path)
+    if (SHA.fullmatch(active_pin or "") is None
+            or SHA.fullmatch(activation_pin or "") is None):
+        raise BuildControlError("Control namespace activation pins are invalid")
     active = _raw(control, "active")
-    original = _raw(control, receipt["activation_receipt_path"])
-    if (hashlib.sha256(active).hexdigest() != receipt["control_pins"]["active"]
-            or hashlib.sha256(original).hexdigest()
-            != receipt["control_pins"][receipt["activation_receipt_path"]]
+    original = _raw(control, activation_path)
+    if (hashlib.sha256(active).hexdigest() != active_pin
+            or hashlib.sha256(original).hexdigest() != activation_pin
             or _raw(control, REGISTRY_PATH) != raw):
         raise BuildControlError("Quarantined activation or registry changed; resources retained")
     control.namespace = namespace
@@ -101,11 +228,86 @@ def assert_namespace_activation(control, request_id=None):
     if not control.namespace:
         return
     record = control.namespace_registry["retirement"]
+    if record.get("schema") == "fullmag.docker-failed-bootstrap-quarantine.v1" and request_id is not None:
+        from docker_volume_failed_bootstrap_quarantine import assert_no_replay
+        assert_no_replay(record, request_id)
     if request_id is not None and request_id == record["old_request_id"]:
         raise BuildControlError("The quarantined request cannot be replayed in a new namespace")
+    if record.get("schema") == "fullmag.docker-isolated-session-snapshot.v1":
+        # Ordinary script activation is forbidden until the copied bytes have
+        # passed the actual native first-start gate. Empty/no-script startup
+        # is handled separately by the snapshot-aware DEV launcher.
+        validation = control.read("isolated-snapshot/native-validation.json", optional=True)
+        manifest_raw = control.read_bytes("isolated-snapshot/source-manifest.json")
+        if hashlib.sha256(manifest_raw).hexdigest() != record["source_manifest_sha256"]:
+            raise BuildControlError("Isolated snapshot source manifest changed before activation")
+        if request_id in json.loads(manifest_raw).get("retired_request_ids", []):
+            raise BuildControlError("A retained source request cannot be replayed after snapshot recovery")
+        request_raw = control.read_bytes("isolated-snapshot/request.json")
+        if hashlib.sha256(request_raw).hexdigest() != record["request_sha256"]:
+            raise BuildControlError("Isolated snapshot request changed before activation")
+        request = json.loads(request_raw)
+        expected = {
+            "schema_version": "runtime_service_retained_snapshot_validation.v1",
+            "state": "validated-read-only", "request_sha256": record["request_sha256"],
+            "config_sha256": record["original_config_sha256"],
+            "source_manifest_sha256": record["source_manifest_sha256"],
+            "run_ids": sorted(pin["run_id"] for pins in (
+                request["retained_terminal_runs"], request["retained_held_manual_runs"]
+            ) for pin in pins),
+            "terminal_count": record["terminal_run_count"],
+            "held_count": record["held_manual_run_count"],
+            "owner_changed": False, "compute_started": False,
+        }
+        if json.dumps(validation, sort_keys=True) != json.dumps(expected, sort_keys=True):
+            raise BuildControlError("Isolated snapshot requires native admission before activation")
     # Every helper read also checks the base registry SHA. Missing old local
     # unresolved.json is not itself permission: the constructor validates the
     # explicit immutable quarantine/new-request authorization above.
+
+
+def _is_empty_stopped_quarantine_receipt(receipt, *, namespace, project, volume,
+                                          worktree_id, project_id):
+    """Recognize only the separately scoped, no-RunIntent quarantine contract."""
+    token = receipt.get("recovery_id") if isinstance(receipt, dict) else None
+    return (
+        isinstance(receipt, dict)
+        and receipt.get("schema") == "fullmag.docker-control-namespace-empty-quarantine.v1"
+        and receipt.get("state") == "quarantined-empty-not-replayed"
+        and receipt.get("scope") == "empty-stopped-namespace"
+        and receipt.get("namespace") == namespace
+        and isinstance(token, str) and HEX.fullmatch(token) is not None
+        and namespace == "namespaces/" + token
+        and receipt.get("compose_project") == project
+        and receipt.get("control_volume") == volume
+        and receipt.get("source_worktree_id") == worktree_id
+        and receipt.get("source_project_id") == project_id
+        and receipt.get("allow_new_requests") is True
+        and receipt.get("allow_old_request_replay") is False
+        and isinstance(receipt.get("old_request_id"), str)
+        and bool(receipt.get("old_request_id"))
+    )
+
+
+def _validate_empty_stopped_control_pins(control, receipt):
+    pins = receipt.get("control_pins")
+    required = {
+        "active", receipt.get("activation_receipt_path"),
+        receipt.get("activation_marker_path"),
+        receipt.get("development_terminal_path"),
+        receipt.get("development_compose_path"),
+        "runtime-control/runtime-services/OWNER.json",
+        "runtime-control/runtime-services/LAUNCH.json",
+        "runtime-control/runtime-service/process-tree.json",
+    }
+    if (not isinstance(pins, dict) or None in required or not required.issubset(pins)
+            or any(not isinstance(path, str) or SHA.fullmatch(digest or "") is None
+                   for path, digest in pins.items())):
+        raise BuildControlError("Empty namespace quarantine pins are incomplete")
+    for path, expected in pins.items():
+        relative = _safe_relative(control, path)
+        if hashlib.sha256(_raw(control, relative)).hexdigest() != expected:
+            raise BuildControlError("Empty namespace quarantine control pin changed: " + path)
 
 
 def _regular(path):

@@ -14,6 +14,10 @@ import {
   patchObjectTransaction,
   primitiveDraftOverlayStore,
 } from "@/kernel/authoring/geometryLifecycleCommands";
+import {
+  primitiveDraftBaseName,
+  resolveDraftObjectName,
+} from "@/kernel/authoring/uniqueObjectName";
 import { useKernel } from "@/kernel/KernelContext";
 import { useObjectEditSelector } from "@/kernel/authoring/object-edit/useObjectEditSelector";
 import {
@@ -26,6 +30,7 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { Button } from "@/shared/ui/Button";
+import { DisabledReason } from "@/shared/ui/DisabledReason";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
@@ -35,6 +40,7 @@ import { DraftQuantityUnitSelect, type DraftUnitUpdater } from "../primitives/Dr
 import type { QuantityDraftField } from "@/kernel/authoring/object-edit/objectEditTypes";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import { useInspectorActiveTab } from "../InspectorTabState";
 import { ObjectPlacementPanel } from "./ObjectPlacementPanel";
 import { Vector3Field } from "../primitives/Vector3Field";
@@ -53,7 +59,12 @@ import {
   summarizeGeometryValidationMessages,
   type GeometryObjectDraft,
 } from "./geometryObjectPanelModel";
-import { objectEditMetadataEquals, reconcileObjectEditAck, reconcileObjectIdentityAck } from "./objectEditAckReconciliation";
+import {
+  objectEditMetadataEquals,
+  rebaseDirtyDraftOntoUnchangedObject,
+  reconcileObjectEditAck,
+  reconcileObjectIdentityAck,
+} from "./objectEditAckReconciliation";
 
 type Feedback = {
   kind: "error" | "success" | "warning";
@@ -148,6 +159,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
   const draft = sessionMatchesTarget
     ? editSnapshot.draft ?? baseDraft
     : baseDraft;
+  const sourceNotice = geometrySourceNotice(draft.mode, object.mode, scene);
   const [feedbackState, setFeedbackState] = useState<FeedbackState>({
     feedback: null,
     key: draftKey,
@@ -207,7 +219,11 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     // Publishing the same confirmed revision must not normalize that text away.
     const currentDraft = objectEditSession.getSnapshot().draft;
     if (!Number.isFinite(baseDraft.baseRevision) || currentDraft?.baseRevision !== baseDraft.baseRevision) {
-      objectEditSession.refreshCanonical(identity, canonicalDraftInSelectedUnits(baseDraft, currentDraft ?? baseDraft));
+      objectEditSession.refreshCanonical(
+        identity,
+        canonicalDraftInSelectedUnits(baseDraft, currentDraft ?? baseDraft),
+        rebaseDirtyDraftOntoUnchangedObject,
+      );
     }
   }, [baseDraft, currentSessionScopeKey, objectEditSession, targetKey]);
 
@@ -422,6 +438,11 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     }
 
     const objectId = createDraftObjectId(submittedDraft);
+    const createName = resolveDraftObjectName(
+      submittedDraft.name.trim() || objectId,
+      primitiveDraftBaseName(selection.nodeId),
+      scene.data,
+    );
     const sceneMutationToken = objectEditSession.beginSceneMutation(
       currentSessionScopeKey,
       objectId,
@@ -440,13 +461,13 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         : undefined;
       const response = await runAuthoringMutationWithHistory(
         historyContext,
-        `Create ${submittedDraft.name.trim() || objectId}`,
+        `Create ${createName}`,
         async () => {
           const created = await createObjectTransaction(api, {
             base_revision: baseRevision,
             geometry: geometryPayload,
             material_ref: optionalRef(submittedDraft.material),
-            name: submittedDraft.name.trim() || objectId,
+            name: createName,
             object_id: objectId,
             region_name: optionalRef(submittedDraft.region),
             transform: transformPayload,
@@ -766,7 +787,20 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <InspectorGroup title="Geometry Object" collapsible defaultOpen>
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Shape", value: draft.geometryKind || object.shape },
+          { label: "Dimensions", value: object.dimensions },
+          { label: "Mode", value: draft.mode },
+          {
+            label: "State",
+            value: inspectorDirty ? "modified" : "clean",
+            tone: inspectorDirty ? "warning" : "neutral",
+          },
+        ]}
+      />
+      <InspectorGroup title="Geometry summary" collapsible defaultOpen={draft.mode !== "committed" || (selection.kind !== "object.geometry" && selection.kind !== "object.antenna.geometry")}>
+        {sourceNotice ? <FieldRow label="Source" value={sourceNotice} /> : null}
         {draft.mode === "committed" && (
           <FieldRow label="Object ID" value={object.objectId} />
         )}
@@ -810,9 +844,18 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         Object.values(draft.quantityFields).some((field) => field && field.lastValidSI !== null) ? (
         <FeedbackBanner kind="warning" message="Preview retains the last valid values. Complete or revert invalid fields before applying." />
       ) : null}
-      <DraftIdentitySection draft={draft} onFieldChange={updateField} showCommitted={draft.mode === "committed"} />
+      <DraftIdentitySection
+        draft={draft}
+        onFieldChange={updateField}
+        showCommitted={
+          draft.mode === "committed" &&
+          selection.kind !== "object.geometry" &&
+          selection.kind !== "object.antenna.geometry"
+        }
+      />
       <ActionsSection
         draft={draft}
+        valid={inspectorValid}
         feedback={feedback}
         sceneMutationLockReason={sceneMutationLockReason}
         pending={pending}
@@ -830,6 +873,25 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
       />
     </div>
   );
+}
+
+function geometrySourceNotice(
+  draftMode: GeometryObjectDraft["mode"],
+  objectMode: ReturnType<typeof resolveGeometryObjectPanelModel>["mode"],
+  scene: Pick<ReturnType<typeof useSceneResource>, "data" | "status">,
+): string | null {
+  if (draftMode === "draft-new") return "Unsaved draft";
+  if (scene.status === "error") {
+    return scene.data ? "Scene refresh failed" : "Scene unavailable";
+  }
+  if (scene.status === "loading") {
+    return scene.data ? "Refreshing scene" : "Loading scene";
+  }
+  if (scene.status === "stale") return "Scene data is stale";
+  if (scene.status === "ready" && objectMode === "missing") {
+    return "Object not found in scene";
+  }
+  return null;
 }
 
 function PrimitiveGeometrySection({
@@ -1012,9 +1074,11 @@ function ActionsSection({
   onRetryAfterConflict,
   pending,
   revisionConflictPhase,
+  valid,
 }: {
   draft: GeometryObjectDraft;
   feedback: Feedback | null;
+  valid: boolean;
   sceneMutationLockReason?: string;
   onApplyCreateDraft: () => Promise<boolean>;
   onRebaseAfterConflict: () => void;
@@ -1026,24 +1090,31 @@ function ActionsSection({
   return (
     <InspectorGroup title="Actions">
       <div className="fm-inspector-toolbar">
-        {draft.mode === "draft-new" ? (
-          <Button
-            disabled={
-              pending ||
-              Boolean(sceneMutationLockReason) ||
-              typeof draft.baseRevision !== "number" ||
-              !Number.isFinite(draft.baseRevision) ||
-              revisionConflictPhase !== null
-            }
-            size="sm"
-            type="button"
-            variant="primary"
-            title={sceneMutationLockReason}
-            onClick={() => void onApplyCreateDraft()}
-          >
-            Apply Draft
-          </Button>
-        ) : null}
+        {draft.mode === "draft-new" ? (() => {
+          const applyDisabledReason =
+            sceneMutationLockReason ?? (!valid ? "Resolve validation errors before applying." : undefined);
+          const applyButton = (
+            <Button
+              disabled={
+                pending ||
+                !valid ||
+                Boolean(sceneMutationLockReason) ||
+                typeof draft.baseRevision !== "number" ||
+                !Number.isFinite(draft.baseRevision) ||
+                revisionConflictPhase !== null
+              }
+              size="sm"
+              type="button"
+              variant="primary"
+              onClick={() => void onApplyCreateDraft()}
+            >
+              Apply Draft
+            </Button>
+          );
+          return applyDisabledReason ? (
+            <DisabledReason reason={applyDisabledReason}>{applyButton}</DisabledReason>
+          ) : applyButton;
+        })() : null}
       </div>
       {feedback ? (
         <FeedbackBanner kind={feedback.kind} message={feedback.message} />
@@ -1100,7 +1171,7 @@ function ValidationSection({
       <FieldRow label="Fetch state" value={status} />
       {messages.length > 0 ? (
         <ul className="fm-inspector-validation-list">
-          {messages.map((message) => (
+          {[...new Set(messages)].map((message) => (
             <li key={message}>{message}</li>
           ))}
         </ul>

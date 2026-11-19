@@ -408,6 +408,7 @@ pub(crate) fn pbc_provenance_artifacts(
             "demag": resolved_demag_boundary,
             "periodic_images": resolved_periodic_images,
             "fft_kernel": fft_kernel,
+            "executed_fft_kernel": provenance.demag_operator_kind,
             "fft_backend": provenance.fft_backend,
             "padded_counts": padded_counts,
         },

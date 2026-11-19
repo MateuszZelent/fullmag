@@ -8,6 +8,8 @@ option(FULLMAG_USE_MFEM_STACK "Build FEM backend against MFEM/libCEED/hypre" OFF
 option(FULLMAG_FEM_WITH_SLEPC "Build FEM frequency-domain dependency slice against PETSc/SLEPc" ON)
 option(FULLMAG_ENABLE_NVTX "Enable phase-level FEM GPU NVTX ranges" OFF)
 option(FULLMAG_FEM_REQUIRE_GPU "Fail configuration unless FEM GPU can be built" OFF)
+option(FULLMAG_ENABLE_CUPTI_ACTIVITY_TRACE
+    "Build optional CUPTI Activity API 28 tracing from an explicitly pinned profiler" ON)
 include("${CMAKE_SOURCE_DIR}/cmake/RequireFemGpu.cmake")
 fullmag_require_fem_gpu_configuration()
 
@@ -25,9 +27,11 @@ include(FullmagCudaDriverLibrary)
 
 set(FEM_PUBLIC_HEADERS
     ${CMAKE_SOURCE_DIR}/include/fullmag_fem.h
+    ${CMAKE_SOURCE_DIR}/include/fullmag_fem_cuda_trace.h
 )
 
 set(FEM_SOURCES
+    gpu/cuda/runtime/cuda_activity_trace.cpp
     core/petsc_slepc_runtime.cpp
     core/fem_field_buffers.cpp
     core/fem_context_builder.cpp
@@ -58,6 +62,7 @@ set(FEM_SOURCES
     gpu/cuda/interactions/magnetoelastic/magnetoelastic_memory.cpp
     gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.cpp
     gpu/cuda/mesh/mesh_geometry_upload.cpp
+    gpu/cuda/reductions/object_average.cpp
     gpu/cuda/reductions/reduction_workspace_memory.cpp
     gpu/cuda/relaxation/direct_energy_increment.cpp
     gpu/cuda/relaxation/nonlinear_cg.cpp
@@ -159,6 +164,8 @@ set(FEM_SOURCES
     cpu/mfem/runtime/backend_lifecycle.cpp
     cpu/mfem/runtime/backend_step.cpp
     cpu/mfem/runtime/cpu_threads.cpp
+    cpu/mfem/runtime/element_parallel_policy.cpp
+    cpu/mfem/runtime/hypre_host_policy.cpp
     cpu/mfem/runtime/eigen_dense.cpp
     cpu/mfem/runtime/field_refresh.cpp
     gpu/cuda/runtime/gpu_state_runtime.cpp
@@ -248,6 +255,9 @@ if(FULLMAG_USE_MFEM_STACK)
     endif()
     include("${CMAKE_SOURCE_DIR}/cmake/FindFullmagMfem.cmake")
     fullmag_find_mfem()
+    if(MFEM_USE_OPENMP)
+        find_package(OpenMP REQUIRED COMPONENTS CXX)
+    endif()
     if(FULLMAG_FEM_WITH_SLEPC)
         if(WIN32)
             fullmag_validate_windows_modal()
@@ -266,8 +276,10 @@ if(FULLMAG_USE_MFEM_STACK)
         cpu/mfem/workflows/antenna_field_solve/charge_control_nullspace_rank.cpp
         cpu/mfem/workflows/antenna_field_solve/charge_terminal_current_constraints.cpp
         cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.cpp
+        cpu/mfem/workflows/antenna_field_solve/accepted_surface_rt0.cpp
           cpu/mfem/workflows/antenna_field_solve/accepted_external_lead_source.cpp
         cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp
+        cpu/mfem/interactions/oersted/surface_rt0.cpp
         cpu/mfem/interactions/oersted/vector_potential.cpp
     )
 
@@ -346,6 +358,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/demag_fem_bem/fem_bem_kernels.cu
             gpu/cuda/observables/observable_kernels.cu
             gpu/cuda/relaxation/pgbb_kernels.cu
+            gpu/cuda/reductions/object_average_kernels.cu
             gpu/cuda/reductions/reduction_kernels.cu
             gpu/cuda/transfer/transfer_kernels.cu
             gpu/cuda/integrators/rk/rk_step.cu
@@ -356,6 +369,43 @@ if(FULLMAG_USE_MFEM_STACK)
             # PETSc/SLEPc dependency slice.
             list(APPEND FEM_SOURCES gpu/frequency_domain/modal_petsc_slepc.cpp)
         endif()
+    endif()
+endif()
+
+# CUPTI stays separate from the solver's CUDA toolkit. API 24 can crash when a
+# bounded collector refuses a buffer; do not fall back to CUDA::cupti from 12.6.
+set(FULLMAG_CUPTI_ROOT "$ENV{FULLMAG_CUPTI_ROOT}" CACHE PATH
+    "Private CUPTI API 28 prefix, independent of the CUDA solver toolkit")
+set(FULLMAG_FEM_CUPTI_TRACE_SUPPORTED FALSE)
+if(UNIX AND NOT APPLE AND FULLMAG_ENABLE_CUPTI_ACTIVITY_TRACE AND
+   FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU AND FULLMAG_CUPTI_ROOT)
+    # These are derived from the selected prefix, never independent overrides.
+    # Clear previous configure results so a root change cannot retain old paths.
+    unset(FULLMAG_CUPTI_INCLUDE_DIR CACHE)
+    unset(FULLMAG_CUPTI_INCLUDE_DIR)
+    unset(FULLMAG_CUPTI_LIBRARY CACHE)
+    unset(FULLMAG_CUPTI_LIBRARY)
+    find_path(FULLMAG_CUPTI_INCLUDE_DIR cupti_version.h
+        PATHS "${FULLMAG_CUPTI_ROOT}/include" NO_DEFAULT_PATH REQUIRED)
+    find_library(FULLMAG_CUPTI_LIBRARY cupti
+        PATHS "${FULLMAG_CUPTI_ROOT}/lib" "${FULLMAG_CUPTI_ROOT}/lib64"
+        NO_DEFAULT_PATH REQUIRED)
+    get_filename_component(FULLMAG_CUPTI_LIBRARY_REALPATH "${FULLMAG_CUPTI_LIBRARY}" REALPATH)
+    include(CheckCXXSourceCompiles)
+    file(SHA256 "${FULLMAG_CUPTI_INCLUDE_DIR}/cupti_version.h" _fullmag_cupti_header_sha)
+    set(_fullmag_cupti_api_check "FULLMAG_CUPTI_API_28_${_fullmag_cupti_header_sha}")
+    set(_fullmag_saved_required_includes "${CMAKE_REQUIRED_INCLUDES}")
+    set(CMAKE_REQUIRED_INCLUDES "${FULLMAG_CUPTI_INCLUDE_DIR}" "${CUDAToolkit_INCLUDE_DIRS}")
+    check_cxx_source_compiles(
+        "#include <cupti_version.h>\n#include <cupti_activity.h>\n#if !defined(CUPTI_API_VERSION) || CUPTI_API_VERSION != 28\n#error CUPTI Activity API 28 is required\n#endif\nint main() { CUpti_ActivityMemcpy6 a{}; CUpti_ActivitySynchronization2 b{}; CUpti_ActivityCudaEvent2 c{}; return int(a.copyCount + b.cudaEventSyncId + c.deviceTimestamp); }"
+        ${_fullmag_cupti_api_check})
+    set(CMAKE_REQUIRED_INCLUDES "${_fullmag_saved_required_includes}")
+    unset(_fullmag_saved_required_includes)
+    if(${_fullmag_cupti_api_check})
+        set(FULLMAG_FEM_CUPTI_TRACE_SUPPORTED TRUE)
+        find_package(Threads REQUIRED)
+    else()
+        message(FATAL_ERROR "The configured private CUPTI prefix is not compatible with Activity API 28")
     endif()
 endif()
 
@@ -405,6 +455,15 @@ endfunction()
 add_library(fullmag_fem SHARED ${FEM_SOURCES})
 fullmag_configure_runtime_source_snapshot(fullmag_fem)
 target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_BUILD_SHARED=1)
+if(FULLMAG_FEM_CUPTI_TRACE_SUPPORTED)
+    target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_CUPTI_TRACE_ENABLED=1
+        FULLMAG_FEM_CUPTI_LIBRARY_PATH="${FULLMAG_CUPTI_LIBRARY_REALPATH}")
+    target_include_directories(fullmag_fem PRIVATE "${FULLMAG_CUPTI_INCLUDE_DIR}")
+    target_link_libraries(fullmag_fem PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+    message(STATUS "FEM CUPTI Activity trace enabled (private CUPTI API 28)")
+else()
+    message(STATUS "FEM CUPTI Activity trace unavailable; building explicit stub")
+endif()
 
 if(FULLMAG_ENABLE_NVTX)
     target_compile_definitions(fullmag_fem PRIVATE FULLMAG_ENABLE_NVTX=1)
@@ -427,6 +486,10 @@ target_include_directories(fullmag_fem
 )
 
 if(FULLMAG_USE_MFEM_STACK)
+    # DOC-ANCHOR: antenna-surface-gmp-dependency
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(FULLMAG_SURFACE_ARITHMETIC REQUIRED IMPORTED_TARGET gmp "mpfr>=4.1")
+    target_link_libraries(fullmag_fem PRIVATE PkgConfig::FULLMAG_SURFACE_ARITHMETIC)
     target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_MFEM_STACK=1)
     if(FULLMAG_ENABLE_CUDA)
         target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUDA_RUNTIME=1)
@@ -440,6 +503,9 @@ if(FULLMAG_USE_MFEM_STACK)
         target_link_libraries(fullmag_fem PRIVATE MFEM::mfem)
     else()
         target_link_libraries(fullmag_fem PRIVATE mfem)
+    endif()
+    if(MFEM_USE_OPENMP)
+        target_link_libraries(fullmag_fem PRIVATE OpenMP::OpenMP_CXX)
     endif()
     if(FULLMAG_FEM_WITH_SLEPC)
         target_compile_definitions(fullmag_fem PUBLIC FULLMAG_FEM_WITH_SLEPC=1)
@@ -490,6 +556,23 @@ file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/fullmag-fem-library-path.txt"
 
 # ── Tests ──
 enable_testing()
+
+add_executable(fem_cuda_activity_trace_contract tests/cuda_activity_trace_contract.cpp)
+target_link_libraries(fem_cuda_activity_trace_contract PRIVATE fullmag_fem)
+target_include_directories(fem_cuda_activity_trace_contract PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+if(FULLMAG_FEM_CUPTI_TRACE_SUPPORTED)
+    target_compile_definitions(fem_cuda_activity_trace_contract PRIVATE
+        FULLMAG_FEM_CUDA_TRACE_TEST_ENABLED=1
+        FULLMAG_FEM_CUPTI_LIBRARY_PATH="${FULLMAG_CUPTI_LIBRARY_REALPATH}")
+    target_include_directories(fem_cuda_activity_trace_contract PRIVATE "${FULLMAG_CUPTI_INCLUDE_DIR}")
+    target_link_libraries(fem_cuda_activity_trace_contract PRIVATE
+        CUDA::cudart CUDA::cuda_driver ${CMAKE_DL_LIBS})
+endif()
+add_test(NAME fem_cuda_activity_trace_contract COMMAND fem_cuda_activity_trace_contract)
+set_tests_properties(fem_cuda_activity_trace_contract PROPERTIES
+    SKIP_RETURN_CODE 77
+    TIMEOUT 75)
 
 if(FULLMAG_USE_MFEM_STACK)
     add_executable(
@@ -784,6 +867,14 @@ target_include_directories(fem_cuda_slonczewski_contract PRIVATE
 )
 add_test(NAME fem_cuda_slonczewski_contract COMMAND fem_cuda_slonczewski_contract)
 
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU)
+    add_executable(fem_cuda_object_average_contract tests/cuda_object_average_contract.cpp)
+    target_link_libraries(fem_cuda_object_average_contract PRIVATE fullmag_fem CUDA::cudart)
+    target_include_directories(fem_cuda_object_average_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME fem_cuda_object_average_contract COMMAND fem_cuda_object_average_contract)
+endif()
+
 add_executable(fem_cuda_sot_contract tests/cuda_sot_contract.cpp)
 target_link_libraries(fem_cuda_sot_contract PRIVATE fullmag_fem)
 if(FULLMAG_ENABLE_CUDA)
@@ -806,6 +897,29 @@ target_include_directories(fem_cuda_rk_guard_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_cuda_rk_guard_contract COMMAND fem_cuda_rk_guard_contract)
+
+add_executable(fem_cuda_pgbb_reuse_contract tests/cuda_pgbb_reuse_contract.cpp)
+target_link_libraries(fem_cuda_pgbb_reuse_contract PRIVATE fullmag_fem)
+target_include_directories(fem_cuda_pgbb_reuse_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_cuda_pgbb_reuse_contract COMMAND fem_cuda_pgbb_reuse_contract)
+
+add_executable(fem_pgbb_accepted_cache_contract tests/pgbb_accepted_cache_contract.cpp)
+target_link_libraries(fem_pgbb_accepted_cache_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_pgbb_accepted_cache_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_pgbb_accepted_cache_contract PRIVATE mfem)
+    endif()
+endif()
+target_include_directories(fem_pgbb_accepted_cache_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_pgbb_accepted_cache_contract COMMAND fem_pgbb_accepted_cache_contract)
 
 if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU)
     add_executable(
@@ -1593,6 +1707,10 @@ add_test(NAME fem_frozen_spins_contract COMMAND fem_frozen_spins_contract)
 
 add_executable(fem_cpu_threads_contract tests/cpu_threads_contract.cpp)
 target_link_libraries(fem_cpu_threads_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK AND MFEM_USE_OPENMP)
+    target_link_libraries(fem_cpu_threads_contract PRIVATE OpenMP::OpenMP_CXX)
+    target_compile_definitions(fem_cpu_threads_contract PRIVATE FULLMAG_FEM_EXPECTS_OPENMP=1)
+endif()
 target_include_directories(fem_cpu_threads_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -1692,6 +1810,7 @@ target_include_directories(fem_state_io_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_state_io_contract COMMAND fem_state_io_contract)
+add_test(NAME fem_torque_observable_contract COMMAND fem_state_io_contract --torque-only)
 
 add_executable(fem_snapshot_contract tests/snapshot_contract.cpp)
 target_link_libraries(fem_snapshot_contract PRIVATE fullmag_fem)
@@ -1790,6 +1909,8 @@ target_include_directories(fem_element_dg0_workflow_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_element_dg0_workflow_contract COMMAND fem_element_dg0_workflow_contract)
+add_test(NAME fem_element_dg0_average_contract
+    COMMAND fem_element_dg0_workflow_contract --object-averages-only)
 
 add_executable(
     fem_element_quadrature_material_contract
@@ -1876,9 +1997,16 @@ target_include_directories(fem_field_buffers_contract PRIVATE
 )
 add_test(NAME fem_field_buffers_contract COMMAND fem_field_buffers_contract)
 
-add_executable(fem_demag_poisson_contract tests/demag_poisson_contract.cpp)
+add_executable(fem_demag_poisson_contract
+    tests/demag_poisson_contract.cpp
+    tests/regional_marker_map_contract.cpp
+)
 target_link_libraries(fem_demag_poisson_contract PRIVATE fullmag_fem)
 if(FULLMAG_USE_MFEM_STACK)
+    target_sources(fem_demag_poisson_contract PRIVATE tests/charge_transport_abi_contract.cpp
+        tests/steady_transport_abi_contract.cpp tests/fem_mixed_p1_contract.cpp)
+    target_compile_definitions(fem_demag_poisson_contract PRIVATE FULLMAG_EMBED_CHARGE_TRANSPORT_CONTRACT=1
+        FULLMAG_EMBED_STEADY_TRANSPORT_CONTRACT=1 FULLMAG_EMBED_MIXED_MARKER_CONTRACT=1)
     if(TARGET MFEM::mfem)
         target_link_libraries(fem_demag_poisson_contract PRIVATE MFEM::mfem)
     else()

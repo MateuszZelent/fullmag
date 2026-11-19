@@ -140,7 +140,7 @@ class CancelledActivationPreflightTests(unittest.TestCase):
             project = proof["compose_project"]
             volume = current["control_volume"]
 
-        with patch.object(module, "_read_cancelled_activation_record", side_effect=lambda _control, relative: records[relative]), \
+        with patch.object(module, "_read_cancelled_activation_record", side_effect=lambda _control, relative, **_options: records[relative]), \
                 patch.object(module, "_read_cancelled_activation_bytes", return_value=None), \
                 patch.object(module, "_cancelled_activation_store_probe", return_value=probe) as store_probe:
             result = module._validate_cancelled_activation_preflight(
@@ -173,7 +173,7 @@ class CancelledActivationPreflightTests(unittest.TestCase):
 
         probe["host_ledger_sha256"] = "f" * 64
         probe["current_session_sha256"] = "0" * 64
-        with patch.object(module, "_read_cancelled_activation_record", side_effect=lambda _control, relative: records[relative]), \
+        with patch.object(module, "_read_cancelled_activation_record", side_effect=lambda _control, relative, **_options: records[relative]), \
                 patch.object(module, "_read_cancelled_activation_bytes", return_value=None), \
                 patch.object(module, "_cancelled_activation_store_probe", return_value=probe):
             result = module._validate_cancelled_activation_preflight(
@@ -184,7 +184,7 @@ class CancelledActivationPreflightTests(unittest.TestCase):
         self.assertEqual(result["proof_sha256"], hashlib.sha256(proof_raw).hexdigest())
 
         probe["run_catalog_sha256"] = "f" * 64
-        with patch.object(module, "_read_cancelled_activation_record", side_effect=lambda _control, relative: records[relative]), \
+        with patch.object(module, "_read_cancelled_activation_record", side_effect=lambda _control, relative, **_options: records[relative]), \
                 patch.object(module, "_read_cancelled_activation_bytes", return_value=None), \
                 patch.object(module, "_cancelled_activation_store_probe", return_value=probe):
             with self.assertRaises(module.BuildControlError):
@@ -207,7 +207,7 @@ class CancelledActivationPreflightTests(unittest.TestCase):
             project = proof["compose_project"]
             volume = current["control_volume"]
 
-        with patch.object(module, "_read_cancelled_activation_record", side_effect=lambda _control, relative: records[relative]), \
+        with patch.object(module, "_read_cancelled_activation_record", side_effect=lambda _control, relative, **_options: records[relative]), \
                 patch.object(module, "_read_cancelled_activation_bytes", return_value=None), \
                 patch.object(module, "_cancelled_activation_store_probe", return_value=probe):
             with self.assertRaises(module.BuildControlError):
@@ -219,12 +219,26 @@ class CancelledActivationPreflightTests(unittest.TestCase):
 
         current["activation_state"] = "accepted"
         records = {"activation/current.json": (current, _raw(current))}
-        with patch.object(module, "_read_cancelled_activation_record", side_effect=lambda _control, relative: records[relative]):
+        with patch.object(module, "_read_cancelled_activation_record", side_effect=lambda _control, relative, **_options: records[relative]):
             with self.assertRaises(module.BuildControlError):
                 module._validate_cancelled_activation_preflight(
                     Control(), "development/attempts/" + development_attempt,
                     {"inputs": {"image_id": image}}, {}, Path(proof["source_root"]),
                     proof["config_sha256"], backend, {},
+                )
+
+    def test_live_session_without_cancelled_activation_names_the_refusal(self):
+        # A session created by `fm.connect()` has no activation record at all.
+        with patch.object(
+            module,
+            "_read_cancelled_activation_record",
+            side_effect=lambda _control, _relative, **options: (
+                (None, None) if options.get("optional") else self.fail("missing record must be optional")
+            ),
+        ):
+            with self.assertRaisesRegex(module.BuildControlError, "active session"):
+                module._validate_cancelled_activation_preflight(
+                    object(), "development/attempts/a", {}, {}, Path("."), "0" * 64, "backend", {},
                 )
 
     def test_probe_source_uses_nonblocking_writer_locks_and_no_mutation(self):

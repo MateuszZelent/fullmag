@@ -3,7 +3,7 @@ import hashlib
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import docker_volume_dev as dev
@@ -40,11 +40,12 @@ class RetainedRecoveryContextTests(unittest.TestCase):
             'stop_journal_sha256': self.auth['prior_stop_journal_sha256'],
             'removed_container_ids': [self.auth['backend_container_id'], self.auth['frontend_container_id']],
         }
-        self.previous = {'inputs': {'source_root': '/checkout'},
+        self.previous = {'attempt': '3' * 32, 'inputs': {'source_root': '/checkout'},
                          'container_recovery': self.metadata,
                          'container_recovery_environment': sorted(self.env)}
         self.document = {'services': {'backend': {'environment': self.env}}}
         self.control = Mock(project='fullmag-worktree-test')
+        self.control.read.return_value = None
 
     def run_context(self, fresh_state=False):
         def control_bytes(_control, relative, *, optional=False):
@@ -66,6 +67,12 @@ class RetainedRecoveryContextTests(unittest.TestCase):
         with patch('docker_volume_pre_ack_retry.storage.resolve_layout') as resolve:
             self.assertEqual(self.run_context(), {})
         resolve.assert_not_called()
+        journal_root = 'development/attempts/' + self.previous['attempt'] + '/pre-api-stop/'
+        self.assertEqual(self.control.read.call_args_list, [
+            call(journal_root + 'receipt.json', optional=True),
+            call(journal_root + 'intent.json', optional=True),
+        ])
+        self.control.write.assert_not_called()
 
     def test_fresh_state_cannot_retarget_original_recovery(self):
         with self.assertRaisesRegex(dev.BuildControlError, 'original session'):
@@ -143,9 +150,19 @@ class RetainedRecoveryContextTests(unittest.TestCase):
             'status': 'recovered',
             'outcome': 'failed',
         })
-        with patch.object(recovery, '_control_bytes', return_value=recovered):
-            with self.assertRaisesRegex(dev.BuildControlError, 'unsupported outcome'):
-                dev._validate_completed_recovery_receipt(self.control, self.auth, recovery)
+        request_raw = recovery._canonical({'request_id': self.auth['request_id']})
+        # The request is bound to the authorization, so the outcome check is
+        # the one that must refuse the receipt.
+        auth = {**self.auth, 'native_request_sha256': hashlib.sha256(request_raw).hexdigest()}
+
+        def control_bytes(_control, relative, *, optional=False):
+            return recovered if relative.endswith('/receipt.json') else request_raw
+
+        with patch.object(recovery, '_control_bytes', side_effect=control_bytes), \
+                patch.object(recovery, 'validate_request', side_effect=lambda request: request), \
+                patch.object(recovery, 'expected_recovery_outcome', return_value='recovered'):
+            with self.assertRaisesRegex(dev.BuildControlError, 'outcome differs from its request scope'):
+                dev._validate_completed_recovery_receipt(self.control, auth, recovery)
 
 
 if __name__ == '__main__':

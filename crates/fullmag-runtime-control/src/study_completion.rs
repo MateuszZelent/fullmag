@@ -126,17 +126,31 @@ pub(crate) fn dependencies_ready_locked(
 /// Immutable accepted-study evidence prepared before a task admission writer
 /// transaction. The intent is fenced again under the writer before this
 /// snapshot is used for mutable dependency checks.
-pub(crate) struct PreparedTaskDependencies {
+enum AcceptedStudyEvidence<'a> {
+    Owned(AcceptedStudySnapshot),
+    Borrowed(&'a AcceptedStudySnapshot),
+}
+
+impl AcceptedStudyEvidence<'_> {
+    fn as_ref(&self) -> &AcceptedStudySnapshot {
+        match self {
+            Self::Owned(accepted) => accepted,
+            Self::Borrowed(accepted) => accepted,
+        }
+    }
+}
+
+pub(crate) struct PreparedTaskDependencies<'a> {
     run_id: String,
     task_id: String,
     expected_intent: Option<FmsRunIntent>,
-    accepted: Option<AcceptedStudySnapshot>,
+    accepted: Option<AcceptedStudyEvidence<'a>>,
     step_id: Option<String>,
 }
 
-impl PreparedTaskDependencies {
+impl PreparedTaskDependencies<'_> {
     pub(crate) fn accepted_study(&self) -> Option<&AcceptedStudySnapshot> {
-        self.accepted.as_ref()
+        self.accepted.as_ref().map(AcceptedStudyEvidence::as_ref)
     }
 
     pub(crate) fn has_run_intent(&self) -> bool {
@@ -164,6 +178,7 @@ impl PreparedTaskDependencies {
         let accepted = self
             .accepted
             .as_ref()
+            .map(AcceptedStudyEvidence::as_ref)
             .context("prepared accepted study snapshot is missing")?;
         if &accepted.run.intent != intent
             || accepted.run.specification.run_id.as_str() != self.run_id
@@ -197,7 +212,7 @@ pub(crate) fn prepare_task_dependencies(
     store: &SessionStore,
     run_id: &RunId,
     task_id: &str,
-) -> Result<PreparedTaskDependencies> {
+) -> Result<PreparedTaskDependencies<'static>> {
     let expected_intent = store.read_run_intent(run_id.as_str())?;
     let mut accepted = None;
     let mut step_id = None;
@@ -222,22 +237,8 @@ pub(crate) fn prepare_task_dependencies(
             if &snapshot.run.intent != intent {
                 bail!("accepted run intent changed while loading its study snapshot");
             }
-
-            let mut matched_step_id: Option<String> = None;
-            for step in &snapshot.study.steps {
-                if fullmag_session::task_id_for_study_step(run_id.as_str(), &step.step_id)?
-                    == task_id
-                {
-                    if matched_step_id.is_some() {
-                        bail!("completion consumer identity is ambiguous");
-                    }
-                    matched_step_id = Some(step.step_id.clone());
-                }
-            }
-            step_id = Some(
-                matched_step_id.context("completion consumer is not an accepted step")?,
-            );
-            accepted = Some(snapshot);
+            step_id = Some(accepted_step_id_for_task(&snapshot, run_id, task_id)?);
+            accepted = Some(AcceptedStudyEvidence::Owned(snapshot));
         }
     }
 
@@ -248,6 +249,52 @@ pub(crate) fn prepare_task_dependencies(
         accepted,
         step_id,
     })
+}
+
+/// Prepare admission dependencies from the candidate snapshot without
+/// reopening immutable CAS objects. The exact fresh intent is captured here
+/// and compared again under the host/store writer before admission effects.
+pub(crate) fn prepare_task_dependencies_from_snapshot<'a>(
+    store: &SessionStore,
+    run_id: &RunId,
+    task_id: &str,
+    accepted: &'a AcceptedStudySnapshot,
+) -> Result<PreparedTaskDependencies<'a>> {
+    let expected_intent = store
+        .read_run_intent(run_id.as_str())?
+        .context("accepted task admission requires its immutable run intent")?;
+    if expected_intent != accepted.run.intent
+        || expected_intent.run_id != run_id.as_str()
+        || accepted.run.specification.run_id != *run_id
+        || expected_intent.study_object_ref.is_none()
+    {
+        bail!("accepted task admission snapshot differs from the current run intent");
+    }
+    let step_id = accepted_step_id_for_task(accepted, run_id, task_id)?;
+    Ok(PreparedTaskDependencies {
+        run_id: run_id.as_str().to_owned(),
+        task_id: task_id.to_owned(),
+        expected_intent: Some(expected_intent),
+        accepted: Some(AcceptedStudyEvidence::Borrowed(accepted)),
+        step_id: Some(step_id),
+    })
+}
+
+fn accepted_step_id_for_task(
+    accepted: &AcceptedStudySnapshot,
+    run_id: &RunId,
+    task_id: &str,
+) -> Result<String> {
+    let mut matched_step_id: Option<String> = None;
+    for step in &accepted.study.steps {
+        if fullmag_session::task_id_for_study_step(run_id.as_str(), &step.step_id)? == task_id {
+            if matched_step_id.is_some() {
+                bail!("completion consumer identity is ambiguous");
+            }
+            matched_step_id = Some(step.step_id.clone());
+        }
+    }
+    matched_step_id.context("completion consumer is not an accepted step")
 }
 
 /// Admission and command replay use the exact accepted plan. Historical

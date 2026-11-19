@@ -134,12 +134,18 @@ def test_stage_constraints_lower_to_one_top_level_definition_with_stage_ids() ->
         study = fm.study("stage frozen spins")
         study.engine("fdm")
         magnet = study.geometry(
-            fm.Box(size=(100e-9, 50e-9, 3e-9)),
+            fm.Box(size=(100e-9, 50e-9, 3e-9))
+            + fm.Cylinder(radius=5e-9, height=5e-9).translate((0, 0, 10e-9)),
             name="User-facing layer",
             object_id="free_layer",
         )
         magnet.Ms = 800e3
         magnet.Aex = 13e-12
+        dot = magnet.add_region(
+            "dot", fm.Cylinder(radius=5e-9, height=5e-9).translate((0, 0, 10e-9)),
+            frame="world",
+        )
+        dot.set_texture(fm.init.UniformMagnetization((-1, 0, 0)))
         frozen = fm.FrozenSpins(
             id="whole_layer",
             selector=fm.select.in_object(magnet),
@@ -167,6 +173,23 @@ def test_stage_constraints_lower_to_one_top_level_definition_with_stage_ids() ->
         "kind": "stage_ids",
         "stage_ids": ["relax", "run"],
     }
+
+    from fullmag.runtime.scene_document import build_scene_document_from_builder
+    from fullmag.runtime.scene_document_ir import scene_document_to_problem_ir
+    from fullmag.runtime.script_builder import export_builder_draft
+
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    assert scene["magnetization_constraints"] == ir["magnetization_constraints"]
+    reimported = scene_document_to_problem_ir(
+        scene, requested_backend="fdm", requested_device="gpu",
+        requested_precision="double", requested_mode="strict",
+    )
+    assert reimported["magnetization_constraints"] == ir["magnetization_constraints"]
+    imported_region, = reimported["object_regions"]
+    assert imported_region["shape"]["center"] == [0, 0, 10e-9]
+    assert imported_region["texture_override"]["initial_magnetization"]["preset_params"]["direction"] == [-1, 0, 0]
+
+
 
 
 @pytest.mark.parametrize(

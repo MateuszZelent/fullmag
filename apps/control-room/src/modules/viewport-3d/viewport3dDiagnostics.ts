@@ -96,6 +96,7 @@ export interface Viewport3DDiagnosticsInput {
   surfaceColorStatus?: string | null;
   targetDiagnostics?: readonly Viewport3DTargetDiagnosticSummary[];
   topologyRevision: string | number | null;
+  topologyIndexStatus?: "idle" | "building" | "ready" | "error";
   tracker: Viewport3DResourceCounts;
   requestedRevision?: string | number | null;
   receivedRevision?: string | number | null;
@@ -185,6 +186,17 @@ export class Viewport3DResourceTracker {
 
   getSnapshot(): Viewport3DResourceCounts {
     return this.counts;
+  }
+
+  /** Publish current allocation counters without scheduling a React update. */
+  publishDebugResourceCounts(): void {
+    recordVisualizationDebugResourceCounts({
+      geometries: this.counts.geometries,
+      materials: this.counts.materials,
+      renderTargets: this.counts.renderTargets,
+      textures: this.counts.textures,
+      workers: this.counts.workers,
+    });
   }
 
   getLedgerSnapshot(): Viewport3DResourceLedgerEntry[] {
@@ -334,6 +346,7 @@ export class Viewport3DResourceTracker {
       owner: ledgerEntry.owner,
     });
     this.counts = incrementCount(this.counts, kind, 1);
+    this.publishDebugResourceCounts();
     if (kind === "geometry") {
       recordVisualizationDebugPerformanceMetric("geometriesCreated");
     } else if (kind === "material") {
@@ -369,6 +382,7 @@ export class Viewport3DResourceTracker {
     }
     dispose();
     this.counts = incrementCount(this.counts, kind, -1);
+    this.publishDebugResourceCounts();
     if (kind === "geometry") {
       recordVisualizationDebugPerformanceMetric("geometriesDisposed");
     } else if (kind === "material") {
@@ -408,13 +422,7 @@ export class Viewport3DResourceTracker {
       textures: 0,
       workers: 0,
     };
-    recordVisualizationDebugResourceCounts({
-      geometries: 0,
-      materials: 0,
-      renderTargets: 0,
-      textures: 0,
-      workers: 0,
-    });
+    this.publishDebugResourceCounts();
   }
 
   subscribe(listener: TrackerListener): () => void {
@@ -487,6 +495,9 @@ export function buildViewport3DDiagnostics(
   return [
     `q:${input.quantityId}`,
     `top:${input.topologyRevision ?? "none"}`,
+    ...(input.topologyIndexStatus
+      ? [`topology-index:${input.topologyIndexStatus}`]
+      : []),
     `field:${input.fieldPayloadRevision ?? input.fieldRevision ?? "none"}`,
     ...formatFieldSyncDiagnostic(input),
     ...formatFieldRevisionSyncDiagnostic(input),

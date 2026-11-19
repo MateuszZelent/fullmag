@@ -43,7 +43,7 @@ export function formatTelemetrySampleTime(timestamp: number | undefined): {
   if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) return null;
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) return null;
-  return { dateTime: date.toISOString(), label: date.toLocaleString() };
+  return { dateTime: date.toISOString(), label: date.toLocaleString("en-US") };
 }
 
 /** Hardware inventory and registered solver lanes are separate observations. */

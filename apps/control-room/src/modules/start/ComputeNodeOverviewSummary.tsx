@@ -4,11 +4,12 @@ import type {
   ComputeNodeInventoryNodeSummary,
   ComputeNodeInventorySummary,
 } from "./model/types";
+import { CopyableIdentifier } from "./ui/CopyableIdentifier";
 
 const GIB = 1024 ** 3;
-const cpuFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
-const gibFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
-const sampleTimeFormat = new Intl.DateTimeFormat(undefined, {
+const cpuFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+const gibFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+const sampleTimeFormat = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
   timeStyle: "short",
 });
@@ -46,14 +47,12 @@ export function ComputeNodeOverviewSummary({
       <div aria-label="Compute host identity and capacity" className="fm-start-node-summary" role="group">
         <article className="fm-start-node-summary__card" data-node-state={state}>
           <div className="fm-start-node-summary__head">
-            <div>
-              <h3>Compute node</h3>
-              <p>Stable identity and capacity</p>
-            </div>
-            <span className="fm-start-compute-settings__status" data-state={nodeStateTone(state)}>
+            <h3>Compute node</h3>
+            <span className="fm-start-compute-settings__status" data-state={nodeStateTone(state)} title={label}>
               {label}
             </span>
           </div>
+          <p className="fm-start-node-summary__host">Stable identity and capacity</p>
           <p className="fm-start-compute-settings__notice" role="status">{detail}</p>
         </article>
       </div>
@@ -76,14 +75,14 @@ function NodeSummary({ node }: { readonly node: ComputeNodeInventoryNodeSummary 
   return (
     <article className="fm-start-node-summary__card" data-node-state={node.state}>
       <div className="fm-start-node-summary__head">
-        <div>
-          <h3>Compute node</h3>
-          <p>{node.nodeId}</p>
-        </div>
+        <h3>Compute node</h3>
         <span className="fm-start-compute-settings__status" data-state={nodeStateTone(node.state)}>
           {stateLabel}
         </span>
       </div>
+      <p className="fm-start-node-summary__host">
+        <CopyableIdentifier label="compute host ID" value={node.nodeId} />
+      </p>
       <dl className="fm-start-node-summary__metrics">
         <Metric
           label="CPU topology"

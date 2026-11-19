@@ -9,6 +9,7 @@ import {
   SESSION_STATUS_PATH,
   SIMULATION_COMMANDS_PATH,
 } from "@/kernel/api/apiPaths";
+import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { KernelContext } from "@/kernel/KernelContext";
@@ -18,6 +19,7 @@ import {
 } from "@/kernel/realtime/communicationPolicy";
 import { RealtimeInvalidationBridge } from "@/kernel/realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
+import { sessionScopedResourceKey } from "@/kernel/resources/sessionResourceIdentity";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
 import type { KernelApi } from "@/kernel/types";
@@ -47,10 +49,11 @@ describe("viewport 3D field revision refetch", () => {
     updateRealtimeCommunicationPolicy({ status_refresh_ms: 1 });
     let sessionEpoch = "session-1@1000";
     let vectorRequests = 0;
+    let oldRequestSignal: AbortSignal | undefined;
     let resolveOldResponse: ((response: Response) => void) | null = null;
     const api = new ControlRoomApi({
       baseUrl: "http://127.0.0.1:8765",
-      fetchImpl: async (url) => {
+      fetchImpl: async (url, init) => {
         const requestUrl = String(url);
         if (new URL(requestUrl).pathname === SESSIONS_PATH) {
           return sessionListResponse();
@@ -64,6 +67,7 @@ describe("viewport 3D field revision refetch", () => {
         if (requestUrl.includes("/data/fields/H_demag/samples/vector")) {
           vectorRequests += 1;
           if (vectorRequests === 1) {
+            oldRequestSignal = init?.signal ?? undefined;
             return new Promise<Response>((resolve) => {
               resolveOldResponse = resolve;
             });
@@ -101,12 +105,264 @@ describe("viewport 3D field revision refetch", () => {
         () => vectorRequests === 2 && observations.at(-1)?.data?.values[0] === 2,
         "new epoch field response was not adopted",
       );
+      expect(oldRequestSignal?.aborted).toBe(true);
 
       await act(async () => resolveOldResponse?.(fieldVectorResponse(1)));
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       expect(observations.at(-1)?.data?.values[0]).toBe(2);
     } finally {
       await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps a slow vector GET alive and coalesces many revisions to bounded refreshes", async () => {
+    updateRealtimeCommunicationPolicy({ field_sample_publish_ms: 20 });
+    const requests: Array<{
+      resolve: (response: Response) => void;
+      signal: AbortSignal | undefined;
+    }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        const requestUrl = String(url);
+        if (new URL(requestUrl).pathname === SESSIONS_PATH) {
+          return sessionListResponse();
+        }
+        if (new URL(requestUrl).pathname === SESSION_STATUS_PATH) {
+          return jsonResponse({
+            resources: {},
+            session: {
+              session_epoch: "session-1@1700000000000",
+              request_scope_epoch: "test-api:1",
+              session_id: "session-1",
+            },
+          });
+        }
+        if (requestUrl.includes("/data/fields/H_demag/samples/vector")) {
+          return new Promise<Response>((resolve, reject) => {
+            const signal = init?.signal ?? undefined;
+            requests.push({ resolve, signal });
+            signal?.addEventListener(
+              "abort",
+              () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+              { once: true },
+            );
+          });
+        }
+        throw new Error(`Unexpected request ${requestUrl}`);
+      },
+    });
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources, {
+      scheduleFlush: (flush) => {
+        flush();
+        return () => undefined;
+      },
+    });
+    const kernel = {
+      api,
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({
+        config: { enabled: false },
+      }),
+      resources,
+    } as unknown as KernelApi;
+    const observations: Array<ReturnType<typeof useViewport3DFieldVectorRequest>> = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+
+    const invalidate = async (revision: number) => {
+      await act(async () => {
+        bridge.handleEvent({
+          payload: {
+            changes: [
+              {
+                recommended_fetch: resourceKey,
+                resource: "fields",
+                resource_id: "samples",
+                revision,
+              },
+            ],
+          },
+          type: "resource.batch_changed",
+        });
+      });
+    };
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Probe observations={observations} />
+          </KernelContext.Provider>,
+        );
+      });
+      await waitFor(() => requests.length === 1, "initial slow field request did not start");
+
+      for (let revision = 2; revision <= 20; revision += 1) {
+        await invalidate(revision);
+      }
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.signal?.aborted).toBe(false);
+
+      await act(async () => requests[0]?.resolve(fieldVectorResponse(1)));
+      await waitFor(
+        () => requests.length === 2 && observations.at(-1)?.data?.values[0] === 1,
+        "coalesced refresh did not start while retaining the initial field",
+      );
+      expect(observations.at(-1)?.status).toBe("stale");
+      expect(observations.at(-1)?.data?.values[0]).toBe(1);
+
+      for (let revision = 21; revision <= 40; revision += 1) {
+        await invalidate(revision);
+      }
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.signal?.aborted).toBe(false);
+
+      await act(async () => requests[1]?.resolve(fieldVectorResponse(2)));
+      await waitFor(
+        () => requests.length === 3 && observations.at(-1)?.data?.values[0] === 2,
+        "latest coalesced revision did not schedule one eventual refresh",
+      );
+      expect(observations.at(-1)?.status).toBe("stale");
+      expect(observations.at(-1)?.data?.values[0]).toBe(2);
+      expect(
+        resources.getRevision(
+          sessionScopedResourceKey(
+            {
+              requestScopeEpoch: "test-api:1",
+              sessionEpoch: "session-1@1700000000000",
+              sessionId: "session-1",
+            },
+            resourceKey,
+          ),
+        ),
+      ).toBe(40);
+
+      await act(async () => requests[2]?.resolve(fieldVectorResponse(3)));
+      await waitFor(
+        () =>
+          observations.at(-1)?.status === "ready" &&
+          observations.at(-1)?.data?.values[0] === 3,
+        "final coalesced field response did not become ready",
+      );
+      expect(requests).toHaveLength(3);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("cancels and rejects a delayed response when the query scope identity changes", async () => {
+    let oldRequestSignal: AbortSignal | undefined;
+    let unmountRequestSignal: AbortSignal | undefined;
+    let resolveOldResponse: ((response: Response) => void) | null = null;
+    let vectorRequests = 0;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        const requestUrl = String(url);
+        if (new URL(requestUrl).pathname === SESSIONS_PATH) {
+          return sessionListResponse();
+        }
+        if (new URL(requestUrl).pathname === SESSION_STATUS_PATH) {
+          return jsonResponse({
+            resources: {},
+            session: {
+              session_epoch: "session-1@1700000000000",
+              request_scope_epoch: "test-api:1",
+              session_id: "session-1",
+            },
+          });
+        }
+        if (requestUrl.includes("/data/fields/H_demag/samples/vector")) {
+          vectorRequests += 1;
+          const scopeId = new URL(requestUrl).searchParams.get("scope_id");
+          if (scopeId === query.scope_id) {
+            oldRequestSignal = init?.signal ?? undefined;
+            return new Promise<Response>((resolve) => {
+              resolveOldResponse = resolve;
+            });
+          }
+          if (scopeId === "unmount-scope") {
+            return new Promise<Response>((_resolve, reject) => {
+              unmountRequestSignal = init?.signal ?? undefined;
+              unmountRequestSignal?.addEventListener(
+                "abort",
+                () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+                { once: true },
+              );
+            });
+          }
+          return fieldVectorResponse(2);
+        }
+        throw new Error(`Unexpected request ${requestUrl}`);
+      },
+    });
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const kernel = {
+      api,
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({
+        config: { enabled: false },
+      }),
+      resources,
+    } as unknown as KernelApi;
+    const observations: Array<ReturnType<typeof useViewport3DFieldVectorRequest>> = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    let rootMounted = true;
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Probe observations={observations} />
+          </KernelContext.Provider>,
+        );
+      });
+      await waitFor(() => vectorRequests === 1, "original scope request did not start");
+
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Probe
+              observations={observations}
+              requestQuery={{ ...query, scope_id: "next-scope" }}
+            />
+          </KernelContext.Provider>,
+        );
+      });
+      await waitFor(
+        () => vectorRequests === 2 && observations.at(-1)?.data?.values[0] === 2,
+        "new scope response was not adopted",
+      );
+      expect(oldRequestSignal?.aborted).toBe(true);
+
+      await act(async () => resolveOldResponse?.(fieldVectorResponse(1)));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(observations.at(-1)?.data?.values[0]).toBe(2);
+
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Probe
+              observations={observations}
+              requestQuery={{ ...query, scope_id: "unmount-scope" }}
+            />
+          </KernelContext.Provider>,
+        );
+      });
+      await waitFor(() => vectorRequests === 3, "new scope request did not start");
+
+      await act(async () => root.unmount());
+      rootMounted = false;
+      expect(unmountRequestSignal?.aborted).toBe(true);
+    } finally {
+      if (rootMounted) await act(async () => root.unmount());
       dom.restore();
     }
   });
@@ -315,14 +571,16 @@ describe("viewport 3D field revision refetch", () => {
 
 function Probe({
   observations,
+  requestQuery = query,
 }: {
   observations: Array<ReturnType<typeof useViewport3DFieldVectorRequest>>;
+  requestQuery?: FieldVectorQuery;
 }) {
   observations.push(
     useViewport3DFieldVectorRequest({
       consumers: ["revision-refetch-test"],
       quantityId: "H_demag",
-      query,
+      query: requestQuery,
       requestId: "revision-refetch-test",
     }),
   );
@@ -350,7 +608,10 @@ function FieldMetaProbe({
   return null;
 }
 
-async function waitFor(predicate: () => boolean, message: string): Promise<void> {
+async function waitFor(
+  predicate: () => boolean,
+  message: string,
+): Promise<void> {
   for (let index = 0; index < 100; index += 1) {
     if (predicate()) return;
     await act(async () => {

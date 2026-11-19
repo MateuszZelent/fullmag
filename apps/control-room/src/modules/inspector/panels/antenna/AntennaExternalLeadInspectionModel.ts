@@ -189,11 +189,11 @@ export function resolveInspectionPreviewState({ authoredStageId, identity, execu
     state = "loading";
     message = "Loading the exact runtime stage inspection…";
   } else if (!inspection.data) {
-    message = "This runtime stage has no external-lead inspection record.";
+    message = "This runtime stage has no antenna inspection record.";
   } else if (!current) {
     state = "identity_mismatch";
     message = "Inspection identity does not match this antenna definition, run and session incarnation.";
-  } else if (current.qualification !== "NOT VERIFIED" || current.field_scope !== "external_electrode_truncation") {
+  } else if (current.qualification !== "NOT VERIFIED" || !["external_electrode_truncation", "full_closed_loop.inspection_only.v2"].includes(current.field_scope)) {
     state = "error";
     message = "Inspection has an unsupported qualification or field scope.";
   } else if (current.status === "failed" || current.status === "cancelled") {
@@ -208,5 +208,14 @@ export function resolveInspectionPreviewState({ authoredStageId, identity, execu
       message = error instanceof Error ? error.message : String(error);
     }
   }
-  return { viewRecord, current, state, message, count };
+  let closed: ReturnType<typeof closedLoopManifest> = null;
+  if (viewRecord) {
+    try { closed = closedLoopManifest(viewRecord); }
+    catch (error) {
+      state = "error";
+      message = error instanceof Error ? error.message : String(error);
+      count = 0;
+    }
+  }
+  return { viewRecord, current, state, message, count, closed };
 }

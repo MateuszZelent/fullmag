@@ -140,7 +140,8 @@ int run_projected_gradient_bb_step(
     }
 
     fullmag_fem_step_stats current_stats{};
-    const int current_snapshot_status = relaxation::fresh_line_search_snapshot(
+    const int current_snapshot_status = relaxation::take_pgbb_accepted_stats(ctx, current_stats)
+        ? FULLMAG_FEM_OK : relaxation::fresh_line_search_snapshot(
         ctx,
         current_stats,
         "projected-gradient BB",
@@ -265,6 +266,7 @@ int run_projected_gradient_bb_step(
     double accepted_armijo_increment_rhs_j = 0.0;
     double last_armijo_increment_rhs_j = 0.0;
     bool every_permitted_trial_unchanged = true;
+    bool refined_evaluation = false;
     while (true) {
         {
             ScopedPhaseTimer timer(&profile_stats.relaxation_retraction_wall_time_ns);
@@ -314,6 +316,7 @@ int run_projected_gradient_bb_step(
             {
                 ScopedPhaseTimer timer(
                     &profile_stats.relaxation_line_search_wall_time_ns);
+                const auto demag_calls_before_armijo = ctx.demag.call_count;
                 armijo = direct_minimizer_armijo_accepts(
                     ctx,
                     "projected-gradient BB",
@@ -328,6 +331,8 @@ int run_projected_gradient_bb_step(
                     accepted_direct_difference,
                     last_armijo_increment_rhs_j,
                     error);
+                refined_evaluation = refined_evaluation ||
+                    ctx.demag.call_count != demag_calls_before_armijo;
             }
             if (!error.empty() || ctx.interrupt.step_interrupted) {
                 const bool interrupted = ctx.interrupt.step_interrupted;
@@ -479,6 +484,7 @@ int run_projected_gradient_bb_step(
         accepted_energy_delta_upper_j;
     ctx.relaxation.accepted_energy_proof.armijo_rhs_j = armijo_increment_rhs_j;
     relaxation::publish_accepted_gradient_completion(ctx, trial_g_norm_sq);
+    relaxation::publish_pgbb_accepted_stats(ctx, refined_evaluation);
     return FULLMAG_FEM_OK;
 #else
     (void)ctx;

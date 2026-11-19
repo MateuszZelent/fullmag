@@ -64,3 +64,17 @@ describe("scalar raster colorization", () => {
     );
   });
 });
+
+describe("direction raster colouring", () => {
+  it("colours occupied pixels by world direction and leaves empty pixels transparent", async () => {
+    const { colorizeDirectionRaster } = await import("./colorRaster");
+    const pixels = colorizeDirectionRaster(
+      new Float64Array([1, 0, 0, 0, 0, 1, 0, 0, -1]),
+      // Occupancy codes: 0 occupied, 1 empty.
+      new Uint8Array([0, 0, 1]),
+    );
+    expect(Array.from(pixels.slice(0, 4))).toEqual([255, 0, 0, 255]);
+    expect(Array.from(pixels.slice(4, 8))).toEqual([255, 255, 255, 255]);
+    expect(Array.from(pixels.slice(8, 12))).toEqual([0, 0, 0, 0]);
+  });
+});

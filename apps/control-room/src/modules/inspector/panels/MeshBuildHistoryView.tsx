@@ -194,7 +194,7 @@ export function MeshBuildHistoryView({
             data-build-id={entry.id}
             key={entry.id}
           >
-            <strong>
+            <strong title={`#${entry.index + 1} ${entry.meshName ?? "unnamed mesh"}`}>
               #{entry.index + 1} {entry.meshName ?? "unnamed mesh"}
             </strong>
             <span>

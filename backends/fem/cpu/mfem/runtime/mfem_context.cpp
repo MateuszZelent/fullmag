@@ -19,6 +19,7 @@
 #include "cpu/mfem/relaxation/relaxation_math.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
 #include "cpu/mfem/runtime/cpu_threads.hpp"
+#include "cpu/mfem/runtime/hypre_host_policy.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
@@ -169,7 +170,8 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
     try {
         debug_checkpoint("context_initialize_mfem:enter");
         std::unique_ptr<mfem::Mesh> mesh_owner;
-        if (!build_mfem_mesh(ctx.mesh, mesh_owner, error)) {
+        FemMarkerMaps marker_maps;
+        if (!build_mfem_mesh(ctx.mesh, mesh_owner, error, &marker_maps)) {
             return false;
         }
         auto *mesh = mesh_owner.get();
@@ -177,6 +179,11 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
 
         MfemInitializationRollback rollback(ctx);
         configure_fem_host_runtime_threads(ctx);
+        // Bind HYPRE to the host before any CPU-lane HYPRE object exists;
+        // the CUDA-enabled HYPRE default would otherwise allocate on a GPU.
+        if (!mfem_device_requests_gpu(ctx) && !configure_hypre_host_policy(error)) {
+            return false;
+        }
 #if FULLMAG_HAS_CUDA_RUNTIME
         const char *device_config = configured_mfem_device_string(ctx);
         const bool use_gpu_device = is_gpu_device_string(device_config);
@@ -352,6 +359,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
         }
         debug_checkpoint("context_initialize_mfem:exchange_operator_ready");
         ctx.mfem_context.mesh = mesh_owner.release();
+        ctx.mfem_context.marker_maps = std::move(marker_maps);
         ctx.mfem_context.fec = fec.release();
         ctx.mfem_context.fes = fes.release();
         ctx.mfem_context.gf_mx = gf_mx.release();
@@ -484,6 +492,7 @@ void context_destroy_mfem(Context &ctx)
     ctx.mfem_context.fec = nullptr;
     ctx.mfem_context.mesh = nullptr;
     ctx.mfem_context.selected_device_index = -1;
+    ctx.mfem_context.marker_maps = {};
     ctx.mfem_context.ready = false;
     ctx.exchange.mfem.ready = false;
     ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = false;

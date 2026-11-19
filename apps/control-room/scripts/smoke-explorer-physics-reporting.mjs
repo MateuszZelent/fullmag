@@ -155,6 +155,20 @@ try {
       });
       return;
     }
+    if (url.pathname === "/v2/platform/instances") {
+      await route.fulfill({
+        status: 200,
+        headers: responseHeaders,
+        body: JSON.stringify({
+          first_port: 3197,
+          instances: [],
+          last_port: 3260,
+          schema_version: "1.0.0",
+          self_api_instance_id: "fixture-instance",
+        }),
+      });
+      return;
+    }
     if (url.pathname === "/v2/platform/health") {
       await route.fulfill({
         status: 200,

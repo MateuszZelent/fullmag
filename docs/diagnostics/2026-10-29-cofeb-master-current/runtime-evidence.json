@@ -1,0 +1,1277 @@
+{
+  "schema": "fullmag.cofeb-current-build-runtime-visualization-evidence.v1",
+  "captured_at_utc": "2026-10-29T03:59:01.504782+00:00",
+  "checkout": "/home/kkingstoun/git/fullmag/fullmag",
+  "branch": "master",
+  "head": "b2b159c58fb921efbf278c120d12d268d958d03b",
+  "backend_provenance": {
+    "commit": "b2b159c58fb921efbf278c120d12d268d958d03b",
+    "source_snapshot_sha256": "fd3cc159005bee251f8f876df7174c3bcef2dc183489146ed370dcb7dc2e42b1",
+    "image_id": "sha256:85d508e510da7f209f550e8209ac033307a57794eae47ed88e963f702e1cf12f",
+    "state": "succeeded",
+    "version": null,
+    "build_mode": null
+  },
+  "development_attempt": "80088b44d21c497199550c8857ed14c6",
+  "compose_sha256": "7e370a5ec8a4ce75de76826247470820fa593ca57f0696c9b6e12db1bbc72369",
+  "backend_container": "4bad825625c0ada691a8bb2eb54536867294a4a188c1f0f87a3fbd073d042059",
+  "backend_limits": {
+    "memory_bytes": 137438953472,
+    "nano_cpus": 16000000000,
+    "native_memory_bytes": "137438953472",
+    "native_cpu_millis": "16000",
+    "cargo_build_jobs": "16"
+  },
+  "script": {
+    "path": "examples/permalloy_layer_cofeb_rings_relax_300nm.py",
+    "sha256": "c986e1d8472cca81aef393d24118f4e0dbd215e1587727d114e3a859f8045cf6"
+  },
+  "activation_attempt": "bbf27f4dc34247f4a37bdfb791019d08",
+  "activation_request_id": "cofeb-master-gpu-20261029-visualization-04",
+  "session": {
+    "session_id": "docker-startup-81eddad36acf3e82f40f751f18963403c1104423786cac8d1229c291c475d0f8",
+    "session_epoch": "docker-startup-81eddad36acf3e82f40f751f18963403c1104423786cac8d1229c291c475d0f8@1793243654041",
+    "request_scope_epoch": "f6a5349e-3f07-4f4f-89bc-ba7b5deaecf6:2",
+    "name": "permalloy_layer_cofeb_rings_relax_300nm",
+    "created_at": "1793243654041",
+    "workspace_root": "/opt/fullmag/runtime-control/local-live/current",
+    "script": {
+      "origin": "user_file",
+      "path": "/opt/fullmag/source/examples/permalloy_layer_cofeb_rings_relax_300nm.py",
+      "writable": false,
+      "managed_copy_path": "/opt/fullmag/runtime-control/local-live/current/exports/permalloy_layer_cofeb_rings_relax_300nm.canonical.py"
+    }
+  },
+  "run": {
+    "run_id": "run-live-d06087ec50780f18efb6b3bf47d774c839cae891da150dfb7a602c6d6086d7e8",
+    "session_id": "docker-startup-81eddad36acf3e82f40f751f18963403c1104423786cac8d1229c291c475d0f8",
+    "revision": 8,
+    "status": "completed",
+    "started_at": "1793243654041",
+    "total_steps": 1,
+    "solver_time_seconds": 0.0,
+    "final_total_energy": -3.668191276379833e-16,
+    "artifact_dir": "/opt/fullmag/runtime-control/local-live/current/runs/run-docker-startup-81eddad36acf3e82f40f751f18963403c1104423786cac8d1229c291c475d0f8",
+    "requested_backend": "fem",
+    "requested_device": "gpu",
+    "requested_precision": "double",
+    "requested_mode": "strict",
+    "resolved_backend": "fem",
+    "resolved_device": "gpu",
+    "resolved_precision": "double",
+    "resolved_mode": "strict",
+    "resolved_engine_id": "fem_native_gpu",
+    "total_stages": 1
+  },
+  "status": {
+    "api_contract_version": "1.0.0",
+    "runtime_bundle_version": "0.1.0-dev.20261029.gb2b159c58fb9.dirty.sfd3cc159005b+9798",
+    "session": {
+      "session_id": "docker-startup-81eddad36acf3e82f40f751f18963403c1104423786cac8d1229c291c475d0f8",
+      "session_epoch": "docker-startup-81eddad36acf3e82f40f751f18963403c1104423786cac8d1229c291c475d0f8@1793243654041",
+      "request_scope_epoch": "f6a5349e-3f07-4f4f-89bc-ba7b5deaecf6:2",
+      "name": "permalloy_layer_cofeb_rings_relax_300nm",
+      "created_at": "1793243654041",
+      "workspace_root": "/opt/fullmag/runtime-control/local-live/current",
+      "script": {
+        "origin": "user_file",
+        "path": "/opt/fullmag/source/examples/permalloy_layer_cofeb_rings_relax_300nm.py",
+        "writable": false,
+        "managed_copy_path": "/opt/fullmag/runtime-control/local-live/current/exports/permalloy_layer_cofeb_rings_relax_300nm.canonical.py"
+      }
+    },
+    "run": {
+      "run_id": "run-live-d06087ec50780f18efb6b3bf47d774c839cae891da150dfb7a602c6d6086d7e8",
+      "stage_index": 0,
+      "stage_label": "",
+      "stage_count": 1,
+      "started_at": "1793243654041",
+      "solver_steps": 10,
+      "solver_time": 0.0,
+      "requested_device": "gpu",
+      "resolved_device": "gpu",
+      "selection_reason": "explicit_device_request"
+    },
+    "solver": {
+      "state": "completed",
+      "algorithm": null,
+      "relaxation_algorithm": null,
+      "dt": null,
+      "max_torque_T": null,
+      "max_torque_Apm": null,
+      "max_rhs_norm_per_s": null,
+      "max_torque": null,
+      "converged": false
+    },
+    "lifecycle": {
+      "solver": "completed",
+      "session_resource": "active",
+      "connectivity": "connected",
+      "commandability": "forbidden"
+    },
+    "display": {
+      "active_quantity_id": "m",
+      "view_mode": "3d",
+      "field_component": "magnitude",
+      "colormap": "viridis",
+      "auto_contrast": true,
+      "contrast_min": null,
+      "contrast_max": null,
+      "vector_glyphs": false,
+      "vector_density": 50,
+      "slice_mode": "single",
+      "slice_layer": 0,
+      "max_points": 16384,
+      "x_chosen_size": 0,
+      "y_chosen_size": 0
+    },
+    "domain": {
+      "generation_id": "14850812098407037233",
+      "discretization": "fem",
+      "cell_count": 1087250
+    },
+    "resources": {
+      "topology_revision": 2,
+      "field_catalog_revision": 5,
+      "field_revision": 30,
+      "slice_revision": 932,
+      "artifact_revision": 0,
+      "command_completion_revision": 2,
+      "fields_revision": 30,
+      "scalars_revision": 2,
+      "domain_generation_id": "14850812098407037233",
+      "artifacts_revision": 0,
+      "engine_log_revision": 0,
+      "solver_profile_revision": 0,
+      "display_revision": 2,
+      "workspace_revision": 0,
+      "mesh_revision": 2,
+      "mesh_build_revision": 2,
+      "commands_revision": 2,
+      "stages_revision": 7,
+      "simulation_preparation_revision": 34,
+      "scene_revision": 1,
+      "visualization_state_revision": 2,
+      "mode_composition_revision": 1,
+      "region_topology_revision": 0,
+      "region_membership_revision": 0,
+      "region_coefficients_revision": 0,
+      "region_initial_state_revision": 0
+    },
+    "capabilities": {
+      "structured_grid": false,
+      "explicit_topology": true,
+      "binary_fields": true,
+      "cell_fields": true,
+      "node_fields": true,
+      "scalar_history": true,
+      "eigen_modes": false,
+      "gpu_telemetry": true,
+      "preview_2d": true,
+      "preview_3d": true,
+      "algorithms_available": [
+        "llg_overdamped",
+        "projected_gradient_bb",
+        "nonlinear_cg",
+        "tangent_plane_implicit"
+      ],
+      "active_lane": {
+        "schema_version": "active-lane-capabilities.v2",
+        "authored": {
+          "backend": "fem",
+          "discretization": "fem",
+          "device": "gpu",
+          "precision": "double",
+          "mode": "strict"
+        },
+        "requested": {
+          "backend": "fem",
+          "discretization": "fem",
+          "device": "gpu",
+          "precision": "double",
+          "mode": "strict"
+        },
+        "resolved": {
+          "backend": "fem",
+          "discretization": "fem",
+          "device": "gpu",
+          "precision": "double",
+          "mode": "strict"
+        },
+        "fallback": null,
+        "source": {
+          "kind": "planner",
+          "capability_profile_version": "2026-09-20",
+          "engine_id": "fem_native_gpu",
+          "authored_intent": "scene.study.requested_execution",
+          "effective_request": "session.runtime_resolution"
+        },
+        "qualification": {
+          "status": "not_asserted",
+          "reason": "Planner capability availability is separate from workload-scoped scientific qualification evidence."
+        },
+        "operations": {
+          "air_void_overlay": {
+            "state": "semantic_only",
+            "reason_code": "capability_semantic_only",
+            "reason": "Air/void presentation semantics exist, but the planner profile does not publish current domain-resource readiness.",
+            "requires": [
+              "domain_metadata:compatible"
+            ]
+          },
+          "constraint.frozen_spins": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "Frozen Spins device-resident FEM GPU explicit RK, projected-gradient BB, and nonlinear-CG execution is available in double precision; tangent-plane implicit relaxation and production qualification remain gated.",
+            "requires": [
+              "planner_feature:constraint.frozen_spins"
+            ]
+          },
+          "field_quantity": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The planner advertises field quantities for the resolved lane.",
+            "requires": [
+              "planner:field_quantities"
+            ]
+          },
+          "grid_build": {
+            "state": "unsupported",
+            "reason_code": "capability_unsupported",
+            "reason": "Structured-grid refresh is not applicable to the resolved lane.",
+            "requires": [
+              "discretization:fdm"
+            ]
+          },
+          "hover_select_cell": {
+            "state": "unsupported",
+            "reason_code": "capability_unsupported",
+            "reason": "Cell hover and selection are specific to structured FDM domains.",
+            "requires": [
+              "discretization:fdm"
+            ]
+          },
+          "initial_magnetization.uniform": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "Uniform initial magnetization is executable in the resolved FDM/FEM lane.",
+            "requires": [
+              "initial_magnetization:uniform",
+              "resolved_lane_identity"
+            ]
+          },
+          "initial_magnetization.vortex": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "Vortex initial magnetization is executable in the resolved FDM/FEM lane.",
+            "requires": [
+              "initial_magnetization:vortex",
+              "resolved_lane_identity"
+            ]
+          },
+          "interaction.bulk_dmi": {
+            "state": "unsupported",
+            "reason_code": "capability_unsupported",
+            "reason": "The resolved planner lane does not advertise this interaction.",
+            "requires": [
+              "interaction:bulk_dmi"
+            ]
+          },
+          "interaction.cubic_anisotropy": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:cubic_anisotropy"
+            ]
+          },
+          "interaction.current_transport": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:current_transport"
+            ]
+          },
+          "interaction.demag": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:demag"
+            ]
+          },
+          "interaction.dmi": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:dmi"
+            ]
+          },
+          "interaction.exchange": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:exchange"
+            ]
+          },
+          "interaction.frozen_spins": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "Frozen Spins device-resident FEM GPU explicit RK, projected-gradient BB, and nonlinear-CG execution is available in double precision; tangent-plane implicit relaxation and production qualification remain gated.",
+            "requires": [
+              "planner_feature:constraint.frozen_spins"
+            ]
+          },
+          "interaction.interfacial_dmi": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:interfacial_dmi"
+            ]
+          },
+          "interaction.magnetoelastic": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:magnetoelastic"
+            ]
+          },
+          "interaction.oersted": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:oersted"
+            ]
+          },
+          "interaction.oersted_field": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:oersted_field"
+            ]
+          },
+          "interaction.rotated_interfacial_dmi": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:rotated_interfacial_dmi"
+            ]
+          },
+          "interaction.sot": {
+            "state": "unsupported",
+            "reason_code": "capability_unsupported",
+            "reason": "The resolved planner lane does not advertise this interaction.",
+            "requires": [
+              "interaction:sot"
+            ]
+          },
+          "interaction.spin_torque": {
+            "state": "unsupported",
+            "reason_code": "capability_unsupported",
+            "reason": "The resolved planner lane does not advertise this interaction.",
+            "requires": [
+              "interaction:spin_torque"
+            ]
+          },
+          "interaction.stt": {
+            "state": "unsupported",
+            "reason_code": "capability_unsupported",
+            "reason": "The resolved planner lane does not advertise this interaction.",
+            "requires": [
+              "interaction:stt"
+            ]
+          },
+          "interaction.thermal": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:thermal"
+            ]
+          },
+          "interaction.uniaxial_anisotropy": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:uniaxial_anisotropy"
+            ]
+          },
+          "interaction.zeeman": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:zeeman"
+            ]
+          },
+          "region_membership": {
+            "state": "semantic_only",
+            "reason_code": "capability_semantic_only",
+            "reason": "Region-membership semantics exist, but the planner profile does not publish current membership-resource readiness.",
+            "requires": [
+              "domain_metadata:compatible",
+              "region_membership_resource:compatible"
+            ]
+          },
+          "shared_mesh_build": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "Shared-domain mesh build is owned by the resolved FEM lane.",
+            "requires": [
+              "discretization:fem"
+            ]
+          },
+          "study.eigenmodes": {
+            "state": "semantic_only",
+            "reason_code": "capability_semantic_only",
+            "reason": "Eigenmode authoring exists, but the resolved planner lane does not advertise executable support.",
+            "requires": [
+              "planner:eigenmodes"
+            ]
+          },
+          "study.fft": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "FFT post-processing can consume planner-advertised field quantities.",
+            "requires": [
+              "field_quantity"
+            ]
+          },
+          "study.frequency_response": {
+            "state": "semantic_only",
+            "reason_code": "capability_semantic_only",
+            "reason": "Frequency-response authoring exists, but the resolved planner lane does not advertise executable support.",
+            "requires": [
+              "planner:frequency_response"
+            ]
+          },
+          "study.relaxation": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner capability profile is a time-domain lane.",
+            "requires": [
+              "planner:time_domain_lane"
+            ]
+          },
+          "study.time_integration": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner capability profile is a time-domain lane.",
+            "requires": [
+              "planner:time_domain_lane"
+            ]
+          },
+          "surface_coloring": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "Surface coloring can consume planner-advertised field quantities.",
+            "requires": [
+              "field_quantity"
+            ]
+          },
+          "vectors": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "Vector rendering can consume planner-advertised field quantities.",
+            "requires": [
+              "field_quantity"
+            ]
+          }
+        }
+      },
+      "transport_authoring": {
+        "contract_version": "transport-authoring-capabilities.v1",
+        "m1_one_way_steady": {
+          "status": "semantic_only",
+          "authoring_allowed": true,
+          "reason": "M1 steady one-way authoring is available; execution qualification remains workload-scoped."
+        },
+        "m2_reciprocal": {
+          "status": "semantic_only",
+          "authoring_allowed": true,
+          "reason": "M2 reciprocal authoring is available; executable qualification remains workload-scoped."
+        },
+        "m3_transient": {
+          "status": "unsupported",
+          "authoring_allowed": false,
+          "reason": "Transient transport remains an M3 authoring capability."
+        },
+        "gpu": {
+          "status": "unsupported",
+          "authoring_allowed": false,
+          "reason": "Transport GPU authoring is unavailable until lane qualification is published."
+        },
+        "single_precision": {
+          "status": "unsupported",
+          "authoring_allowed": false,
+          "reason": "Transport single precision is unavailable until precision qualification is published."
+        },
+        "hybrid": {
+          "status": "unsupported",
+          "authoring_allowed": false,
+          "reason": "Transport hybrid execution is not supported by the v1 authoring contract."
+        }
+      }
+    },
+    "energies": {
+      "total": -3.668191276379833e-16,
+      "exchange": 1.4576915063166036e-17,
+      "demag": 2.5962013506951533e-15,
+      "zeeman": 0.0,
+      "anisotropy": -2.9775973933963028e-15,
+      "dmi": 0.0
+    },
+    "metrics": {
+      "uptime_seconds": 2687,
+      "total_steps": 0,
+      "steps_per_second": null
+    }
+  },
+  "native_claim": {
+    "run_id": "run-live-d06087ec50780f18efb6b3bf47d774c839cae891da150dfb7a602c6d6086d7e8",
+    "task_id": "task-8cb773c1f20e0ed32e1ea2574d825235faf28c23673d54032cb5b4849f1592d5",
+    "attempt_id": "attempt-8452ad205e584581916bcc78bbfcdb05",
+    "ownership_epoch": 1
+  },
+  "native_completion_sha256": "373881cebfa929974cb4b2eaecd687be3a892b478de9850386ead853c5858a03",
+  "native_gpu_snapshot": {
+    "schema_version": "fullmag.fem.gpu.accepted-state-snapshot.v1",
+    "clock": {
+      "accepted_step": 10,
+      "time_seconds": 0.0
+    },
+    "values_sha256": "sha256:f87c4d4ea756c9a9f287c12d0465c07981cd9d3dd3296207e0cabfed44392f26",
+    "native_node_map_sha256": "sha256:f65a1651e2e5299345066e44b29101d5f4b408868c4587200fdc030b88ce4f39",
+    "native_indexed_geometry_sha256": "sha256:96259acb91eae7d3af48ecefa2a0d565574917bdeb55dc6144674fcd0880217a",
+    "gpu_uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937",
+    "gpu_execution_receipt_sha256": "sha256:eb214cd96e9de7f1086b01f297f70d9c7a44d20c8727b69805ad598f8197b023",
+    "gpu_execution_identity_sha256": "sha256:c322861c6d14d259f82eb04d29d282312df5d1fe7421ddae0dbba9d934d6d732",
+    "clock_digest": "sha256:a62c11cb6de01bf1c188aedcbba5069bd9d44f1ee8180bf4b32d136d51692951",
+    "state_digest": "sha256:abb84b2cdb4c8e832c8bb9f4839a37f345291c08ec1936d7ab586b89af3dd5ad",
+    "primary_carrier_ids": [
+      "fem.gpu.native-local-node-values-f64le.v1",
+      "fem.gpu.native-local-node-map.v1",
+      "fem.gpu.native-indexed-geometry.v1",
+      "fem.gpu.execution-receipt.v1"
+    ]
+  },
+  "native_trace": {
+    "count": 10,
+    "steps": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "accepted_step_wall_sum_ns": 5004252993,
+    "first_backend_create_wall_ns": 27700078828,
+    "note": "Trace timings are distinct from end-to-end command latency; no profile attribution beyond these recorded fields.",
+    "source_file": "native-accepted-steps.json",
+    "sha256": "a57df85076c21797d4a6ded9ab97fe117b40203cc658c2dd4c0d97cc6293403d"
+  },
+  "fields": {
+    "m/full": {
+      "meta": {
+        "observation_frame": {
+          "observation_frame_id": "obs:docker-startup-81eddad36acf3e82f40f751f18963403c1104423786cac8d1229c291c475d0f8@1793243654041:14850812098407037233:2:10:0000000000000000",
+          "session_epoch": "docker-startup-81eddad36acf3e82f40f751f18963403c1104423786cac8d1229c291c475d0f8@1793243654041",
+          "domain_generation_id": "14850812098407037233",
+          "topology_revision": "2",
+          "source_step": 10,
+          "source_time_seconds": 0.0
+        },
+        "quantity_id": "m",
+        "label": "Magnetization",
+        "kind": "vector_field",
+        "components": 3,
+        "location": "magnetic_only",
+        "unit": "dimensionless",
+        "field_revision": 3,
+        "domain_generation_id": "14850812098407037233",
+        "stats": {
+          "min": -0.9999999998686845,
+          "max": 0.9999994185663572,
+          "mean": -0.03968274109922787
+        },
+        "source_step": 10,
+        "source_time_seconds": 0.0,
+        "source_revision": 2,
+        "materialized_at_unix_ms": 0,
+        "stale_by_steps": 0,
+        "materialization_wall_time_ns": 0,
+        "state": "complete",
+        "resolved_capability": {
+          "quantity_id": "m",
+          "provider": "available",
+          "request": "field_vector",
+          "materialization": "materialized",
+          "render": "renderable",
+          "publication": "interactive",
+          "scope": "full",
+          "lane": "fem_native_gpu",
+          "precision": "double",
+          "carriers": [
+            {
+              "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:full",
+              "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+              "scope": "full",
+              "scope_kind": "full",
+              "components": 3,
+              "indexing": "node",
+              "view": "3D",
+              "payload_state": "current"
+            }
+          ]
+        }
+      },
+      "binary": {
+        "quantity": "m",
+        "scope": "full",
+        "http": 200,
+        "version": 3,
+        "n_comp": 3,
+        "point_count": 183764,
+        "value_count": 551292,
+        "finite": true,
+        "min": -0.9999999998686845,
+        "max": 0.9999994185663572,
+        "values_sha256": "f87c4d4ea756c9a9f287c12d0465c07981cd9d3dd3296207e0cabfed44392f26",
+        "full_payload_sha256": "5afc8f8256b139ea745db4224368cd098c073ffb7b0777eb7a7672d32b10e6c4",
+        "headers": {
+          "x-fullmag-field-revision": "3",
+          "x-fullmag-domain-generation-id": "14850812098407037233",
+          "x-fullmag-quantity-id": "m",
+          "x-fullmag-component": "full",
+          "x-fullmag-encoding": "FMVP;version=3",
+          "x-fullmag-point-count": "183764",
+          "x-fullmag-value-count": "551292",
+          "x-fullmag-n-comp": "3",
+          "x-fullmag-payload-state": "current",
+          "x-fullmag-mesh-topology-hash": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+          "x-fullmag-field-indexing": "full_domain",
+          "x-fullmag-carrier-revision": "2",
+          "x-fullmag-api-instance": "f6a5349e-3f07-4f4f-89bc-ba7b5deaecf6"
+        },
+        "run": {
+          "run_id": "run-live-d06087ec50780f18efb6b3bf47d774c839cae891da150dfb7a602c6d6086d7e8",
+          "stage_index": 0,
+          "stage_label": "",
+          "stage_count": 1,
+          "started_at": "1793243654041",
+          "solver_steps": 10,
+          "solver_time": 0.0,
+          "requested_device": "gpu",
+          "resolved_device": "gpu",
+          "selection_reason": "explicit_device_request"
+        }
+      }
+    },
+    "H_demag/airbox": {
+      "meta": {
+        "observation_frame": {
+          "observation_frame_id": "obs:docker-startup-81eddad36acf3e82f40f751f18963403c1104423786cac8d1229c291c475d0f8@1793243654041:14850812098407037233:2:10:0000000000000000",
+          "session_epoch": "docker-startup-81eddad36acf3e82f40f751f18963403c1104423786cac8d1229c291c475d0f8@1793243654041",
+          "domain_generation_id": "14850812098407037233",
+          "topology_revision": "2",
+          "source_step": 10,
+          "source_time_seconds": 0.0
+        },
+        "quantity_id": "H_demag",
+        "label": "Demagnetization Field",
+        "kind": "vector_field",
+        "components": 3,
+        "location": "full_domain",
+        "unit": "A/m",
+        "field_revision": 3,
+        "domain_generation_id": "14850812098407037233",
+        "stats": {
+          "min": -786837.5321663134,
+          "max": 627966.1914355665,
+          "mean": 1197.549533149726
+        },
+        "source_step": 10,
+        "source_time_seconds": 0.0,
+        "source_revision": 0,
+        "materialized_at_unix_ms": 0,
+        "stale_by_steps": 0,
+        "materialization_wall_time_ns": 0,
+        "state": "complete",
+        "resolved_capability": {
+          "quantity_id": "H_demag",
+          "provider": "available",
+          "request": "field_vector",
+          "materialization": "materialized",
+          "render": "renderable",
+          "publication": "interactive",
+          "scope": "airbox",
+          "lane": "fem_native_gpu",
+          "precision": "double",
+          "carriers": [
+            {
+              "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:airbox:airbox",
+              "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+              "scope": "airbox",
+              "scope_kind": "airbox",
+              "scope_id": "airbox",
+              "components": 3,
+              "indexing": "node",
+              "view": "3D",
+              "payload_state": "current"
+            }
+          ]
+        }
+      },
+      "binary": {
+        "quantity": "H_demag",
+        "scope": "airbox",
+        "http": 200,
+        "version": 3,
+        "n_comp": 3,
+        "point_count": 157393,
+        "value_count": 472179,
+        "finite": true,
+        "min": -786837.5321663134,
+        "max": 627966.1914355665,
+        "values_sha256": "da81dc5f5d9efe31f0293c539995cefd6b1e91d146a8b263ef12481ea3dc3118",
+        "full_payload_sha256": "afc4a7ccbc9bdc66e0cae982c1d371043c657662914b150472687665680ab657",
+        "headers": {
+          "x-fullmag-field-revision": "3",
+          "x-fullmag-domain-generation-id": "14850812098407037233",
+          "x-fullmag-quantity-id": "H_demag",
+          "x-fullmag-component": "full",
+          "x-fullmag-encoding": "FMVP;version=3",
+          "x-fullmag-point-count": "157393",
+          "x-fullmag-value-count": "472179",
+          "x-fullmag-n-comp": "3",
+          "x-fullmag-payload-state": "current",
+          "x-fullmag-mesh-topology-hash": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+          "x-fullmag-field-indexing": "explicit_node_indices",
+          "x-fullmag-node-index-count": "157393",
+          "x-fullmag-carrier-revision": "2",
+          "x-fullmag-scope-kind": "airbox",
+          "x-fullmag-scope-id": "airbox",
+          "x-fullmag-api-instance": "f6a5349e-3f07-4f4f-89bc-ba7b5deaecf6"
+        },
+        "run": {
+          "run_id": "run-live-d06087ec50780f18efb6b3bf47d774c839cae891da150dfb7a602c6d6086d7e8",
+          "stage_index": 0,
+          "stage_label": "",
+          "stage_count": 1,
+          "started_at": "1793243654041",
+          "solver_steps": 10,
+          "solver_time": 0.0,
+          "requested_device": "gpu",
+          "resolved_device": "gpu",
+          "selection_reason": "explicit_device_request"
+        }
+      }
+    },
+    "H_eff/airbox": {
+      "meta": {
+        "observation_frame": {
+          "observation_frame_id": "obs:docker-startup-81eddad36acf3e82f40f751f18963403c1104423786cac8d1229c291c475d0f8@1793243654041:14850812098407037233:2:10:0000000000000000",
+          "session_epoch": "docker-startup-81eddad36acf3e82f40f751f18963403c1104423786cac8d1229c291c475d0f8@1793243654041",
+          "domain_generation_id": "14850812098407037233",
+          "topology_revision": "2",
+          "source_step": 10,
+          "source_time_seconds": 0.0
+        },
+        "quantity_id": "H_eff",
+        "label": "Effective Field",
+        "kind": "vector_field",
+        "components": 3,
+        "location": "full_domain",
+        "unit": "A/m",
+        "field_revision": 3,
+        "domain_generation_id": "14850812098407037233",
+        "stats": {
+          "min": -786837.5321663134,
+          "max": 627966.1914355665,
+          "mean": 1197.549533149726
+        },
+        "source_step": 10,
+        "source_time_seconds": 0.0,
+        "source_revision": 0,
+        "materialized_at_unix_ms": 0,
+        "stale_by_steps": 0,
+        "materialization_wall_time_ns": 0,
+        "state": "complete",
+        "resolved_capability": {
+          "quantity_id": "H_eff",
+          "provider": "available",
+          "request": "field_vector",
+          "materialization": "materialized",
+          "render": "renderable",
+          "publication": "interactive",
+          "scope": "airbox",
+          "lane": "fem_native_gpu",
+          "precision": "double",
+          "carriers": [
+            {
+              "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:airbox:airbox",
+              "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+              "scope": "airbox",
+              "scope_kind": "airbox",
+              "scope_id": "airbox",
+              "components": 3,
+              "indexing": "node",
+              "view": "3D",
+              "payload_state": "current"
+            }
+          ]
+        }
+      },
+      "binary": {
+        "quantity": "H_eff",
+        "scope": "airbox",
+        "http": 200,
+        "version": 3,
+        "n_comp": 3,
+        "point_count": 157393,
+        "value_count": 472179,
+        "finite": true,
+        "min": -786837.5321663134,
+        "max": 627966.1914355665,
+        "values_sha256": "da81dc5f5d9efe31f0293c539995cefd6b1e91d146a8b263ef12481ea3dc3118",
+        "full_payload_sha256": "9cef708a98b5cab8b2d029b7e00b2e0951b9038343c479443b374d0245bfe93a",
+        "headers": {
+          "x-fullmag-field-revision": "3",
+          "x-fullmag-domain-generation-id": "14850812098407037233",
+          "x-fullmag-quantity-id": "H_eff",
+          "x-fullmag-component": "full",
+          "x-fullmag-encoding": "FMVP;version=3",
+          "x-fullmag-point-count": "157393",
+          "x-fullmag-value-count": "472179",
+          "x-fullmag-n-comp": "3",
+          "x-fullmag-payload-state": "current",
+          "x-fullmag-mesh-topology-hash": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+          "x-fullmag-field-indexing": "explicit_node_indices",
+          "x-fullmag-node-index-count": "157393",
+          "x-fullmag-carrier-revision": "2",
+          "x-fullmag-scope-kind": "airbox",
+          "x-fullmag-scope-id": "airbox",
+          "x-fullmag-api-instance": "f6a5349e-3f07-4f4f-89bc-ba7b5deaecf6"
+        },
+        "run": {
+          "run_id": "run-live-d06087ec50780f18efb6b3bf47d774c839cae891da150dfb7a602c6d6086d7e8",
+          "stage_index": 0,
+          "stage_label": "",
+          "stage_count": 1,
+          "started_at": "1793243654041",
+          "solver_steps": 10,
+          "solver_time": 0.0,
+          "requested_device": "gpu",
+          "resolved_device": "gpu",
+          "selection_reason": "explicit_device_request"
+        }
+      }
+    }
+  },
+  "energy": {
+    "revision": 32,
+    "step": 10,
+    "time_seconds": 0.0,
+    "exchange": 1.4576915063166036e-17,
+    "demag": 2.5962013506951533e-15,
+    "zeeman": 0.0,
+    "anisotropy": -2.9775973933963028e-15,
+    "dmi": 0.0,
+    "total": -3.668191276379833e-16
+  },
+  "universe_and_object_bounds": {
+    "scene_revision": 1,
+    "universe": {
+      "airbox_hmax": 5.000000000000001e-07,
+      "airbox_hmin": 1e-08,
+      "center": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mode": "auto",
+      "padding": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "size": [
+        2.8e-06,
+        2.1e-06,
+        1.2e-06
+      ]
+    },
+    "study_universe_mesh": {
+      "airbox_hmax": 5.000000000000001e-07,
+      "airbox_hmin": 1e-08,
+      "center": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mode": "auto",
+      "padding": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "size": [
+        2.8e-06,
+        2.1e-06,
+        1.2e-06
+      ]
+    },
+    "object_bounds_min": [
+      -1.0000000000000002e-06,
+      -3.0000000000000004e-07,
+      -8.000000000000001e-10
+    ],
+    "object_bounds_max": [
+      1.0000000000000002e-06,
+      3.0000000000000004e-07,
+      3.1080000000000006e-07
+    ],
+    "mesh_dirty": false
+  },
+  "commands": {
+    "revision": 2,
+    "pending_count": 0,
+    "accepted_count": 0,
+    "dispatched_count": 0,
+    "running_count": 0,
+    "completed_count": 1,
+    "rejected_count": 0,
+    "failed_count": 0,
+    "can_accept_commands": false,
+    "runtime_controls": [
+      {
+        "kind": "solve",
+        "enabled": false,
+        "reason": "Runtime is not accepting compute commands."
+      },
+      {
+        "kind": "compute_fields",
+        "enabled": true
+      },
+      {
+        "kind": "compute_energies",
+        "enabled": true
+      },
+      {
+        "kind": "mesh_build",
+        "enabled": false,
+        "reason": "Runtime is not ready to rebuild the mesh."
+      },
+      {
+        "kind": "fdm_grid_refresh",
+        "enabled": false,
+        "reason": "Runtime is not ready to rebuild the mesh."
+      },
+      {
+        "kind": "pause",
+        "enabled": false,
+        "reason": "accepted_control_unsupported: Docker accepted workers expose durable Stop; Pause is unavailable until a worker pause command is published."
+      },
+      {
+        "kind": "resume",
+        "enabled": false,
+        "reason": "Runtime is not paused."
+      },
+      {
+        "kind": "stop",
+        "enabled": false,
+        "reason": "Runtime is not active."
+      },
+      {
+        "kind": "skip",
+        "enabled": false,
+        "reason": "No active stage is available to skip."
+      }
+    ],
+    "commands": [
+      {
+        "command_id": "fm-4f29b085-8e6d-40a9-8074-75e9963550c2",
+        "request_id": "fm-8731b497-7669-4cff-84ad-237101c50b05",
+        "client_intent_id": "cofeb-master-solve10-20261029-current-04",
+        "seq": 1,
+        "kind": "solve",
+        "target": {
+          "kind": "run",
+          "run_id": "run-live-d06087ec50780f18efb6b3bf47d774c839cae891da150dfb7a602c6d6086d7e8"
+        },
+        "reason": "CoFeB visualization recovery; one explicitly authorized command",
+        "status": "completed",
+        "created_at_unix_ms": 1793244375991,
+        "completed_at_unix_ms": 1793244991235,
+        "completion_status": "completed"
+      }
+    ]
+  },
+  "compute_fields_post_issued": false,
+  "field_publication": "native terminal quantity bundle automatically materialized step10 fields",
+  "timings": {
+    "script_materialization_ms": 398049,
+    "native_domain_preparation_ms": 188365,
+    "total_preparation_ms": 586414,
+    "solve_command_end_to_end_ms": 615244
+  },
+  "health": {
+    "status": "ok",
+    "uptime_seconds": 1793246341,
+    "api_contract_version": "1.0.0",
+    "active_session": true
+  },
+  "runtime_service": {
+    "schema_version": "application_service_status.v1",
+    "configured": true,
+    "state": "ready",
+    "reason": {
+      "code": "service_ready",
+      "message": "The live native service identity and configuration were verified."
+    }
+  },
+  "browser": {
+    "attempt": "af947a0a399c4f8b828d179839115353",
+    "state": "passed",
+    "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+    "context_lost": false,
+    "drawing_buffer": [
+      617,
+      495
+    ],
+    "page_errors": 0,
+    "http_errors": [],
+    "screenshot_sha256": "83c55cfadc91010394a00cf47242ea79c889c3d8c4cd5b2aa2ce62863797761c",
+    "field_payload_values_hashed_in_browser": false,
+    "note": "API binary values and native GPU snapshot were checked independently; browser proof covers visible canvas and viewed PNG. FDM-only vector gate is not used for FEM."
+  },
+  "source_checks": {
+    "schema": "fullmag.runtime-feedback-source-check.v1",
+    "project": "fullmag-master",
+    "backend": "a774324c4df8",
+    "frontend": "0463d3925bae",
+    "source_head": "b2b159c58fb921efbf278c120d12d268d958d03b",
+    "source_sha256": "6ffbf078375174c169531850a057bf78ec21bfe85d0511319e7104401e4d7691",
+    "commands": [
+      {
+        "name": "typecheck",
+        "state": "succeeded",
+        "stdout": {
+          "path": "verification/runtime-feedback-20261029-r6/typecheck.stdout.log",
+          "sha256": "cf9de4c3ae46843b6648e07da6c5166871daa9af7176398ee19675dbda793197",
+          "bytes": 190
+        },
+        "stderr": {
+          "path": "verification/runtime-feedback-20261029-r6/typecheck.stderr.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "exit_code": 0,
+        "duration_ms": 4717
+      },
+      {
+        "name": "eslint",
+        "state": "succeeded",
+        "stdout": {
+          "path": "verification/runtime-feedback-20261029-r6/eslint.stdout.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "stderr": {
+          "path": "verification/runtime-feedback-20261029-r6/eslint.stderr.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "exit_code": 0,
+        "duration_ms": 4790
+      },
+      {
+        "name": "architecture",
+        "state": "succeeded",
+        "stdout": {
+          "path": "verification/runtime-feedback-20261029-r6/architecture.stdout.log",
+          "sha256": "e9fc7f3f7fd9315350add99d4205125473266d064e98b1192b18fc8d6da0ba43",
+          "bytes": 187
+        },
+        "stderr": {
+          "path": "verification/runtime-feedback-20261029-r6/architecture.stderr.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "exit_code": 0,
+        "duration_ms": 2830
+      }
+    ],
+    "state": "succeeded"
+  },
+  "source_sha256": {
+    "apps/control-room/src/kernel/layout/WorkspaceShellClient.tsx": "6ffbf078375174c169531850a057bf78ec21bfe85d0511319e7104401e4d7691",
+    "crates/fullmag-api/src/accepted_scheduler_main.rs": "70c5bf29967a1b22eab9e9ab4415af7eb2fd332a4633ee5c2219fae10c30c2ce",
+    "crates/fullmag-api/src/development_accepted_restore/terminal_observation.rs": "8f4d5276da932782648bca8b1ab1567df3c7c0c05adc9ad9cef3da981eb8b7cc",
+    "crates/fullmag-api/src/router_v2/handlers/platform/development_restart.rs": "0a60d54d8fd2b2b2199b204baaf0c025fbb49d822aee3f6a4aaaee9140937a49",
+    "crates/fullmag-api/src/router_v2/middleware/development_admission.rs": "9926609e511eac9ff470df6c013f9eca22116d5bd745d54aa6b41aecfcdd65c2",
+    "crates/fullmag-api/src/run_intent_persistence.rs": "d1aabe0e47f05f742788a9a32733680aef6944caba581b9ed2c294ec3253d55c",
+    "crates/fullmag-authoring/src/geometry.rs": "e111d1cc3badd27860f2a9d5b7c619e20a23bb86106800f7ceb98350a64c46c9",
+    "crates/fullmag-runtime-control/src/application_service_status.rs": "6811696029747c35994f38027aaa53deb4c1db2609a12b5362d198272eda4155",
+    "crates/fullmag-runtime-control/src/lib.rs": "79a27eb0f0a749985c1d05e76c59f88ff76f98b57e674987d6c9dc8a819d0a3e",
+    "crates/fullmag-runtime-control/src/study.rs": "ca0c12c94a93ec46e87e5c24a3c9741948272474e663c1c833783f828326b89b",
+    "docker/all-in-one/runtime_service.py": "6518f5311bcf8870016e25fecbd31bade6653228a37a7695e67668e7db0ac8e0",
+    "scripts/docker_dev.py": "a8133c6faaa8781570fbb35ca51caf3930fd9d8e87e40df49afb3ffe0288d775",
+    "scripts/docker_dev_browser_qa.py": "3be47386fe125ea5e3e0fac4abc8490b8a18116db763e55c7ea5ca542d1cddbf",
+    "scripts/docker_volume_catalog_failure.py": "fef16e04807d7963314d82354bd7466d1ff840eb97fe8f4d5e64341cff0e717e",
+    "scripts/docker_volume_dev.py": "a5f77398471ffb7a419026a1836afb1ba660ae54dd9958dc547d18c2f3d96bef",
+    "scripts/docker_volume_fresh_runtime.py": "7c4aa49405f4354e864773e5f43a3f463ea2f0276b45939bbf7596cb75082b99",
+    "scripts/docker_volume_preowner_drained.py": "a4ecff65a7cd8482fdb916c5b4a0d64a8a9885bf75cac2a2fd4960ea9cf07a73",
+    "scripts/docker_volume_preparation_abort.py": "f5837319300201ef3efed8a7a575753cf7117dd479f34bb167487d0327c65bcc",
+    "scripts/docker_volume_stop_diagnostic.py": "3be63c911334bac0a4856a35b61293c626d7d4410ea98496672654346f926c37",
+    "scripts/docker_volume_stop_preowner_policy.py": "2ed64ec47df05ee10a38d53402113c6d8d61ac4e30ac073db760582a47532b51",
+    "scripts/docker_volume_terminal_observation.py": "73a90f2bc9b0f078a24efecfb1e2d3e493f731371ac5d215af554572c206aef4"
+  },
+  "old_completed_run_preserved": "run-live-f83f7552cf05f87b1eeb213f88de34fbf9202abcbf918bfa8634bb8f17db68c1",
+  "unit_tests_run": false,
+  "worktree_created": false,
+  "git_commit_push_performed": false,
+  "scientific_qualification": "NOT VERIFIED; no convergence/parity or all-lane qualification",
+  "cache_maintenance": {
+    "attempt": "e9b964df046b46e1bdc3058186b1094e",
+    "result": {
+      "compiler_cache": {
+        "accounting": "unique-inode-allocated-blocks",
+        "after_bytes": 6361886720,
+        "before_bytes": 6361886720,
+        "incremental_root": "/build/workspace/.fullmag-build/cargo-targets/direct/backend-dev/incremental",
+        "max_incremental_bytes": 8589934592,
+        "recovery_bytes_before": 0,
+        "removed_bytes": 0,
+        "removed_crates": [],
+        "removed_paths": [],
+        "retained_crates": [
+          "_fullmag_core-1swwl11blmvou",
+          "build_script_build-18q088jkr85vl",
+          "build_script_build-1jbtyil3qw8je",
+          "build_script_build-1pxsj0ehrlm13",
+          "build_script_build-2icr0a2jfffjp",
+          "build_script_build-2ypqelx762y4w",
+          "fullmag-2oqdic3qwkvpj",
+          "fullmag_antenna_artifacts-2f7st0pjiog22",
+          "fullmag_antenna_artifacts-3f337jt18z82n",
+          "fullmag_api-3lzmspimgewir",
+          "fullmag_api_accepted_fem_preparation_scheduler-0h3kbncxesmyg",
+          "fullmag_api_accepted_fem_preparation_supervisor-07cwa59lohs0j",
+          "fullmag_api_accepted_fem_preparer-1dqtw8j3d26oy",
+          "fullmag_api_accepted_scheduler-220japvc89ysd",
+          "fullmag_api_accepted_supervisor-0zmnfjpjap3cx",
+          "fullmag_api_accepted_worker-106ppogsw4hwi",
+          "fullmag_api_preparation_resource_pool-30j53baag8c9o",
+          "fullmag_api_preparation_retry-14gkmw5g50f3y",
+          "fullmag_api_resource_pool-26hg5v2jm9re0",
+          "fullmag_application-3bjjnv8m2kpgw",
+          "fullmag_application-3phvj37rbbve3",
+          "fullmag_authoring-0pxm1uos7zf5z",
+          "fullmag_authoring-0vag9grbu2vbz",
+          "fullmag_build_info-2px1uynxjlu58",
+          "fullmag_engine-100h3pgynsyfs",
+          "fullmag_engine-38b6vqkxnb1ov",
+          "fullmag_fdm_demag-0znzwapxty5te",
+          "fullmag_fdm_demag-3ccsuemabjhqk",
+          "fullmag_fdm_sys-0e3045fl4mh25",
+          "fullmag_fem_sys-1ngwjcq1qlnxs",
+          "fullmag_ir-2ar4ervcaxec9",
+          "fullmag_ir-2vq3em0xpb2lj",
+          "fullmag_plan-0w5myhmmmw46c",
+          "fullmag_plan-3qrg1s1nopjrl",
+          "fullmag_quantities-0p7qy4ljo4ota",
+          "fullmag_quantities-1j6gvd1ur05gf",
+          "fullmag_runner-0syt8enpxn2ff",
+          "fullmag_runner-1jvv0v2mtwf27",
+          "fullmag_runtime_control-2bd8xhpb4u385",
+          "fullmag_runtime_service-3fpv6ru3uos28",
+          "fullmag_session-2foifz824gknw",
+          "fullmag_session-3f4nd6n1ab9at",
+          "fullmag_workspace-3pdlvt3j5jgds",
+          "fullmag_workspace_inspect-3ueak7oz8ace1"
+        ],
+        "schema": "fullmag.backend-compiler-cache-retention.v1",
+        "state": "complete",
+        "workspace": "/build/workspace"
+      },
+      "current_receipt_sha256": "4193742367ba8cc3a34dfa97ec302a4e619ae7e7dd684bef576e359d0a3db690",
+      "retained": [
+        "current",
+        "direct-rollback"
+      ],
+      "schema": "fullmag.package-maintenance.v1",
+      "shared_cache": {
+        "cache_logical_bytes": 22491924896,
+        "evicted": [],
+        "schema": "fullmag.shared-backend-package.v1",
+        "staging_retained": []
+      },
+      "state": "succeeded"
+    },
+    "space_after": {
+      "capacity_bytes": 1081101176832,
+      "used_bytes": 882586210304,
+      "available_bytes": 143522611200,
+      "minimum_free_bytes": 34359738368,
+      "scope": "Docker VM filesystem; not a per-volume quota or Windows VHDX allocation"
+    }
+  },
+  "domain_meta": {
+    "domain_id": "current",
+    "discretization": "fem",
+    "generation_id": "14850812098407037233",
+    "dimension": 3,
+    "coordinate_system": "cartesian",
+    "units": {
+      "length": "m"
+    },
+    "bounds": {
+      "min": [
+        -1.4e-06,
+        -1.05e-06,
+        -6e-07
+      ],
+      "max": [
+        1.4e-06,
+        1.05e-06,
+        6e-07
+      ]
+    },
+    "counts": {
+      "cells": null,
+      "nodes": 183764,
+      "elements": 1087250,
+      "boundary_faces": 52454
+    },
+    "element_type": "mixed"
+  },
+  "old_completed_catalog_sha256": "9e3b9182f82e48618aa47e50b07cae732f7f03382b8a55dc6af2234bccdba45f",
+  "native_completion": {
+    "source_path": "/home/kkingstoun/git/fullmag/storage/runtimes/fullmag-902a54b7b1f633a7/docker-volume-dev/176c53b2754048829eb049e7d7239863/runs/docker-all/session-store/runs/run-live-d06087ec50780f18efb6b3bf47d774c839cae891da150dfb7a602c6d6086d7e8/worker-attempts/task-8cb773c1f20e0ed32e1ea2574d825235faf28c23673d54032cb5b4849f1592d5/attempt-8452ad205e584581916bcc78bbfcdb05/epoch-1/worker_execution_completed.v1.json",
+    "source_sha256": "373881cebfa929974cb4b2eaecd687be3a892b478de9850386ead853c5858a03",
+    "public_projection_file": "native-completion-projection.json",
+    "status": "completed",
+    "completed_step_count": 10
+  },
+  "algorithm_evidence": {
+    "script_stage": "add_minimize(method=\"bb\", max_steps=10)",
+    "runtime_algorithm_attested": false,
+    "reason": "API algorithm and relaxation_algorithm are null; describe BB as script configuration, not a separately attested runtime algorithm."
+  },
+  "health_protocol_note": "Raw health.uptime_seconds is epoch-like rather than elapsed uptime; retained as reported. Elapsed uptime is available under status.metrics. Do not use health.uptime_seconds for duration calculations."
+}

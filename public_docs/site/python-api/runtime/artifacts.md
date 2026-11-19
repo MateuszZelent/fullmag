@@ -10,34 +10,28 @@ owner: fullmag-public-docs
 # Artifacts
 
 (python-api-runtime-artifacts-problem-statement)=
-<!-- (problem-statement)= -->
 ## Contract
 Artifacts are the persisted run outputs: the output directory, saved magnetization states, tables,
 and field snapshots written by the runtime.
 
 (python-api-runtime-artifacts-governing-equations)=
-<!-- (governing-equations)= -->
 ## Governing equations
 No physical equation is owned here.
 
 (python-api-runtime-artifacts-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 Magnetization state is stored with its own unit metadata; table quantities carry the units defined
 by the corresponding observables.
 
 (python-api-runtime-artifacts-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 State formats are validated against the supported set (`json`, `zarr`, `h5`); format is inferred
 from the path extension when `"auto"` is requested.
 
 (python-api-runtime-artifacts-python-api)=
-<!-- (python-api)= -->
 ## Python API
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| --- | --- | --- | $1$ | --- | --- | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | --- |
 | `Result.output_dir` | `str \| None` | `None` | $1$ | Directory path | Directory for run artifacts | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | output dir |
 | `Result.save_state(path, format=..., dataset=...)` | method | `format="auto"`, `dataset="values"` | $1$ | Requires `final_magnetization` | Persist final state | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | n/a (runtime output) |
 | `save_magnetization(path, values, ...)` | function | `format="auto"` | $1$ | `json`, `zarr`, or `h5` | Low-level state writer | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | n/a |
@@ -69,71 +63,55 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 ```
 
 (python-api-runtime-artifacts-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
 Artifacts are runtime outputs; they are not authoring inputs and have no lowering destination.
 
 (python-api-runtime-artifacts-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
 
-Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+Requested intent is the value authored by Python and preserved in `ProblemIR`; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
 
 Saving without `final_magnetization` raises immediately. Unsupported formats raise rather than
 writing a best-effort file.
 
 (python-api-runtime-artifacts-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
-State serialization lives in `fullmag/init/state_io.py` and supports JSON, Zarr, and HDF5.
+State serialization lives in `packages/fullmag-py/src/fullmag/init/state_io.py` and supports JSON, Zarr, and HDF5.
 
 (python-api-runtime-artifacts-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## Implementation mapping
 Anchors: `packages/fullmag-py/src/fullmag/runtime/simulation.py` (`Result.save_state`) and
 `packages/fullmag-py/src/fullmag/init/state_io.py` (`save_magnetization`).
 
 (python-api-runtime-artifacts-validation)=
-<!-- (validation)= -->
 ## Validation
-State round-trip is covered by read/write tests; ownership tests validate the source map.
+State round-trip is covered by read/write tests and API contract checks.
 
 (python-api-runtime-artifacts-limitations)=
-<!-- (limitations)= -->
 ## Limitations
 Artifact format support does not guarantee interchange with other tools; readers must honor the
 stored unit and dataset metadata.
 
 (python-api-runtime-artifacts-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## Scientific bibliography
 No physical model is introduced.
 
-(python-api-runtime-artifacts-source-code-index)=
-<!-- (source-code-index)= -->
-
-## Control Room crosswalk
+## Control Room support
 
 Status: Runtime and provenance data are inspection-only; they are not standalone authoring controls.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Runtime` | `inspection-only` | No runtime-authoring transaction |
-| Parameters without a named UI field | `Model Explorer -> Runtime` | `not implemented` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Runtime` | `Python-only` | Authored in Python |
 
-not implemented: frontend support for runtime-selection and artifact-publication parameters.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx (RuntimeExplorerInspectorPanels)`.
+Runtime-selection and artifact-publication parameters outside the workspace runtime panel remain Python-only.
+See [Control Room capability register](/frontend/capability-register) for the UI support matrix.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx` (`RuntimeExplorerInspectorPanels`).
 
+(python-api-runtime-artifacts-source-code-index)=
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| State persistence | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `Result.save_state` | Public save entrypoint | Ownership test |
+| Artifact access and state persistence entrypoint | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | [`class Result`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | Runtime artifact access and `Result.save_state` | Ownership and API contract tests |
 | Serialization formats | [`packages/fullmag-py/src/fullmag/init/state_io.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/state_io.py#L77) | [`save_magnetization`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/state_io.py#L77), `load_magnetization` | JSON/Zarr/HDF5 round-trip | Read/write tests |
-
-### Source-map coverage
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Runtime artifact access and state persistence entrypoint. | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | [`class Result`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | Runtime artifact access and state persistence entrypoint. | Source-map validator and focused API tests |
-| Magnetization artifact serialization. | [`packages/fullmag-py/src/fullmag/init/state_io.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/state_io.py#L77) | [`save_magnetization`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/state_io.py#L77) | Magnetization artifact serialization. | Source-map validator and focused API tests |

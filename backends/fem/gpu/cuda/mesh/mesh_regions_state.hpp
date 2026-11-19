@@ -40,6 +40,11 @@ struct FemGpuMeshRegionDeviceState {
     // Reduced-row-indexed representative list used by reduced CSR operators.
     uint32_t *periodic_reduced_representative_nodes = nullptr;
     uint64_t periodic_reduced_node_count = 0;
+    // Periodic class members in CSR form: class r owns
+    // members[offsets[r]..offsets[r + 1]) in ascending node order, so class
+    // reductions visit only their own nodes in a fixed order.
+    uint32_t *periodic_class_member_offsets = nullptr;
+    uint32_t *periodic_class_members = nullptr;
 };
 
 } // namespace fullmag::fem

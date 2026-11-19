@@ -15,13 +15,20 @@ USER root
 ARG FULLMAG_DOCKER_HELPERS=""
 
 COPY ${FULLMAG_DOCKER_HELPERS}backend_dev.py /opt/fullmag/backend_dev.py
+COPY ${FULLMAG_DOCKER_HELPERS}backend_native_contracts.py /opt/fullmag/backend_native_contracts.py
 # The source extractor is supplied by the image-runtime integration worker.
 # Keep it image-owned and immutable; backend_dev.py remains the command
 # boundary and never executes source-controlled commands.
 COPY ${FULLMAG_DOCKER_HELPERS}backend_source.py /opt/fullmag/backend_source.py
+COPY ${FULLMAG_DOCKER_HELPERS}backend_shared_store.py /opt/fullmag/backend_shared_store.py
+COPY ${FULLMAG_DOCKER_HELPERS}backend_shared_recovery.py /opt/fullmag/backend_shared_recovery.py
+COPY ${FULLMAG_DOCKER_HELPERS}backend_compiler_cache.py /opt/fullmag/backend_compiler_cache.py
+COPY ${FULLMAG_DOCKER_HELPERS}backend_group_cache_cleanup.py /opt/fullmag/backend_group_cache_cleanup.py
+COPY ${FULLMAG_DOCKER_HELPERS}backend_group_retirement.py /opt/fullmag/backend_group_retirement.py
 COPY ${FULLMAG_DOCKER_HELPERS}backend_candidate_retirement.py /opt/fullmag/backend_candidate_retirement.py
 COPY ${FULLMAG_DOCKER_HELPERS}worker_cgroup_gate.py /opt/fullmag/worker_cgroup_gate.py
-RUN mkdir -p /opt/fullmag/worker-cgroup && chmod 0755 /opt/fullmag/worker-cgroup
+RUN chmod 0644 /opt/fullmag/worker_cgroup_gate.py && \
+    mkdir -p /opt/fullmag/worker-cgroup && chmod 0755 /opt/fullmag/worker-cgroup
 # This fixed image-owned helper is used only by the isolated, networkless
 # CAP_CHOWN maintenance service before the unprivileged backend starts.
 COPY ${FULLMAG_DOCKER_HELPERS}backend_volume_cache_maintenance.py /opt/fullmag/backend_volume_cache_maintenance.py
@@ -44,7 +51,7 @@ RUN set -eu; \
         rmdir /workspace; \
     fi; \
     ln -s /build/workspace /workspace; \
-    chown -R 65532:65532 /build /output /opt/fullmag/backend_dev.py /opt/fullmag/backend_source.py /opt/fullmag/backend_candidate_retirement.py /opt/fullmag/backend_volume_cache_maintenance.py; \
+    chown -R 65532:65532 /build /output /opt/fullmag/backend_dev.py /opt/fullmag/backend_source.py /opt/fullmag/backend_candidate_retirement.py /opt/fullmag/backend_volume_cache_maintenance.py /opt/fullmag/backend_group_cache_cleanup.py; \
     chmod 0755 /opt/fullmag/backend_dev.py; \
     chmod 0644 /opt/fullmag/backend_source.py /opt/fullmag/backend_candidate_retirement.py; \
     chmod 0755 /opt/fullmag/backend_volume_cache_maintenance.py

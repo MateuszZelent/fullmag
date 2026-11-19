@@ -381,6 +381,94 @@ async fn check_owner(state: &Arc<AppState>, expected: &InspectionOwner) -> Resul
     Ok(())
 }
 
+/// Thin registry/record discovery. Retained owners still require full field admission.
+pub(crate) async fn inspection_discovery_metadata(
+    state: &Arc<AppState>,
+    stage_ids: &[String],
+    accepted_candidate: bool,
+) -> Result<std::collections::BTreeMap<String, crate::schemas::runtime::AntennaInspectionDiscoveryResource>, ApiError> {
+    use crate::schemas::runtime::{AntennaInspectionDiscoveryResource as Resource, AntennaInspectionDiscoveryState as Discovery};
+    let unknown = |reason: &str| stage_ids.iter().map(|id| (id.clone(), Resource {
+        state: Discovery::Unknown, reason_code: reason.into(),
+    })).collect::<std::collections::BTreeMap<_, _>>();
+    if stage_ids.len() > 64 { return Ok(unknown("inspection_discovery_budget")); }
+    if stage_ids.iter().collect::<std::collections::BTreeSet<_>>().len() != stage_ids.len() {
+        return Ok(unknown("ambiguous_inspection_owner"));
+    }
+    if stage_ids.is_empty() { return Ok(std::collections::BTreeMap::new()); }
+    let context = crate::capture_current_live_request_context(state).await?;
+    // Accepted discovery only admits Succeeded tasks. A negative lifecycle hint
+    // skips that registry read; it never proves that an owner is retained.
+    let accepted = if accepted_candidate {
+        match super::accepted_inspection_fields::stage_ids(state).await {
+            Ok(ids) => ids,
+            Err(_) => {
+                crate::validate_current_live_request_context(state, &context).await?;
+                return Ok(unknown("inspection_discovery_unavailable"));
+            }
+        }
+    } else { Vec::new() };
+    let legacy = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::ensure_current_live_request_context(snapshot, &context,
+            state.current_live_session_epoch.load(Ordering::Acquire))?;
+        stage_ids.iter().filter_map(|id| {
+            let registered = snapshot.stage_execution.as_ref().is_some_and(|execution|
+                execution.stages.iter().any(|stage| stage.stage_id.as_deref() == Some(id.as_str())
+                    && stage.artifact_refs.iter().any(|path| FsPath::new(path).file_name()
+                        .is_some_and(|name| name == RECORD_NAME || name == CLOSED_RECORD_NAME))));
+            registered.then(|| (id.clone(), capture(snapshot, id, context.clone()).map(|value| value.owner)))
+        }).collect::<Vec<_>>()
+    };
+    let legacy = if legacy.is_empty() {
+        std::collections::BTreeMap::new()
+    } else {
+        let permit = match Arc::clone(&state.quantity_data_plane.accepted_inspection_admission).acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => {
+                crate::validate_current_live_request_context(state, &context).await?;
+                return Ok(unknown("inspection_discovery_unavailable"));
+            }
+        };
+        let result = tokio::task::spawn_blocking(move || {
+            // Cancellation of the HTTP request must not release a still-running reader.
+            let _permit = permit;
+            legacy.into_iter().map(|(id, owner)| {
+                let parsed = owner.and_then(|owner| read_registered_record(&owner))
+                    .and_then(|bytes| parse_record(&bytes));
+                (id, parsed.map(|record| record.status == "inspection_only"))
+            }).collect::<std::collections::BTreeMap<_, _>>()
+        }).await;
+        match result {
+            Ok(legacy) => legacy,
+            Err(_) => {
+                crate::validate_current_live_request_context(state, &context).await?;
+                return Ok(unknown("inspection_discovery_unavailable"));
+            }
+        }
+    };
+    crate::validate_current_live_request_context(state, &context).await?;
+    Ok(stage_ids.iter().map(|id| {
+        let result = inspection_discovery_state(accepted.contains(id), legacy.get(id));
+        (id.clone(), result)
+    }).collect())
+}
+
+fn inspection_discovery_state(
+    accepted: bool,
+    legacy: Option<&Result<bool, ApiError>>,
+) -> crate::schemas::runtime::AntennaInspectionDiscoveryResource {
+    use crate::schemas::runtime::{AntennaInspectionDiscoveryResource as Resource, AntennaInspectionDiscoveryState as State};
+    let (state, reason) = match (accepted, legacy) {
+        (true, Some(_)) => (State::Unknown, "ambiguous_inspection_owner"),
+        (true, None) | (false, Some(Ok(true))) => (State::Retained, "retained_inspection_metadata"),
+        (false, Some(Err(_))) => (State::Unknown, "inspection_record_invalid"),
+        (false, None) | (false, Some(Ok(false))) => (State::Absent, "no_retained_inspection"),
+    };
+    Resource { state, reason_code: reason.into() }
+}
+
 /// One owner-fenced entry into the common data plane; existing inspection guards remain private.
 pub(super) async fn verified_inspection_fields(
     state: &Arc<AppState>, requested_stage: Option<&str>,
@@ -1038,6 +1126,27 @@ pub(super) fn validate_payload_kind(kind: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+pub(super) fn validate_family_payload_kind(kind: &str) -> Result<(), ApiError> {
+    if ![
+        "stable_vertex_ids", "vertex_xyz", "sample_xyz", "conductivity",
+        "v_raw", "v_per_a", "j_center_raw", "j_center_per_a", "j_local_raw", "j_local_per_a",
+        "h_raw", "h_per_a", "cells", "faces", "weak", "prepared_preimage", "charge_preimage",
+        "source_preimage", "certificate", "authoring_receipt", "direct_evidence", "sample_cells",
+    ].contains(&kind) {
+        validate_payload_kind(kind)?;
+    }
+    Ok(())
+}
+
+pub(super) fn select_closed_payload(
+    mut loaded: fullmag_runner::LoadedAntennaClosedLoopInspection,
+    kind: &str,
+) -> Result<(String, Vec<u8>), ApiError> {
+    let bytes = loaded.payloads.remove(kind)
+        .ok_or_else(|| ApiError::bad_request("unknown closed-loop inspection payload kind"))?;
+    Ok((digest(&bytes), bytes))
+}
+
 pub(super) fn select_payload(
     loaded: LoadedAntennaExternalLeadSolution,
     kind: &str,
@@ -1141,16 +1250,7 @@ pub async fn get_antenna_external_lead_inspection_payload(
     let Query(query) = query.map_err(|error| {
         ApiError::bad_request(format!("invalid inspection payload query: {error}"))
     })?;
-    // Closed-loop payload names belong to the closed-loop bundle. Accepted
-    // external-lead resources keep their narrower shared validator.
-    if ![
-        "stable_vertex_ids", "vertex_xyz", "sample_xyz", "conductivity",
-        "v_raw", "v_per_a", "j_center_raw", "j_center_per_a", "j_local_raw", "j_local_per_a",
-        "h_raw", "h_per_a", "cells", "faces", "weak", "prepared_preimage", "charge_preimage",
-        "source_preimage", "certificate", "authoring_receipt", "direct_evidence", "sample_cells",
-    ].contains(&payload_kind.as_str()) {
-        validate_payload_kind(&payload_kind)?;
-    }
+    validate_family_payload_kind(&payload_kind)?;
     let snapshot = snapshot(&state, &stage_id).await?;
     let owner = snapshot.owner.clone();
     let (etag, bytes) = tokio::task::spawn_blocking(move || {
@@ -1168,9 +1268,7 @@ pub async fn get_antenna_external_lead_inspection_payload(
             ));
         }
         let (payload_sha256, bytes) = if record.schema_version == "antenna_closed_loop_stage_output.v2" {
-            let mut loaded = load_closed(&record, &snapshot.owner.artifact_dir)?;
-            let bytes = loaded.payloads.remove(&payload_kind).ok_or_else(|| ApiError::bad_request("unknown closed-loop inspection payload kind"))?;
-            (digest(&bytes), bytes)
+            select_closed_payload(load_closed(&record, &snapshot.owner.artifact_dir)?, &payload_kind)?
         } else {
             let loaded = fullmag_runner::load_published_antenna_external_lead_solution(
                 &snapshot.owner.artifact_dir, &output.inspection_ref.runner_reference(),
@@ -1316,4 +1414,49 @@ mod tests {
         assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
         assert_eq!(error.code.as_deref(), Some("inspection_owner_changed"));
     }
+    #[test]
+    fn inspection_discovery_distinguishes_registry_retention_absence_and_invalid_metadata() {
+        use crate::schemas::runtime::AntennaInspectionDiscoveryState as State;
+        assert_eq!(inspection_discovery_state(true, None).state, State::Retained);
+        assert_eq!(inspection_discovery_state(false, Some(&Ok(true))).state, State::Retained);
+        assert_eq!(inspection_discovery_state(false, None).state, State::Absent);
+        assert_eq!(inspection_discovery_state(false, Some(&Ok(false))).state, State::Absent);
+        let invalid_record = parse_record(b"{").map(|record| record.status == "inspection_only");
+        let unknown = inspection_discovery_state(false, Some(&invalid_record));
+        assert_eq!(unknown.state, State::Unknown);
+        assert_eq!(unknown.reason_code, "inspection_record_invalid");
+        // Registration is discovery; no payload qualification is claimed.
+        assert_eq!(serde_json::to_value(inspection_discovery_state(true, None)).unwrap(),
+            serde_json::json!({"state": "retained", "reason_code": "retained_inspection_metadata"}));
+    }
+
+    #[test]
+    fn accepted_and_legacy_owners_for_one_stage_are_ambiguous() {
+        use crate::schemas::runtime::AntennaInspectionDiscoveryState as State;
+        for legacy in [Ok(true), Ok(false), Err(invalid("foreign registered metadata"))] {
+            let result = inspection_discovery_state(true, Some(&legacy));
+            assert_eq!(result.state, State::Unknown);
+            assert_eq!(result.reason_code, "ambiguous_inspection_owner");
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_antenna_without_a_registered_record_is_absent_without_data_materialization() {
+        use crate::schemas::runtime::AntennaInspectionDiscoveryState as State;
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        {
+            let mut current = state.current_live_state.write().await;
+            current.as_mut().unwrap().stage_execution = Some(serde_json::from_value(serde_json::json!({
+                "total_stages": 1, "runtime_state": "failed",
+                "stages": [{"stage_id": "stage-000", "antenna_solve_stage_id": "antenna-solve",
+                    "kind": "study_pipeline_antenna_field_solve", "status": "failed", "artifact_refs": []}]
+            })).unwrap());
+        }
+        let discovered = inspection_discovery_metadata(&state, &["stage-000".into()], false).await.unwrap();
+        assert_eq!(discovered["stage-000"].state, State::Absent);
+        let current = state.current_live_state.read().await;
+        assert_eq!(current.as_ref().unwrap().stage_execution.as_ref().unwrap().stages[0].status,
+            crate::types::StageLifecycleState::Failed);
+    }
+
 }

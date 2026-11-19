@@ -1,0 +1,431 @@
+{
+  "document": {
+    "path": "docs/physics/0107-airbox-feature-refinement.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM has no conforming Poisson airbox mesh."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM has no conforming Poisson airbox mesh."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-air-feature-laplace",
+      "symbols": [
+        "laplacian",
+        "potential",
+        "air_domain"
+      ],
+      "sources": [
+        "public-api"
+      ]
+    },
+    {
+      "id": "eq-air-curvature-target",
+      "symbols": [
+        "surface_target",
+        "curvature_factor",
+        "radius",
+        "lower_clamp",
+        "air_hmax",
+        "curvature",
+        "parametric_sample",
+        "sample_index",
+        "surface_index"
+      ],
+      "sources": [
+        "curvature-field",
+        "curvature-sampling"
+      ]
+    },
+    {
+      "id": "eq-air-curvature-ramp",
+      "symbols": [
+        "curvature_size",
+        "point",
+        "surface_target",
+        "growth",
+        "surface_distance",
+        "air_hmax",
+        "air_domain",
+        "surface"
+      ],
+      "sources": [
+        "curvature-field",
+        "regression"
+      ]
+    },
+    {
+      "id": "eq-air-gap-width",
+      "symbols": [
+        "gap_width",
+        "point",
+        "wall_distance",
+        "wall_indices"
+      ],
+      "sources": [
+        "gap-field"
+      ]
+    },
+    {
+      "id": "eq-air-gap-count",
+      "symbols": [
+        "elements_across",
+        "resolution"
+      ],
+      "sources": [
+        "gap-count"
+      ]
+    },
+    {
+      "id": "eq-air-gap-target",
+      "symbols": [
+        "gap_size",
+        "point",
+        "gap_width",
+        "elements_across",
+        "resolution",
+        "lower_clamp",
+        "air_hmax",
+        "air_domain"
+      ],
+      "sources": [
+        "gap-field",
+        "regression"
+      ]
+    },
+    {
+      "id": "eq-air-feature-composition",
+      "symbols": [
+        "lower_clamp",
+        "air_hmax",
+        "air_hmin",
+        "background_size",
+        "point",
+        "grading_size",
+        "curvature_size",
+        "gap_size"
+      ],
+      "sources": [
+        "feature-fields"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "potential",
+      "latex": "\\phi",
+      "meaning": "scalar magnetostatic potential in air",
+      "si_unit": "\\mathrm A"
+    },
+    {
+      "id": "laplacian",
+      "latex": "\\nabla^2",
+      "meaning": "Laplace operator",
+      "si_unit": "\\mathrm{m^{-2}}"
+    },
+    {
+      "id": "air_domain",
+      "latex": "\\Omega_\\mathrm{air}",
+      "meaning": "air (airbox) volume of the shared domain",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "point",
+      "latex": "\\mathbf x",
+      "meaning": "point in the air volume",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "surface",
+      "latex": "S_k",
+      "meaning": "$k$-th air-adjacent magnetic surface",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "surface_index",
+      "latex": "k",
+      "meaning": "surface index",
+      "si_unit": "1"
+    },
+    {
+      "id": "curvature",
+      "latex": "\\kappa_k",
+      "meaning": "sampled surface curvature magnitude of $S_k$",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "parametric_sample",
+      "latex": "(u_q,v_q)",
+      "meaning": "interior parametric sample of $S_k$",
+      "si_unit": "1"
+    },
+    {
+      "id": "sample_index",
+      "latex": "q",
+      "meaning": "sample index",
+      "si_unit": "1"
+    },
+    {
+      "id": "radius",
+      "latex": "R_k",
+      "meaning": "smallest sampled radius of curvature of $S_k$",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "curvature_factor",
+      "latex": "c",
+      "meaning": "air curvature factor (`curvature_factor`)",
+      "si_unit": "1"
+    },
+    {
+      "id": "surface_target",
+      "latex": "h_k",
+      "meaning": "surface target of $S_k$",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "surface_distance",
+      "latex": "d_k(\\mathbf x)",
+      "meaning": "distance from $\\mathbf x$ to $S_k$",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "growth",
+      "latex": "g",
+      "meaning": "air growth rate (`maximum_element_growth_rate`)",
+      "si_unit": "1"
+    },
+    {
+      "id": "curvature_size",
+      "latex": "h_c(\\mathbf x)",
+      "meaning": "curvature target in air",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "wall",
+      "latex": "W_i",
+      "meaning": "$i$-th air wall (component surface set or $\\Gamma_\\mathrm{out}$)",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "wall_count",
+      "latex": "N",
+      "meaning": "number of air walls",
+      "si_unit": "1"
+    },
+    {
+      "id": "wall_indices",
+      "latex": "i,j",
+      "meaning": "wall indices",
+      "si_unit": "1"
+    },
+    {
+      "id": "wall_distance",
+      "latex": "d_i(\\mathbf x)",
+      "meaning": "distance from $\\mathbf x$ to $W_i$",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "wall_separation",
+      "latex": "\\operatorname{dist}(W_i,W_j)",
+      "meaning": "shortest distance between two walls",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "gap_width",
+      "latex": "w(\\mathbf x)",
+      "meaning": "estimated local gap width",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "resolution",
+      "latex": "r",
+      "meaning": "air narrow-region resolution (`narrow_region_resolution`)",
+      "si_unit": "1"
+    },
+    {
+      "id": "elements_across",
+      "latex": "n(r)",
+      "meaning": "elements requested across a gap",
+      "si_unit": "1"
+    },
+    {
+      "id": "gap_size",
+      "latex": "h_n(\\mathbf x)",
+      "meaning": "narrow-gap target in air",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "air_hmax",
+      "latex": "h_\\mathrm{air}",
+      "meaning": "air maximum element size (`maximum_element_size`)",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "air_hmin",
+      "latex": "h_\\mathrm{air,min}",
+      "meaning": "air minimum element size (`minimum_element_size`)",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "lower_clamp",
+      "latex": "h_\\mathrm{lo}",
+      "meaning": "lower clamp of both feature targets",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "grading_size",
+      "latex": "h_\\mathrm{grading}(\\mathbf x)",
+      "meaning": "0102 interface grading target",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "background_size",
+      "latex": "h(\\mathbf x)",
+      "meaning": "background target size",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "outer_boundary",
+      "latex": "\\Gamma_\\mathrm{out}",
+      "meaning": "outer truncation boundary of the airbox",
+      "si_unit": "\\mathrm{m^2}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "feature-fields",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_airbox_feature_fields.py",
+      "symbol": "add_airbox_feature_fields",
+      "responsibility": "Builds the air-restricted curvature and narrow-gap Gmsh fields.",
+      "evidence_status": "interpreted-gmsh-regression"
+    },
+    {
+      "id": "curvature-field",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_airbox_feature_fields.py",
+      "symbol": "_add_air_curvature_field",
+      "responsibility": "Per-surface Distance->Threshold with slope g-1, restricted to air.",
+      "evidence_status": "interpreted-gmsh-regression"
+    },
+    {
+      "id": "gap-field",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_airbox_feature_fields.py",
+      "symbol": "_add_air_gap_field",
+      "responsibility": "Pairwise distance-sum MathEval clamped to [h_lo, h_air], restricted to air.",
+      "evidence_status": "interpreted-gmsh-regression"
+    },
+    {
+      "id": "gap-count",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_resolve_narrow_region_count",
+      "responsibility": "Maps the resolution r to the element count n(r).",
+      "evidence_status": "contract-test"
+    },
+    {
+      "id": "curvature-sampling",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py",
+      "symbol": "_sample_surface_curvature_radius",
+      "responsibility": "Samples Gmsh curvature on interior parametric points.",
+      "evidence_status": "interpreted-gmsh-regression"
+    },
+    {
+      "id": "route-guard",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_airbox_feature_fields.py",
+      "symbol": "require_no_airbox_feature_refinement",
+      "responsibility": "Rejects the controls on level-set air routes.",
+      "evidence_status": "contract-test"
+    },
+    {
+      "id": "public-api",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseHandle",
+      "responsibility": "Public validation of the universe mesh controls.",
+      "evidence_status": "contract-test"
+    },
+    {
+      "id": "universe-config",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseConfig",
+      "responsibility": "Serializes the controls into study_universe only when authored.",
+      "evidence_status": "contract-test"
+    },
+    {
+      "id": "lowering",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_study_universe_airbox_options",
+      "responsibility": "Lowers study_universe into AirboxOptions.",
+      "evidence_status": "contract-test"
+    },
+    {
+      "id": "script-export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_universe_feature_refinement_kwargs",
+      "responsibility": "Exports the controls as study.universe.mesh keywords.",
+      "evidence_status": "contract-test"
+    },
+    {
+      "id": "authored-state",
+      "path": "crates/fullmag-authoring/src/universe_state.rs",
+      "symbol": "UniverseStateWire",
+      "responsibility": "Validates and canonicalizes the authored universe state.",
+      "evidence_status": "source-check"
+    },
+    {
+      "id": "canonical-policy",
+      "path": "crates/fullmag-ir/src/mesh_policy.rs",
+      "symbol": "FemAirboxMeshPolicyIR",
+      "responsibility": "Canonical fem_mesh_policy.v1 airbox copy.",
+      "evidence_status": "source-check"
+    },
+    {
+      "id": "regression",
+      "path": "packages/fullmag-py/tests/test_airbox_feature_refinement.py",
+      "symbol": "class GmshRealizationTests",
+      "responsibility": "Two spheres with a 20 nm gap: gap and near-surface air refine.",
+      "evidence_status": "interpreted-gmsh-regression"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.universe.mesh.curvature_factor",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite $>0$; requires `maximum_element_size`; FDM `cell_size` combination rejected; otherwise `ValueError`",
+        "meaning": "air target $c\\,R_k$ at curved magnetic surfaces",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "runtime_metadata.study_universe.airbox_curvature_factor"
+      },
+      {
+        "python": "study.universe.mesh.narrow_region_resolution",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite $>0$; requires `maximum_element_size`; FDM `cell_size` combination rejected; otherwise `ValueError`",
+        "meaning": "elements $n(r)$ across air gaps",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "runtime_metadata.study_universe.airbox_narrow_region_resolution"
+      }
+    ]
+  }
+}

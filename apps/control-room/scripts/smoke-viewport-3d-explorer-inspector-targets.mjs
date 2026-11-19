@@ -25,7 +25,10 @@ const timeoutMs = Number(process.env.CONTROL_ROOM_TARGET_SMOKE_TIMEOUT_MS ?? 30_
 const CANVAS_SELECTOR = ".fm-viewport-3d canvas";
 const appDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = resolve(appDir, "../..");
-const browserAuditArtifactDir = join(appDir, ".artifacts", "viewport-3d-browser-audit");
+const browserAuditArtifactDir = resolve(
+  process.env.CONTROL_ROOM_AUDIT_ARTIFACTS_DIR ??
+    join(appDir, ".artifacts", "viewport-3d-browser-audit"),
+);
 // Keep enough rendered support cells for canvas-delta assertions while still
 // retaining a strict outside-support Airbox and two independent regions.
 // The physical extent remains [-1, 1]^3 with a central [-0.5, 0.5]^3 support.
@@ -83,15 +86,29 @@ try {
     pageUrl: url,
   });
   removeMutationProcessGuards = mutationGuard.installProcessGuards();
-  browser = await playwright.chromium.launch();
+  browser = process.env.CONTROL_ROOM_TARGET_SMOKE_SWIFTSHADER === "1"
+    ? await playwright.chromium.launch({
+        args: [
+          "--enable-unsafe-swiftshader",
+          "--ignore-gpu-blocklist",
+          "--use-angle=swiftshader-webgl",
+          "--use-gl=angle",
+        ],
+      })
+    : await playwright.chromium.launch();
   const targetSmokePhase = process.env.CONTROL_ROOM_TARGET_SMOKE_PHASE;
-  const analysisHandoffOnly = targetSmokePhase === "analysis-handoff";
-  const fdmOnly = targetSmokePhase === "fdm" || analysisHandoffOnly;
-  const femOnly = targetSmokePhase === "fem";
-  const fdm = femOnly ? null : await verifyFdmObjectAndAirboxTargets(browser, url);
-  const fieldFailures = fdmOnly || femOnly ? null : await verifyFdmFieldFailureRecovery(browser, url);
-  const fem = fdmOnly ? null : await verifyFemObjectTargetAndFallback(browser, url);
-  console.log(`Explorer/Inspector target smoke passed: ${JSON.stringify({ fdm, fem, fieldFailures, url })}`);
+  if (targetSmokePhase === "airbox-independent-visualization") {
+    const airboxIndependentVisualization = await verifyAirboxIndependentVisualization(browser, url);
+    console.log(`Airbox independent visualization smoke passed: ${JSON.stringify({ airboxIndependentVisualization, url })}`);
+  } else {
+    const analysisHandoffOnly = targetSmokePhase === "analysis-handoff";
+    const fdmOnly = targetSmokePhase === "fdm" || analysisHandoffOnly;
+    const femOnly = targetSmokePhase === "fem" || targetSmokePhase === "wireframe-scope";
+    const fdm = femOnly ? null : await verifyFdmObjectAndAirboxTargets(browser, url);
+    const fieldFailures = fdmOnly || femOnly ? null : await verifyFdmFieldFailureRecovery(browser, url);
+    const fem = fdmOnly ? null : await verifyFemObjectTargetAndFallback(browser, url);
+    console.log(`Explorer/Inspector target smoke passed: ${JSON.stringify({ fdm, fem, fieldFailures, url })}`);
+  }
 } catch (error) {
   runFailure = error;
   throw error;
@@ -204,6 +221,7 @@ async function verifyFdmObjectAndAirboxTargets(browser, url) {
   const errors = attachBrowserErrors(page);
   await installFixtureApi(page, fixture);
   await installFixtureConfig(page);
+
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
     await assertHealthyCanvas(page, "FDM initial");
@@ -301,6 +319,19 @@ async function verifyFemObjectTargetAndFallback(browser, url) {
   const errors = attachBrowserErrors(page);
   await installFixtureApi(page, fixture);
   await installFixtureConfig(page);
+  await page.addInitScript(() => {
+    window.__wireframeInspectorCommits = 0;
+    let rendererId = 0;
+    window.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      supportsFiber: true,
+      renderers: new Map(),
+      inject(renderer) { this.renderers.set(++rendererId, renderer); return rendererId; },
+      onCommitFiberRoot() { window.__wireframeInspectorCommits++; },
+      onCommitFiberUnmount() {},
+      onPostCommitFiberRoot() {},
+      checkDCE() {},
+    };
+  });
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
     await assertHealthyCanvas(page, "FEM initial");
@@ -314,6 +345,18 @@ async function verifyFemObjectTargetAndFallback(browser, url) {
     }
     await selectVisualizationNode(page, "fem-owned", null);
     await assertTarget(page, "object:fem-owned");
+    if (process.env.CONTROL_ROOM_TARGET_SMOKE_PHASE === "wireframe-scope") {
+      const panel = page.locator(".fm-inspector-panel").last();
+      await panel.getByRole("radio", { name: "Shaded + Wireframe", exact: true }).click();
+      await waitForVisualizationMutationSettled(page, panel);
+      const wireframeScope = await verifyFemWireframeScope(page, fixture);
+      await captureBrowserAuditScreenshot(page, "target-smoke-wireframe-scope.png");
+      await selectAirboxVisualization(page);
+      await assertAirboxControls(page);
+      await assertHealthyCanvas(page, "FEM wireframe scope and Airbox exclusion");
+      assertNoBrowserErrors(errors);
+      return { wireframeScope, airboxScopeControlAbsent: true };
+    }
     const ownedBeforePixels = await sampleViewportPixels(page);
     await assertNoViewportPixelDelta(page, ownedBeforePixels, "FEM owned target no-op negative control");
     await setObjectDisplayState(page, { colorbar: true, vectors: true, wireframe: true });
@@ -321,6 +364,7 @@ async function verifyFemObjectTargetAndFallback(browser, url) {
     const ownedRenderModeDeltas = await verifyPrimaryRenderModeCycle(page, "FEM owned object");
     await setObjectDisplayState(page, { colorbar: true, vectors: true, wireframe: true });
     const owned = await readTargetControls(page);
+    const wireframeScope = await verifyFemWireframeScope(page, fixture);
     await selectVisualizationNode(page, "fem-fallback", null);
     await assertTarget(page, "object:fem-fallback");
     const fallbackBeforePixels = await sampleViewportPixels(page, 1);
@@ -346,10 +390,237 @@ async function verifyFemObjectTargetAndFallback(browser, url) {
     await assertHealthyCanvas(page, "FEM target/fallback interactions");
     assertNoBrowserErrors(errors);
     await captureBrowserAuditScreenshot(page, "target-smoke-fem-success.png");
-    return { fallbackDelta, fallbackTarget: "object:fem-fallback", fieldRequests: fixture.fieldRequests, ownedDelta, ownedRenderModeDeltas, ownedTarget: "object:fem-owned" };
+    return { fallbackDelta, fallbackTarget: "object:fem-fallback", fieldRequests: fixture.fieldRequests, ownedDelta, ownedRenderModeDeltas, ownedTarget: "object:fem-owned", wireframeScope };
+  } catch (error) {
+    await captureBrowserAuditScreenshot(page, "target-smoke-fem-failure.png");
+    const body = await page.locator("body").innerText();
+    throw new Error(`FEM target smoke failed: ${error instanceof Error ? error.message : String(error)}; browserErrors=${JSON.stringify(errors)}; page=${body.slice(0, 6000)}`, { cause: error });
   } finally {
     await page.close();
   }
+}
+
+async function verifyAirboxIndependentVisualization(browser, url) {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 950 } });
+  page.setDefaultTimeout(timeoutMs);
+  const fixture = createFemAirboxIndependentFixture();
+  const magneticPartIds = fixture.manifest.mesh_parts
+    .filter((part) => part.role === "magnetic")
+    .map((part) => part.id);
+  if (JSON.stringify(magneticPartIds) !== JSON.stringify(["part-owned", "part-second"])) {
+    throw new Error(`Airbox fixture must contain two actual FEM magnetic parts; found ${JSON.stringify(magneticPartIds)}.`);
+  }
+  const errors = attachBrowserErrors(page);
+  // Unused platform resources are explicitly absent in this isolated fixture.
+  await page.route(`${apiBase}/**`, (route) => fulfillEmpty(route, 204));
+  await installFixtureApi(page, fixture);
+  await installAirboxIndependentFixtureResources(page, fixture);
+  await installFixtureConfig(page);
+  let delayedAck = null;
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+    await assertHealthyCanvas(page, "FEM Airbox independent visualization initial");
+    await selectAirboxVisualization(page);
+    await assertTarget(page, "airbox");
+    const panel = page.locator(".fm-inspector-panel").last();
+    const vectors = await assertAirboxControls(page);
+    if ((await vectors.getAttribute("aria-pressed")) !== "false") {
+      throw new Error("Airbox vector pass must be off before the H_eff render baseline.");
+    }
+    const quantity = panel.getByRole("combobox", { name: "Quantity source", exact: true });
+    if (await quantity.count() !== 1) {
+      throw new Error(`Airbox inspector must expose one Quantity Source control; found ${await quantity.count()}.`);
+    }
+    await quantity.scrollIntoViewIfNeeded();
+    await quantity.focus();
+    await waitForInspectorNoOpacityAnimation(page, panel);
+    const inspectorBefore = await captureInspectorMutationProbe(page);
+    if (!inspectorBefore.scroll.length) {
+      throw new Error("Airbox inspector fixture did not expose a scrollable ancestor for the mutation stability check.");
+    }
+    const fieldBaseline = await sampleViewportPixels(page, 1);
+    const quantityPatchesBefore = countVisualizationPatches(fixture);
+
+    const ackStarted = createDeferred();
+    const ackReleased = createDeferred();
+    delayedAck = ackReleased;
+    fixture.nextVisualizationAck = { released: ackReleased, started: ackStarted };
+    const quantityResponse = page.waitForResponse((response) => response.request().method() === "PATCH" && response.url().endsWith("/visualization/state"));
+    // Attach rejection handling immediately so failure cleanup cannot mask the assertion.
+    void quantityResponse.catch(() => {});
+    await quantity.click();
+    await page.getByRole("option", { name: "Effective Field", exact: true }).click();
+    await waitForDeferred(ackStarted.promise, "Airbox H_eff display PATCH", timeoutMs);
+    await waitForAnimationFrame(page);
+    await waitForAnimationFrame(page);
+    await assertTarget(page, "airbox");
+    await quantity.press("Enter");
+    if (await page.getByRole("option").count() !== 0) throw new Error("Pending quantity reopened its menu.");
+    const inspectorPending = await captureInspectorMutationProbe(page);
+    assertInspectorMutationStable(inspectorBefore, inspectorPending, "while the Airbox quantity ACK is delayed");
+    assertIndependentTargetState(fixture, { airboxQuantity: "H_eff", airboxPalette: "inferno" });
+    ackReleased.resolve();
+    delayedAck = null;
+    await quantityResponse;
+    await waitForAnimationFrame(page);
+    await waitForAnimationFrame(page);
+    await waitForVisualizationMutationSettled(page, panel);
+    const inspectorAcknowledged = await captureInspectorMutationProbe(page);
+    assertInspectorMutationStable(inspectorBefore, inspectorAcknowledged, "after the Airbox quantity ACK");
+    if (countVisualizationPatches(fixture) - quantityPatchesBefore !== 1) {
+      throw new Error(`Selecting Airbox H_eff must issue one visualization PATCH; observed ${countVisualizationPatches(fixture) - quantityPatchesBefore}.`);
+    }
+    await assertTarget(page, "airbox");
+
+    if ((await vectors.getAttribute("aria-pressed")) !== "true") {
+      await Promise.all([
+        page.waitForResponse((response) => response.request().method() === "PATCH" && response.url().endsWith("/visualization/state")),
+        vectors.click(),
+      ]);
+    }
+    await waitForVisualizationMutationSettled(page, panel);
+    await waitForFieldRequest(page, {
+      component: "full",
+      quantityId: "H_eff",
+      scopeId: "part-airbox",
+      scopeKind: "airbox",
+    });
+    assertFieldRequest(fixture, {
+      component: "full",
+      quantityId: "H_eff",
+      scopeId: "part-airbox",
+      scopeKind: "airbox",
+    });
+    const hEffDelta = await waitForViewportPixelDelta(
+      page,
+      fieldBaseline,
+      "FEM Airbox H_eff field vectors",
+      { minimumChangedPixels: 32 },
+    );
+    await assertHealthyCanvas(page, "FEM Airbox H_eff field vectors");
+    assertIndependentTargetState(fixture, { airboxQuantity: "H_eff", airboxPalette: "inferno" });
+
+    await panel.getByRole("button", { name: /^Vectors.*Density/ }).click();
+    const palette = panel.getByRole("combobox", { name: "Color map", exact: true });
+    if (await palette.count() !== 1 || await palette.isDisabled()) {
+      throw new Error(`Airbox inspector must expose an enabled Color map control; found ${await palette.count()}.`);
+    }
+    const paletteTransitions = [];
+    for (const paletteName of ["plasma", "cividis", "turbo", "grayscale", "rdbu"]) {
+      const baseline = await sampleViewportPixels(page, 1);
+      const patchesBefore = countVisualizationPatches(fixture);
+      await Promise.all([
+        page.waitForResponse((response) => response.request().method() === "PATCH" && response.url().endsWith("/visualization/state")),
+        palette.selectOption(paletteName),
+      ]);
+      await waitForVisualizationMutationSettled(page, panel);
+      const delta = await waitForViewportPixelDelta(
+        page,
+        baseline,
+        `FEM Airbox ${paletteName} vector palette`,
+        { minimumChangedPixels: 32 },
+      );
+      const palettePatchCount = countVisualizationPatches(fixture) - patchesBefore;
+      if (palettePatchCount !== 1) {
+        throw new Error(`Changing only the Airbox palette must issue one visualization PATCH; observed ${palettePatchCount}.`);
+      }
+      await assertHealthyCanvas(page, `FEM Airbox ${paletteName} vector palette`);
+      assertIndependentTargetState(fixture, {
+        airboxQuantity: "H_eff",
+        airboxPalette: paletteName,
+      });
+      paletteTransitions.push({ changedPixels: delta.changedPixels, palette: paletteName });
+    }
+
+    // The same quantity control must preserve focus for a magnetic object too.
+    await selectVisualizationNode(page, "fem-owned");
+    const objectPanel = page.locator(".fm-inspector-panel").last();
+    const objectQuantity = objectPanel.getByRole("combobox", { name: "Quantity source", exact: true });
+    await objectQuantity.scrollIntoViewIfNeeded();
+    await objectQuantity.focus();
+    await page.evaluate(() => { delete window.__airboxIndependentInspectorRoot; });
+    const objectBefore = await captureInspectorMutationProbe(page);
+    const objectAckStarted = createDeferred();
+    const objectAckReleased = createDeferred();
+    delayedAck = objectAckReleased;
+    fixture.nextVisualizationAck = { released: objectAckReleased, started: objectAckStarted };
+    const objectResponse = page.waitForResponse((response) => response.request().method() === "PATCH" && response.url().endsWith("/visualization/state"));
+    void objectResponse.catch(() => {});
+    await objectQuantity.click();
+    await page.getByRole("option", { name: /^External field$/i }).click();
+    await waitForDeferred(objectAckStarted.promise, "Object quantity PATCH", timeoutMs);
+    await waitForAnimationFrame(page);
+    await waitForAnimationFrame(page);
+    assertInspectorMutationStable(objectBefore, await captureInspectorMutationProbe(page), "while the object quantity ACK is delayed");
+    if (fixture.visualization.overrides.find((entry) => entry.scope === "airbox")?.quantity?.active_quantity_id !== "H_eff") {
+      throw new Error("Object quantity mutation changed Airbox quantity.");
+    }
+    objectAckReleased.resolve();
+    delayedAck = null;
+    await objectResponse;
+    await waitForAnimationFrame(page);
+    await waitForAnimationFrame(page);
+    assertInspectorMutationStable(objectBefore, await captureInspectorMutationProbe(page), "after the object quantity ACK");
+    await objectQuantity.click();
+    await Promise.all([
+      page.waitForResponse((response) => response.request().method() === "PATCH" && response.url().endsWith("/visualization/state")),
+      page.getByRole("option", { name: "Magnetization", exact: true }).click(),
+    ]);
+    assertIndependentTargetState(fixture, { airboxQuantity: "H_eff", airboxPalette: "rdbu" });
+    await selectAirboxVisualization(page);
+
+    assertNoBrowserErrors(errors);
+    await captureBrowserAuditScreenshot(page, "target-smoke-fem-airbox-independent-visualization.png");
+    const evidence = {
+      fieldRequests: fixture.fieldRequests,
+      hEffChangedPixels: hEffDelta.changedPixels,
+      inspectorStable: true,
+      magneticTargets: ["fem-owned", "fem-second"],
+      paletteTransitions,
+      webglHealthy: true,
+    };
+    await mkdir(browserAuditArtifactDir, { recursive: true });
+    await writeFile(
+      join(browserAuditArtifactDir, "target-smoke-fem-airbox-independent-visualization.json"),
+      `${JSON.stringify(evidence, null, 2)}\n`,
+    );
+    return evidence;
+  } catch (error) {
+    await mkdir(browserAuditArtifactDir, { recursive: true });
+    await page.screenshot({ path: join(browserAuditArtifactDir, "airbox-independent-failure.png") });
+    await writeFile(join(browserAuditArtifactDir, "airbox-independent-failure.json"), JSON.stringify({
+      error: String(error), errors, body: await page.locator("body").innerText(), requests: fixture.requests, patches: fixture.visualizationPatches,
+    }, null, 2));
+    throw error;
+  } finally {
+    if (delayedAck) delayedAck.resolve();
+    await page.close();
+  }
+}
+
+async function installAirboxIndependentFixtureResources(page, fixture) {
+  await page.route("**/v2/platform/health", (route) =>
+    fulfillJson(route, { active_session: true, status: "ok" }),
+  );
+  await page.route("**/v2/sessions/current/data/quantities", (route) =>
+    fulfillJson(route, quantityCatalogFixture()),
+  );
+  await page.route("**/v2/sessions/current/meshing/builds/current", (route) =>
+    fulfillJson(route, fixture.meshBuild),
+  );
+  await page.route("**/v2/sessions/current/meshing/builds/latest-successful", (route) =>
+    fulfillJson(route, {
+      geometry_realization_revision: 1,
+      revision: 1,
+      source_scene_revision: 1,
+    }),
+  );
+  await page.route("**/v2/sessions/current/simulation/preparation", (route) =>
+    fulfillJson(route, fixture.preparation),
+  );
+  await page.route("**/v2/sessions/current/model/geometry/validation", (route) =>
+    fulfillJson(route, { diagnostics: [], dirty: false, scene_revision: 1, status: "ready" }),
+  );
 }
 
 async function installFixtureConfig(page) {
@@ -364,6 +635,10 @@ async function installFixtureConfig(page) {
 }
 
 async function installFixtureApi(page, fixture) {
+  // Keep unrelated platform/Home requests inside the isolated fixture origin.
+  if (apiBase === "http://fullmag-target-smoke.fixture.invalid") {
+    await page.route(`${apiBase}/**`, (route) => fulfillEmpty(route, 204));
+  }
   await page.route("**/v2/sessions", async (route) => {
     await fulfillJson(route, {
       schema_version: "session_list.v1",
@@ -385,8 +660,15 @@ async function installFixtureApi(page, fixture) {
     if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
     if (path === "/v2/sessions/current/visualization/state" && request.method() === "PATCH") {
       const patch = request.postDataJSON() ?? {};
+      (fixture.visualizationPatches ??= []).push(patch);
       fixture.visualization = applyPatch(fixture.visualization, patch);
       fixture.visualization.revision += 1;
+      const delayedAck = fixture.nextVisualizationAck;
+      fixture.nextVisualizationAck = null;
+      if (delayedAck) {
+        delayedAck.started.resolve();
+        await delayedAck.released.promise;
+      }
       return fulfillJson(route, fixture.visualization);
     }
     if (path === "/v2/sessions/current/status") return fulfillJson(route, fixture.status);
@@ -431,7 +713,7 @@ async function installFixtureApi(page, fixture) {
       if (fixture.fieldMode === "empty") return fulfillEmpty(route, 204);
       if (fixture.fieldMode === "stale") return fulfillBinary(route, fdmFieldVectorBuffer({ quantityId, gridShape: fixture.domain.grid?.shape }), fieldVectorHeaders({ ...fieldRequest, domainGenerationId: "stale" }));
       if (fixture.fieldMode === "mismatch") return fulfillBinary(route, fdmFieldVectorBuffer({ quantityId: "H_eff", gridShape: fixture.domain.grid?.shape }), fieldVectorHeaders({ ...fieldRequest, quantityId: "H_eff" }));
-      if (fieldRequest.scopeKind === "full") {
+      if (fieldRequest.scopeKind === "full" && fixture.fdmMembership) {
         return fulfillBinary(
           route,
           fdmFieldVectorBuffer({ quantityId, gridShape: fixture.domain.grid?.shape }),
@@ -441,6 +723,7 @@ async function installFixtureApi(page, fixture) {
       const scoped = fdmScopedFieldVectorBuffer({ fieldRequest, fixture });
       return fulfillBinary(route, scoped.buffer, scoped.headers);
     }
+    if (path === "/v2/sessions/current/data/quantities") return fulfillJson(route, quantityCatalogFixture());
     if (path === "/v2/sessions/current/data/fields") return fulfillJson(route, fieldCatalogFixture());
     return fulfillEmpty(route, 204);
   });
@@ -552,7 +835,7 @@ async function setObjectDisplayState(page, expected) {
   if (expected.wireframe && (await shadedWithEdges.getAttribute("aria-checked")) !== "true") {
     await shadedWithEdges.click();
     await page.waitForFunction(
-      () => document.querySelector('.fm-viz-render-mode-grid [role="radio"][aria-label="Shaded +"]')?.getAttribute("aria-checked") === "true",
+      () => document.querySelector('.fm-viz-render-mode-grid [role="radio"][aria-label="Shaded + Wireframe"]')?.getAttribute("aria-checked") === "true",
       null,
       { timeout: timeoutMs },
     );
@@ -611,9 +894,15 @@ async function waitForVisualizationMutationSettled(page, panel) {
   if (!panelHandle) throw new Error("Selected visualization Inspector disappeared while saving a display mutation.");
   try {
     await page.waitForFunction(
-      (element) =>
-        element instanceof HTMLElement &&
-        !element.innerText.includes("Saving display changes."),
+      (element) => {
+        const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+        const sync = audit?.readVisualizationSyncSnapshot?.();
+        const controller = audit?.readVisualizationControllerSnapshot?.();
+        return element instanceof HTMLElement && Boolean(sync && controller) &&
+          !sync.inflightPatch && !sync.pendingPatch && !sync.error &&
+          Object.keys(controller.pendingOverrides ?? {}).length === 0 &&
+          !element.innerText.includes("Saving display changes.");
+      },
       panelHandle,
       { timeout: timeoutMs },
     );
@@ -633,6 +922,193 @@ async function waitForVisualizationMutationSettled(page, panel) {
     throw new Error(
       `Visualization mutation did not settle: ${error instanceof Error ? error.message : String(error)} ${JSON.stringify(diagnostic)}`,
     );
+  }
+}
+
+async function waitForInspectorNoOpacityAnimation(page, panel) {
+  const handle = await panel.elementHandle();
+  if (!handle) throw new Error("Airbox Inspector disappeared before the mutation stability baseline.");
+  await page.waitForFunction(
+    (element) => element instanceof HTMLElement &&
+      element.getAnimations({ subtree: true }).every((animation) =>
+        !(animation.effect?.getKeyframes() ?? []).some((frame) =>
+          Object.prototype.hasOwnProperty.call(frame, "opacity"),
+        ),
+      ),
+    handle,
+    { timeout: timeoutMs },
+  );
+}
+
+async function captureInspectorMutationProbe(page, relatedGroupLabel = null) {
+  return page.evaluate((relatedGroup) => {
+    const panel = Array.from(document.querySelectorAll(".fm-inspector-panel")).at(-1);
+    if (!(panel instanceof HTMLElement)) throw new Error("No Airbox Inspector panel is mounted.");
+    const rootSlot = "__airboxIndependentInspectorRoot";
+    if (!(rootSlot in window)) window[rootSlot] = panel;
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusKey = active
+      ? [active.tagName, active.id, active.getAttribute("aria-label"), active.getAttribute("role")].join("|")
+      : null;
+    const controls = Array.from(new Set(panel.querySelectorAll(
+      'button, select, input, textarea, [role="button"], [role="radio"], [role="switch"]',
+    // Quantity and its unit picker are related controls; changing from m to H
+    // legitimately adds a display-unit picker. All other controls must persist.
+    ))).filter((control) => !["Quantity source", "Display unit"].includes(control.getAttribute("aria-label")) &&
+      (!relatedGroup || control.closest('[role="radiogroup"]')?.getAttribute("aria-label") !== relatedGroup)).map((control, index) => ({
+      ariaDisabled: control.getAttribute("aria-disabled"),
+      disabled: "disabled" in control && control.disabled === true,
+      key: [index, control.tagName, control.id, control.getAttribute("aria-label"), control.getAttribute("role")].join("|"),
+      opacity: getComputedStyle(control).opacity,
+    }));
+    const scroll = [];
+    let ancestor = active;
+    let depth = 0;
+    while (ancestor instanceof HTMLElement && panel.contains(ancestor)) {
+      const overflowY = getComputedStyle(ancestor).overflowY;
+      if (["auto", "scroll"].includes(overflowY) && ancestor.scrollHeight > ancestor.clientHeight + 1) {
+        scroll.push({ depth, scrollTop: ancestor.scrollTop });
+      }
+      ancestor = ancestor.parentElement;
+      depth += 1;
+    }
+    ancestor = panel.parentElement;
+    while (ancestor instanceof HTMLElement && depth < 20) {
+      const overflowY = getComputedStyle(ancestor).overflowY;
+      if (["auto", "scroll"].includes(overflowY) && ancestor.scrollHeight > ancestor.clientHeight + 1) {
+        scroll.push({ depth, scrollTop: ancestor.scrollTop });
+      }
+      ancestor = ancestor.parentElement;
+      depth += 1;
+    }
+    const opacityAnimations = panel.getAnimations({ subtree: true }).filter((animation) =>
+      (animation.effect?.getKeyframes() ?? []).some((frame) =>
+        Object.prototype.hasOwnProperty.call(frame, "opacity"),
+      ),
+    ).length;
+    return {
+      controls,
+      focusKey,
+      opacityAnimations,
+      sameRoot: window[rootSlot] === panel,
+      scroll,
+    };
+  }, relatedGroupLabel);
+}
+
+async function verifyFemWireframeScope(page, fixture) {
+  const panel = page.locator(".fm-inspector-panel").last();
+  const group = panel.getByRole("radiogroup", { name: "Wireframe mesh", exact: true });
+  const surface = group.getByRole("radio", { name: "Surface mesh", exact: true });
+  if (await surface.getAttribute("aria-checked") !== "true") throw new Error("FEM wireframe must default to Surface mesh.");
+  const readSettings = () => page.evaluate(() => window.__FULLMAG_CONTROL_ROOM_AUDIT__.readVisualizationTargetSettings({ id: "object:fem-owned", kind: "object" }));
+  const unrelated = (settings) => Object.fromEntries(Object.entries(settings).filter(([key]) => key !== "wireframeGeometryScope"));
+  const initial = await readSettings();
+  const evidence = [];
+  for (const [value, label] of [["full", "Full volume mesh"], ["surface", "Surface mesh"]]) {
+    const radio = group.getByRole("radio", { name: label, exact: true });
+    await radio.scrollIntoViewIfNeeded();
+    await radio.focus();
+    await waitForInspectorNoOpacityAnimation(page, panel);
+    await page.evaluate(() => {
+      delete window.__airboxIndependentInspectorRoot;
+      window.__wireframeScopeFocus = document.activeElement;
+    });
+    const before = await captureInspectorMutationProbe(page, "Wireframe mesh");
+    const commitStart = await page.evaluate(() => window.__wireframeInspectorCommits);
+    if (!(commitStart > 0)) throw new Error("React commit probe did not observe the fixture roots.");
+    const requestStart = fixture.requests.length;
+    const patchStart = countVisualizationPatches(fixture);
+    const started = createDeferred(), released = createDeferred();
+    fixture.nextVisualizationAck = { started, released };
+    const response = page.waitForResponse((item) => item.request().method() === "PATCH" && item.url().endsWith("/visualization/state"));
+    void response.catch(() => {});
+    try {
+      await radio.click();
+      await waitForDeferred(started.promise, "wireframe scope PATCH", timeoutMs);
+      await waitForAnimationFrame(page);
+      await waitForAnimationFrame(page);
+      assertInspectorMutationStable(before, await captureInspectorMutationProbe(page, "Wireframe mesh"), "while the wireframe scope ACK is delayed");
+      if (!await page.evaluate(() => document.activeElement === window.__wireframeScopeFocus)) throw new Error("Wireframe scope mutation lost focus while pending.");
+      released.resolve();
+      await response;
+      await waitForVisualizationMutationSettled(page, panel);
+      await waitForAnimationFrame(page);
+      assertInspectorMutationStable(before, await captureInspectorMutationProbe(page, "Wireframe mesh"), "after the wireframe scope ACK");
+      if (!await page.evaluate(() => document.activeElement === window.__wireframeScopeFocus)) throw new Error("Wireframe scope mutation lost focus after ACK.");
+      const settings = await readSettings();
+      if (settings.wireframeGeometryScope !== value || JSON.stringify(unrelated(settings)) !== JSON.stringify(unrelated(initial))) {
+        throw new Error(`Wireframe scope changed unrelated target settings: ${JSON.stringify({ initial, settings })}`);
+      }
+      const commits = await page.evaluate((start) => window.__wireframeInspectorCommits - start, commitStart);
+      const requests = fixture.requests.length - requestStart;
+      if (commits > 32 || requests > 16 || countVisualizationPatches(fixture) - patchStart !== 1) {
+        throw new Error(`Wireframe scope exceeded its mutation budget: ${JSON.stringify({ commits, requests })}`);
+      }
+      evidence.push({ value, commits, requests, focusRetained: true, rootStable: true, unrelatedSettingsPreserved: true });
+    } finally {
+      released.resolve();
+      fixture.nextVisualizationAck = null;
+    }
+  }
+  return evidence;
+}
+
+function assertInspectorMutationStable(before, after, phase) {
+  if (!after.sameRoot) throw new Error(`Airbox Inspector root remounted ${phase}.`);
+  if (JSON.stringify(before.controls) !== JSON.stringify(after.controls)) {
+    throw new Error(`Airbox Inspector controls changed disabled/opacity state ${phase}: ${JSON.stringify({ before: before.controls, after: after.controls })}.`);
+  }
+  if (before.focusKey !== after.focusKey) {
+    throw new Error(`Airbox Inspector focus changed ${phase}: ${JSON.stringify({ before: before.focusKey, after: after.focusKey })}.`);
+  }
+  if (JSON.stringify(before.scroll) !== JSON.stringify(after.scroll)) {
+    throw new Error(`Airbox Inspector scroll position changed ${phase}: ${JSON.stringify({ before: before.scroll, after: after.scroll })}.`);
+  }
+  if (before.opacityAnimations !== 0 || after.opacityAnimations !== 0) {
+    throw new Error(`Airbox Inspector has active opacity animations ${phase}: ${JSON.stringify({ before: before.opacityAnimations, after: after.opacityAnimations })}.`);
+  }
+}
+
+function assertIndependentTargetState(fixture, { airboxQuantity, airboxPalette }) {
+  const overrides = fixture.visualization.overrides ?? [];
+  for (const objectId of ["fem-owned", "fem-second"]) {
+    const object = overrides.find((entry) => entry.scope === "object" && entry.scope_id === objectId);
+    if (object?.quantity?.active_quantity_id !== "m" || object?.style?.scalar_color_palette !== "viridis") {
+      throw new Error(`Airbox mutation changed magnetic target ${objectId}: ${JSON.stringify(object)}.`);
+    }
+  }
+  const airbox = overrides.find((entry) => entry.scope === "airbox" && entry.scope_id === "airbox");
+  if (airbox?.quantity?.active_quantity_id !== airboxQuantity || airbox?.style?.scalar_color_palette !== airboxPalette) {
+    throw new Error(`Airbox target state mismatch: ${JSON.stringify({ airbox, expected: { airboxQuantity, airboxPalette } })}.`);
+  }
+  if (fixture.visualization.active_quantity_id !== "m" || fixture.visualization.quantity?.active_quantity_id !== "m") {
+    throw new Error(`Airbox mutation leaked into global quantity state: ${JSON.stringify(fixture.visualization)}.`);
+  }
+}
+
+function countVisualizationPatches(fixture) {
+  // Camera persistence uses the same endpoint; count target mutations only.
+  return (fixture.visualizationPatches ?? []).filter((patch) => Array.isArray(patch.overrides)).length;
+}
+
+function createDeferred() {
+  let resolve;
+  const promise = new Promise((complete) => { resolve = complete; });
+  return { promise, resolve };
+}
+
+async function waitForDeferred(promise, label, timeout) {
+  let timer;
+  try {
+    await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}.`)), timeout);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -755,6 +1231,7 @@ async function assertAirboxControls(page) {
   const panel = page.locator(".fm-inspector-panel").last();
   await panel.getByRole("button", { name: "Toggle vector field arrows" }).waitFor({ state: "visible", timeout: timeoutMs });
   if (await panel.getByRole("radio", { name: "Shaded", exact: true }).count()) throw new Error("Airbox exposed a shaded render mode.");
+  if (await panel.getByRole("radiogroup", { name: "Wireframe mesh", exact: true }).count()) throw new Error("Airbox exposed the FEM wireframe scope control.");
   if (await panel.getByRole("radio", { name: "Wireframe", exact: true }).count() !== 1) throw new Error("Airbox did not expose wireframe mode.");
   if (await panel.getByRole("radio", { name: "Points", exact: true }).count() !== 1) throw new Error("Airbox did not expose points mode.");
   if (await panel.getByRole("switch", { name: "Add colorbar to viewport" }).count()) throw new Error("Airbox exposed a colorbar control.");
@@ -1327,10 +1804,172 @@ function createFemFixture() {
   return fixture;
 }
 
+function createFemAirboxIndependentFixture() {
+  const tetrahedra = [
+    [[0, 0, 0], [0.5, 0, 0], [0, 0.5, 0], [0, 0, 0.5]],
+    [[1, 0, 0], [1.5, 0, 0], [1, 0.5, 0], [1, 0, 0.5]],
+    [[-1, -1, -1], [5, -1, -1], [-1, 5, -1], [-1, -1, 5]],
+  ];
+  const objectIds = ["fem-owned", "fem-second"];
+  const objects = objectIds.map((id, index) => ({
+    geometry: { geometry_params: { size: [0.5, 0.5, 0.5] }, kind: "box" },
+    id,
+    magnetization_ref: "fixture-magnetization",
+    regions: [],
+    transform: { translation: [index * 1, 0, 0] },
+    visible: true,
+  }));
+  const fixture = baseFixture("fem", objects);
+  const surfaceFaces = [[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]];
+  const part = (id, role, objectId, ordinal) => {
+    const points = tetrahedra[ordinal];
+    return {
+      boundary_face_count: 4,
+      boundary_face_indices: [0, 1, 2, 3].map((index) => ordinal * 4 + index),
+      boundary_face_start: ordinal * 4,
+      bounds_max: [0, 1, 2].map((axis) => Math.max(...points.map((point) => point[axis]))),
+      bounds_min: [0, 1, 2].map((axis) => Math.min(...points.map((point) => point[axis]))),
+      element_count: 1,
+      element_start: ordinal,
+      id,
+      node_count: 4,
+      node_indices: [0, 1, 2, 3].map((index) => ordinal * 4 + index),
+      node_start: ordinal * 4,
+      object_id: objectId,
+      role,
+      surface_faces: surfaceFaces,
+      topology: "tet4",
+    };
+  };
+
+  fixture.status.capabilities.active_lane = {
+    authored: { backend: "fem", device: "cpu", discretization: "fem", mode: "strict", precision: "double" },
+    requested: { backend: "fem", device: "cpu", discretization: "fem", mode: "strict", precision: "double" },
+    resolved: { backend: "fem", device: "cpu", discretization: "fem", mode: "strict", precision: "double" },
+    schema_version: "active-lane-capabilities.v2",
+    source: { kind: "planner", engine_id: "fem_native_cpu", capability_profile_version: "fixture", authored_intent: "fixture", effective_request: "fixture" },
+    fallback: null,
+    qualification: { status: "not_asserted", reason: "Synthetic browser fixture." },
+    operations: {},
+  };
+  fixture.status.domain.generation_id = "1";
+  fixture.status.domain.cell_count = 3;
+  fixture.status.resources = {
+    ...fixture.status.resources,
+    domain_generation_id: "1",
+    mesh_build_revision: 1,
+    mesh_revision: 1,
+    topology_revision: 1,
+  };
+  Object.assign(fixture.status.session, {
+    request_scope_epoch: "browser-fixture-api:1",
+    session_epoch: "browser-target-fixture@1",
+  });
+  fixture.status.lifecycle = {
+    commandability: "allowed",
+    connectivity: "connected",
+    session_resource: "active",
+    solver: "awaiting_command",
+  };
+  Object.assign(fixture.status.display, {
+    auto_contrast: true,
+    colormap: "viridis",
+    contrast_max: null,
+    contrast_min: null,
+    field_component: "magnitude",
+    vector_density: 50,
+    vector_glyphs: false,
+  });
+  fixture.status.capabilities.explicit_topology = true;
+  fixture.domain.generation_id = "1";
+  fixture.domain.counts = { cells: 3, nodes: 12 };
+  fixture.domain.bounds = { max: [5, 5, 5], min: [-1, -1, -1] };
+  fixture.universe.object_bounds_max = [1.5, 0.5, 0.5];
+  fixture.universe.object_bounds_min = [0, 0, 0];
+  fixture.visualization.active_quantity_id = "m";
+  fixture.visualization.quantity.active_quantity_id = "m";
+  fixture.visualization.layers.quantity_overlay = { visible: true };
+  fixture.visualization.layers.airbox = {
+    surface: { visible: false },
+    vectors: { density: 8, domain: "airbox_only", visible: false },
+    visible: true,
+    wireframe: { visible: false },
+  };
+  fixture.visualization.overrides = [
+    ...objectIds.map((objectId) => ({
+      display: { surface: { visible: true }, visible: true },
+      quantity: { active_quantity_id: "m" },
+      scope: "object",
+      scope_id: objectId,
+      style: { scalar_color_palette: "viridis", surface_color_source: "magnitude" },
+    })),
+    {
+      display: {
+        vectors: { visible: false },
+        visible: true,
+        wireframe: { visible: false },
+      },
+      quantity: { active_quantity_id: "H_demag" },
+      scope: "airbox",
+      scope_id: "airbox",
+      style: { scalar_color_palette: "inferno", vector_budget: 8, vector_color_mode: "magnitude" },
+    },
+  ];
+  fixture.manifest = {
+    generation_id: "1",
+    mesh_parts: [
+      part("part-owned", "magnetic", "fem-owned", 0),
+      part("part-second", "magnetic", "fem-second", 1),
+      part("part-airbox", "airbox", null, 2),
+    ],
+    regions: [],
+    revision: 1,
+    source_scene_revision: 1,
+    topology_fingerprint: "2".repeat(64),
+  };
+  fixture.topology = femTopologyBufferForTetrahedra(tetrahedra, [1, 1, 0]);
+  fixture.meshBuild = {
+    active_build: null,
+    effective_airbox_target: { maximum_element_size: 1, growth_rate: 1.3 },
+    geometry_realization_revision: 1,
+    mesh_pipeline_status: [{ id: "fixture-complete", status: "completed" }],
+    provenance: { geometry_realization_revision: 1, mesh_revision: 1, source_scene_revision: 1 },
+    published_resources: {
+      manifest: "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+      mesh_build_revision: 1,
+      mesh_revision: 1,
+    },
+    revision: 1,
+    shared_domain_build_report: {
+      build_mode: "fixture-shared-domain",
+      effective_airbox_target: { maximum_element_size: 1, growth_rate: 1.3 },
+      effective_per_object_targets: {},
+      fallbacks_triggered: [],
+    },
+    source_scene_revision: 1,
+  };
+  fixture.preparation = {
+    active_stage_id: null,
+    completed_at_unix_ms: 1,
+    failure: null,
+    log_tail: [],
+    preparation_id: "browser-target-fixture-preparation",
+    receipt: null,
+    requested_execution: { backend: "fem", device: "cpu", mode: "strict", precision: "double" },
+    resolved_execution: { backend: "fem", device: "cpu", mode: "strict", precision: "double" },
+    revision: 1,
+    stages: [],
+    started_at_unix_ms: 0,
+    status: "ready",
+  };
+  fixture.nextVisualizationAck = null;
+  return fixture;
+}
+
 function baseFixture(discretization, objects) {
   return {
     fieldRequests: [], requests: [],
-    status: { api_contract_version: "1.0.0", capabilities: { binary_fields: true, explicit_topology: discretization === "fem", node_fields: true, preview_3d: true, structured_grid: discretization === "fdm" }, display: { active_quantity_id: "m", view_mode: "3d" }, domain: { cell_count: discretization === "fdm" ? FDM_TARGET_GRID_CELL_COUNT : 8, discretization, generation_id: 1 }, energies: {}, metrics: {}, resources: { domain_generation_id: 1, field_catalog_revision: 1, field_revision: 1, fields_revision: 1, mesh_revision: 1, scene_revision: 1, topology_revision: 1, visualization_state_revision: 1 }, run: null, runtime_bundle_version: "browser-target-fixture", session: { created_at: "0", name: "browser target fixture", session_id: "browser-target-fixture", workspace_root: "/tmp" }, solver: { state: "idle" } },
+    status: { api_contract_version: "1.0.0", capabilities: { binary_fields: true, explicit_topology: discretization === "fem", node_fields: true, preview_3d: true, structured_grid: discretization === "fdm" }, display: { active_quantity_id: "m", view_mode: "3d" }, domain: { cell_count: discretization === "fdm" ? FDM_TARGET_GRID_CELL_COUNT : 8, discretization, generation_id: 1 }, energies: {}, lifecycle: { commandability: "allowed", connectivity: "connected", session_resource: "active", solver: "awaiting_command" }, metrics: {}, resources: { domain_generation_id: 1, field_catalog_revision: 1, field_revision: 1, fields_revision: 1, mesh_revision: 1, scene_revision: 1, topology_revision: 1, visualization_state_revision: 1 }, run: null, runtime_bundle_version: "browser-target-fixture", session: { created_at: "0", name: "browser target fixture", request_scope_epoch: "browser-fixture-api:1", session_epoch: "browser-target-fixture@1", session_id: "browser-target-fixture", workspace_root: "/tmp" }, solver: { state: "idle" } },
     visualization: { active_quantity_id: "m", layers: { airbox: { vectors: { visible: false }, wireframe: { visible: true } }, surface: { visible: true }, vectors: { visible: false }, wireframe: { visible: false } }, overrides: [], quantity: { active_quantity_id: "m" }, revision: 1, schema_version: 1 },
     scene: { objects, revision: 1, schema_version: 2 },
     universe: { mesh_dirty: false, object_bounds_max: [1, 1, 1], object_bounds_min: [-1, -1, -1], scene_revision: 1, study_universe_mesh: null, universe: null },
@@ -1402,6 +2041,54 @@ function fieldAvailabilityFixture({ fixture, quantityId, query }) {
     supported: true,
     target_id: targetId,
     materialized,
+  };
+}
+function quantityCatalogFixture() {
+  const definitions = [
+    { domain: "magnetic_only", id: "m", label: "Magnetization", unit: "1" },
+    { domain: "full_domain", id: "H_demag", label: "Demag field", unit: "A/m" },
+    { domain: "full_domain", id: "H_eff", label: "Effective Field", unit: "A/m" },
+    { domain: "full_domain", id: "H_ext", label: "External field", unit: "A/m" },
+  ];
+  return {
+    quantities: definitions.map(({ domain, id, label, unit }) => ({
+      capability_state: "supported",
+      description: `${label} vector field fixture`,
+      domain,
+      id,
+      interactive_preview: true,
+      label,
+      location: "node",
+      materializable: true,
+      materialization_state: "unmaterialized",
+      n_comp: 3,
+      normalization_hint: "magnitude",
+      publication_state: "interactive",
+      renderable: true,
+      requestable: true,
+      resolved_capability: {
+        carriers: [],
+        lane: "fem_cpu_native",
+        materialization: "unmaterialized",
+        precision: "double",
+        provider: "available",
+        publication: "interactive",
+        quantity_id: id,
+        reason_code: "field_unmaterialized",
+        render: "renderable",
+        request: "field_vector",
+        scope: domain,
+      },
+      shape: "vector_field",
+      solver_capability: "supported",
+      supports_export: true,
+      supports_history: false,
+      supports_preview_2d: true,
+      supports_preview_3d: true,
+      unit,
+    })),
+    revision: 1,
+    schema_version: "1.0.0",
   };
 }
 function fieldCatalogFixture() { return { domain_generation_id: "1", quantities: ["m", "H_eff", "H_demag", "H_ext"].map((quantity_id) => ({ available: true, components: 3, domain: "full_domain", domain_generation_id: "1", field_revision: 1, kind: "vector", label: quantity_id === "m" ? "Magnetization" : quantity_id === "H_eff" ? "Effective field" : quantity_id === "H_ext" ? "External field" : "Demag field", location: "nodes", materialization_wall_time_ns: 0, materialized_at_unix_ms: 1, quantity_id, source_revision: 1, source_step: 0, spatial: true, stale_by_steps: 0, state: "complete", ui_exposed: true, unit: quantity_id === "m" ? "1" : "A/m" })), revision: 1 }; }
@@ -1500,9 +2187,14 @@ function fdmFieldVectorBuffer({ quantityId = "m", gridShape = FDM_TARGET_GRID_SH
 function fdmScopedFieldVectorBuffer({ fieldRequest, fixture }) {
   const cellIndices = fixture.fdmMembership
     ? resolveFdmScopedCellIndices({ fieldRequest, fixture })
-    : fieldRequest.scopeKind === "airbox"
-      ? [4, 5, 6, 7]
-      : [0, 1, 2, 3];
+    : [...new Set((fixture.manifest?.mesh_parts ?? [])
+        .filter((part) => fieldRequest.scopeKind === "full" ||
+          (fieldRequest.scopeKind === "airbox"
+            ? part.role === "airbox" || part.role === "air"
+            : fieldRequest.scopeKind === "object"
+              ? part.object_id === fieldRequest.scopeId
+              : part.id === fieldRequest.scopeId))
+        .flatMap((part) => part.node_indices ?? []))];
   const encoder = new TextEncoder();
   const scopeKindBytes = encoder.encode(fieldRequest.scopeKind ?? "full");
   const resolvedScopeId =
@@ -1692,6 +2384,50 @@ function femTopologyBuffer() {
   return buffer;
 }
 
+function femTopologyBufferForTetrahedra(tetrahedra, cellMarkerValues) {
+  const faces = [[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]];
+  const nodeCount = tetrahedra.length * 4;
+  const cellCount = tetrahedra.length;
+  const facetCount = tetrahedra.length * faces.length;
+  const byteLength =
+    32 +
+    nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT +
+    cellCount * 4 * Uint32Array.BYTES_PER_ELEMENT +
+    facetCount * 3 * Uint32Array.BYTES_PER_ELEMENT +
+    cellCount * Uint32Array.BYTES_PER_ELEMENT +
+    facetCount * Uint32Array.BYTES_PER_ELEMENT;
+  const buffer = new ArrayBuffer(byteLength);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMMT"].entries()) view.setUint8(index, code.charCodeAt(0));
+  view.setUint8(4, 1);
+  view.setUint8(5, 1);
+  view.setUint32(8, nodeCount, true);
+  view.setUint32(12, cellCount, true);
+  view.setUint32(16, facetCount, true);
+  view.setUint32(20, cellCount, true);
+  view.setUint32(24, facetCount, true);
+  let offset = 32;
+  new Float64Array(buffer, offset, nodeCount * 3).set(tetrahedra.flat(2));
+  offset += nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT;
+  const cellNodes = new Uint32Array(buffer, offset, cellCount * 4);
+  const facetNodes = new Uint32Array(buffer, offset + cellCount * 4 * Uint32Array.BYTES_PER_ELEMENT, facetCount * 3);
+  for (let tetrahedron = 0; tetrahedron < tetrahedra.length; tetrahedron += 1) {
+    const firstNode = tetrahedron * 4;
+    cellNodes.set([firstNode, firstNode + 1, firstNode + 2, firstNode + 3], tetrahedron * 4);
+    for (let face = 0; face < faces.length; face += 1) {
+      facetNodes.set(faces[face].map((node) => firstNode + node), (tetrahedron * faces.length + face) * 3);
+    }
+  }
+  offset += cellCount * 4 * Uint32Array.BYTES_PER_ELEMENT;
+  offset += facetCount * 3 * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, cellCount).set(cellMarkerValues);
+  offset += cellCount * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, facetCount).set(
+    cellMarkerValues.flatMap((marker) => Array(faces.length).fill(marker)),
+  );
+  return buffer;
+}
+
 function parsePng(buffer) {
   if (buffer.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") throw new Error("Viewport screenshot is not PNG.");
   let offset = 8;
@@ -1780,7 +2516,13 @@ async function fulfillTopology(route, topology) {
 async function fulfillEmpty(route, status) { await route.fulfill({ status, body: "", headers: fixtureHeaders() }); }
 function fieldVectorHeaders({ component, domainGenerationId = "1", quantityId, scopeId, scopeKind }) { return { "x-fullmag-component": component ?? "full", "x-fullmag-domain-generation-id": domainGenerationId, "x-fullmag-quantity-id": quantityId, ...(scopeId === null ? {} : { "x-fullmag-scope-id": scopeId }), "x-fullmag-scope-kind": scopeKind ?? "full" }; }
 function fixtureHeaders() { return { "access-control-allow-origin": "*", "access-control-expose-headers": "accept-ranges, content-length, content-range, etag, x-api-contract-version, x-fullmag-component, x-fullmag-domain-generation-id, x-fullmag-encoding, x-fullmag-field-indexing, x-fullmag-mesh-topology-hash, x-fullmag-mesh-topology-revision, x-fullmag-node-index-count, x-fullmag-quantity-id, x-fullmag-scope-id, x-fullmag-scope-kind", "x-api-contract-version": "1.0.0" }; }
-async function loadPlaywright() { try { return await import("playwright"); } catch { return null; } }
+async function loadPlaywright() {
+  try {
+    return await import(process.env.CONTROL_ROOM_TARGET_SMOKE_PLAYWRIGHT_MODULE ?? "playwright");
+  } catch {
+    return null;
+  }
+}
 
 async function startRuntime() {
   const port = await reservePort(requestedPort);

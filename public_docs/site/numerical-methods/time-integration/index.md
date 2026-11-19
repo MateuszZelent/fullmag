@@ -4,7 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: explicit-runge-kutta, adaptive-stepping, tangent-plane-methods, their source maps, and source revision 88c7160080bc1e8519950df283d2dd02087cc3da
+source_of_truth: explicit-runge-kutta, adaptive-stepping, tangent-plane-methods
 ---
 
 (public-docs-numerical-methods-time-integration-root)=
@@ -20,7 +20,7 @@ adaptive-stepping
 tangent-plane-methods
 ```
 
-## Method families and canonical LLG time-domain policy (`0960`)
+## Method families and canonical LLG time-domain policy
 
 Fullmag separates public time-integration requests (`LLG.integrator`) from backend/device execution while enforcing a unified mathematical and operational contract (`LLG-TD-POLICY-V1` through `LLG-TD-ATOMIC-V1`):
 

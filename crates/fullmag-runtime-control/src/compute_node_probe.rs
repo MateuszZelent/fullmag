@@ -1059,7 +1059,7 @@ fn sample_compute_node_inner(
     let cpu_quota_enforcement = {
         #[cfg(target_os = "linux")]
         {
-            if crate::worker_cgroup::probe_delegated_cpu_quota().is_ok() {
+            if crate::worker_cgroup::probe_delegated_cpu_quota_settled().is_ok() {
                 EnforcementStatus::Supported
             } else {
                 EnforcementStatus::Unavailable
@@ -1522,12 +1522,16 @@ fn parse_cpu_id_list(value: &str) -> Result<BTreeSet<u32>> {
 fn observe_cpu_quota() -> Result<CpuQuota> {
     use std::fs;
 
-    let memberships = parse_linux_cgroup_memberships(
+    observe_linux_cpu_quota(
         &fs::read_to_string("/proc/self/cgroup").context("read Linux cgroup membership")?,
-    )?;
-    let mounts = parse_linux_cgroup_mounts(
         &fs::read_to_string("/proc/self/mountinfo").context("read Linux cgroup mounts")?,
-    )?;
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn observe_linux_cpu_quota(cgroup: &str, mountinfo: &str) -> Result<CpuQuota> {
+    let memberships = parse_linux_cgroup_memberships(cgroup)?;
+    let mounts = parse_linux_cgroup_mounts(mountinfo)?;
 
     // Prefer the widest visible hierarchy. A more specific delegated bind
     // mount can hide an ancestor quota even though it matches this process.
@@ -2531,19 +2535,25 @@ fn observed_percent(value: &str) -> Result<Observation<u8>> {
 }
 
 fn observed_temperature(value: &str) -> Result<Observation<i32>> {
-    match parse_optional_u64(value, "GPU temperature")? {
-        Some(celsius) => {
-            let milli = celsius
-                .checked_mul(1000)
-                .context("GPU temperature overflow")?;
-            Ok(Observation::Available {
-                value: i32::try_from(milli).context("GPU temperature does not fit in i32")?,
-            })
-        }
-        None => Ok(Observation::Unavailable {
+    if is_unavailable_text(value) {
+        return Ok(Observation::Unavailable {
             reason: UnavailableReason::NotReported,
-        }),
+        });
     }
+    let celsius = value
+        .trim()
+        .parse::<f64>()
+        .context("parse GPU temperature from nvidia-smi")?;
+    if !celsius.is_finite() || celsius < 0.0 {
+        bail!("nvidia-smi returned an invalid GPU temperature");
+    }
+    let milli = (celsius * 1000.0).round();
+    if !milli.is_finite() || milli > f64::from(i32::MAX) {
+        bail!("GPU temperature does not fit in i32 millicelsius");
+    }
+    Ok(Observation::Available {
+        value: milli as i32,
+    })
 }
 
 fn parse_optional_u64(value: &str, field: &str) -> Result<Option<u64>> {
@@ -2988,6 +2998,40 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_cgroup_subtree_mount_does_not_hide_parent_cpu_quota() {
+        let directory = tempfile::tempdir().unwrap();
+        let full = directory.path().join("full");
+        let subtree = directory.path().join("subtree");
+        std::fs::create_dir_all(full.join("workers/control")).unwrap();
+        std::fs::create_dir_all(subtree.join("control")).unwrap();
+        std::fs::write(full.join("cpu.max"), "400000 100000\n").unwrap();
+        for path in [
+            full.join("workers"),
+            full.join("workers/control"),
+            subtree.clone(),
+            subtree.join("control"),
+        ] {
+            std::fs::write(path.join("cpu.max"), "max 100000\n").unwrap();
+        }
+        let full_mount = format!(
+            "31 20 0:28 / {} ro - cgroup2 cgroup rw\n", full.display(),
+        );
+        let subtree_mount = format!(
+            "32 20 0:28 /workers {} rw - cgroup2 cgroup rw\n", subtree.display(),
+        );
+        for mountinfo in [
+            format!("{full_mount}{subtree_mount}"),
+            format!("{subtree_mount}{full_mount}"),
+        ] {
+            assert_eq!(
+                observe_linux_cpu_quota("0::/workers/control\n", &mountinfo).unwrap(),
+                CpuQuota::Limited { capacity_millis: 4000 },
+            );
+        }
+    }
+
     #[test]
     fn unknown_cpu_quota_does_not_publish_fallback_capacity() {
         let fallback: Result<u64> = Ok(2000);
@@ -3013,6 +3057,23 @@ mod tests {
             .unwrap(),
             std::path::PathBuf::from("/sys/fs/cgroup/job")
         );
+    }
+
+    #[test]
+    fn gpu_temperature_accepts_decimal_and_integral_degrees() {
+        assert_eq!(observed_temperature("52.90").unwrap(),
+                   Observation::Available { value: 52_900 });
+        assert_eq!(observed_temperature("71").unwrap(),
+                   Observation::Available { value: 71_000 });
+    }
+
+    #[test]
+    fn gpu_temperature_rejects_invalid_reports_and_preserves_unavailable() {
+        for value in ["NaN", "inf", "-1", "2147484", "invalid"] {
+            assert!(observed_temperature(value).is_err(), "{value}");
+        }
+        assert_eq!(observed_temperature("N/A").unwrap(),
+                   Observation::Unavailable { reason: UnavailableReason::NotReported });
     }
 
     #[test]

@@ -297,7 +297,7 @@ async fn remesh_active_record_survives_command_history_pruning() {
             snapshot.scene_document = Some(scene);
             snapshot.metadata = Some(serde_json::json!({
                 "execution_plan": { "backend_plan": { "kind": "fdm" } }
-            }));
+            }).into());
         }
         {
             let mut ledger = state.current_command_ledger.lock().await;
@@ -459,6 +459,8 @@ async fn remesh_snapshot_preserves_canonical_policies_and_overwrites_client_spoo
                 airbox_hmin: None,
                 airbox_growth_rate: None,
                 airbox_grading: None,
+                airbox_curvature_factor: None,
+                airbox_narrow_region_resolution: None,
             })
         };
         scene.objects[0].regions = vec![serde_json::from_value(serde_json::json!({

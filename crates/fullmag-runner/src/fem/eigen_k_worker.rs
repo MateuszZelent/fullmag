@@ -1164,7 +1164,13 @@ mod tests {
         let request = worker_request(plan);
         let expected = request.expected_plan_sha256.clone();
         let encoded = serde_json::to_string(&request).unwrap();
-        let original_map = serde_json::to_string(&request.plan.mesh.per_domain_quality).unwrap();
+        let ordered_map = request
+            .plan
+            .mesh
+            .per_domain_quality
+            .iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let original_map = serde_json::to_string(&ordered_map).unwrap();
         for domains in [
             format!(
                 "{{\"0\":{},\"1\":{}}}",

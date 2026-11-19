@@ -87,6 +87,9 @@ pub(crate) enum GeometryShape {
     Sphere {
         radius: f64,
     },
+    Ellipsoid {
+        radii: [f64; 3],
+    },
     SinWaveguide {
         length: f64,
         width: f64,
@@ -114,6 +117,14 @@ pub(crate) enum GeometryShape {
     Difference {
         base: std::boxed::Box<GeometryShape>,
         tool: std::boxed::Box<GeometryShape>,
+    },
+    Union {
+        a: std::boxed::Box<GeometryShape>,
+        b: std::boxed::Box<GeometryShape>,
+    },
+    Intersection {
+        a: std::boxed::Box<GeometryShape>,
+        b: std::boxed::Box<GeometryShape>,
     },
 }
 
@@ -193,22 +204,27 @@ pub(crate) fn ir_to_shape(entry: &GeometryEntryIR) -> Result<GeometryShape, Stri
             base: std::boxed::Box::new(ir_to_shape(base)?),
             tool: std::boxed::Box::new(ir_to_shape(tool)?),
         }),
-        GeometryEntryIR::Union { name, .. } => Err(format!(
-            "geometry '{}' (Union) is not yet supported by the FDM planner; use Box, Cylinder, or Difference",
-            name
-        )),
-        GeometryEntryIR::Intersection { name, .. } => Err(format!(
-            "geometry '{}' (Intersection) is not yet supported by the FDM planner; use Box, Cylinder, or Difference",
-            name
-        )),
+        GeometryEntryIR::Union { a, b, .. } => Ok(GeometryShape::Union {
+            a: std::boxed::Box::new(ir_to_shape(a)?),
+            b: std::boxed::Box::new(ir_to_shape(b)?),
+        }),
+        GeometryEntryIR::Intersection { a, b, .. } => Ok(GeometryShape::Intersection {
+            a: std::boxed::Box::new(ir_to_shape(a)?),
+            b: std::boxed::Box::new(ir_to_shape(b)?),
+        }),
         GeometryEntryIR::Translate { base, by, .. } => Ok(GeometryShape::Translate {
             child: std::boxed::Box::new(ir_to_shape(base)?),
             by: *by,
         }),
-        GeometryEntryIR::Ellipsoid { name, .. } => Err(format!(
-            "geometry '{}' (Ellipsoid) is not yet supported by the FDM planner; use Box or Cylinder",
-            name
-        )),
+        GeometryEntryIR::Ellipsoid { radii, .. } => {
+            if (radii[0] - radii[1]).abs() <= 1e-15 * radii[0].abs()
+                && (radii[1] - radii[2]).abs() <= 1e-15 * radii[0].abs()
+            {
+                Ok(GeometryShape::Sphere { radius: radii[0] })
+            } else {
+                Ok(GeometryShape::Ellipsoid { radii: *radii })
+            }
+        }
         GeometryEntryIR::Ellipse { name, .. } => Err(format!(
             "geometry '{}' (Ellipse) is not yet supported by the FDM planner; use Box or Cylinder",
             name
@@ -236,20 +252,18 @@ pub(crate) fn extract_multilayer_geometry(
         GeometryEntryIR::Box { .. }
         | GeometryEntryIR::Cylinder { .. }
         | GeometryEntryIR::Sphere { .. }
+        | GeometryEntryIR::Ellipsoid { .. }
         | GeometryEntryIR::SinWaveguide { .. }
         | GeometryEntryIR::ArchWaveguide { .. }
         | GeometryEntryIR::ImportedGeometry { .. }
-        | GeometryEntryIR::Difference { .. } => Ok(PlacedGeometry {
+        | GeometryEntryIR::Difference { .. }
+        | GeometryEntryIR::Union { .. }
+        | GeometryEntryIR::Intersection { .. } => Ok(PlacedGeometry {
             name: entry.name().to_string(),
             shape: ir_to_shape(entry).map_err(|e| e)?,
             translation: [0.0, 0.0, 0.0],
         }),
-        GeometryEntryIR::Union { .. } | GeometryEntryIR::Intersection { .. } => Err(format!(
-            "geometry '{}' uses CSG union/intersection which is not yet supported by the public multilayer planner; use Box/Cylinder/Difference with optional Translate",
-            entry.name()
-        )),
-        GeometryEntryIR::Ellipsoid { .. }
-        | GeometryEntryIR::Ellipse { .. }
+        GeometryEntryIR::Ellipse { .. }
         | GeometryEntryIR::MicrostripAntenna { .. }
         | GeometryEntryIR::CpwAntenna { .. } => Err(format!(
             "geometry '{}' is not yet supported by the public multilayer planner; use Box/Cylinder/Difference with optional Translate",
@@ -279,6 +293,7 @@ pub(crate) fn shape_local_bounds(shape: &GeometryShape) -> Option<([f64; 3], [f6
             Some(([-extents[0], -extents[1], -extents[2]], extents))
         }
         GeometryShape::Sphere { radius } => Some(([-*radius; 3], [*radius; 3])),
+        GeometryShape::Ellipsoid { radii } => Some(([-radii[0], -radii[1], -radii[2]], *radii)),
         GeometryShape::SinWaveguide {
             length,
             width,
@@ -310,6 +325,41 @@ pub(crate) fn shape_local_bounds(shape: &GeometryShape) -> Option<([f64; 3], [f6
             ))
         }
         GeometryShape::Difference { base, .. } => shape_local_bounds(base),
+        GeometryShape::Union { a, b } => {
+            let (a_min, a_max) = shape_local_bounds(a)?;
+            let (b_min, b_max) = shape_local_bounds(b)?;
+            Some((
+                [
+                    a_min[0].min(b_min[0]),
+                    a_min[1].min(b_min[1]),
+                    a_min[2].min(b_min[2]),
+                ],
+                [
+                    a_max[0].max(b_max[0]),
+                    a_max[1].max(b_max[1]),
+                    a_max[2].max(b_max[2]),
+                ],
+            ))
+        }
+        GeometryShape::Intersection { a, b } => {
+            let (a_min, a_max) = shape_local_bounds(a)?;
+            let (b_min, b_max) = shape_local_bounds(b)?;
+            let bounds_min = [
+                a_min[0].max(b_min[0]),
+                a_min[1].max(b_min[1]),
+                a_min[2].max(b_min[2]),
+            ];
+            let bounds_max = [
+                a_max[0].min(b_max[0]),
+                a_max[1].min(b_max[1]),
+                a_max[2].min(b_max[2]),
+            ];
+            if (0..3).any(|axis| bounds_max[axis] < bounds_min[axis]) {
+                None
+            } else {
+                Some((bounds_min, bounds_max))
+            }
+        }
         GeometryShape::Translate { child, by } => {
             let (bounds_min, bounds_max) = shape_local_bounds(child)?;
             Some((
@@ -353,6 +403,10 @@ impl GeometryShape {
             Self::Sphere { radius } => GeometryEntryIR::Sphere {
                 name: "fdm-canonical-sphere".to_string(),
                 radius: *radius,
+            },
+            Self::Ellipsoid { radii } => GeometryEntryIR::Ellipsoid {
+                name: "fdm-canonical-ellipsoid".to_string(),
+                radii: *radii,
             },
             Self::SinWaveguide {
                 length,
@@ -402,6 +456,16 @@ impl GeometryShape {
                 base: Box::new(base.to_geometry_entry()),
                 tool: Box::new(tool.to_geometry_entry()),
             },
+            Self::Union { a, b } => GeometryEntryIR::Union {
+                name: "fdm-canonical-union".to_string(),
+                a: Box::new(a.to_geometry_entry()),
+                b: Box::new(b.to_geometry_entry()),
+            },
+            Self::Intersection { a, b } => GeometryEntryIR::Intersection {
+                name: "fdm-canonical-intersection".to_string(),
+                a: Box::new(a.to_geometry_entry()),
+                b: Box::new(b.to_geometry_entry()),
+            },
         }
     }
 
@@ -409,7 +473,9 @@ impl GeometryShape {
         match self {
             Self::SinWaveguide { .. } | Self::ArchWaveguide { .. } => true,
             Self::Translate { child, .. } => child.has_legacy_waveguide(),
-            Self::Difference { base, tool } => {
+            Self::Difference { base, tool }
+            | Self::Union { a: base, b: tool }
+            | Self::Intersection { a: base, b: tool } => {
                 base.has_legacy_waveguide() || tool.has_legacy_waveguide()
             }
             _ => false,
@@ -443,6 +509,14 @@ pub(crate) enum CompiledGeometryShape {
     Difference {
         base: Box<CompiledGeometryShape>,
         tool: Box<CompiledGeometryShape>,
+    },
+    Union {
+        a: Box<CompiledGeometryShape>,
+        b: Box<CompiledGeometryShape>,
+    },
+    Intersection {
+        a: Box<CompiledGeometryShape>,
+        b: Box<CompiledGeometryShape>,
     },
 }
 
@@ -494,6 +568,14 @@ impl CompiledGeometryShape {
                 base: Box::new(Self::from_shape(base)?),
                 tool: Box::new(Self::from_shape(tool)?),
             }),
+            GeometryShape::Union { a, b } => Ok(Self::Union {
+                a: Box::new(Self::from_shape(a)?),
+                b: Box::new(Self::from_shape(b)?),
+            }),
+            GeometryShape::Intersection { a, b } => Ok(Self::Intersection {
+                a: Box::new(Self::from_shape(a)?),
+                b: Box::new(Self::from_shape(b)?),
+            }),
             _ => Ok(Self::Canonical(GeometryPredicate::from_geometry_entry(
                 &shape.to_geometry_entry(),
                 AffineTransform3::identity(),
@@ -537,6 +619,8 @@ impl CompiledGeometryShape {
                 child.contains([point[0] - by[0], point[1] - by[1], point[2] - by[2]])
             }
             Self::Difference { base, tool } => Ok(base.contains(point)? && !tool.contains(point)?),
+            Self::Union { a, b } => Ok(a.contains(point)? || b.contains(point)?),
+            Self::Intersection { a, b } => Ok(a.contains(point)? && b.contains(point)?),
         }
     }
 }
@@ -701,6 +785,42 @@ pub(crate) fn voxelize_shape(
             }
             (bbox, Some(mask), grid_cells, [-*radius; 3])
         }
+        GeometryShape::Ellipsoid { radii } => {
+            let bbox = [2.0 * radii[0], 2.0 * radii[1], 2.0 * radii[2]];
+            let bounds_min = [-radii[0], -radii[1], -radii[2]];
+            let grid_cells = [
+                (bbox[0] / cell_size[0]).round().max(1.0) as u32,
+                (bbox[1] / cell_size[1]).round().max(1.0) as u32,
+                (bbox[2] / cell_size[2]).round().max(1.0) as u32,
+            ];
+            let Some(n) = checked_voxel_count(grid_cells, errors) else {
+                return (bbox, None, grid_cells, bounds_min);
+            };
+            let mut mask = vec![false; n];
+            let Some(predicate) = compile_shape_for_mask(shape, errors) else {
+                return (bbox, None, grid_cells, bounds_min);
+            };
+            for z in 0..grid_cells[2] {
+                for y in 0..grid_cells[1] {
+                    for x in 0..grid_cells[0] {
+                        let point = [
+                            bounds_min[0] + (x as f64 + 0.5) * cell_size[0],
+                            bounds_min[1] + (y as f64 + 0.5) * cell_size[1],
+                            bounds_min[2] + (z as f64 + 0.5) * cell_size[2],
+                        ];
+                        let index = (x + grid_cells[0] * (y + grid_cells[1] * z)) as usize;
+                        mask[index] = match predicate.contains(point) {
+                            Ok(inside) => inside,
+                            Err(error) => {
+                                errors.push(error.to_string());
+                                return (bbox, None, grid_cells, bounds_min);
+                            }
+                        };
+                    }
+                }
+            }
+            (bbox, Some(mask), grid_cells, bounds_min)
+        }
         GeometryShape::SinWaveguide {
             length,
             width,
@@ -832,9 +952,11 @@ pub(crate) fn voxelize_shape(
 
             (bbox, Some(mask), [nx, ny, nz], bounds_min)
         }
-        GeometryShape::Translate { .. } => {
+        GeometryShape::Translate { .. }
+        | GeometryShape::Union { .. }
+        | GeometryShape::Intersection { .. } => {
             let Some((bounds_min, bounds_max)) = shape_local_bounds(shape) else {
-                errors.push("translated geometry requires a bounded child shape".to_string());
+                errors.push("CSG/translated geometry requires bounded child shapes".to_string());
                 return ([1.0, 1.0, 1.0], None, [1, 1, 1], [-0.5, -0.5, -0.5]);
             };
             let bbox = [

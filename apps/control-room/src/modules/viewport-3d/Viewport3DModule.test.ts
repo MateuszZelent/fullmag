@@ -51,6 +51,21 @@ function scalarColorBuffer(
   };
 }
 
+describe("viewport export phase snapshot", () => {
+  it("copies displayed phases before the lazy export extractor is loaded", () => {
+    const source = readFileSync(new URL("./Viewport3DModule.tsx", import.meta.url), "utf8");
+    const callbackStart = source.indexOf("getExportSource={async () => {");
+    const extractorLoad = source.indexOf('await import("./export/extractViewport3DExportSource")', callbackStart);
+    const synchronousCapture = source.slice(callbackStart, extractorLoad);
+    expect(synchronousCapture).toContain("getDisplayedPhaseRadForOverlay(overlay)");
+    expect(synchronousCapture).toContain("([layerId, { value }])");
+    expect(synchronousCapture).toContain("[layerId, value]");
+    const extraction = source.slice(extractorLoad, source.indexOf("clientReady={clientReady}", extractorLoad));
+    expect(extraction).toContain("analysisOverlay,");
+    expect(extraction).toContain("modeCompositionPhaseByLayerId,");
+  });
+});
+
 describe("viewport vector segment diagnostics", () => {
   it("reports the physical length range of packed vector segments", () => {
     expect(
@@ -591,7 +606,7 @@ describe("resolveViewport3DColorbarLegend", () => {
       maxLabel: "0.75",
       minLabel: "-0.25",
       paletteGradient:
-        "linear-gradient(90deg, rgb(68, 1, 84), rgb(49, 104, 142), rgb(53, 183, 121), rgb(253, 231, 37))",
+        "linear-gradient(90deg in srgb, rgb(68, 1, 84), rgb(49, 104, 142), rgb(53, 183, 121), rgb(253, 231, 37))",
     });
   });
 
@@ -607,7 +622,7 @@ describe("resolveViewport3DColorbarLegend", () => {
     ).toMatchObject({
       label: "mat_ms [A/m]",
       paletteGradient:
-        "linear-gradient(90deg, rgb(0, 0, 4), rgb(66, 10, 104), rgb(147, 43, 93), rgb(221, 81, 58), rgb(252, 255, 164))",
+        "linear-gradient(90deg in srgb, rgb(0, 0, 4), rgb(66, 10, 104), rgb(147, 43, 93), rgb(221, 81, 58), rgb(252, 255, 164))",
       maxLabel: "800000 A/m",
       minLabel: "400000 A/m",
     });
@@ -686,7 +701,7 @@ describe("resolveViewport3DColorbarLegend", () => {
       maxLabel: "0.4",
       minLabel: "-0.6",
       paletteGradient:
-        "linear-gradient(90deg, rgb(0, 0, 4), rgb(66, 10, 104), rgb(147, 43, 93), rgb(221, 81, 58), rgb(252, 255, 164))",
+        "linear-gradient(90deg in srgb, rgb(0, 0, 4), rgb(66, 10, 104), rgb(147, 43, 93), rgb(221, 81, 58), rgb(252, 255, 164))",
     });
   });
 
@@ -1232,6 +1247,75 @@ describe("resolveViewport3DColorbarLegend", () => {
         }),
       },
     ]);
+  });
+
+  it("shows the displayed modal glyph range instead of the magnetic target's live quantity", () => {
+    const modalQuantityId = "analysis:eigen:mode";
+    const modalRange = { min: -5, max: 5 };
+    const parts = [
+      {
+        id: "film",
+        label: "Film",
+        settings: visualizationSettings({
+          activeQuantityId: "m",
+          shaderVisible: false,
+          surfaceColorSource: "solid",
+          vectorBudget: 48,
+          vectorColorMode: "z",
+          vectorsVisible: true,
+        }),
+        targetKind: "part" as const,
+      },
+      {
+        id: "air",
+        label: "Airbox",
+        settings: visualizationSettings({ activeQuantityId: "H_demag" }),
+        targetKind: "airbox" as const,
+      },
+    ];
+    const availableQuantityIds = new Set(["m", "H_demag"]);
+    const targets = buildViewport3DColorbarTargetPlans({
+      analysisOverlayQuantityId: modalQuantityId,
+      availableQuantityIds,
+      parts,
+    });
+    const rangeStates = resolveViewport3DColorbarRangeStates({
+      fieldModel: {
+        scalarColorsByMode: new Map(),
+        scalarColorsByPartAndMode: new Map(),
+        targetPasses: new Map([
+          [
+            "film",
+            {
+              surface: { scalarColorMode: null, scalarColors: null },
+              vectors: {
+                colorScale: {
+                  colorMode: "z",
+                  colorPalette: "viridis",
+                  quantityId: modalQuantityId,
+                  range: modalRange,
+                },
+              },
+            },
+          ],
+        ]),
+      },
+      plans: planViewport3DColorbars({ targets }),
+    });
+    const plans = planViewport3DColorbars({
+      rangeStatesByGroupKey: rangeStates,
+      targets,
+    });
+    const legends = resolveViewport3DColorbarLegendsFromPlans({
+      labelByTargetId: new Map([["film", "Film"], ["air", "Airbox"]]),
+      plans,
+    });
+
+    expect(legends.find(({ legend }) => legend.quantityId === modalQuantityId)?.legend)
+      .toMatchObject({ colorMode: "z", range: modalRange, rangeState: "current" });
+    expect(targets.find(({ targetId }) => targetId === "air")?.quantityId).toBe("H_demag");
+    expect(buildViewport3DColorbarTargetPlans({ availableQuantityIds, parts })[0]?.quantityId)
+      .toBe("m");
   });
 
   it("merges parent and inherited region legends when their effective scale is identical", () => {
@@ -2030,25 +2114,14 @@ describe("Viewport3DModule scene wiring", () => {
       "const canvasGlOptions = resolveStableViewport3DCanvasGlOptions(\n    getViewport3DVisualProfile(canvasContextProfileId),\n    effectAntialias,\n  );",
     );
     expect(source).toContain("const handleCanvasCreated = useCallback");
-    expect(source).toContain("const handleCanvasContextMenu = useCallback");
     expect(source).toContain("const handleCanvasPointerMissed = useCallback");
     expect(canvasBlock).toContain("camera={canvasCamera}");
     expect(canvasBlock).toContain("gl={canvasGlOptions}");
     expect(canvasBlock).toContain("onCreated={handleCanvasCreated}");
-    expect(canvasBlock).toContain("onContextMenu={handleCanvasContextMenu}");
+    expect(source).toContain("<Viewport3DExportMenu onCommand={onViewCommand}>");
     expect(canvasBlock).toContain("onPointerMissed={handleCanvasPointerMissed}");
     expect(canvasBlock).not.toContain("camera={{");
     expect(canvasBlock).not.toContain("onCreated={({ gl }) =>");
-  });
-
-  it("suppresses the native context menu because right button pans the camera", () => {
-    const source = readFileSync(
-      new URL("./Viewport3DModule.tsx", import.meta.url),
-      "utf8",
-    );
-
-    expect(source).toContain("const handleCanvasContextMenu = useCallback");
-    expect(source).toContain("event.preventDefault();");
   });
 
   it("holds transport only for a real camera interaction", () => {
@@ -2104,6 +2177,31 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain("fieldDataIssue");
     expect(source).toContain("data unavailable");
     expect(source).toContain("fm-viewport-3d__issue-banner");
+  });
+
+  it("keeps informational HUD pills in one truncating lane with tooltips", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+    const css = readFileSync("src/design/styles/viewport-3d.css", "utf8");
+    const lane = source.slice(
+      source.indexOf('<div className="fm-viewport-3d__hud-info">'),
+      source.indexOf("</div>", source.indexOf('<div className="fm-viewport-3d__hud-info">')),
+    );
+
+    expect(lane).toContain("<Viewport3DFieldLabel");
+    expect(lane).toContain("<span title={status || undefined}>{status}</span>");
+    expect(lane).toContain("<span title={hudSampleSummary}>{hudSampleSummary}</span>");
+    // Interactive controls stay outside the truncating lane.
+    expect(lane).not.toContain("<Select");
+    expect(lane).not.toContain("<Button");
+    expect(css).toMatch(/\.fm-viewport-3d__hud-info \{[^}]*flex-wrap: nowrap;[^}]*overflow: hidden;/);
+    expect(css).toMatch(/\.fm-viewport-3d__issue-banner-text \{[^}]*white-space: nowrap;/);
+    // Annotated image export still draws the pills that moved into the lane.
+    expect(
+      readFileSync(new URL("./viewport3dImageExport.ts", import.meta.url), "utf8"),
+    ).toContain(":scope > span, :scope > .fm-viewport-3d__hud-info > span");
   });
 
   it("gates the temporary azimuth and polar controls behind an explicit browser debug flag", () => {

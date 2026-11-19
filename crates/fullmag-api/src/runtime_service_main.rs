@@ -1,6 +1,12 @@
 //! Native accepted-run service. UI is an attaching client, never its owner.
+#[path = "accepted_study_supervisor.rs"]
+mod accepted_study_supervisor;
 #[path = "compute_operator_env.rs"]
 mod compute_operator_env;
+mod failed_worker_recovery;
+mod failed_preclaim_cancellation;
+mod runtime_service_unclaimed_cancellation;
+mod claimed_worker_interruption;
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
     compute_node_snapshot::Reported,
@@ -162,7 +168,6 @@ async fn publish_compute_node_sample(
     .context("compute-node sampling worker failed")?
 }
 
-const MAX_CONSECUTIVE_SAMPLE_STORE_WRITER_BUSY: u32 = 5;
 const HOST_ADMISSION_DEFERRAL_BUDGET: Duration = Duration::from_secs(60);
 
 fn is_store_writer_busy(error: &anyhow::Error) -> bool {
@@ -171,9 +176,8 @@ fn is_store_writer_busy(error: &anyhow::Error) -> bool {
         .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
 }
 
-fn sample_store_writer_busy_within_budget(consecutive: &mut u32) -> bool {
+fn record_sample_store_writer_busy(consecutive: &mut u32) {
     *consecutive = consecutive.saturating_add(1);
-    *consecutive <= MAX_CONSECUTIVE_SAMPLE_STORE_WRITER_BUSY
 }
 
 fn host_admission_deferral_within_budget(deferred_at: &mut Option<Instant>, now: Instant) -> bool {
@@ -2280,6 +2284,8 @@ fn cancel_failed_no_spawn(args: impl Iterator<Item = OsString>) -> Result<()> {
     {
         bail!("failed no-spawn cancellation found a worker process exit receipt");
     }
+    fullmag_runtime_control::ensure_admitted_task_coordinator_genesis(&store, &claim)
+        .context("recover exact pre-Prepare admission genesis for no-spawn cancellation")?;
     let recovered = fullmag_runtime_control::recover_coordinator(&store, &claim)?;
     if recovered
         .events
@@ -2294,7 +2300,7 @@ fn cancel_failed_no_spawn(args: impl Iterator<Item = OsString>) -> Result<()> {
         | fullmag_application::CoordinatorPhase::Running
         | fullmag_application::CoordinatorPhase::Stopping => Some(
             fullmag_runtime_control::retry_store_writer_busy(|| {
-                fullmag_runtime_control::request_accepted_task_stop(
+                fullmag_runtime_control::request_failed_no_spawn_task_stop(
                     &store,
                     &run_id,
                     &request.identity.task_id,
@@ -2537,11 +2543,29 @@ fn run() -> Result<()> {
         Some(value) if value == OsString::from("--initialize-docker-host") => {
             initialize_docker_host(args)
         }
+        Some(value) if value == OsString::from("--fail-reaped-worker") => {
+            failed_worker_recovery::run(args)
+        }
+        Some(value) if value == OsString::from("--complete-reaped-worker-archive") => {
+            failed_worker_recovery::run_completion(args)
+        }
+        Some(value) if value == OsString::from("--cancel-failed-preclaim") => {
+            failed_preclaim_cancellation::run(args)
+        }
         Some(value) if value == OsString::from("--cancel-failed-no-spawn") => {
             cancel_failed_no_spawn(args)
         }
+        Some(value) if value == OsString::from("--cancel-unclaimed") => {
+            runtime_service_unclaimed_cancellation::cancel_unclaimed(args)
+        }
         Some(value) if value == OsString::from("--prepare-orphan-teardown") => {
             run_orphan_teardown(OrphanTeardownPhase::Prepare, args)
+        }
+        Some(value) if value == OsString::from("--prepare-claimed-interruption") => {
+            claimed_worker_interruption::run(false, args)
+        }
+        Some(value) if value == OsString::from("--complete-claimed-interruption") => {
+            claimed_worker_interruption::run(true, args)
         }
         Some(value) if value == OsString::from("--recover-orphan-after-teardown") => {
             run_orphan_teardown(OrphanTeardownPhase::Recover, args)
@@ -2553,7 +2577,7 @@ fn run() -> Result<()> {
             }
             run_service(path)
         }
-        _ => bail!("usage: fullmag-runtime-service --config <absolute-json-path> | --cancel-failed-no-spawn --config <absolute-json-path> --request <absolute-json-path> | --prepare-orphan-teardown --config <absolute-json-path> --request <absolute-json-path> | --recover-orphan-after-teardown --config <absolute-json-path> --request <absolute-json-path> --attestation <absolute-json-path> | --initialize-docker-host --ledger-root <absolute-path> --store-root <absolute-path> [--device-access cpu|gpu] [--native-fem-readiness <absolute-json-path>] [--host-id <stable-id>]")
+        _ => bail!("usage: fullmag-runtime-service --complete-reaped-worker-archive --config <absolute-json-path> --request <original-absolute-json-path> --request-sha256 <sha256> --completion <absolute-json-path> --completion-sha256 <sha256> [--verify-only] | --fail-reaped-worker --config <absolute-json-path> --request <absolute-json-path> --request-sha256 <sha256> [--verify-only] | --config <absolute-json-path> | --cancel-failed-no-spawn --config <absolute-json-path> --request <absolute-json-path> | --cancel-unclaimed --config <absolute-json-path> --request <absolute-json-path> | --prepare-orphan-teardown --config <absolute-json-path> --request <absolute-json-path> | --recover-orphan-after-teardown --config <absolute-json-path> --request <absolute-json-path> --attestation <absolute-json-path> | --initialize-docker-host --ledger-root <absolute-path> --store-root <absolute-path> [--device-access cpu|gpu] [--native-fem-readiness <absolute-json-path>] [--host-id <stable-id>]")
     }
 }
 
@@ -2836,11 +2860,11 @@ fn run_service(path: PathBuf) -> Result<()> {
                             inventory_owner = sample_owner;
                         }
                         Err(error) => {
-                            if is_store_writer_busy(&error)
-                                && sample_store_writer_busy_within_budget(
-                                    &mut consecutive_busy_samples,
-                                )
-                            {
+                            if is_store_writer_busy(&error) {
+                                // A competing writer cannot invalidate the
+                                // service owner. The scheduler independently
+                                // gates every new admission on a fresh sample.
+                                record_sample_store_writer_busy(&mut consecutive_busy_samples);
                                 tracing::warn!(
                                     error = ?error,
                                     consecutive_busy_samples,
@@ -2923,19 +2947,11 @@ fn run_service(path: PathBuf) -> Result<()> {
                                 tracing::debug!(%reason, "host compute-node admission deferred");
                             }
                             Err(error) if is_store_writer_busy(&error) => {
-                                if !host_admission_deferral_within_budget(
-                                    &mut admission_deferred_at,
-                                    Instant::now(),
-                                ) {
-                                    admission_unknown = true;
-                                    owner.publish(
-                                        RuntimeServiceState::Unknown,
-                                        generations.map(|p| p.0),
-                                        generations.map(|p| p.1),
-                                        children.describe(),
-                                    )?;
-                                    bail!("host compute-node admission observation failed: {error:#}");
-                                }
+                                // Contention is not evidence of a failed owner.
+                                // Reservations still require a fresh snapshot;
+                                // keep validating pools and publishing liveness.
+                                // Do not consume the separate stale/topology
+                                // observation budget without an observation.
                                 tracing::warn!(error = ?error, "host admission observation deferred while the ledger writer is busy");
                             }
                             Err(error) => {
@@ -3195,12 +3211,15 @@ mod tests {
     }
 
     #[test]
-    fn sample_writer_busy_budget_allows_five_cycles_only() {
+    fn sample_writer_busy_counter_is_diagnostic_and_saturates() {
         let mut consecutive = 0;
-        for _ in 0..MAX_CONSECUTIVE_SAMPLE_STORE_WRITER_BUSY {
-            assert!(sample_store_writer_busy_within_budget(&mut consecutive));
+        for _ in 0..6 {
+            record_sample_store_writer_busy(&mut consecutive);
         }
-        assert!(!sample_store_writer_busy_within_budget(&mut consecutive));
+        assert_eq!(consecutive, 6);
+        consecutive = u32::MAX;
+        record_sample_store_writer_busy(&mut consecutive);
+        assert_eq!(consecutive, u32::MAX);
     }
 
     #[test]

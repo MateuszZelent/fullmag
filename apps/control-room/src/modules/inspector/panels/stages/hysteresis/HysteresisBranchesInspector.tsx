@@ -21,7 +21,7 @@ export function HysteresisBranchesInspector({
           {branches.map((branch) => (
             <div key={branch.branch_id} className="fm-hysteresis-inspector-step">
               <div className="fm-hysteresis-inspector-step__header">
-                <span className="fm-hysteresis-inspector-step__title">{branch.branch_id}</span>
+                <span className="fm-hysteresis-inspector-step__title" title={branch.branch_id}>{branch.branch_id}</span>
                 <span className="fm-hysteresis-inspector-step__method">
                   {branch.branch_role}
                 </span>

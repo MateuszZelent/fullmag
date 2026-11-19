@@ -1,9 +1,20 @@
-import { ShaderMaterial, type Side } from "three";
+import { ShaderMaterial, type ShaderMaterialParameters, type Side } from "three";
+import { Viewport3DFieldPresentationMaterial, type Viewport3DFieldPresentation } from "./viewport3dFieldPresentationMaterial";
+import {
+  getScalarColorPaletteStops,
+  SCALAR_COLOR_PALETTE_ITEMS,
+  type ScalarColorPalette,
+} from "@/shared/visualization/scalarColorPalette";
 
 import {
   floquetPhaseAdapter,
   phasorAdapter,
 } from "@/shared/domain/analysis/phasorConventionAdapter";
+
+import {
+  isLivePhaseUniform,
+  type LivePhaseUniform,
+} from "@/kernel/visualization/livePhaseUniform";
 
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 import {
@@ -12,6 +23,8 @@ import {
 } from "./viewport3dVectorColoring";
 
 export const VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE = "fmScalarValue";
+export const VIEWPORT_3D_TENSOR_ROW_ATTRIBUTES = ["fmTensorRow0", "fmTensorRow1", "fmTensorRow2"] as const;
+
 export const VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE = "fmVectorValue";
 export const VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE = "fmComplexRealValue";
 export const VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE = "fmComplexImagValue";
@@ -27,6 +40,22 @@ export interface Viewport3DScalarSurfaceShaderOptions {
   side: Side;
   toneMapped?: boolean;
   transparent: boolean;
+  presentation?: Viewport3DFieldPresentation | null;
+}
+
+export type Viewport3DScalarSurfaceMaterial = ShaderMaterial | Viewport3DFieldPresentationMaterial;
+
+export function applyScalarSurfaceMaterialPolicy(
+  material: Viewport3DScalarSurfaceMaterial,
+  policy: Pick<Viewport3DScalarSurfaceShaderOptions,
+    "transparent" | "side" | "depthTest" | "depthWrite" | "polygonOffset" | "polygonOffsetFactor" | "polygonOffsetUnits">,
+): void {
+  const programChanged = material instanceof Viewport3DFieldPresentationMaterial &&
+    (material.transparent !== policy.transparent || material.side !== policy.side);
+  Object.assign(material, policy);
+  // StandardMaterial compiles OPAQUE/DOUBLE_SIDED/FLIP_SIDED into its program.
+  // Plain opacity changes remain uniforms and do not relink the program.
+  if (programChanged) material.needsUpdate = true;
 }
 
 export function canApplyScalarShaderColorBuffer(
@@ -42,7 +71,7 @@ export function canApplyScalarShaderColorBuffer(
   );
   const hasComplexValues = canApplyComplexShaderColorBuffer(buffer, vertexCount);
   return Boolean(
-    (hasScalarValues || hasVectorValues || hasComplexValues) &&
+    (hasScalarValues || hasVectorValues || hasComplexValues || hasTensorShaderValues(buffer, vertexCount)) &&
       Number.isFinite(buffer.range.min) &&
       Number.isFinite(buffer.range.max),
   );
@@ -50,8 +79,16 @@ export function canApplyScalarShaderColorBuffer(
 
 export function createScalarSurfaceShaderMaterial(
   buffer: ScalarColorBuffer,
+  options: Omit<Viewport3DScalarSurfaceShaderOptions, "presentation"> & { presentation?: null },
+): ShaderMaterial;
+export function createScalarSurfaceShaderMaterial(
+  buffer: ScalarColorBuffer,
   options: Viewport3DScalarSurfaceShaderOptions,
-): ShaderMaterial {
+): Viewport3DScalarSurfaceMaterial;
+export function createScalarSurfaceShaderMaterial(
+  buffer: ScalarColorBuffer,
+  options: Viewport3DScalarSurfaceShaderOptions,
+): Viewport3DScalarSurfaceMaterial {
   const colorModeId = shaderColorModeId(buffer.colorMode);
   const orientationMode = colorModeId === 1;
   const complexMode = hasComplexShaderValues(buffer);
@@ -62,11 +99,11 @@ export function createScalarSurfaceShaderMaterial(
     ? phasorAdapter(buffer.phasorConvention as Parameters<typeof phasorAdapter>[0]).phaseAnimationDirection
     : 1;
   const floquetActive = buffer.wavevectorKf ? 1 : 0;
-  const material = new ShaderMaterial({
+  const parameters: ShaderMaterialParameters = {
     clipping: true,
     depthTest: options.depthTest,
     depthWrite: options.depthWrite,
-    fragmentShader: orientationMode
+    fragmentShader: hasTensorShaderValues(buffer) ? TENSOR_SURFACE_FRAGMENT_SHADER : orientationMode
       ? ORIENTATION_SURFACE_FRAGMENT_SHADER
       : SCALAR_SURFACE_FRAGMENT_SHADER,
     name: "FullmagScalarSurfaceShaderMaterial",
@@ -80,12 +117,12 @@ export function createScalarSurfaceShaderMaterial(
       fmAmplitudeScale: { value: finiteAmplitudeScale(buffer.amplitudeScale) },
       fmOpacity: { value: options.opacity },
       fmPaletteId: { value: scalarPaletteId(buffer.colorPalette) },
-      fmPhaseRad: { value: finitePhaseRad(buffer.complexPhaseRad) ?? 0 },
+      fmPhaseRad: scalarSurfacePhaseUniform(buffer),
       fmRepresentationId: {
         value: complexRepresentationId(buffer.complexRepresentation),
       },
-      fmScalarMax: { value: buffer.range.max },
-      fmScalarMin: { value: buffer.range.min },
+      fmScalarMax: { value: buffer.range.max / (buffer.tensorScale ?? 1) },
+      fmScalarMin: { value: buffer.range.min / (buffer.tensorScale ?? 1) },
       fmShadeStrength: { value: options.shadeStrength ?? 0 },
       fmWavevectorKf: { value: buffer.wavevectorKf ?? [0, 0, 0] },
       fmCellOrigin: { value: buffer.cellOrigin ?? [0, 0, 0] },
@@ -93,8 +130,12 @@ export function createScalarSurfaceShaderMaterial(
       fmTemporalPhaseSign: { value: temporalPhaseSign },
       fmFloquetActive: { value: floquetActive },
     },
-    vertexShader: resolveSurfaceVertexShader(orientationMode, complexMode),
-  });
+    vertexShader: resolveSurfaceVertexShader(orientationMode, complexMode, hasTensorShaderValues(buffer)),
+  };
+  const material = options.presentation
+    ? new Viewport3DFieldPresentationMaterial(parameters, options.presentation)
+    : new ShaderMaterial(parameters);
+  material.opacity = options.opacity;
   material.toneMapped = options.toneMapped ?? false;
   return material;
 }
@@ -111,22 +152,25 @@ export function scalarSurfaceShaderVariantKey(buffer: ScalarColorBuffer): string
   const colorModeId = shaderColorModeId(buffer.colorMode);
   const orientationMode = colorModeId === 1;
   const complexMode = hasComplexShaderValues(buffer);
+  if (hasTensorShaderValues(buffer)) return "scalar:tensor-frobenius";
   return `${orientationMode ? "orientation" : "scalar"}:${complexMode ? "complex" : "real"}`;
 }
 
 export function updateScalarSurfaceShaderMaterial(
-  material: ShaderMaterial,
+  material: Viewport3DScalarSurfaceMaterial,
   buffer: ScalarColorBuffer,
   opacity: number,
   shadeStrength?: number,
+  presentation?: Viewport3DFieldPresentation | null,
 ): void {
   const nextColorModeId = shaderColorModeId(buffer.colorMode);
   const orientationMode = nextColorModeId === 1;
   const nextVertexShader = resolveSurfaceVertexShader(
     orientationMode,
     hasComplexShaderValues(buffer),
+    hasTensorShaderValues(buffer),
   );
-  const nextFragmentShader = orientationMode
+  const nextFragmentShader = hasTensorShaderValues(buffer) ? TENSOR_SURFACE_FRAGMENT_SHADER : orientationMode
     ? ORIENTATION_SURFACE_FRAGMENT_SHADER
     : SCALAR_SURFACE_FRAGMENT_SHADER;
 
@@ -152,21 +196,55 @@ export function updateScalarSurfaceShaderMaterial(
     buffer.amplitudeScale,
   );
   material.uniforms.fmOpacity.value = opacity;
+  material.opacity = opacity;
+  if (material instanceof Viewport3DFieldPresentationMaterial && presentation) {
+    material.roughness = presentation.roughness;
+    material.metalness = presentation.metalness;
+  }
   if (typeof shadeStrength === "number" && Number.isFinite(shadeStrength)) {
     material.uniforms.fmShadeStrength.value = shadeStrength;
   }
   material.uniforms.fmPaletteId.value = scalarPaletteId(buffer.colorPalette);
-  material.uniforms.fmPhaseRad.value = finitePhaseRad(buffer.complexPhaseRad) ?? 0;
+  bindScalarSurfacePhaseUniform(material, buffer);
   material.uniforms.fmRepresentationId.value = complexRepresentationId(
     buffer.complexRepresentation,
   );
-  material.uniforms.fmScalarMax.value = buffer.range.max;
-  material.uniforms.fmScalarMin.value = buffer.range.min;
+  material.uniforms.fmScalarMax.value = buffer.range.max / (buffer.tensorScale ?? 1);
+  material.uniforms.fmScalarMin.value = buffer.range.min / (buffer.tensorScale ?? 1);
   material.uniforms.fmWavevectorKf.value = buffer.wavevectorKf ?? [0, 0, 0];
   material.uniforms.fmCellOrigin.value = buffer.cellOrigin ?? [0, 0, 0];
   material.uniforms.fmSpatialPhaseSign.value = spatialPhaseSign;
   material.uniforms.fmTemporalPhaseSign.value = temporalPhaseSign;
   material.uniforms.fmFloquetActive.value = floquetActive;
+}
+
+/**
+ * A buffer with a live phase uniform shares that cell with the material, so
+ * phase animation never touches the buffer or the material. Without one the
+ * material owns a private cell holding the buffer's static phase.
+ */
+function scalarSurfacePhaseUniform(buffer: ScalarColorBuffer): LivePhaseUniform | { value: number } {
+  return buffer.complexPhaseUniform ?? { value: finitePhaseRad(buffer.complexPhaseRad) ?? 0 };
+}
+
+export function bindScalarSurfacePhaseUniform(
+  material: Viewport3DScalarSurfaceMaterial,
+  buffer: ScalarColorBuffer,
+): void {
+  const current = material.uniforms.fmPhaseRad;
+  if (buffer.complexPhaseUniform) {
+    if (current !== buffer.complexPhaseUniform) {
+      material.uniforms.fmPhaseRad = buffer.complexPhaseUniform;
+    }
+    return;
+  }
+  const staticPhaseRad = finitePhaseRad(buffer.complexPhaseRad) ?? 0;
+  if (!current || isLivePhaseUniform(current)) {
+    // Never write a static phase into a shared live cell.
+    material.uniforms.fmPhaseRad = { value: staticPhaseRad };
+    return;
+  }
+  current.value = staticPhaseRad;
 }
 
 function canApplyComplexShaderColorBuffer(
@@ -196,7 +274,7 @@ function finiteAmplitudeScale(value: number | null | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 1;
 }
 
-function complexRepresentationId(
+export function complexRepresentationId(
   representation: ScalarColorBuffer["complexRepresentation"],
 ): number {
   switch (representation) {
@@ -217,7 +295,9 @@ function complexRepresentationId(
 function resolveSurfaceVertexShader(
   orientationMode: boolean,
   complexMode: boolean,
+  tensorMode = false,
 ): string {
+  if (tensorMode) return TENSOR_SURFACE_VERTEX_SHADER;
   if (complexMode) {
     return orientationMode
       ? COMPLEX_ORIENTATION_SURFACE_VERTEX_SHADER
@@ -244,23 +324,39 @@ function shaderColorModeId(mode: string | null | undefined): number {
   }
 }
 
-function scalarPaletteId(palette: string | null | undefined): number {
-  if (palette?.trim().toLowerCase().replace(/[\s-]+/g, "_") === "twilight") {
-    return 5;
-  }
+// Preserve the existing phase/scalar IDs, and derive new IDs from the shared
+// catalog. GPU surfaces, CPU glyphs and CSS legends interpolate the same stops.
+const SHADER_PALETTES: readonly (ScalarColorPalette | "twilight")[] = [
+  "viridis", "coolwarm", "inferno", "jet", "magma", "twilight",
+  ...SCALAR_COLOR_PALETTE_ITEMS.map(({ value }) => value).filter(
+    (value) => !["viridis", "coolwarm", "inferno", "jet", "magma"].includes(value),
+  ),
+];
 
-  switch (normalizeViewport3DColorPalette(palette)) {
-    case "coolwarm":
-      return 1;
-    case "inferno":
-      return 2;
-    case "jet":
-      return 3;
-    case "magma":
-      return 4;
-    case "viridis":
-      return 0;
-  }
+export function scalarPaletteId(palette: string | null | undefined): number {
+  const normalized = palette?.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return SHADER_PALETTES.indexOf(
+    normalized === "twilight" ? "twilight" : normalizeViewport3DColorPalette(palette),
+  );
+}
+
+/** GLSL body of `vec3 paletteColor(float t)`; requires `uniform int fmPaletteId`. */
+export function scalarPaletteGlsl(): string {
+  const number = (value: number) => value.toFixed(10);
+  return SHADER_PALETTES.map((palette, id) => {
+    const stops = getScalarColorPaletteStops(palette);
+    const segments = stops.slice(0, -1).map((start, index) => {
+      const end = stops[index + 1];
+      const lower = index / (stops.length - 1);
+      const upper = (index + 1) / (stops.length - 1);
+      const color = (stop: readonly number[]) => `vec3(${stop.map(number).join(", ")})`;
+      const expression = `mix(${color(start)}, ${color(end)}, (t - ${number(lower)}) * ${number(stops.length - 1)})`;
+      return index === stops.length - 2
+        ? `return ${expression};`
+        : `if (t < ${number(upper)}) return ${expression};`;
+    });
+    return `if (fmPaletteId == ${id}) {\n${segments.join("\n")}\n}`;
+  }).join("\n");
 }
 
 const SCALAR_SURFACE_VERTEX_SHADER = `
@@ -309,6 +405,8 @@ uniform vec3 fmCellOrigin;
 uniform float fmSpatialPhaseSign;
 uniform float fmTemporalPhaseSign;
 uniform int fmFloquetActive;
+uniform float fmScalarMin;
+uniform float fmScalarMax;
 varying float vScalarValue;
 varying vec3 vNormalView;
 
@@ -355,6 +453,11 @@ void main() {
   vec3 complexImag = ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
   vec3 projected = projectComplex(complexReal, complexImag, theta);
   vScalarValue = scalarFromVector(projected);
+  float scalarSpan = fmScalarMax - fmScalarMin;
+  // Leave invalid samples for the fragment's diagnostic color.
+  if (vScalarValue == vScalarValue && abs(vScalarValue) <= 3.0e38) {
+    vScalarValue = scalarSpan > 0.0 ? (vScalarValue - fmScalarMin) / scalarSpan : 0.5;
+  }
   vNormalView = normalize(normalMatrix * normal);
   vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
   #include <clipping_planes_vertex>
@@ -434,53 +537,9 @@ uniform float fmScalarMax;
 varying float vScalarValue;
 varying vec3 vNormalView;
 
-vec3 mixStops3(float t, vec3 a, vec3 b, vec3 c) {
-  if (t < 0.5) {
-    return mix(a, b, t * 2.0);
-  }
-  return mix(b, c, (t - 0.5) * 2.0);
-}
-
-vec3 mixStops4(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
-  if (t < 0.3333333) {
-    return mix(a, b, t * 3.0);
-  }
-  if (t < 0.6666667) {
-    return mix(b, c, (t - 0.3333333) * 3.0);
-  }
-  return mix(c, d, (t - 0.6666667) * 3.0);
-}
-
-vec3 mixStops5(float t, vec3 a, vec3 b, vec3 c, vec3 d, vec3 e) {
-  if (t < 0.25) {
-    return mix(a, b, t * 4.0);
-  }
-  if (t < 0.5) {
-    return mix(b, c, (t - 0.25) * 4.0);
-  }
-  if (t < 0.75) {
-    return mix(c, d, (t - 0.5) * 4.0);
-  }
-  return mix(d, e, (t - 0.75) * 4.0);
-}
-
 vec3 paletteColor(float t) {
-  if (fmPaletteId == 1) {
-    return mixStops3(t, vec3(0.231, 0.298, 0.753), vec3(0.867, 0.867, 0.867), vec3(0.706, 0.016, 0.149));
-  }
-  if (fmPaletteId == 2) {
-    return mixStops5(t, vec3(0.0, 0.0, 0.016), vec3(0.259, 0.039, 0.408), vec3(0.576, 0.169, 0.365), vec3(0.867, 0.318, 0.227), vec3(0.988, 1.0, 0.643));
-  }
-  if (fmPaletteId == 3) {
-    return mixStops5(t, vec3(0.0, 0.0, 0.498), vec3(0.0, 0.498, 1.0), vec3(0.498, 1.0, 0.498), vec3(1.0, 0.498, 0.0), vec3(0.498, 0.0, 0.0));
-  }
-  if (fmPaletteId == 4) {
-    return mixStops5(t, vec3(0.0, 0.0, 0.016), vec3(0.231, 0.059, 0.439), vec3(0.549, 0.161, 0.502), vec3(0.871, 0.286, 0.408), vec3(0.988, 0.992, 0.749));
-  }
-  if (fmPaletteId == 5) {
-    return mixStops5(t, vec3(0.184, 0.079, 0.213), vec3(0.384, 0.461, 0.731), vec3(0.886, 0.85, 0.886), vec3(0.698, 0.338, 0.322), vec3(0.184, 0.079, 0.213));
-  }
-  return mixStops4(t, vec3(0.267, 0.004, 0.329), vec3(0.192, 0.408, 0.557), vec3(0.208, 0.718, 0.475), vec3(0.992, 0.906, 0.145));
+  ${scalarPaletteGlsl()}
+  return vec3(0.0);
 }
 
 vec3 srgbToLinearVec3(vec3 c) {
@@ -495,10 +554,8 @@ void main() {
   float v = vScalarValue;
   bool bad = !(v == v) || abs(v) > 3.0e38;
 
-  // fmScalarValue is normalized to [0, 1] in float64 precision before upload
-  // (see viewport3dFieldMapping.ts). Do not normalize it a second time with
-  // the raw range uniforms; that made component changes look like shading
-  // changes instead of changing the surface texture.
+  // CPU-uploaded scalars are already normalized. The complex vertex shader
+  // normalizes after projection so both paths supply palette coordinates.
   float t = bad ? 0.5 : clamp(v, 0.0, 1.0);
   vec3 base = bad ? vec3(0.85, 0.0, 0.85) : paletteColor(t);
   vec3 shaded = base;
@@ -600,3 +657,35 @@ void main() {
   #include <colorspace_fragment>
 }
 `;
+
+function hasTensorShaderValues(buffer: ScalarColorBuffer, vertexCount = (buffer.tensorRows?.[0].length ?? 0) / 3): boolean {
+  return Boolean(buffer.tensorRows && vertexCount > 0 && buffer.tensorRows.every(row => row.length === vertexCount * 3) &&
+    Number.isFinite(buffer.tensorScale) && buffer.tensorScale! > 0);
+}
+
+export const TENSOR_SURFACE_VERTEX_SHADER = `
+#include <clipping_planes_pars_vertex>
+attribute vec3 fmTensorRow0;
+attribute vec3 fmTensorRow1;
+attribute vec3 fmTensorRow2;
+varying vec3 vTensorRow0;
+varying vec3 vTensorRow1;
+varying vec3 vTensorRow2;
+varying vec3 vNormalView;
+void main() {
+  vTensorRow0 = fmTensorRow0;
+  vTensorRow1 = fmTensorRow1;
+  vTensorRow2 = fmTensorRow2;
+  vNormalView = normalize(normalMatrix * normal);
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  #include <clipping_planes_vertex>
+  gl_Position = projectionMatrix * mvPosition;
+}
+`;
+
+export const TENSOR_SURFACE_FRAGMENT_SHADER = SCALAR_SURFACE_FRAGMENT_SHADER
+  .replace("varying float vScalarValue;", "varying vec3 vTensorRow0;\nvarying vec3 vTensorRow1;\nvarying vec3 vTensorRow2;")
+  .replace("float v = vScalarValue;", `
+  float norm = sqrt(dot(vTensorRow0, vTensorRow0) + dot(vTensorRow1, vTensorRow1) + dot(vTensorRow2, vTensorRow2));
+  float span = fmScalarMax - fmScalarMin;
+  float v = span > 0.0 ? (norm - fmScalarMin) / span : 0.5;`);

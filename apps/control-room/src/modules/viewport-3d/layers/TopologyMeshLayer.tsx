@@ -1,5 +1,6 @@
 "use client";
 
+import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import type { ModeCompositionFieldLayerSnapshotMap } from "@/kernel/visualization/ModeCompositionFieldLayerController";
@@ -21,6 +22,7 @@ import {
 import type {
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
+  Viewport3DTopologyPartRenderModel,
 } from "../viewport3dRenderModel";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DColors } from "../viewport3dTypes";
@@ -46,8 +48,12 @@ export function TopologyMeshLayer({
   meshQualityOverlayVisible,
   modeCompositionFieldLayers,
   modeCompositionId,
-  modeCompositionPhaseByLayerId,
+  modeCompositionPhaseUniformByLayerId,
   onSelectPart,
+  onGeometryReady,
+  replacementObjectIds,
+  onRenderableGeometryChange,
+  renderableGeometryStageVisible = true,
   tracker,
   topologyModel,
   topologyFreshness,
@@ -67,8 +73,15 @@ export function TopologyMeshLayer({
   meshQualityOverlayVisible: boolean;
   modeCompositionFieldLayers?: ModeCompositionFieldLayerSnapshotMap;
   modeCompositionId?: string | null;
-  modeCompositionPhaseByLayerId?: ReadonlyMap<string, number>;
+  modeCompositionPhaseUniformByLayerId?: ReadonlyMap<string, LivePhaseUniform>;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
+  onGeometryReady?: (part: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>, ready: boolean) => void;
+  replacementObjectIds?: ReadonlySet<string>;
+  onRenderableGeometryChange?: (
+    renderableGeometryKey: string,
+    ready: boolean,
+  ) => void;
+  renderableGeometryStageVisible?: boolean;
   tracker: Viewport3DResourceTracker;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
   topologyFreshness: Viewport3DTopologyFreshness;
@@ -84,12 +97,20 @@ export function TopologyMeshLayer({
       <>
         {topologyModel.magneticParts.map((partModel) => {
           const settings = getPartSettings(partModel.part);
+          const previewObject = primitiveModel?.objects.find((object) =>
+            [object.objectId, object.objectId.endsWith("_geom")
+              ? object.objectId.slice(0, -5) : object.objectId + "_geom"]
+              .some((id) => id === partModel.part.object_id || id === partModel.part.geometry_id),
+          );
+          const replacementVisible = !topologyCurrent || !previewObject ||
+            previewObject.role !== "antenna" || !replacementObjectIds ||
+            replacementObjectIds.has(previewObject.objectId);
           const modeTargetId = modeCompositionTargetIdForMeshPart(partModel.part);
           const modeCompositionSnapshot = modeTargetId
             ? modeCompositionFieldLayers?.get(modeTargetId) ?? null
             : null;
-          const modeCompositionPhaseRad = modeCompositionSnapshot?.layer
-            ? modeCompositionPhaseByLayerId?.get(
+          const modeCompositionPhase = modeCompositionSnapshot?.layer
+            ? modeCompositionPhaseUniformByLayerId?.get(
                 modeCompositionSnapshot.layer.layer_id,
               ) ?? null
             : null;
@@ -133,10 +154,14 @@ export function TopologyMeshLayer({
               materialProfile={materialProfile}
               meshQualityColors={meshQualityOverlayVisible ? meshQualityColors : null}
               modeCompositionId={modeCompositionId ?? null}
-              modeCompositionPhaseRad={modeCompositionPhaseRad}
+              modeCompositionPhase={modeCompositionPhase}
               modeCompositionSnapshot={modeCompositionSnapshot}
               onSelectPart={onSelectPart}
+              onRenderableGeometryChange={onRenderableGeometryChange}
+              renderableGeometryStageVisible={renderableGeometryStageVisible}
               partModel={partModel}
+              onGeometryReady={onGeometryReady}
+              renderVisible={replacementVisible}
               settings={
                 topologyCurrent
                   ? settings

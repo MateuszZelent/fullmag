@@ -18,6 +18,63 @@ describe("quantityItemsForVisualizationTarget", () => {
     ]);
   });
 
+  it("lists plan quantities that need an accepted run as disabled, not hidden", () => {
+    const entry = (id: string, label: string, overrides: object) => ({
+      capability_state: "supported",
+      solver_capability: "supported",
+      requestable: true,
+      renderable: true,
+      publication_state: "interactive",
+      description: label,
+      domain: "magnetic_only",
+      id,
+      interactive_preview: true,
+      label,
+      location: "cell",
+      n_comp: 3,
+      normalization_hint: "max_abs",
+      shape: "vector_field",
+      supports_export: true,
+      supports_history: false,
+      supports_preview_2d: true,
+      supports_preview_3d: true,
+      unit: "",
+      resolved_capability: {
+        quantity_id: id,
+        provider: "available",
+        request: "field_vector",
+        render: "renderable",
+        publication: "interactive",
+        scope: "magnetic_only",
+        lane: "fdm_cpu_reference",
+        precision: "double",
+        carriers: [],
+      },
+      ...overrides,
+    });
+    const quantityCatalog = {
+      schema_version: "v1",
+      quantities: [
+        entry("m", "Magnetization", {
+          materializable: true,
+          materialization_state: "complete",
+        }),
+        entry("H_ex", "Exchange Field", {
+          materializable: false,
+          materialization_state: "unmaterialized",
+          materialization_reason_code: "accepted_state_required",
+        }),
+      ],
+    } as unknown as QuantityCatalogResource;
+
+    expect(
+      quantityItemsForVisualizationTarget("m", "object", null, quantityCatalog),
+    ).toEqual([
+      { label: "Magnetization", value: "m" },
+      { disabled: true, label: "Exchange Field (after Run)", value: "H_ex" },
+    ]);
+  });
+
   it("offers advertised materializable quantities before field payloads exist", () => {
     const fieldCatalog = {
       domain_generation_id: "fdm-generation-1",

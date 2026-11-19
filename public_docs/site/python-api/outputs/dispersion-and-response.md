@@ -4,21 +4,19 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: dispersion-and-response.source-map.json and reviewed source revision 5e99782acbb7fb3f65d0cad872e102bf67733103
+source_of_truth: packages/fullmag-py/src/fullmag/model/outputs.py, crates/fullmag-runner/src/eigen/tracking.rs
 ---
 
 (public-docs-python-api-outputs-dispersion-and-response)=
 # Dispersion and Response
 
 (python-api-outputs-dispersion-and-response-problem-statement)=
-<!-- (problem-statement)= -->
 ## 1. Contract and scope
 
 This page records the dispersion-curve (`SaveDispersion`) and frequency-response (`SaveResponse`)
 output descriptors attached to `Eigenmodes` and `FrequencyResponse` studies.
 
 (python-api-outputs-dispersion-and-response-governing-equations)=
-<!-- (governing-equations)= -->
 ## 2. Governing equations
 
 Response and dispersion definitions belong to {doc}`../../numerical-methods/frequency-domain/index`
@@ -28,21 +26,18 @@ and tracked branch tables (`eigen/branches.v2.json` and `eigen/dispersion.csv`),
 $\delta\mathbf m(\omega)$.
 
 (python-api-outputs-dispersion-and-response-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## 3. Symbols and SI units
 
 Eigenfrequency values are in hertz ($\mathrm{Hz}$), wave vectors in $\mathrm{rad\,m^{-1}}$, and
 response observables carry the SI units of their physical definition.
 
 (python-api-outputs-dispersion-and-response-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## 4. Assumptions and validity
 
 Response observable identifiers and dispersion names are validated immediately upon construction and
 checked for stage compatibility during planning (`validate_eigen_outputs`).
 
 (python-api-outputs-dispersion-and-response-python-api)=
-<!-- (python-api)= -->
 ## 5. Python API
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
@@ -86,14 +81,12 @@ study.stages.add_frequency_response(
 ```
 
 (python-api-outputs-dispersion-and-response-problem-ir)=
-<!-- (problem-ir)= -->
 ## 6. ProblemIR
 
 `SaveDispersion.to_ir()` emits `dispersion_curve`; `SaveResponse.to_ir()` emits
 `frequency_response_output`. Both are carried in the study's `sampling.outputs`.
 
 (python-api-outputs-dispersion-and-response-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## 7. Round-trip and failure semantics
 
 Requested intent is the value authored by Python and preserved in `ProblemIR`; resolved execution is
@@ -102,14 +95,12 @@ unsupported combinations are rejected explicitly rather than silently substitute
 observables fail immediately; dispersion names are preserved without interpretation.
 
 (python-api-outputs-dispersion-and-response-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## 8. Discrete realization
 
 Response materialization follows the frequency-domain solvers; dispersion follows the modal
 eigensolver and `track_branches` (`crates/fullmag-runner/src/eigen/tracking.rs`).
 
 (python-api-outputs-dispersion-and-response-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## 9. Implementation mapping
 
 | Class | Repository path | Stable symbol | Responsibility |
@@ -119,45 +110,55 @@ eigensolver and `track_branches` (`crates/fullmag-runner/src/eigen/tracking.rs`)
 | Branch tracking | [`crates/fullmag-runner/src/eigen/tracking.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/eigen/tracking.rs#L1217) | `track_branches` | Mass-weighted Hungarian dispersion branch tracking |
 
 (python-api-outputs-dispersion-and-response-validation)=
-<!-- (validation)= -->
 ## 10. Validation
 
 Ownership tests compare this inventory with live signatures.
 
 (python-api-outputs-dispersion-and-response-limitations)=
-<!-- (limitations)= -->
 ## 11. Limitations
 
 Requesting an output does not guarantee the solver materializes it; planner and solver capability
 resolution are authoritative.
 
 (python-api-outputs-dispersion-and-response-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## 12. Scientific bibliography
 
 Definitions belong to {doc}`../../numerical-methods/frequency-domain/index` and
 {doc}`../../numerical-methods/eigensolvers/index`.
 
-(python-api-outputs-dispersion-and-response-source-code-index)=
-<!-- (source-code-index)= -->
+## Control Room support
 
-## Control Room crosswalk
-
-Status: Table/field autosave and result inspection are partial; unsupported output formats remain not implemented.
+Status: Spectral dispersion and driven response inspection are `implemented` as `inspection-only` result views, while stage output selectors (`Outputs`) are `partial` and unsupported raw output serialization formats remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Outputs` | `partial` | Submit stage draft; output resources are revised after execution |
-| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Outputs` | `not implemented` | Python-only until implemented |
+| Dispersion & response output specs (`SaveDispersion`, `SaveResponse`) | `Model Explorer -> Stages -> <stage> -> Outputs` (`StudyStageDraftEditor`) | `partial` | Submit stage draft; output resources are revised after execution |
+| Dispersion curves, tracked branches, & $S(k,f)$ heatmaps | `Analysis Plots` (`EigenDispersionInspectorPanel`, `DynamicStructureFactorView`, `SpinWaveGammaView`) | `inspection-only` | Readback from `/v2/sessions/current/analysis/spin-wave/*` and `SolutionSet` (decimated heatmaps disclose bounding explicitly) |
+| Driven FMR curves & resonance peak tables | `Analysis Plots` (`FmrResponseSweepInspectorPanel`, `FmrPeakInspector`, `FrequencyResponseChart`) | `inspection-only` | Readback from `/v2/sessions/current/analysis/frequency-response/*` and interactive peak selection |
+| Saved multi-run dispersion / spectrum comparison | `Results Navigator` (`SavedResultsBrowser`) | `inspection-only` | Offline comparison across materialized `SolutionSet` revisions |
+| Output formatting flags without a named UI field | `Model Explorer -> Stages -> <stage> -> Outputs` | `Python-only` | Authored in Python |
 
-not implemented: frontend support for output parameters not rendered by the autosave/result inspectors.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: [`apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts#L1074) (`buildEigenDispersionChartModel`, `buildFrequencyResponseChartModel`).
+```{image} /_static/images/ui/charts-dispersion-and-fmr-spectrum.png
+:alt: Spin-wave dispersion, Dynamic Structure Factor S(k,f) heatmap, and FMR spectrum inside Control Room Analysis Plots
+:align: center
+:width: 100%
+```
 
+```{image} /_static/images/ui/results-saved-navigator-comparison.png
+:alt: Saved Results Navigator comparing historical SolutionSet runs and spectral overlays
+:align: center
+:width: 100%
+```
+
+Output parameters outside the stage and result inspectors remain Python-only.
+See [Control Room capability register](/frontend/capability-register), [Planar Monitors & Frequency-Domain Inspectors](/frontend/inspectors/analysis-and-frequency-domain), and [Charts & Playback](/frontend/visualization/charts-and-playback).
+Frontend source owners: [`apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts#L1074) (`buildEigenDispersionChartModel`, `buildFrequencyResponseChartModel`), `EigenDispersionInspectorPanel`, `DynamicStructureFactorView`, and `SavedResultsBrowser`.
+
+(python-api-outputs-dispersion-and-response-source-code-index)=
 ## 13. Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Dispersion output request validation and lowering. | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L324) | `class SaveDispersion` | Dispersion output request validation and lowering. | Source-map validator and focused API tests |
-| Response output request validation and lowering. | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L217) | `class SaveResponse` | Response output request validation and lowering. | Source-map validator and focused API tests |
-| Branch tracking across k-paths. | [`crates/fullmag-runner/src/eigen/tracking.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/eigen/tracking.rs#L1217) | `track_branches` | Mass-weighted Hungarian mode branch tracking. | Rust runner source |
+| Dispersion output request validation and lowering | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L324) | `class SaveDispersion` | Dispersion output request validation and lowering | Ownership and API contract tests |
+| Response output request validation and lowering | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L217) | `class SaveResponse` | Response output request validation and lowering | Ownership and API contract tests |
+| Branch tracking across k-paths | [`crates/fullmag-runner/src/eigen/tracking.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/eigen/tracking.rs#L1217) | `track_branches` | Mass-weighted Hungarian mode branch tracking | Rust runner source |

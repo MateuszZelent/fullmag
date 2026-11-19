@@ -14,11 +14,17 @@ const styles = await Promise.all(
   styleNames.map((name) => readFile(new URL(`../src/design/styles/${name}`, import.meta.url), "utf8")),
 );
 
-const markup = `
+const inspectorMarkup = `
+      <aside class="fm-start__inspector fm-start-inspector" id="inspector">
+        <div class="fm-start-inspector__body"><p class="fm-start-inspector__note">Inspector</p></div>
+        <footer class="fm-start-inspector__foot"><button class="fm-start-inspector__open" id="create-script">Waiting for the Save dialog…</button></footer>
+      </aside>`;
+
+const pageMarkup = (inspectorState) => `
   <style>* { box-sizing: border-box; } body { margin: 0; } #frame { width: 100vw; height: 100vh; }
   ${styles.join("\n")}</style>
   <div id="frame">
-    <div class="fm-start">
+    <div class="fm-start" data-inspector="${inspectorState}" data-section="home">
       <div class="fm-start__rail"><nav><ul class="fm-start-rail__nav"><li><button class="fm-start-rail__item" aria-current="page">Home</button></li></ul></nav></div>
       <main class="fm-start__content"><div class="fm-start__content-inner">
         <div class="fm-start-tiles">
@@ -42,13 +48,13 @@ const markup = `
           <span class="fm-start-row__size">120 lines</span><span class="fm-start-row__opened">today</span><span class="fm-start-row__pin"></span>
         </div></div>
       </div></main>
-      <aside class="fm-start__inspector fm-start-inspector" id="inspector">
-        <div class="fm-start-inspector__body"><p class="fm-start-inspector__note">Inspector</p></div>
-        <footer class="fm-start-inspector__foot"><button class="fm-start-inspector__open" id="create-script">Waiting for the Save dialog…</button></footer>
-      </aside>
+      ${inspectorState === "visible" ? inspectorMarkup : ""}
       <footer class="fm-start-status"><span class="fm-start-status__item">No active session</span></footer>
     </div>
   </div>`;
+
+const markup = pageMarkup("visible");
+const noSelectionMarkup = pageMarkup("hidden");
 
 const luminance = ([r, g, b]) => {
   const lin = (v) => {
@@ -72,8 +78,9 @@ try {
   await page.setContent(markup);
 
   // ── Layout ────────────────────────────────────────────────────────────
-  const layout = async (width, height) => {
+  const layout = async (width, height, fixture = markup) => {
     await page.setViewportSize({ width, height });
+    await page.setContent(fixture);
     return page.evaluate(() => {
       const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect();
       const start = rect(".fm-start");
@@ -88,8 +95,10 @@ try {
       const projectRow = rect(".fm-start-row");
       return {
         columns: getComputedStyle(document.querySelector(".fm-start")).gridTemplateColumns.split(" ").length,
-        inspectorDisplay: getComputedStyle(inspector).display,
-        inspectorWidth: inspector.getBoundingClientRect().width,
+        inspectorState: document.querySelector(".fm-start").dataset.inspector,
+        inspectorExists: Boolean(inspector),
+        inspectorDisplay: inspector ? getComputedStyle(inspector).display : "absent",
+        inspectorWidth: inspector?.getBoundingClientRect().width ?? 0,
         tilesOnOneRow: new Set(tiles.map((t) => Math.round(t))).size === 1,
         statusAtBottom: Math.abs(status.bottom - start.bottom) <= 1,
         statusFullWidth: Math.abs(status.width - start.width) <= 1,
@@ -100,6 +109,7 @@ try {
         pathDirection: getComputedStyle(path).direction,
         pathTruncates: path.scrollWidth >= path.clientWidth,
         createScriptFits: (() => {
+          if (!inspector) return false;
           const button = document.querySelector("#create-script").getBoundingClientRect();
           const panel = inspector.getBoundingClientRect();
           return button.width > 0 && button.left >= panel.left - 1 && button.right <= panel.right + 1;
@@ -110,6 +120,8 @@ try {
 
   const wide = await layout(1680, 1000);
   assert.equal(wide.columns, 3, "Three columns at 1680px");
+  assert.equal(wide.inspectorState, "visible", "The selected Home fixture has a visible inspector state");
+  assert.equal(wide.inspectorExists, true, "A selected Home item renders its inspector");
   assert.equal(wide.inspectorDisplay !== "none", true, "Inspector visible at 1680px");
   assert.ok(Math.abs(wide.inspectorWidth - 364) <= 1, `Inspector is 364px wide, got ${wide.inspectorWidth}`);
   assert.ok(wide.tilesOnOneRow, "The five launch tiles share one row at 1680px");
@@ -122,8 +134,16 @@ try {
 
   assert.ok(wide.createScriptFits, "The longest Create script label stays inside the inspector at 1680px");
 
+  const noSelection = await layout(1680, 1000, noSelectionMarkup);
+  assert.equal(noSelection.inspectorState, "hidden", "Home without a selection has a hidden inspector state");
+  assert.equal(noSelection.columns, 2, "Home without a selection uses two columns at 1680px");
+  assert.equal(noSelection.inspectorExists, false, "Home without a selection does not render an empty inspector");
+  assert.ok(noSelection.statusAtBottom && noSelection.statusFullWidth, "Unselected Home keeps the full-width status strip");
+
   const narrow = await layout(1000, 800);
   assert.equal(narrow.columns, 2, "Two columns below 1180px");
+  assert.equal(narrow.inspectorState, "visible", "The narrow fixture still represents a selected Home item");
+  assert.equal(narrow.inspectorExists, true, "The narrow layout fixture retains selected inspector markup");
   assert.equal(narrow.inspectorDisplay, "none", "Inspector is hidden below 1180px, not left under the rail");
   assert.ok(narrow.statusAtBottom && narrow.statusFullWidth, "Status strip still spans the bottom");
 

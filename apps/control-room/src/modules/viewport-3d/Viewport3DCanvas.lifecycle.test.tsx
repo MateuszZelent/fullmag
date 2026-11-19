@@ -95,4 +95,52 @@ describe("Viewport3DCanvas strict lifecycle", () => {
       dom.restore();
     }
   });
+
+  it("pauses and resumes the frameloop on the same root without remounting", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const htmlElement = globalThis.HTMLElement as unknown as {
+      prototype: { getBoundingClientRect: () => DOMRect };
+    };
+    const originalRect = htmlElement.prototype.getBoundingClientRect;
+    htmlElement.prototype.getBoundingClientRect = () =>
+      ({ height: 240, width: 320 }) as DOMRect;
+    const originalObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      disconnect() {}
+      observe() { this.callback([], this as unknown as ResizeObserver); }
+      unobserve() {}
+    } as typeof ResizeObserver;
+    fiber.configurations.length = 0;
+    fiber.roots.length = 0;
+    const root = createReactRoot(container as unknown as Element);
+    const renderCanvas = async (frameloop: "demand" | "never") => {
+      await act(async () => {
+        root.render(<Viewport3DCanvas dpr={1} frameloop={frameloop}><group /></Viewport3DCanvas>);
+      });
+      await act(async () => {
+        fiber.resolvers.splice(0).forEach((resolve) => resolve());
+      });
+    };
+
+    try {
+      await renderCanvas("demand");
+      await renderCanvas("never");
+      await renderCanvas("demand");
+
+      expect(fiber.roots).toHaveLength(1);
+      expect(fiber.roots[0].unmount).not.toHaveBeenCalled();
+      expect(fiber.configurations.map((configuration) =>
+        (configuration as { frameloop?: string }).frameloop,
+      )).toEqual(["demand", "never", "demand"]);
+      await act(async () => root.unmount());
+      expect(fiber.roots[0].unmount).toHaveBeenCalledTimes(1);
+    } finally {
+      htmlElement.prototype.getBoundingClientRect = originalRect;
+      globalThis.ResizeObserver = originalObserver;
+      dom.restore();
+    }
+  });
 });

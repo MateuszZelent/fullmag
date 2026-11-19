@@ -113,7 +113,7 @@ pub async fn get_mesh_summary(
         revision: snapshot.mesh_revision,
         mesh_summary: mesh_workspace.get("mesh_summary").cloned(),
         mesh_quality_summary: mesh_workspace.get("mesh_quality_summary").cloned(),
-        effective_airbox_target: mesh_workspace.get("effective_airbox_target").cloned(),
+        effective_airbox_target: effective_airbox_target(mesh_workspace, snapshot.fem_mesh.as_deref()),
         effective_per_object_targets: mesh_workspace.get("effective_per_object_targets").cloned(),
     };
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
@@ -144,6 +144,46 @@ pub async fn get_mesh_capabilities(
     }))
 }
 
+/// Advertise the session's own lane, the one lane this runtime is known to
+/// mesh for. Device and precision are published only once resolved; other
+/// lanes stay unpublished, which the mesh editor treats as informational
+/// rather than as a rejection. Workspace-published entries take precedence.
+fn insert_session_lane_capabilities(
+    snapshot: &SessionStateResponse,
+    projected: &mut serde_json::Map<String, Value>,
+) {
+    let session = &snapshot.session;
+    let backend = session
+        .resolved_backend
+        .as_deref()
+        .unwrap_or(session.requested_backend.as_str())
+        .to_ascii_lowercase();
+    let discretization = if backend.contains("fem") {
+        Some("fem")
+    } else if backend.contains("fdm") {
+        Some("fdm")
+    } else {
+        None
+    };
+    if let Some(discretization) = discretization {
+        projected
+            .entry(discretization.to_string())
+            .or_insert_with(|| json!({"status": "supported", "reason": "Session discretization lane."}));
+    }
+    if let (Some(device), Some(precision)) = (
+        session.resolved_device.as_deref(),
+        session.resolved_precision.as_deref(),
+    ) {
+        for key in [device.to_ascii_lowercase(), precision.to_ascii_lowercase()] {
+            if matches!(key.as_str(), "cpu" | "gpu" | "single" | "double") {
+                projected.entry(key).or_insert_with(|| {
+                    json!({"status": "supported", "reason": "Resolved session execution lane."})
+                });
+            }
+        }
+    }
+}
+
 fn projected_mesh_capabilities(
     snapshot: &SessionStateResponse,
     mesh_workspace: &Value,
@@ -156,6 +196,7 @@ fn projected_mesh_capabilities(
     for id in MIXED_P1_MESH_FEATURE_CAPABILITY_IDS {
         projected.remove(id);
     }
+    insert_session_lane_capabilities(snapshot, &mut projected);
     let feature = |id: &str| {
         snapshot
             .capabilities
@@ -245,7 +286,7 @@ pub async fn get_mesh_semantics(
         .map(|mesh| MeshSolverMeshResource {
             mesh_name: mesh.mesh_name.clone(),
             mesh_id: mesh.mesh_id.clone(),
-            topology_fingerprint: fullmag_runner::fem_mesh_topology_fingerprint(mesh),
+            topology_fingerprint: mesh.topology_fingerprint().to_owned(),
             generation_id: mesh.generation_id.clone(),
             domain_mesh_mode: mesh.domain_mesh_mode.clone(),
             object_segment_count: mesh.object_segments.len() as u32,
@@ -261,7 +302,8 @@ pub async fn get_mesh_semantics(
             .as_ref()
             .map(|workspace| MeshBuildDiagnosticsResource {
                 mesh_quality_summary: workspace.get("mesh_quality_summary").cloned(),
-                mesh_statistics: workspace.get("mesh_statistics").cloned(),
+                mesh_statistics: workspace_mesh_statistics(workspace, snapshot.fem_mesh.as_deref())
+                    .cloned(),
                 last_build_summary: workspace.get("last_build_summary").cloned(),
                 mesh_pipeline_status: workspace.get("mesh_pipeline_status").cloned(),
                 last_build_error: workspace
@@ -314,7 +356,7 @@ pub async fn get_mesh_active_build(
         policy_diff: mesh_build_policy_diff(mesh_workspace),
         active_build: mesh_workspace.get("active_build").cloned(),
         mesh_pipeline_status: mesh_workspace.get("mesh_pipeline_status").cloned(),
-        effective_airbox_target: mesh_workspace.get("effective_airbox_target").cloned(),
+        effective_airbox_target: effective_airbox_target(mesh_workspace, snapshot.fem_mesh.as_deref()),
         effective_per_object_targets: mesh_workspace.get("effective_per_object_targets").cloned(),
         last_build_summary: mesh_workspace.get("last_build_summary").cloned(),
         shared_domain_build_report: typed_shared_domain_build_report(&snapshot, mesh_workspace),
@@ -551,7 +593,7 @@ pub async fn get_mesh_last_successful_build(
         source_scene_revision: provenance.source_scene_revision,
         geometry_realization_revision: provenance.geometry_realization_revision,
         last_success: mesh_workspace.get("last_build_summary").cloned(),
-        effective_airbox_target: mesh_workspace.get("effective_airbox_target").cloned(),
+        effective_airbox_target: effective_airbox_target(mesh_workspace, snapshot.fem_mesh.as_deref()),
         effective_per_object_targets: mesh_workspace.get("effective_per_object_targets").cloned(),
         last_build_error: mesh_workspace
             .get("last_build_error")
@@ -630,10 +672,11 @@ pub async fn replace_mesh_universe_config(
     let mut scene =
         crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
             .await?;
+    // The declared universe and the universe mesh policy are one authored
+    // value; the scene lowering rejects a document where they differ, so a
+    // second Airbox edit must update both (as the authoring routes do).
     scene.study.universe_mesh = Some(config.clone());
-    if scene.universe.is_none() {
-        scene.universe = Some(config.clone());
-    }
+    scene.universe = Some(config.clone());
     let committed =
         crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
             .await?;
@@ -677,7 +720,8 @@ pub async fn get_mesh_universe_report(
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
     let report = Some(json!({
         "config": current_universe_mesh_config(scene),
-        "effective_airbox_target": mesh_workspace.get("effective_airbox_target").cloned().unwrap_or(Value::Null),
+        "effective_airbox_target": effective_airbox_target(mesh_workspace, snapshot.fem_mesh.as_deref()),
+        "shared_interface_node_count": snapshot.fem_mesh.as_deref().and_then(super::airbox_evidence::shared_interface_node_count),
         "mesh_summary": mesh_workspace.get("mesh_summary").cloned().unwrap_or(Value::Null),
         "last_build_summary": mesh_workspace.get("last_build_summary").cloned().unwrap_or(Value::Null),
     }));
@@ -701,7 +745,7 @@ pub async fn get_mesh_universe_quality(
 ) -> Result<Json<MeshUniverseQualityResource>, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
-    let quality = Some(universe_quality(mesh_workspace, snapshot.fem_mesh.as_ref()));
+    let quality = Some(universe_quality(mesh_workspace, snapshot.fem_mesh.as_deref()));
     Ok(Json(MeshUniverseQualityResource {
         revision: snapshot.mesh_revision,
         quality,
@@ -801,7 +845,7 @@ pub async fn get_mesh_shared_domain_report(
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
     let mut report = json!({
         "mesh_summary": mesh_workspace.get("mesh_summary").cloned().unwrap_or(Value::Null),
-        "mesh_statistics": workspace_mesh_statistics(mesh_workspace).cloned().unwrap_or(Value::Null),
+        "mesh_statistics": workspace_mesh_statistics(mesh_workspace, snapshot.fem_mesh.as_deref()).cloned().unwrap_or(Value::Null),
         "mesh_cost_report": mesh_workspace.get("mesh_cost_report").cloned().unwrap_or(Value::Null),
         "mesh_pipeline_status": mesh_workspace.get("mesh_pipeline_status").cloned().unwrap_or(Value::Null),
         "last_build_summary": mesh_workspace.get("last_build_summary").cloned().unwrap_or(Value::Null),
@@ -984,7 +1028,7 @@ pub async fn get_mesh_shared_domain_cross_section_image(
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
     let elements = require_tet4_cross_section_topology(mesh, "cross-section image")?;
-    let expected_topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
+    let expected_topology_fingerprint = mesh.topology_fingerprint().to_owned();
     let artifact = snapshot
         .mesh_workspace
         .as_ref()
@@ -1138,7 +1182,7 @@ pub async fn get_mesh_shared_domain_cross_section_quality(
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
     let elements = require_tet4_cross_section_topology(mesh, "cross-section quality")?;
-    let expected_topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
+    let expected_topology_fingerprint = mesh.topology_fingerprint().to_owned();
     let artifact = snapshot
         .mesh_workspace
         .as_ref()
@@ -1235,7 +1279,7 @@ pub async fn get_mesh_shared_domain_quality_data(
     let expected_topology_fingerprint = snapshot
         .fem_mesh
         .as_ref()
-        .map(fullmag_runner::fem_mesh_topology_fingerprint);
+        .map(|mesh| mesh.topology_fingerprint().to_owned());
     let Some(artifact) =
         read_mesh_quality_data_artifact(mesh_workspace, expected_topology_fingerprint.as_deref())?
     else {
@@ -1532,24 +1576,30 @@ pub async fn get_mesh_quality_gates(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<MeshQualityGatesResource>, ApiError> {
     let snapshot = current_snapshot(&state).await?;
-    let mesh_workspace = current_mesh_workspace(&snapshot)?;
-    let gates = first_workspace_value(
-        mesh_workspace,
-        &[
-            &["mesh_quality_gates"],
-            &["quality_gates"],
-            &["last_build_summary", "mesh_quality_gates"],
-            &["last_build_summary", "quality_gates"],
-            &["shared_domain_report", "mesh_quality_gates"],
-            &["shared_domain_report", "quality_gates"],
-        ],
-    )
-    .or_else(|| Some(derive_mesh_quality_gates(&snapshot, mesh_workspace)));
-    Ok(Json(MeshQualityGatesResource {
-        revision: snapshot.mesh_revision,
-        gates,
-        mixed_certificate: mixed_certificate_quality_evidence(&snapshot),
-    }))
+    // Certificate evidence re-validates every cell on a miss; keep that walk
+    // off the async workers that serve every other request.
+    tokio::task::spawn_blocking(move || {
+        let mesh_workspace = current_mesh_workspace(&snapshot)?;
+        let gates = first_workspace_value(
+            mesh_workspace,
+            &[
+                &["mesh_quality_gates"],
+                &["quality_gates"],
+                &["last_build_summary", "mesh_quality_gates"],
+                &["last_build_summary", "quality_gates"],
+                &["shared_domain_report", "mesh_quality_gates"],
+                &["shared_domain_report", "quality_gates"],
+            ],
+        )
+        .or_else(|| Some(derive_mesh_quality_gates(&snapshot, mesh_workspace)));
+        Ok(Json(MeshQualityGatesResource {
+            revision: snapshot.mesh_revision,
+            gates,
+            mixed_certificate: mixed_certificate_quality_evidence(&snapshot),
+        }))
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("mesh quality gate task failed: {error}")))?
 }
 
 // Both wire versions must supply the same complete numerical quality evidence.
@@ -1568,6 +1618,17 @@ struct MixedCertificateQualityView {
 }
 
 fn mixed_certificate_quality_evidence(
+    snapshot: &SessionStateResponse,
+) -> MeshMixedCertificateQualityEvidenceResource {
+    match snapshot.fem_mesh.as_ref() {
+        Some(mesh) => mesh.mixed_certificate_evidence(snapshot.mesh_revision, || {
+            compute_mixed_certificate_quality_evidence(snapshot)
+        }),
+        None => compute_mixed_certificate_quality_evidence(snapshot),
+    }
+}
+
+fn compute_mixed_certificate_quality_evidence(
     snapshot: &SessionStateResponse,
 ) -> MeshMixedCertificateQualityEvidenceResource {
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
@@ -1989,8 +2050,10 @@ fn periodic_pairs_resource_from_artifact(
     let artifact_source_scene_revision = value.get("source_scene_revision").and_then(Value::as_u64);
     let current_scene_revision = snapshot.scene_document.as_ref().map(|scene| scene.revision);
     let expected_build_scene_revision = mesh_build_provenance(snapshot).source_scene_revision;
+    let qualified_geometry = snapshot.scene_document.as_ref().is_some_and(|scene|
+        bound_mesh_is_current(snapshot, scene) == Some(true));
     let artifact_stale_reason = match current_scene_revision {
-        Some(current) if artifact_source_scene_revision != Some(current) => Some(format!(
+        Some(current) if !qualified_geometry && artifact_source_scene_revision != Some(current) => Some(format!(
             "periodic pairs artifact source scene revision {:?} does not match current scene revision {}",
             artifact_source_scene_revision, current
         )),
@@ -2118,92 +2181,13 @@ pub async fn get_mesh_shared_domain_manifest(
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
             let provenance = mesh_build_provenance(&snapshot);
-            let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
-            let topology_truth = mesh
-                .build_report
-                .as_ref()
-                .and_then(|report| typed_shared_domain_build_report_from_ir(&snapshot, report));
-            let facet_index =
-                crate::router_v2::handlers::shared::FacetGlobalOrdinalIndex::new(&mesh.facets);
-            let body = MeshSharedDomainManifestResource {
-                revision: snapshot.mesh_revision,
-                source_scene_revision: provenance.source_scene_revision,
-                geometry_realization_revision: provenance.geometry_realization_revision,
-                mesh_name: mesh.mesh_name.clone(),
-                mesh_id: mesh.mesh_id.clone(),
-                topology_fingerprint: topology_hash.clone(),
-                topology_schema_version: Some(2),
-                topology_counts: Some(mesh_topology_counts(mesh)),
-                element_counts_by_type: topology_truth
-                    .as_ref()
-                    .map(|truth| truth.element_counts_by_type.clone())
-                    .unwrap_or_default(),
-                facet_counts_by_type_and_role: topology_truth
-                    .as_ref()
-                    .map(|truth| truth.facet_counts_by_type_and_role.clone())
-                    .unwrap_or_default(),
-                requested_layered_policy: topology_truth
-                    .as_ref()
-                    .and_then(|truth| truth.requested_layered_policy.clone()),
-                resolved_layered_policy: topology_truth
-                    .as_ref()
-                    .and_then(|truth| truth.resolved_layered_policy.clone()),
-                mixed_layer_topology_certificate: topology_truth
-                    .as_ref()
-                    .and_then(|truth| truth.mixed_layer_topology_certificate.clone()),
-                mixed_layer_topology_certificate_v2: topology_truth
-                    .as_ref()
-                    .and_then(|truth| truth.mixed_layer_topology_certificate_v2.clone()),
-                mixed_topology_provenance: topology_truth
-                    .as_ref()
-                    .and_then(|truth| truth.mixed_topology_provenance.clone()),
-                gmsh_version: topology_truth
-                    .as_ref()
-                    .and_then(|truth| truth.gmsh_version.clone()),
-                fallbacks_triggered: topology_truth
-                    .as_ref()
-                    .and_then(|truth| truth.fallbacks_triggered.clone()),
-                generation_id: mesh.generation_id.clone(),
-                domain_mesh_mode: mesh.domain_mesh_mode.clone(),
-                object_segments: mesh
-                    .object_segments
-                    .iter()
-                    .map(MeshObjectSegmentResource::from)
-                    .collect(),
-                mesh_parts: mesh
-                    .mesh_parts
-                    .iter()
-                    .map(|part| {
-                        let mut resource = MeshPartResource::from(part);
-                        resource.element_counts_by_type = mesh_part_family_counts(mesh, part);
-                        if let Some((resolved_indices, surface_faces)) =
-                            crate::router_v2::handlers::shared::mesh_part_surface_faces_with_indices(
-                                mesh,
-                                part,
-                                &facet_index,
-                            )
-                        {
-                            resource.boundary_face_indices = resolved_indices;
-                            resource.surface_faces = surface_faces;
-                        }
-                        resource.surface_node_indices =
-                            (!resource.surface_faces.is_empty()).then(|| {
-                                crate::router_v2::handlers::shared::surface_node_indices_from_faces(
-                                    &resource.surface_faces,
-                                )
-                            });
-                        resource
-                    })
-                    .collect(),
-                regions: snapshot
-                    .scene_document
-                    .as_ref()
-                    .map(|scene| mesh_manifest_regions(scene, mesh))
-                    .unwrap_or_default(),
-            };
+            let topology_hash = mesh.topology_fingerprint().to_owned();
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+            let validated_for_scene_revision = snapshot.scene_document.as_ref().and_then(|scene| {
+                (bound_mesh_is_current(&snapshot, scene) == Some(true)).then_some(scene.revision)
+            });
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-                "mesh-shared-domain-manifest:{generation_id}:{topology_hash}:{}:{}:{}",
+                "mesh-shared-domain-manifest:{generation_id}:{topology_hash}:{}:{}:{}:{validated_for_scene_revision:?}",
                 snapshot.mesh_revision,
                 provenance
                     .source_scene_revision
@@ -2215,9 +2199,97 @@ pub async fn get_mesh_shared_domain_manifest(
                     .unwrap_or_else(|| "unknown".to_string())
             ));
             crate::validate_current_live_request_context(&state, &request_context).await?;
+            // Revalidation is the common case; skip the per-part surface
+            // extraction when the client already holds this manifest.
             Ok(
-                crate::router_v2::handlers::shared::conditional_json_response(
-                    &headers, &etag, &body,
+                crate::router_v2::handlers::shared::conditional_json_response_with(
+                    &headers,
+                    &etag,
+                    || {
+                        let topology_truth = mesh
+                            .build_report
+                            .as_ref()
+                            .and_then(|report| typed_shared_domain_build_report_from_ir(&snapshot, report));
+                        let facet_index =
+                            crate::router_v2::handlers::shared::FacetGlobalOrdinalIndex::new(&mesh.facets);
+                        MeshSharedDomainManifestResource {
+                            revision: snapshot.mesh_revision,
+                            source_scene_revision: provenance.source_scene_revision,
+                            validated_for_scene_revision,
+                            geometry_realization_revision: provenance.geometry_realization_revision,
+                            mesh_name: mesh.mesh_name.clone(),
+                            mesh_id: mesh.mesh_id.clone(),
+                            topology_fingerprint: topology_hash.clone(),
+                            topology_schema_version: Some(2),
+                            topology_counts: Some(mesh_topology_counts(mesh)),
+                            element_counts_by_type: topology_truth
+                                .as_ref()
+                                .map(|truth| truth.element_counts_by_type.clone())
+                                .unwrap_or_default(),
+                            facet_counts_by_type_and_role: topology_truth
+                                .as_ref()
+                                .map(|truth| truth.facet_counts_by_type_and_role.clone())
+                                .unwrap_or_default(),
+                            requested_layered_policy: topology_truth
+                                .as_ref()
+                                .and_then(|truth| truth.requested_layered_policy.clone()),
+                            resolved_layered_policy: topology_truth
+                                .as_ref()
+                                .and_then(|truth| truth.resolved_layered_policy.clone()),
+                            mixed_layer_topology_certificate: topology_truth
+                                .as_ref()
+                                .and_then(|truth| truth.mixed_layer_topology_certificate.clone()),
+                            mixed_layer_topology_certificate_v2: topology_truth
+                                .as_ref()
+                                .and_then(|truth| truth.mixed_layer_topology_certificate_v2.clone()),
+                            mixed_topology_provenance: topology_truth
+                                .as_ref()
+                                .and_then(|truth| truth.mixed_topology_provenance.clone()),
+                            gmsh_version: topology_truth
+                                .as_ref()
+                                .and_then(|truth| truth.gmsh_version.clone()),
+                            fallbacks_triggered: topology_truth
+                                .as_ref()
+                                .and_then(|truth| truth.fallbacks_triggered.clone()),
+                            generation_id: mesh.generation_id.clone(),
+                            domain_mesh_mode: mesh.domain_mesh_mode.clone(),
+                            object_segments: mesh
+                                .object_segments
+                                .iter()
+                                .map(MeshObjectSegmentResource::from)
+                                .collect(),
+                            mesh_parts: mesh
+                                .mesh_parts
+                                .iter()
+                                .map(|part| {
+                                    let mut resource = MeshPartResource::from(part);
+                                    resource.element_counts_by_type = mesh_part_family_counts(mesh, part);
+                                    if let Some((resolved_indices, surface_faces)) =
+                                        crate::router_v2::handlers::shared::mesh_part_surface_faces_with_indices(
+                                            mesh,
+                                            part,
+                                            &facet_index,
+                                        )
+                                    {
+                                        resource.boundary_face_indices = resolved_indices;
+                                        resource.surface_faces = surface_faces;
+                                    }
+                                    resource.surface_node_indices =
+                                        (!resource.surface_faces.is_empty()).then(|| {
+                                            crate::router_v2::handlers::shared::surface_node_indices_from_faces(
+                                                &resource.surface_faces,
+                                            )
+                                        });
+                                    resource
+                                })
+                                .collect(),
+                            regions: snapshot
+                                .scene_document
+                                .as_ref()
+                                .map(|scene| mesh_manifest_regions(scene, mesh))
+                                .unwrap_or_default(),
+                        }
+                    },
                 ),
             )
         }
@@ -2312,7 +2384,7 @@ pub async fn get_mesh_shared_domain_topology(
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
-            let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
+            let topology_hash = mesh.topology_fingerprint().to_owned();
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
                 "mesh-shared-domain-topology:{generation_id}:{topology_hash}:{}",
                 snapshot.mesh_revision,
@@ -2463,6 +2535,14 @@ pub async fn get_mesh_object_report(
         .find(|entry| entry.id == object_id)
         .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
+    let source_mesh = field_only_source_payload(&snapshot, &object_id)?;
+    let last_build_summary = source_mesh.as_ref().map(|mesh| json!({
+        "source": "pinned_current_source", "mesh_id": mesh.mesh_id,
+        "generation_id": mesh.generation_id, "node_count": mesh.nodes.len(),
+        "element_count": mesh.cells.len(), "boundary_face_count": mesh.facets.len(),
+        "source_scene_revision": mesh_source_scene_revision(&snapshot),
+        "markers": mesh.element_markers.iter().copied().collect::<BTreeSet<_>>(),
+    })).unwrap_or_else(|| mesh_workspace.get("last_build_summary").cloned().unwrap_or(Value::Null));
     let report = Some(json!({
         "object_id": object.id,
         "object_name": object.name,
@@ -2472,7 +2552,7 @@ pub async fn get_mesh_object_report(
             .and_then(|targets| targets.get(object_id.as_str()))
             .cloned()
             .unwrap_or(Value::Null),
-        "last_build_summary": mesh_workspace.get("last_build_summary").cloned().unwrap_or(Value::Null),
+        "last_build_summary": last_build_summary,
     }));
     Ok(Json(MeshObjectReportResource {
         revision: snapshot.mesh_revision,
@@ -2505,7 +2585,7 @@ pub async fn get_mesh_object_quality(
         .find(|entry| entry.id == object_id)
         .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
-    let quality = object_quality(&snapshot, mesh_workspace, &object_id);
+    let quality = object_quality(&snapshot, mesh_workspace, &object_id)?;
     Ok(Json(MeshObjectQualityResource {
         revision: snapshot.mesh_revision,
         object_id,
@@ -2537,7 +2617,7 @@ pub async fn get_mesh_region_quality(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active FEM mesh"))?;
     let null_workspace = Value::Null;
-    let mesh_workspace = snapshot.mesh_workspace.as_ref().unwrap_or(&null_workspace);
+    let mesh_workspace = snapshot.mesh_workspace.as_deref().unwrap_or(&null_workspace);
     let membership =
         crate::router_v2::handlers::data::mesh_region_membership::build_mesh_region_membership(
             scene,
@@ -2618,13 +2698,18 @@ pub async fn get_mesh_object_topology(
     Path(object_id): Path<String>,
 ) -> Result<axum::response::Response, ApiError> {
     let (snapshot, request_context) = current_snapshot_with_context(&state).await?;
-    match snapshot.fem_mesh.as_ref() {
+    let source_mesh = field_only_source_payload(&snapshot, &object_id)?;
+    match source_mesh.as_ref().or(snapshot.fem_mesh.as_deref()) {
         Some(mesh) => {
-            let object_mesh = subset_object_mesh(mesh, &object_id)
-                .map_err(ApiError::conflict)?
-                .ok_or_else(|| {
-                    ApiError::not_found(format!("object mesh not found: {object_id}"))
-                })?;
+            let object_mesh = if source_mesh.is_some() {
+                // All electrical regions and both sides of the source cut
+                // belong to this object; the first part is not the union.
+                mesh.clone()
+            } else {
+                subset_object_mesh(mesh, &object_id)
+                    .map_err(ApiError::conflict)?
+                    .ok_or_else(|| ApiError::not_found(format!("object mesh not found: {object_id}")))?
+            };
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&object_mesh);
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
@@ -2742,7 +2827,7 @@ pub async fn get_mesh_histogram_bin_elements(
     let quality_values = if let Some(quality_metric) = metric.quality_metric() {
         let mesh_workspace = current_mesh_workspace(&snapshot)?;
         let expected_topology_fingerprint =
-            Some(fullmag_runner::fem_mesh_topology_fingerprint(mesh));
+            Some(mesh.topology_fingerprint().to_owned());
         let Some(artifact) = read_mesh_quality_data_artifact(
             mesh_workspace,
             expected_topology_fingerprint.as_deref(),
@@ -2993,7 +3078,7 @@ fn current_mesh_workspace(snapshot: &SessionStateResponse) -> Result<&Value, Api
         std::sync::LazyLock::new(|| Value::Object(serde_json::Map::new()));
     Ok(snapshot
         .mesh_workspace
-        .as_ref()
+        .as_deref()
         .unwrap_or(&EMPTY_MESH_WORKSPACE))
 }
 
@@ -3032,11 +3117,23 @@ fn first_workspace_u128(root: &Value, paths: &[&[&str]]) -> Option<u128> {
     })
 }
 
-fn workspace_mesh_statistics(mesh_workspace: &Value) -> Option<&Value> {
-    workspace_value_at(mesh_workspace, &["mesh_statistics"]).or_else(|| {
-        workspace_value_at(mesh_workspace, &["last_build_summary", "mesh_statistics"])
-            .filter(|value| !value.is_null())
-    })
+fn workspace_mesh_statistics<'a>(
+    mesh_workspace: &'a Value,
+    mesh: Option<&'a FemMeshPayload>,
+) -> Option<&'a Value> {
+    // Accepted preparation publishes its evidence with the canonical mesh,
+    // independently of the optional interactive workspace diagnostics.
+    mesh.and_then(|mesh| mesh.build_report.as_ref())
+        .and_then(|report| report.mesh_statistics.as_ref())
+        .filter(|value| !value.is_null())
+        .or_else(|| {
+            workspace_value_at(mesh_workspace, &["mesh_statistics"])
+                .filter(|value| !value.is_null())
+        })
+        .or_else(|| {
+            workspace_value_at(mesh_workspace, &["last_build_summary", "mesh_statistics"])
+                .filter(|value| !value.is_null())
+        })
 }
 
 fn derive_mesh_quality_gates(snapshot: &SessionStateResponse, mesh_workspace: &Value) -> Value {
@@ -3076,7 +3173,7 @@ fn derive_mesh_quality_gates(snapshot: &SessionStateResponse, mesh_workspace: &V
             }
         ],
         "mesh_quality_summary": mesh_workspace.get("mesh_quality_summary").cloned().unwrap_or(Value::Null),
-        "mesh_statistics": workspace_mesh_statistics(mesh_workspace).cloned().unwrap_or(Value::Null)
+        "mesh_statistics": workspace_mesh_statistics(mesh_workspace, snapshot.fem_mesh.as_deref()).cloned().unwrap_or(Value::Null)
     })
 }
 
@@ -3242,10 +3339,11 @@ fn filtered_worst_entries(value: Option<&Value>, marker: u32) -> Vec<Value> {
 
 fn scoped_mesh_statistics(
     mesh_workspace: &Value,
+    mesh: Option<&FemMeshPayload>,
     marker: Option<u32>,
     kind: Option<&str>,
 ) -> Option<Value> {
-    let mesh_statistics = workspace_mesh_statistics(mesh_workspace)?;
+    let mesh_statistics = workspace_mesh_statistics(mesh_workspace, mesh)?;
     let scopes = mesh_statistics.get("scopes").and_then(Value::as_array)?;
     let scope = scopes.iter().find(|scope| {
         marker.is_some_and(|marker| scope_marker(scope) == Some(marker))
@@ -3338,6 +3436,27 @@ fn merge_mesh_scope_size_statistics(
     mesh: Option<&FemMeshPayload>,
     marker: u32,
 ) {
+    // New publications already contain the bounded geometry summaries. Keep
+    // legacy reconstruction off the request path for those meshes.
+    let complete = quality.get("global").is_some_and(|global| {
+        global.get("marker").and_then(Value::as_u64) == Some(u64::from(marker))
+            && ["volume", "characteristic_size", "edge_length"]
+                .iter()
+                .all(|metric| {
+                    global.get(*metric).is_some_and(|statistics| {
+                        ["min", "max", "mean", "std"].iter().all(|field| {
+                            statistics.get(*field).and_then(Value::as_f64)
+                                .is_some_and(f64::is_finite)
+                        }) && statistics.get("histogram").and_then(Value::as_array)
+                            .is_some_and(|bins| !bins.is_empty())
+                    })
+                })
+            && global.get("volume").and_then(|value| value.get("total"))
+                .and_then(Value::as_f64).is_some_and(f64::is_finite)
+    });
+    if complete {
+        return;
+    }
     let Some(size_statistics) = mesh.and_then(|mesh| mesh_scope_size_statistics(mesh, marker))
     else {
         return;
@@ -3385,28 +3504,25 @@ fn merge_mesh_scope_size_statistics(
 }
 
 fn mesh_scope_size_statistics(mesh: &FemMeshPayload, marker: u32) -> Option<Value> {
+    mesh_size_statistics(mesh, Some(marker))
+}
+
+fn mesh_size_statistics(mesh: &FemMeshPayload, marker: Option<u32>) -> Option<Value> {
     if mesh.element_markers.len() != mesh.cell_count() {
         return None;
     }
-    let elements = mesh.require_tet4_elements().ok()?;
-
     let mut volumes = Vec::new();
     let mut characteristic_sizes = Vec::new();
     let mut edge_lengths = Vec::new();
 
-    for (element_index, element) in elements.iter().enumerate() {
-        if mesh.element_markers[element_index] != marker {
+    for element_index in 0..mesh.cell_count() {
+        if marker.is_some_and(|marker| mesh.element_markers[element_index] != marker) {
             continue;
         }
-        let Some(tet) = element_nodes(mesh, element) else {
-            continue;
-        };
-        edge_lengths.extend(tet_edge_lengths(tet));
-        let volume = tet_volume(tet).abs();
-        if volume > 0.0 && volume.is_finite() {
-            volumes.push(volume);
-            characteristic_sizes.push((volume * 6.0 * 2.0_f64.sqrt()).cbrt());
-        }
+        let geometry = super::mesh_cell_geometry::cell_geometry(mesh, element_index)?;
+        edge_lengths.extend_from_slice(&geometry.edges[..geometry.edge_count]);
+        volumes.push(geometry.volume);
+        characteristic_sizes.push((geometry.volume * 6.0 * 2.0_f64.sqrt()).cbrt());
     }
 
     if volumes.is_empty() && edge_lengths.is_empty() {
@@ -3414,17 +3530,28 @@ fn mesh_scope_size_statistics(mesh: &FemMeshPayload, marker: u32) -> Option<Valu
     }
 
     let element_count = volumes.len();
+    let mut volume_statistics = distribution_statistics(&volumes);
+    volume_statistics["total"] = json!(volumes.iter().sum::<f64>());
+    volume_statistics["definition"] = json!("absolute_canonical_tetrahedral_decomposition");
+    volume_statistics["unit"] = json!("m^3");
+    let mut size_statistics = distribution_statistics(&characteristic_sizes);
+    size_statistics["definition"] = json!("volume_equivalent_regular_tetrahedron");
+    size_statistics["unit"] = json!("m");
+    let mut edge_statistics = distribution_statistics(&edge_lengths);
+    edge_statistics["definition"] = json!("canonical_edges_per_cell");
+    edge_statistics["unit"] = json!("m");
 
     Some(json!({
-        "scope_id": format!("marker:{marker}"),
-        "kind": if marker == 0 { "airbox" } else { "domain" },
-        "label": if marker == 0 { "Airbox".to_string() } else { format!("Domain {marker}") },
-        "role": if marker == 0 { "air" } else { "domain" },
+        "scope_id": marker.map(|marker| format!("marker:{marker}")).unwrap_or_else(|| "mesh".into()),
+        "kind": if marker == Some(0) { "airbox" } else { "domain" },
+        "label": match marker { Some(0) => "Airbox".to_string(), Some(marker) => format!("Domain {marker}"), None => "Mesh".into() },
+        "role": if marker == Some(0) { "air" } else { "domain" },
         "marker": marker,
         "element_count": element_count,
-        "characteristic_size": distribution_statistics(&characteristic_sizes),
-        "edge_length": distribution_statistics(&edge_lengths),
-        "volume": distribution_statistics(&volumes),
+        "geometry_source": "canonical_cell_decomposition",
+        "characteristic_size": size_statistics,
+        "edge_length": edge_statistics,
+        "volume": volume_statistics,
     }))
 }
 
@@ -3674,11 +3801,11 @@ fn tet_edge_lengths(tet: [[f64; 3]; 4]) -> [f64; 6] {
     ]
 }
 
-fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
+pub(super) fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }
 
-fn tet_volume(tet: [[f64; 3]; 4]) -> f64 {
+pub(super) fn tet_volume(tet: [[f64; 3]; 4]) -> f64 {
     let a = sub(tet[1], tet[0]);
     let b = sub(tet[2], tet[0]);
     let c = sub(tet[3], tet[0]);
@@ -3737,7 +3864,7 @@ fn size_histogram_bins(values: &[f64], bin_count: usize) -> Vec<Value> {
         return Vec::new();
     }
     if (edges[edges.len() - 1] - edges[0]).abs()
-        <= f64::EPSILON * edges[edges.len() - 1].abs().max(1.0)
+        <= f64::EPSILON * edges[edges.len() - 1].abs().max(edges[0].abs())
     {
         return vec![
             json!({ "lo": edges[0], "hi": edges[edges.len() - 1], "count": values.len() }),
@@ -3747,13 +3874,7 @@ fn size_histogram_bins(values: &[f64], bin_count: usize) -> Vec<Value> {
     let bins = edges.len() - 1;
     let mut counts = vec![0usize; bins];
     for value in values {
-        let mut bin_index = bins - 1;
-        for index in 0..bins {
-            if *value < edges[index + 1] || index == bins - 1 {
-                bin_index = index;
-                break;
-            }
-        }
+        let bin_index = edges[1..].partition_point(|edge| *edge <= *value).min(bins - 1);
         counts[bin_index] += 1;
     }
 
@@ -3779,7 +3900,7 @@ fn size_histogram_edges(values: &[f64], bin_count: usize) -> Vec<f64> {
     if !min.is_finite() || !max.is_finite() {
         return Vec::new();
     }
-    if (max - min).abs() <= f64::EPSILON * max.abs().max(1.0) {
+    if (max - min).abs() <= f64::EPSILON * max.abs().max(min.abs()) {
         return vec![min, max];
     }
 
@@ -3836,11 +3957,37 @@ fn object_marker_from_mesh(mesh: Option<&FemMeshPayload>, object_id: &str) -> Op
     }
 }
 
+fn effective_airbox_target(mesh_workspace: &Value, mesh: Option<&FemMeshPayload>) -> Option<Value> {
+    [
+        &["effective_airbox_target"][..],
+        &["last_build_summary", "effective_airbox_target"],
+        &[
+            "last_build_summary",
+            "shared_domain_build_report",
+            "effective_airbox_target",
+        ],
+        &["shared_domain_build_report", "effective_airbox_target"],
+    ]
+    .iter()
+    .find_map(|path| {
+        workspace_value_at(mesh_workspace, path)
+            .filter(|value| value.is_object())
+            .cloned()
+    })
+    .or_else(|| {
+        mesh?.build_report
+            .as_ref()?
+            .effective_airbox_target
+            .as_ref()
+            .and_then(|target| serde_json::to_value(target).ok())
+    })
+}
+
 fn universe_quality(mesh_workspace: &Value, mesh: Option<&FemMeshPayload>) -> Value {
     let per_domain_quality = mesh
         .and_then(|mesh| mesh.per_domain_quality.get(&0))
         .and_then(|quality| serde_json::to_value(quality).ok());
-    let mut quality = scoped_mesh_statistics(mesh_workspace, Some(0), Some("airbox"))
+    let mut quality = scoped_mesh_statistics(mesh_workspace, mesh, Some(0), Some("airbox"))
         .or_else(|| {
             per_domain_quality
                 .as_ref()
@@ -3852,10 +3999,7 @@ fn universe_quality(mesh_workspace: &Value, mesh: Option<&FemMeshPayload>) -> Va
     merge_quality_field(
         &mut quality,
         "effective_airbox_target",
-        mesh_workspace
-            .get("effective_airbox_target")
-            .cloned()
-            .unwrap_or(Value::Null),
+        effective_airbox_target(mesh_workspace, mesh).unwrap_or(Value::Null),
     );
     merge_quality_field(
         &mut quality,
@@ -3870,6 +4014,34 @@ fn universe_quality(mesh_workspace: &Value, mesh: Option<&FemMeshPayload>) -> Va
         "per_domain_quality",
         per_domain_quality.unwrap_or(Value::Null),
     );
+    if mesh.is_some_and(|mesh| !super::airbox_evidence::airbox_gamma_supported(mesh)) {
+        // Historical Gmsh publications can contain numeric gamma placeholders
+        // for unsupported cell families. Do not expose them as measurements.
+        let unavailable = json!({
+            "status": "unavailable",
+            "reason": "Gmsh gamma is undefined for pyramid and hexahedron cells."
+        });
+        if let Some(global) = quality.get_mut("global").and_then(Value::as_object_mut) {
+            global.insert("gamma".to_string(), unavailable.clone());
+        }
+        if let Some(scopes) = quality.get_mut("scopes").and_then(Value::as_array_mut) {
+            for scope in scopes {
+                if let Some(scope) = scope.as_object_mut() {
+                    scope.insert("gamma".to_string(), unavailable.clone());
+                }
+            }
+        }
+        if let Some(legacy) = quality
+            .get_mut("per_domain_quality")
+            .and_then(Value::as_object_mut)
+        {
+            for key in ["gamma_min", "gamma_mean", "gamma_histogram"] {
+                legacy.insert(key.to_string(), Value::Null);
+            }
+        }
+    }
+    let gates = super::airbox_evidence::airbox_quality_gates(&quality, mesh);
+    merge_quality_field(&mut quality, "airbox_quality_gates", gates);
     quality
 }
 
@@ -3877,7 +4049,24 @@ fn object_quality(
     snapshot: &SessionStateResponse,
     mesh_workspace: &Value,
     object_id: &str,
-) -> Option<Value> {
+) -> Result<Option<Value>, ApiError> {
+    if let Some(source) = field_only_source_payload(snapshot, object_id)? {
+        let mut global = mesh_size_statistics(&source, None).unwrap_or_else(|| json!({}));
+        // Shape-quality summaries belong to individual electrical markers.
+        // Percentiles cannot be combined without the per-cell measurements.
+        global["scope_id"] = json!(format!("object:{object_id}"));
+        global["kind"] = json!("object");
+        global["role"] = json!("conductor");
+        global["label"] = json!(object_id);
+        return Ok(Some(json!({
+            "quality_source": "pinned_current_source", "global": global,
+            "markers": source.element_markers.iter().copied().collect::<BTreeSet<_>>(),
+            "per_domain_quality": if source.per_domain_quality.len() == 1 {
+                source.per_domain_quality.values().next().and_then(|quality| serde_json::to_value(quality).ok())
+            } else { None },
+            "per_marker_quality": source.per_domain_quality,
+        })));
+    }
     let effective_target = mesh_workspace
         .get("effective_per_object_targets")
         .and_then(|targets| targets.get(object_id))
@@ -3887,7 +4076,7 @@ fn object_quality(
         .and_then(|target| target.get("marker"))
         .and_then(Value::as_u64)
         .and_then(|marker| u32::try_from(marker).ok())
-        .or_else(|| object_marker_from_mesh(snapshot.fem_mesh.as_ref(), object_id));
+        .or_else(|| object_marker_from_mesh(snapshot.fem_mesh.as_deref(), object_id));
     let per_domain_quality = marker
         .and_then(|marker| {
             snapshot
@@ -3899,7 +4088,9 @@ fn object_quality(
         })
         .and_then(|quality| serde_json::to_value(quality).ok());
     let mut quality = marker
-        .and_then(|marker| scoped_mesh_statistics(mesh_workspace, Some(marker), None))
+        .and_then(|marker| {
+            scoped_mesh_statistics(mesh_workspace, snapshot.fem_mesh.as_deref(), Some(marker), None)
+        })
         .or_else(|| {
             marker.and_then(|marker| {
                 per_domain_quality.as_ref().and_then(|quality| {
@@ -3909,7 +4100,7 @@ fn object_quality(
         })
         .unwrap_or_else(|| json!({}));
     if let Some(marker) = marker {
-        merge_mesh_scope_size_statistics(&mut quality, snapshot.fem_mesh.as_ref(), marker);
+        merge_mesh_scope_size_statistics(&mut quality, snapshot.fem_mesh.as_deref(), marker);
     }
     merge_quality_field(
         &mut quality,
@@ -3926,7 +4117,7 @@ fn object_quality(
         "per_domain_quality",
         per_domain_quality.unwrap_or(Value::Null),
     );
-    Some(quality)
+    Ok(Some(quality))
 }
 
 fn region_quality(
@@ -3954,7 +4145,7 @@ fn region_quality(
         })));
     };
 
-    let expected_topology_fingerprint = Some(fullmag_runner::fem_mesh_topology_fingerprint(mesh));
+    let expected_topology_fingerprint = Some(mesh.topology_fingerprint().to_owned());
     if let Some(artifact) =
         read_mesh_quality_data_artifact(mesh_workspace, expected_topology_fingerprint.as_deref())?
     {
@@ -4094,6 +4285,19 @@ struct MeshBuildProvenance {
 }
 
 fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance {
+    // Field-only preparation owns a source mesh; independent sampling objects
+    // intentionally do not belong to that mesh. Invalid prepared ownership must
+    // not fall back to the all-visible-objects heuristic.
+    let field_only_publication = [snapshot.mesh_workspace.as_ref(), snapshot.metadata.as_ref()]
+        .into_iter().flatten().any(|document|
+            document.pointer("/execution_plan/backend_plan/kind").and_then(Value::as_str)
+                == Some("antenna_field_only"));
+    if field_only_publication {
+        return field_only_source_mesh_for_inspection(snapshot).map(|_| MeshBuildProvenance {
+            source_scene_revision: snapshot.scene_document.as_ref().map(|scene| scene.revision),
+            geometry_realization_revision: None,
+        }).unwrap_or_default();
+    }
     let last_build = snapshot
         .mesh_workspace
         .as_ref()
@@ -4123,6 +4327,101 @@ fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance
 
 pub(crate) fn mesh_source_scene_revision(snapshot: &SessionStateResponse) -> Option<u64> {
     mesh_build_provenance(snapshot).source_scene_revision
+}
+
+fn bound_mesh_is_current(
+    snapshot: &SessionStateResponse,
+    scene: &fullmag_authoring::SceneDocument,
+) -> Option<bool> {
+    crate::live_geometry_mesh_build::bound_geometry_mesh_is_current(snapshot, scene)
+        .or_else(|| crate::live_authored_damping::desktop::published_mesh_is_current(snapshot, scene))
+}
+
+/// Currentness is an independent fact. A qualified mesh can retain its original
+/// build provenance after a compatible edit.
+pub(crate) fn shared_domain_mesh_is_current(
+    snapshot: &SessionStateResponse,
+    scene: &fullmag_authoring::SceneDocument,
+) -> bool {
+    snapshot.fem_mesh.is_some()
+        && bound_mesh_is_current(snapshot, scene)
+            .unwrap_or_else(|| mesh_source_scene_revision(snapshot) == Some(scene.revision))
+}
+
+
+pub(crate) fn prepared_field_only_source_mesh(snapshot: &SessionStateResponse) -> Option<&Value> {
+    let preparation = snapshot.simulation_preparation.as_ref()?;
+    let workspace = snapshot.mesh_workspace.as_ref()?;
+    if preparation.preparation_id.is_empty() || preparation.status != "ready"
+        || workspace["preparation_id"].as_str() != Some(preparation.preparation_id.as_str())
+    { return None; }
+    field_only_source_mesh_binding(snapshot)
+}
+
+// Persistent geometry identity alone never grants live execution readiness.
+pub(crate) fn field_only_source_mesh_binding(snapshot: &SessionStateResponse) -> Option<&Value> {
+    let scene = snapshot.scene_document.as_ref()?;
+    let workspace = snapshot.mesh_workspace.as_ref()?;
+    let mesh = snapshot.fem_mesh.as_ref()?;
+    let plan = workspace.pointer("/execution_plan/backend_plan")?;
+    let metadata_plan = snapshot.metadata.as_ref()?.pointer("/execution_plan/backend_plan")?;
+    if scene.study.requested_backend != "fem"
+        || workspace["schema_version"].as_str()
+            != Some(crate::live_scene_preparation::LIVE_SCENE_PREPARATION_READ_MODEL_SCHEMA)
+        || workspace["status"].as_str() != Some("completed")
+        || workspace["source_scene_revision"].as_u64() != Some(scene.revision)
+        || workspace["preparation_id"].as_str().is_none_or(str::is_empty)
+        || workspace.get("accepted_run_id")
+            .is_some_and(|run| run.as_str() != Some(snapshot.session.run_id.as_str()))
+        || plan["kind"].as_str() != Some("antenna_field_only")
+        || plan["schema_version"].as_str() != Some("antenna_field_only_plan.v1")
+        || mesh.nodes.is_empty() || mesh.cells.is_empty()
+    {
+        return None;
+    }
+    // Both projections were published atomically by the canonical preparation owner.
+    // Compare only its small identity, never deserialize or clone the numerical plan.
+    for key in ["kind", "schema_version", "stage_id", "port_mode_id", "source_object_id"] {
+        let value = plan.get(key)?.as_str()?;
+        if value.is_empty() || metadata_plan.get(key)?.as_str()? != value { return None; }
+    }
+    let generation = mesh.generation_id.as_deref()?;
+    if generation.is_empty() || mesh.mesh_id != format!("{}:{generation}", mesh.mesh_name) {
+        return None;
+    }
+    if plan.pointer("/field_sampling/domain") != metadata_plan.pointer("/field_sampling/domain")
+        || plan.pointer("/field_sampling/carrier_kind") != metadata_plan.pointer("/field_sampling/carrier_kind")
+    { return None; }
+    let global = plan.pointer("/field_sampling/domain/kind").and_then(Value::as_str) == Some("global");
+    if global {
+        let binding = snapshot.metadata.as_ref()?.get("antenna_domain_publication")?;
+        if binding["mesh_generation_id"].as_str() != Some(generation)
+            || binding["mesh_name"].as_str() != Some(mesh.mesh_name.as_str())
+            || binding.get("sampling_topology_digest") != plan.pointer("/field_sampling/topology_digest")
+            || plan.pointer("/field_sampling/topology_digest") != metadata_plan.pointer("/field_sampling/topology_digest")
+        { return None; }
+    } else if plan.pointer("/source_mesh/mesh_name").and_then(Value::as_str) != Some(mesh.mesh_name.as_str()) {
+        return None;
+    }
+    let source_id = plan["source_object_id"].as_str()?;
+    let source = scene.objects.iter().find(|object| object.id == source_id)?;
+    if source.tags.iter().any(|tag| tag == "mesh:dirty")
+        || !(plan.get("source_object_segments").and_then(Value::as_array).is_some_and(|segments|
+                segments.iter().any(|segment| segment["object_id"].as_str() == Some(source_id)))
+            || plan.get("source_mesh_parts").and_then(Value::as_array).is_some_and(|parts|
+                parts.iter().any(|part| part["object_id"].as_str() == Some(source_id))))
+    {
+        return None;
+    }
+    Some(plan)
+}
+
+fn field_only_source_mesh_for_inspection(snapshot: &SessionStateResponse) -> Option<&Value> {
+    prepared_field_only_source_mesh(snapshot).or_else(|| {
+        snapshot.imported_antenna_mesh_proof.as_ref()
+            .filter(|proof| proof.valid_for(snapshot))?;
+        field_only_source_mesh_binding(snapshot)
+    })
 }
 
 fn clean_scene_mesh_provenance(snapshot: &SessionStateResponse) -> Option<MeshBuildProvenance> {
@@ -4302,9 +4601,8 @@ fn build_periodic_pairs_resource(
         }
     };
     let provenance = mesh_build_provenance(snapshot);
-    let current_scene_revision = snapshot.scene_document.as_ref().map(|scene| scene.revision);
-    let provenance_is_current = provenance.source_scene_revision.is_some()
-        && provenance.source_scene_revision == current_scene_revision;
+    let provenance_is_current = snapshot.scene_document.as_ref()
+        .is_some_and(|scene| shared_domain_mesh_is_current(snapshot, scene));
     if status == PeriodicValidationStatus::Valid && !provenance_is_current {
         status = PeriodicValidationStatus::Stale;
         status_reasons.push(
@@ -4551,6 +4849,10 @@ fn mesh_manifest_region_for_object(
         .filter(|segment| segment.object_id == object.id)
         .map(|segment| segment.element_count)
         .sum::<u32>();
+    let element_count = if element_count == 0 {
+        mesh.mesh_parts.iter().filter(|part| part.object_id.as_deref() == Some(object.id.as_str()))
+            .map(|part| part.element_count).sum()
+    } else { element_count };
     if mesh_part_ids.is_empty() && element_count == 0 {
         return None;
     }
@@ -4727,19 +5029,120 @@ fn push_region_geometry_aliases(aliases: &mut BTreeSet<String>, value: &str) {
     aliases.insert(trimmed.replace(':', "%3A"));
 }
 
+/// The current solve and Global sampling have independent topology. Object
+/// reads must retain the cut conductor used by V/J, not subset the air mesh.
+pub(crate) fn field_only_source_payload(
+    snapshot: &SessionStateResponse,
+    object_id: &str,
+) -> Result<Option<FemMeshPayload>, ApiError> {
+    let expected_source = [snapshot.metadata.as_ref(), snapshot.mesh_workspace.as_ref()]
+        .into_iter()
+        .flatten()
+        .any(|document| {
+            let plan = document.pointer("/execution_plan/backend_plan");
+            plan.is_some_and(|plan| {
+                plan["kind"].as_str() == Some("antenna_field_only")
+                    && plan["source_object_id"].as_str() == Some(object_id)
+            })
+        });
+    if !expected_source {
+        return Ok(None);
+    }
+    let execution = snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.execution_plan())
+        .ok_or_else(|| {
+            ApiError::conflict_with_code(
+                "antenna_source_mesh_invalid",
+                "current-source execution plan is missing or not typed",
+            )
+        })?;
+    let fullmag_ir::BackendPlanIR::AntennaFieldOnly(plan) = &execution.backend_plan else {
+        return Err(ApiError::conflict("current-source plan changed backend"));
+    };
+    if plan.source_object_id != object_id {
+        return Err(ApiError::conflict(
+            "current-source plan changed object identity",
+        ));
+    }
+    // The guard also remains valid after Solve: it binds preparation, scene,
+    // run and mesh identity, rather than requiring a running solver.
+    field_only_source_mesh_for_inspection(snapshot).ok_or_else(|| {
+        ApiError::conflict_with_code(
+            "antenna_source_mesh_stale",
+            "current-source mesh has no valid preparation binding",
+        )
+    })?;
+    Ok(Some(
+        fullmag_runner::StageFemMeshAsset::build_from_antenna_field_only_plan(plan).payload,
+    ))
+}
+
 fn subset_object_mesh(
     mesh: &FemMeshPayload,
     object_id: &str,
 ) -> Result<Option<FemMeshPayload>, String> {
-    if let Some(part) = mesh.mesh_parts.iter().find(|part| {
-        part.role == "magnetic_object"
-            && part
+    let parts = mesh
+        .mesh_parts
+        .iter()
+        .filter(|part| {
+            matches!(
+                part.role.as_str(),
+                "magnetic_object" | "conductor" | "geometry"
+            ) && part
                 .object_id
                 .as_deref()
-                .map(|id| object_ids_match(id, object_id))
-                .unwrap_or(false)
-    }) {
+                .is_some_and(|id| object_ids_match(id, object_id))
+        })
+        .collect::<Vec<_>>();
+    if let [part] = parts.as_slice() {
         return subset_part_payload(mesh, part, object_id).map(Some);
+    }
+    if !parts.is_empty() {
+        let mut part = (*parts[0]).clone();
+        let mut nodes = BTreeSet::new();
+        let mut elements = BTreeSet::new();
+        let mut facets = BTreeSet::new();
+        let mut facet_ordinals = BTreeSet::new();
+        for source in parts {
+            nodes.extend(collect_part_source_node_indices(mesh, source)?);
+            elements
+                .extend(part_source_element_indices(mesh, source).map_err(|error| error.message)?);
+            if source.boundary_face_indices.is_empty() {
+                facets.extend(
+                    source.boundary_face_start
+                        ..source
+                            .boundary_face_start
+                            .saturating_add(source.boundary_face_count),
+                );
+            } else {
+                facets.extend(source.boundary_face_indices.iter().copied());
+            }
+            facet_ordinals.extend(source.facet_global_ordinals.iter().copied());
+        }
+        part.id = object_id.to_owned();
+        part.label = object_id.to_owned();
+        part.geometry_id = None;
+        part.element_start = 0;
+        // Explicit elements below own the union, not a fabricated range.
+        part.element_count = 0;
+        part.node_start = 0;
+        part.node_count = nodes.len() as u32;
+        part.node_indices = nodes.into_iter().collect();
+        part.boundary_face_start = 0;
+        part.boundary_face_count = facets.len() as u32;
+        part.boundary_face_indices = facets.into_iter().collect();
+        part.facet_global_ordinals = facet_ordinals.into_iter().collect();
+        part.bounds_min = None;
+        part.bounds_max = None;
+        return subset_part_payload_with_elements(
+            mesh,
+            &part,
+            object_id,
+            Some(&elements.into_iter().collect::<Vec<_>>()),
+        )
+        .map(Some);
     }
 
     let Some(segment) = mesh
@@ -4895,6 +5298,15 @@ fn subset_part_payload(
     part: &FemMeshPartPayload,
     mesh_suffix: &str,
 ) -> Result<FemMeshPayload, String> {
+    subset_part_payload_with_elements(mesh, part, mesh_suffix, None)
+}
+
+fn subset_part_payload_with_elements(
+    mesh: &FemMeshPayload,
+    part: &FemMeshPartPayload,
+    mesh_suffix: &str,
+    explicit_elements: Option<&[usize]>,
+) -> Result<FemMeshPayload, String> {
     let has_cell_mesh_parts = !mesh.cells.mesh_parts.is_empty();
     if has_cell_mesh_parts && mesh.cells.mesh_parts.len() != mesh.cells.types.len() {
         return Err(malformed_part_topology(
@@ -4920,14 +5332,17 @@ fn subset_part_payload(
     }
 
     let element_start = part.element_start as usize;
-    let element_end = element_start.saturating_add(part.element_count as usize);
+    let element_count =
+        explicit_elements.map_or(part.element_count as usize, |indices| indices.len());
     let mut cell_types = Vec::new();
     let mut cell_offsets = vec![0];
     let mut cell_nodes = Vec::new();
     let mut cell_global_ordinals = Vec::new();
     let mut cell_mesh_parts = Vec::new();
     let mut element_markers = Vec::new();
-    for source_element_index in element_start..element_end {
+    for ordinal in 0..element_count {
+        let source_element_index =
+            explicit_elements.map_or(element_start + ordinal, |indices| indices[ordinal]);
         let cell_type = *mesh.cells.types.get(source_element_index).ok_or_else(|| {
             malformed_part_topology(
                 part,
@@ -5242,6 +5657,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn size_histograms_preserve_si_volume_variation() {
+        let values = [1e-27, 2e-27, 9e-27];
+        let bins = size_histogram_bins(&values, 3);
+        assert_eq!(bins.len(), 3);
+        assert_eq!(bins.iter().map(|bin| bin["count"].as_u64().unwrap()).sum::<u64>(), 3);
+        assert_eq!(size_histogram_bins(&[0.0, 0.0], 3).len(), 1);
+        assert_eq!(size_histogram_bins(&[1e-27, 1e-27], 3).len(), 1);
+    }
+
+    #[test]
     fn shared_domain_manifest_counts_are_global_topology_counts() {
         let mesh = FemMeshPayload {
             mesh_name: "counts-test".to_string(),
@@ -5428,6 +5853,25 @@ mod tests {
             vec![[0, 1, 3]]
         );
         assert_eq!(part_mesh.mesh_parts[0].node_count, 4);
+
+        let mut owned = mesh.clone();
+        let mut first = owned.mesh_parts[0].clone();
+        first.role = "magnetic_object".into();
+        first.object_id = Some("waveguide".into());
+        first.element_start = 0;
+        first.node_indices = vec![0, 1, 2, 3];
+        first.boundary_face_start = 0;
+        let mut second = first.clone();
+        second.element_start = 1;
+        second.node_indices = vec![0, 1, 2, 4];
+        second.boundary_face_start = 1;
+        owned.mesh_parts = vec![first, second];
+        let union = subset_object_mesh(&owned, "waveguide").unwrap().unwrap();
+        assert_eq!(union.nodes.len(), 5);
+        assert_eq!(union.cells.global_ordinals, vec![0, 1]);
+        assert_eq!(union.element_markers, vec![1, 0]);
+        assert_eq!(union.facets.len(), 2);
+        assert_eq!(mesh_size_statistics(&union, None).unwrap()["element_count"], 2);
     }
 
     #[test]

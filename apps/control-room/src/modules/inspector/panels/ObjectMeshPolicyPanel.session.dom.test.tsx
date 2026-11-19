@@ -4,8 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KernelContext } from "@/kernel/KernelContext";
 import type { KernelApi } from "@/kernel/types";
+import { InspectorFooter } from "@/modules/inspector/InspectorFooter";
+import { InspectorEditSessionProvider } from "@/modules/inspector/InspectorEditSession";
 import {
   findElement,
+  findElements,
   installSimulationPreparationTestDom,
   TestEvent,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
@@ -31,6 +34,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  SESSION_STATUS_RESOURCE_KEY: "session:status",
   useSessionResourceIdentity: () => mocks.identity,
   useSessionStatusSelector: (selector: (value: never) => unknown) =>
     selector({ data: { domain: { discretization: "fem" } } } as never),
@@ -102,8 +106,8 @@ function maximumSize(container: Parameters<typeof findElement>[0]) {
 function applyButton(container: Parameters<typeof findElement>[0]) {
   return findElement(
     container,
-    (element) => element.tagName === "BUTTON" && element.textContent.includes("Apply Policy"),
-    "Apply Policy button",
+    (element) => element.tagName === "BUTTON" && element.textContent.trim() === "Apply",
+    "Inspector footer Apply button",
   );
 }
 
@@ -132,13 +136,22 @@ describe("ObjectMeshPolicyPanel session fencing", () => {
 
     try {
       await act(async () => root.render(
-        <KernelContext.Provider value={kernel()}>
-          <ObjectMeshPolicyPanel selection={{ objectId: "film" } as never} />
-        </KernelContext.Provider>,
+        <InspectorEditSessionProvider>
+          <KernelContext.Provider value={kernel()}>
+            <ObjectMeshPolicyPanel selection={{ objectId: "film" } as never} />
+            <InspectorFooter onFocus={() => undefined} />
+          </KernelContext.Provider>
+        </InspectorEditSessionProvider>,
       ));
       const input = maximumSize(container);
       input.value = "2e-9";
       await act(async () => input.dispatchEvent(new TestEvent("input", { bubbles: true })));
+      expect(
+        findElements(
+          container,
+          (element) => element.tagName === "BUTTON" && element.textContent.includes("Apply Policy"),
+        ),
+      ).toHaveLength(0);
       await act(async () => {
         applyButton(container).dispatchEvent(new TestEvent("click", { bubbles: true }));
         await Promise.resolve();
@@ -165,9 +178,12 @@ describe("ObjectMeshPolicyPanel session fencing", () => {
 
     try {
       await act(async () => root.render(
-        <KernelContext.Provider value={kernel()}>
-          <ObjectMeshPolicyPanel selection={{ objectId: "film" } as never} />
-        </KernelContext.Provider>,
+        <InspectorEditSessionProvider>
+          <KernelContext.Provider value={kernel()}>
+            <ObjectMeshPolicyPanel selection={{ objectId: "film" } as never} />
+            <InspectorFooter onFocus={() => undefined} />
+          </KernelContext.Provider>
+        </InspectorEditSessionProvider>,
       ));
       const input = maximumSize(container);
       input.value = "2e-9";

@@ -30,6 +30,7 @@ import {
   ensureControlRoomDependencies,
   resolvePnpmInvocation,
 } from "./scripts/resolve-pnpm-invocation.mjs";
+import { bundleDocumentation, DEFAULT_ONLINE_DOCS_URL } from "./scripts/bundle-docs.mjs";
 import { createDevSourceMirror } from "./scripts/dev-source-mirror.mjs";
 
 const appDir = dirname(fileURLToPath(import.meta.url));
@@ -133,6 +134,14 @@ async function startDevServer() {
     );
     process.exit(1);
     return;
+  }
+
+  try {
+    await bundleDocumentation({ ifPresent: true });
+  } catch (error) {
+    process.stderr.write(
+      `[control-room dev-server] documentation bundle skipped: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
   }
 
   // Next.js writes port-specific type includes to tracked tsconfig files on
@@ -385,6 +394,10 @@ function startStaticServer(root) {
       proxyApiRequest(req, res, requestUrl);
       return;
     }
+    if (requestUrl.pathname === "/docs" || requestUrl.pathname.startsWith("/docs/")) {
+      serveDocsFileOrProxy(resolvedRoot, req, res, requestUrl);
+      return;
+    }
     serveStaticFile(resolvedRoot, requestUrl.pathname, res);
   });
   server.on("upgrade", proxyWebSocketUpgrade);
@@ -470,6 +483,70 @@ function serveStaticFile(root, pathname, res) {
   }
   res.writeHead(200, { "content-type": contentType(candidate) });
   createReadStream(candidate).pipe(res);
+}
+
+function serveDocsFileOrProxy(staticRootDir, req, res, requestUrl) {
+  const docsRelPath = requestUrl.pathname.replace(/^\/docs\/?/, "") || "index.html";
+  const decodedRelPath = decodeURIComponent(docsRelPath);
+  const docsRoots = [
+    join(staticRootDir, "docs"),
+    join(appDir, "public", "docs"),
+    join(repoRoot, "public_docs", "site", "_build", "html"),
+    join(repoRoot, "public_docs", "site"),
+  ];
+
+  for (const docsRoot of docsRoots) {
+    const direct = resolve(docsRoot, `./${decodedRelPath}`);
+    for (const candidate of [direct, join(direct, "index.html")]) {
+      try {
+        if (
+          existsSync(candidate) &&
+          statSync(candidate).isFile() &&
+          pathIsInsideRoot(docsRoot, candidate)
+        ) {
+          res.writeHead(200, { "content-type": contentType(candidate) });
+          if (req.method === "HEAD") {
+            res.end();
+          } else {
+            createReadStream(candidate).pipe(res);
+          }
+          return;
+        }
+      } catch {
+        // Ignore unreadable candidate and try next root.
+      }
+    }
+  }
+
+  const docsOnlineBase = (
+    process.env.FULLMAG_DOCS_PROXY_TARGET ??
+    process.env.FULLMAG_DOCS_URL ??
+    DEFAULT_ONLINE_DOCS_URL
+  ).replace(/\/+$/, "");
+  const remoteTarget = new URL(
+    `/${docsRelPath.replace(/^\/+/, "")}${requestUrl.search}`,
+    `${docsOnlineBase}/`,
+  );
+  fetch(remoteTarget, {
+    method: req.method === "HEAD" ? "HEAD" : "GET",
+    headers: { "user-agent": "FullMag-ControlRoom-DocsProxy/1.0" },
+  })
+    .then(async (response) => {
+      const contentTypeHeader = response.headers.get("content-type") ?? contentType(decodedRelPath);
+      res.writeHead(response.status, { "content-type": contentTypeHeader });
+      if (req.method === "HEAD" || !response.body) {
+        res.end();
+        return;
+      }
+      for await (const chunk of response.body) {
+        res.write(chunk);
+      }
+      res.end();
+    })
+    .catch(() => {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      res.end("Documentation not found");
+    });
 }
 
 function staticCandidate(root, pathname) {

@@ -9,14 +9,34 @@ import math
 import operator
 from pathlib import Path
 import struct
+from time import monotonic_ns
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 from weakref import WeakSet
 import numpy as np
 from numpy.typing import NDArray
 
+from fullmag._progress import emit_progress
 from fullmag._validation import parse_bool, parse_finite_float, parse_integer
 from fullmag.model.discretization import _MESH_SIZE_PRESET_ALIASES
+
+
+def _canonical_marker_array(values: object, name: str) -> NDArray[np.uint32]:
+    """Validate before conversion; legacy nonnegative int32 buffers remain valid."""
+    if isinstance(values, (list, tuple)) and any(isinstance(value, (bool, np.bool_)) for value in values):
+        raise ValueError(f"{name} must contain integers in canonical u32 range")
+    raw = np.asarray(values)
+    if raw.ndim != 1:
+        raise ValueError(f"{name} must be a one-dimensional canonical u32 marker array")
+    if raw.size:
+        if raw.dtype.kind not in "iu":
+            raise ValueError(f"{name} must contain integers in canonical u32 range")
+        # Canonical arrays need no extra scan or temporary N-sized boolean mask.
+        if raw.dtype.kind == "u" and raw.dtype.itemsize <= 4:
+            return raw.astype(np.uint32, copy=False)
+        if raw.min() < 0 or raw.max() > np.iinfo(np.uint32).max:
+            raise ValueError(f"{name} must contain integers in canonical u32 range")
+    return raw.astype(np.uint32, copy=False)
 
 
 FEM_TOPOLOGY_VOLUME_EPS = 1.0e-30 / 6.0
@@ -182,6 +202,8 @@ class MeshQualityReport:
         element_volume: Per-element volume values aligned to mesh elements.
         element_tags: Gmsh element tags aligned to per-element quality arrays.
         quality_source: Source of the reported quality metrics.
+        gamma_element_count: Number of elements for which Gmsh defines gamma.
+        quality_by_family: Bounded Gmsh quality summaries keyed by cell family.
     """
 
     n_elements: int
@@ -203,6 +225,8 @@ class MeshQualityReport:
     element_volume: list[float] | None = None
     element_tags: list[int] | None = None
     quality_source: str = "gmsh"
+    gamma_element_count: int | None = None
+    quality_by_family: dict[str, dict[str, object]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,7 +261,10 @@ class MeshStatisticsScope:
     degenerate_count: int
     sicn: dict[str, object] | None = None
     gamma: dict[str, object] | None = None
+    quality_by_family: dict[str, dict[str, object]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    volume_histogram: list[dict[str, object]] = field(default_factory=list)
+    edge_length_histogram: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -706,6 +733,11 @@ class AirboxOptions:
         boundary_marker: Gmsh physical group tag for the outer boundary Γ_out.
         maximum_element_size: Maximum element size for the airbox mesh (far field).
         minimum_element_size: Minimum element size for the airbox mesh (at interface).
+        curvature_factor: Air target ``c * R`` next to curved magnetic surfaces
+                          (note 0107); requires ``maximum_element_size``.
+        narrow_region_resolution: Element-count control across air gaps
+                                  between walls (note 0107); requires
+                                  ``maximum_element_size``.
     """
 
     padding_factor: float = 3.0
@@ -717,8 +749,30 @@ class AirboxOptions:
     center: tuple[float, float, float] | None = None
     maximum_element_size: float | None = None
     minimum_element_size: float | None = None
+    curvature_factor: float | None = None
+    narrow_region_resolution: float | None = None
+
+    @property
+    def has_feature_refinement(self) -> bool:
+        return self.curvature_factor is not None or self.narrow_region_resolution is not None
 
     def __post_init__(self) -> None:
+        for name in ("curvature_factor", "narrow_region_resolution"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            parsed = parse_finite_float(
+                value,
+                f"/study_universe/airbox_{name}",
+                positive=True,
+                allow_numeric_string=True,
+            )
+            object.__setattr__(self, name, float(parsed))
+        if self.has_feature_refinement and self.maximum_element_size is None:
+            raise ValueError(
+                "study_universe airbox curvature_factor/narrow_region_resolution "
+                "require the airbox maximum_element_size"
+            )
         # ``grading_ratio`` is a multiplicative layer-to-layer growth law for
         # the typed FEM airbox.  Values at or below one used to be accepted and
         # then silently disabled the field in the Gmsh builder, producing a
@@ -2101,12 +2155,12 @@ class MeshData:
     cell_types: NDArray[np.str_]
     cell_offsets: NDArray[np.int64]
     cell_nodes: NDArray[np.int32]
-    element_markers: NDArray[np.int32]
+    element_markers: NDArray[np.uint32]
     facet_types: NDArray[np.str_]
     facet_roles: NDArray[np.str_]
     facet_offsets: NDArray[np.int64]
     facet_nodes: NDArray[np.int32]
-    boundary_markers: NDArray[np.int32]
+    boundary_markers: NDArray[np.uint32]
     cell_global_ordinals: NDArray[np.int64]
     facet_global_ordinals: NDArray[np.int64]
     cell_mesh_parts: NDArray[np.str_] = field(
@@ -2130,12 +2184,12 @@ class MeshData:
         object.__setattr__(self, "cell_types", np.asarray(self.cell_types, dtype=np.str_))
         object.__setattr__(self, "cell_offsets", np.asarray(self.cell_offsets, dtype=np.int64))
         object.__setattr__(self, "cell_nodes", np.asarray(self.cell_nodes, dtype=np.int32))
-        object.__setattr__(self, "element_markers", np.asarray(self.element_markers, dtype=np.int32))
+        object.__setattr__(self, "element_markers", _canonical_marker_array(self.element_markers, "element_markers"))
         object.__setattr__(self, "facet_types", np.asarray(self.facet_types, dtype=np.str_))
         object.__setattr__(self, "facet_roles", np.asarray(self.facet_roles, dtype=np.str_))
         object.__setattr__(self, "facet_offsets", np.asarray(self.facet_offsets, dtype=np.int64))
         object.__setattr__(self, "facet_nodes", np.asarray(self.facet_nodes, dtype=np.int32))
-        object.__setattr__(self, "boundary_markers", np.asarray(self.boundary_markers, dtype=np.int32))
+        object.__setattr__(self, "boundary_markers", _canonical_marker_array(self.boundary_markers, "boundary_markers"))
         object.__setattr__(self, "cell_global_ordinals", np.asarray(self.cell_global_ordinals, dtype=np.int64))
         object.__setattr__(self, "facet_global_ordinals", np.asarray(self.facet_global_ordinals, dtype=np.int64))
         object.__setattr__(self, "cell_mesh_parts", np.asarray(self.cell_mesh_parts, dtype=np.str_))
@@ -2879,7 +2933,13 @@ class MeshData:
             u64(len(data))
             encoded.extend(data)
 
-        def sequence(values: object, write_item: Any) -> None:
+        def sequence(values: object, write_item: Any, payload: bytes | None = None) -> None:
+            # ``payload`` is the already validated little-endian encoding of
+            # every item; ``None`` keeps the per-item writer and its errors.
+            if payload is not None:
+                u64(len(values))  # type: ignore[arg-type]
+                encoded.extend(payload)
+                return
             items = list(values)  # type: ignore[arg-type]
             u64(len(items))
             for item in items:
@@ -2910,30 +2970,29 @@ class MeshData:
                 ) from error
             u8(tag)
 
-        sequence(self.nodes, f64x3)
-        sequence(
-            self.cell_types,
-            lambda value: enum({"tet4": 1, "prism6": 2, "pyramid5": 3, "hex8": 4}, value),
-        )
-        sequence(self.cell_offsets, u32)
-        sequence(self.cell_nodes, u32)
-        sequence(self.cell_global_ordinals, u64)
-        sequence(
-            self.cell_mesh_parts,
-            lambda value: enum({"magnetic": 1, "transition_air": 2, "far_air": 3}, value),
-        )
-        sequence(self.element_markers, u32)
-        sequence(self.facet_types, lambda value: enum({"tri3": 1, "quad4": 2}, value))
-        sequence(
+        def enum_sequence(values: object, mapping: dict[str, int]) -> None:
+            sequence(
+                values,
+                lambda value: enum(mapping, value),
+                _fingerprint_enum_payload(values, mapping),
+            )
+
+        sequence(self.nodes, f64x3, _fingerprint_f64x3_payload(self.nodes))
+        enum_sequence(self.cell_types, {"tet4": 1, "prism6": 2, "pyramid5": 3, "hex8": 4})
+        sequence(self.cell_offsets, u32, _fingerprint_uint_payload(self.cell_offsets, 32))
+        sequence(self.cell_nodes, u32, _fingerprint_uint_payload(self.cell_nodes, 32))
+        sequence(self.cell_global_ordinals, u64, _fingerprint_uint_payload(self.cell_global_ordinals, 64))
+        enum_sequence(self.cell_mesh_parts, {"magnetic": 1, "transition_air": 2, "far_air": 3})
+        sequence(self.element_markers, u32, _fingerprint_uint_payload(self.element_markers, 32))
+        enum_sequence(self.facet_types, {"tri3": 1, "quad4": 2})
+        enum_sequence(
             self.facet_roles,
-            lambda value: enum(
-                {"exterior": 1, "material_interface": 2, "periodic_seam": 3}, value
-            ),
+            {"exterior": 1, "material_interface": 2, "periodic_seam": 3},
         )
-        sequence(self.facet_offsets, u32)
-        sequence(self.facet_nodes, u32)
-        sequence(self.facet_global_ordinals, u64)
-        sequence(self.boundary_markers, u32)
+        sequence(self.facet_offsets, u32, _fingerprint_uint_payload(self.facet_offsets, 32))
+        sequence(self.facet_nodes, u32, _fingerprint_uint_payload(self.facet_nodes, 32))
+        sequence(self.facet_global_ordinals, u64, _fingerprint_uint_payload(self.facet_global_ordinals, 64))
+        sequence(self.boundary_markers, u32, _fingerprint_uint_payload(self.boundary_markers, 32))
 
         def periodic_boundary_pair(pair: object) -> None:
             if not isinstance(pair, dict):
@@ -2971,9 +3030,9 @@ class MeshData:
         *,
         nodes: NDArray[np.float64] | list[list[float]],
         elements: NDArray[np.int32] | list[list[int]],
-        element_markers: NDArray[np.int32] | list[int],
+        element_markers: NDArray[np.uint32] | list[int],
         boundary_faces: NDArray[np.int32] | list[list[int]],
-        boundary_markers: NDArray[np.int32] | list[int],
+        boundary_markers: NDArray[np.uint32] | list[int],
         periodic_boundary_pairs: list[dict[str, object]] | None = None,
         periodic_node_pairs: list[dict[str, object]] | None = None,
         periodic_mesh_certificate: dict[str, object] | None = None,
@@ -3177,7 +3236,36 @@ class MeshData:
         if self.element_markers.shape != (self.n_elements,):
             raise ValueError("element_markers must cover every FEM cell")
 
-        for index, cell_type in enumerate(self.cell_types.tolist()):
+        # A batched screen finds every candidate failure; the scalar check
+        # below stays the authority for the verdict, its order and its
+        # message.  The screen widens the epsilon by a relative margin far
+        # above the rounding difference of its vectorized ``L**3``.
+        candidates: list[NDArray[np.int64]] = []
+        for cell_type, ordinals, coordinates in _iter_cell_family_batches(self):
+            determinants = _cell_jacobian_determinants_batch(cell_type, coordinates)
+            if eps_volume is not None:
+                screen_eps = np.full(ordinals.size, float(eps_volume) * 6.0)
+            else:
+                characteristic_length = np.max(
+                    np.linalg.norm(
+                        coordinates[:, :, np.newaxis, :] - coordinates[:, np.newaxis, :, :],
+                        axis=3,
+                    ),
+                    axis=(1, 2),
+                )
+                screen_eps = np.maximum(
+                    np.finfo(np.float64).tiny,
+                    FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS * characteristic_length**3,
+                )
+            flagged = ~(np.min(np.abs(determinants), axis=1) > screen_eps * (1.0 + 1.0e-9))
+            if require_positive_orientation:
+                flagged |= np.any(determinants < 0.0, axis=1)
+            candidates.append(ordinals[flagged])
+        candidate_ordinals = (
+            np.sort(np.concatenate(candidates)) if candidates else np.zeros(0, dtype=np.int64)
+        )
+        for index in candidate_ordinals.tolist():
+            cell_type = str(self.cell_types[index])
             coordinates = self.nodes[self.cell_node_ids(index)]
             determinants = _cell_jacobian_determinants(cell_type, coordinates)
             characteristic_length = float(np.max(np.linalg.norm(
@@ -3379,14 +3467,14 @@ class MeshData:
             "hex8": [1, 0, 3, 2, 5, 4, 7, 6],
         }
         changed = False
-        for index, cell_type in enumerate(self.cell_types.tolist()):
-            start, stop = int(self.cell_offsets[index]), int(self.cell_offsets[index + 1])
-            determinant = _cell_jacobian_determinants(
-                cell_type,
-                self.nodes[cell_nodes[start:stop]],
-            )
-            if np.all(determinant < 0.0):
-                cell_nodes[start:stop] = cell_nodes[start:stop][reverse[cell_type]]
+        for cell_type, ordinals, coordinates in _iter_cell_family_batches(self):
+            determinants = _cell_jacobian_determinants_batch(cell_type, coordinates)
+            flipped = ordinals[np.all(determinants < 0.0, axis=1)]
+            if flipped.size:
+                starts = self.cell_offsets[flipped][:, np.newaxis]
+                cell_nodes[starts + np.arange(len(reverse[cell_type]))] = self.cell_nodes[
+                    starts + np.asarray(reverse[cell_type], dtype=np.int64)
+                ]
                 changed = True
         if not changed:
             return self
@@ -3411,10 +3499,14 @@ class MeshData:
                 if self.periodic_mesh_certificate is not None
                 else None
             ),
-            quality=self.quality,
-            per_domain_quality=self.per_domain_quality,
+            # SICN is signed and the mixed topology fingerprint includes
+            # ordered cell connectivity. A real reorientation invalidates the
+            # extracted quality summaries and topology certificate; callers
+            # must recompute them from the oriented mesh before publishing.
+            quality=None,
+            per_domain_quality=None,
             realization_report=self.realization_report,
-            mixed_layer_topology_certificate=self.mixed_layer_topology_certificate,
+            mixed_layer_topology_certificate=None,
             vertex_identity=self.vertex_identity,
         )
 
@@ -3771,9 +3863,10 @@ class MeshData:
         )
 
     def statistics_ir(self, mesh_name: str) -> dict[str, object] | None:
-        if not (
-            np.all(self.cell_types == "tet4")
-            and np.all(self.facet_types == "tri3")
+        if not set(str(value) for value in self.cell_types.tolist()).issubset(
+            FEM_CELL_ARITIES
+        ) or not set(str(value) for value in self.facet_types.tolist()).issubset(
+            FEM_FACET_ARITIES
         ):
             return None
         return _mesh_statistics_report_to_ir(
@@ -3781,6 +3874,7 @@ class MeshData:
         )
 
     def to_ir(self, mesh_name: str) -> dict[str, object]:
+        certification_started_ns = monotonic_ns()
         # Native mixed certification proves positive orientation, so avoid a
         # second Python pass over every cell merely to discover that no
         # reorientation is needed.  Uncertified/source-only meshes retain the
@@ -3789,6 +3883,11 @@ class MeshData:
         mesh = self if native_mixed_valid else self.oriented_copy()
         if not native_mixed_valid:
             mesh.validate_strict(require_positive_orientation=True)
+        emit_progress(
+            "MeshData.to_ir phase=certificate_fingerprint_validation "
+            f"elapsed_ms={(monotonic_ns() - certification_started_ns) / 1_000_000:.3f}"
+        )
+        conversion_started_ns = monotonic_ns()
         ir: dict[str, object] = {
             "mesh_name": mesh_name,
             "nodes": mesh.nodes.tolist(),
@@ -3823,7 +3922,8 @@ class MeshData:
             ir["mixed_layer_topology_certificate"] = (
                 mesh.mixed_layer_topology_certificate.to_dict()
             )
-        if mesh.per_domain_quality is not None:
+        if _legacy_per_domain_quality_is_complete(mesh):
+            assert mesh.per_domain_quality is not None
             ir["per_domain_quality"] = {
                 str(marker): {
                     "n_elements": q.n_elements,
@@ -3838,15 +3938,53 @@ class MeshData:
                     "volume_min": q.volume_min,
                     "volume_max": q.volume_max,
                     "volume_mean": q.volume_mean,
-                        "volume_std": q.volume_std,
-                        "avg_quality": q.avg_quality,
-                    }
-                    for marker, q in mesh.per_domain_quality.items()
+                    "volume_std": q.volume_std,
+                    "avg_quality": q.avg_quality,
+                }
+                for marker, q in mesh.per_domain_quality.items()
             }
         mesh_statistics = mesh.statistics_ir(mesh_name)
         if mesh_statistics is not None:
             ir["mesh_statistics"] = mesh_statistics
+        emit_progress(
+            "MeshData.to_ir phase=ir_conversion_statistics "
+            f"elapsed_ms={(monotonic_ns() - conversion_started_ns) / 1_000_000:.3f}"
+        )
         return ir
+
+
+def _legacy_per_domain_quality_is_complete(mesh: MeshData) -> bool:
+    """Whether the legacy gamma-bearing carrier covers every eligible marker."""
+    reports = mesh.per_domain_quality
+    if not reports:
+        return False
+
+    marker_ids, marker_counts = np.unique(mesh.element_markers, return_counts=True)
+    canonical_counts = {
+        int(marker): int(count)
+        for marker, count in zip(marker_ids, marker_counts, strict=True)
+    }
+    if set(reports) != set(canonical_counts):
+        return False
+
+    gamma_supported = np.isin(mesh.cell_types, ("tet4", "prism6"))
+    unsupported_markers = set(
+        int(marker)
+        for marker in np.unique(mesh.element_markers[~gamma_supported])
+    )
+    for marker, expected_count in canonical_counts.items():
+        report = reports[marker]
+        if (
+            report.n_elements != expected_count
+            or report.quality_source != "gmsh"
+            or marker in unsupported_markers
+            or (
+                report.gamma_element_count is not None
+                and report.gamma_element_count != expected_count
+            )
+        ):
+            return False
+    return True
 
 
 def _mesh_quality_report_from_serialized(value: object) -> MeshQualityReport | None:
@@ -4905,6 +5043,40 @@ def _mixed_cell_signed_and_absolute_volume(
     return sum(signed_tetra_volumes), sum(abs(value) for value in signed_tetra_volumes)
 
 
+def _fingerprint_f64x3_payload(values: object) -> bytes | None:
+    """Encode finite ``(N, 3)`` float rows exactly like the per-item f64 writer."""
+    if (
+        not isinstance(values, np.ndarray)
+        or values.ndim != 2
+        or values.shape[1] != 3
+        or values.dtype.kind != "f"
+        or not np.all(np.isfinite(values))
+    ):
+        return None
+    return values.astype("<f8").tobytes()
+
+
+def _fingerprint_uint_payload(values: object, bits: int) -> bytes | None:
+    """Encode an in-range integer vector exactly like the per-item u32/u64 writer."""
+    if not isinstance(values, np.ndarray) or values.ndim != 1 or values.dtype.kind not in "iu":
+        return None
+    if values.size and (int(values.min()) < 0 or int(values.max()) > (1 << bits) - 1):
+        return None
+    return values.astype(f"<u{bits // 8}").tobytes()
+
+
+def _fingerprint_enum_payload(values: object, mapping: Mapping[str, int]) -> bytes | None:
+    """Encode a string vector of known enum values as u8 tags."""
+    if not isinstance(values, np.ndarray) or values.ndim != 1 or values.dtype.kind != "U":
+        return None
+    tags = np.zeros(values.shape[0], dtype=np.uint8)
+    for value, tag in mapping.items():
+        tags[values == value] = tag
+    if np.any(tags == 0):
+        return None
+    return tags.tobytes()
+
+
 def _mixed_reference_derivative_samples(family: str) -> NDArray[np.float64]:
     """Return the fixed order-2 reference derivatives for one cell family."""
     q = 1.0 / math.sqrt(3.0)
@@ -4951,6 +5123,29 @@ def _mixed_reference_derivative_samples(family: str) -> NDArray[np.float64]:
             ],
             dtype=np.float64,
         )
+    if family == "hex8":
+        signs = np.asarray(
+            [
+                [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+                [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1],
+            ],
+            dtype=np.float64,
+        )
+        return np.asarray(
+            [
+                np.column_stack(
+                    (
+                        signs[:, 0] * (1 + signs[:, 1] * s) * (1 + signs[:, 2] * t) / 8,
+                        signs[:, 1] * (1 + signs[:, 0] * r) * (1 + signs[:, 2] * t) / 8,
+                        signs[:, 2] * (1 + signs[:, 0] * r) * (1 + signs[:, 1] * s) / 8,
+                    )
+                )
+                for r in (-q, q)
+                for s in (-q, q)
+                for t in (-q, q)
+            ],
+            dtype=np.float64,
+        )
     raise ValueError(f"mixed quality metric does not support {family}")
 
 
@@ -4964,6 +5159,26 @@ def _mixed_cell_scaled_jacobians(
         denominator = float(np.prod(np.linalg.norm(matrix, axis=0)))
         values.append(abs(float(np.linalg.det(matrix))) / denominator if denominator else 0.0)
     return np.asarray(values, dtype=np.float64)
+
+
+def _mixed_cell_scaled_jacobians_batch(
+    family: str, coordinates: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    """Evaluate ``_mixed_cell_scaled_jacobians`` for ``(M, k, 3)`` cells.
+
+    Every per-cell operation keeps the scalar operand layout and reduction
+    order, so row ``m`` is bit-identical to the scalar result for cell ``m``.
+    """
+    transposed = coordinates.transpose(0, 2, 1)
+    samples = _mixed_reference_derivative_samples(family)
+    values = np.empty((coordinates.shape[0], samples.shape[0]), dtype=np.float64)
+    for sample, derivatives in enumerate(samples):
+        matrix = np.matmul(transposed, derivatives)
+        denominator = np.prod(np.linalg.norm(matrix, axis=1), axis=1)
+        determinant = np.abs(np.linalg.det(matrix))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            values[:, sample] = np.where(denominator != 0.0, determinant / denominator, 0.0)
+    return values
 
 
 def _mixed_face_adjacency(
@@ -5586,6 +5801,58 @@ def _cell_jacobian_determinants(
     raise ValueError(f"unknown cell type: {cell_type}")
 
 
+_CELL_JACOBIAN_BATCH_SIZE = 1 << 17
+
+
+def _cell_jacobian_determinants_batch(
+    cell_type: str,
+    coordinates: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Evaluate ``_cell_jacobian_determinants`` for ``(M, k, 3)`` cells.
+
+    Row ``m`` is bit-identical to the scalar result for cell ``m``: the batch
+    uses the same reference derivatives, the same per-cell matrix layout and
+    the same LAPACK determinant.  ``hex8`` keeps the scalar evaluation.
+    """
+    count = coordinates.shape[0]
+    if cell_type == "tet4":
+        matrix = np.stack(
+            [coordinates[:, 1] - coordinates[:, 0], coordinates[:, 2] - coordinates[:, 0], coordinates[:, 3] - coordinates[:, 0]],
+            axis=2,
+        )
+        return np.linalg.det(matrix).reshape(count, 1)
+    if cell_type in ("prism6", "pyramid5"):
+        transposed = coordinates.transpose(0, 2, 1)
+        samples = _mixed_reference_derivative_samples(cell_type)
+        result = np.empty((count, samples.shape[0]), dtype=np.float64)
+        for sample, derivatives in enumerate(samples):
+            result[:, sample] = np.linalg.det(np.matmul(transposed, derivatives))
+        return result
+    if cell_type == "hex8":
+        if count == 0:
+            return np.empty((0, 8), dtype=np.float64)
+        return np.stack([_cell_jacobian_determinants(cell_type, cell) for cell in coordinates])
+    raise ValueError(f"unknown cell type: {cell_type}")
+
+
+def _iter_cell_family_batches(
+    mesh: "MeshData",
+) -> Iterator[tuple[str, NDArray[np.int64], NDArray[np.float64]]]:
+    """Yield ``(family, cell ordinals, (M, k, 3) coordinates)`` blocks.
+
+    Blocks follow cell-ordinal order within each family and are bounded so
+    that a production mesh does not materialize every Jacobian at once.
+    """
+    families = np.asarray(mesh.cell_types)
+    for family in dict.fromkeys(families.tolist()):
+        arity = FEM_CELL_ARITIES[str(family)]
+        ordinals = np.flatnonzero(families == family).astype(np.int64)
+        for start in range(0, ordinals.size, _CELL_JACOBIAN_BATCH_SIZE):
+            block = ordinals[start : start + _CELL_JACOBIAN_BATCH_SIZE]
+            node_index = mesh.cell_offsets[block][:, np.newaxis] + np.arange(arity, dtype=np.int64)
+            yield str(family), block, mesh.nodes[mesh.cell_nodes[node_index]]
+
+
 def _tetra_signed_volumes(mesh: MeshData) -> NDArray[np.float64]:
     if mesh.elements.size == 0:
         return np.zeros(0, dtype=np.float64)
@@ -5596,44 +5863,248 @@ def _tetra_signed_volumes(mesh: MeshData) -> NDArray[np.float64]:
     return np.linalg.det(np.stack([p1 - p0, p2 - p0, p3 - p0], axis=2)) / 6.0
 
 
+def _mesh_cell_connectivity(
+    mesh: MeshData,
+    cell_indices: NDArray[np.int64],
+    family: str,
+) -> NDArray[np.int32]:
+    arity = FEM_CELL_ARITIES[family]
+    starts = mesh.cell_offsets[cell_indices]
+    return mesh.cell_nodes[starts[:, np.newaxis] + np.arange(arity, dtype=np.int64)]
+
+
+def _cell_volume_pieces(
+    family: str,
+    coordinates: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    pieces: list[NDArray[np.float64]] = []
+    for local_tet in _MIXED_CELL_TETRA_DECOMPOSITIONS[family]:
+        tetra = coordinates[:, local_tet, :]
+        first = tetra[:, 1] - tetra[:, 0]
+        second = tetra[:, 2] - tetra[:, 0]
+        third = tetra[:, 3] - tetra[:, 0]
+        pieces.append(
+            np.einsum("ni,ni->n", first, np.cross(second, third)) / 6.0
+        )
+    return np.stack(pieces, axis=1)
+
+
+def _mesh_cell_geometry(
+    mesh: MeshData,
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.bool_],
+    NDArray[np.bool_],
+]:
+    """Compute signed/physical cell volumes and sampled validity by family.
+
+    Volumes use the same canonical tetrahedral decomposition as the mixed
+    topology certificate. Orientation and exact-zero diagnostics use the
+    topology-specific Jacobian samples already defined by the mesh contract.
+    Work is vectorized by family and chunked to bound temporary memory.
+    """
+    signed = np.zeros(mesh.n_elements, dtype=np.float64)
+    absolute = np.zeros(mesh.n_elements, dtype=np.float64)
+    inverted = np.zeros(mesh.n_elements, dtype=np.bool_)
+    degenerate = np.zeros(mesh.n_elements, dtype=np.bool_)
+    for family in sorted(set(str(value) for value in mesh.cell_types.tolist())):
+        ordinals = np.flatnonzero(mesh.cell_types == family).astype(np.int64)
+        derivative_samples = (
+            None
+            if family == "tet4"
+            else _mixed_reference_derivative_samples(family)
+        )
+        for chunk_start in range(0, len(ordinals), 16_384):
+            chunk_stop = min(chunk_start + 16_384, len(ordinals))
+            local_ordinals = ordinals[chunk_start:chunk_stop]
+            connectivity = _mesh_cell_connectivity(
+                mesh, local_ordinals, family
+            )
+            coordinates = mesh.nodes[connectivity]
+            pieces = _cell_volume_pieces(family, coordinates)
+            signed[local_ordinals] = np.sum(pieces, axis=1)
+            absolute[local_ordinals] = np.sum(np.abs(pieces), axis=1)
+            if derivative_samples is None:
+                determinants = pieces[:, 0]
+                inverted[local_ordinals] = determinants <= 0.0
+                degenerate[local_ordinals] = determinants == 0.0
+            else:
+                jacobians = np.einsum(
+                    "nai,qaj->nqij", coordinates, derivative_samples, optimize=True
+                )
+                determinants = np.linalg.det(jacobians)
+                inverted[local_ordinals] = np.any(determinants <= 0.0, axis=1)
+                degenerate[local_ordinals] = np.any(determinants == 0.0, axis=1)
+    return signed, absolute, inverted, degenerate
+
+
 _TET_FACE_NODE_INDICES = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
 
-
-def _face_key(face: NDArray[np.integer] | list[int] | tuple[int, int, int]) -> tuple[int, int, int]:
-    return tuple(sorted(int(node) for node in face))  # type: ignore[return-value]
-
-
-def _tetra_face_marker_sets(mesh: MeshData) -> dict[tuple[int, int, int], set[int]]:
-    face_markers: dict[tuple[int, int, int], set[int]] = {}
-    for element_index, element in enumerate(mesh.elements):
-        marker = int(mesh.element_markers[element_index])
-        for face_indices in _TET_FACE_NODE_INDICES:
-            key = _face_key([int(element[index]) for index in face_indices])
-            face_markers.setdefault(key, set()).add(marker)
-    return face_markers
+_TRI_FACE_KEY_DTYPE = np.dtype([("n0", np.int64), ("n1", np.int64), ("n2", np.int64)])
+_TRI_FACE_PACKED_NODE_BITS = 21
 
 
-def _boundary_face_counts_by_marker(mesh: MeshData) -> dict[int, int]:
-    face_markers = _tetra_face_marker_sets(mesh)
-    counts: dict[int, int] = {}
-    for face in mesh.boundary_faces:
-        for marker in face_markers.get(_face_key(face), set()):
-            counts[marker] = counts.get(marker, 0) + 1
-    return counts
+def _tri_face_keys(*face_arrays: NDArray[np.integer]) -> list[NDArray[Any]]:
+    """Orientation-free, mutually comparable keys of triangle faces.
 
-
-def _interface_face_count_by_marker_pair(
-    face_markers: dict[tuple[int, int, int], set[int]],
-) -> dict[tuple[int, int], int]:
-    counts: dict[tuple[int, int], int] = {}
-    for markers in face_markers.values():
-        if len(markers) < 2:
+    Node triples are packed into one int64 when every id fits 21 bits; larger
+    or negative ids fall back to structured keys with the same ordering.
+    """
+    ordered = [
+        np.sort(np.asarray(faces, dtype=np.int64).reshape((-1, 3)), axis=1)
+        for faces in face_arrays
+    ]
+    populated = [faces for faces in ordered if faces.size]
+    packable = all(
+        int(faces.min()) >= 0 and int(faces.max()) < (1 << _TRI_FACE_PACKED_NODE_BITS)
+        for faces in populated
+    )
+    keys: list[NDArray[Any]] = []
+    for faces in ordered:
+        if packable:
+            bits = _TRI_FACE_PACKED_NODE_BITS
+            keys.append((faces[:, 0] << (2 * bits)) | (faces[:, 1] << bits) | faces[:, 2])
             continue
-        ordered = sorted(int(marker) for marker in markers)
-        for left, right in zip(ordered[:-1], ordered[1:], strict=False):
-            key = (left, right)
-            counts[key] = counts.get(key, 0) + 1
-    return counts
+        structured = np.empty(len(faces), dtype=_TRI_FACE_KEY_DTYPE)
+        structured["n0"] = faces[:, 0]
+        structured["n1"] = faces[:, 1]
+        structured["n2"] = faces[:, 2]
+        keys.append(structured)
+    return keys
+
+
+def _tetra_marker_face_statistics(mesh: MeshData) -> tuple[dict[int, int], int]:
+    """Boundary-face counts per marker and the marker-interface face count.
+
+    Every distinct (face, marker) incidence of the tet4 cells is formed once with
+    sorted arrays.  A boundary face counts once for each distinct marker that
+    owns it, and a face owned by ``k`` distinct markers contributes ``k - 1``
+    interfaces (the adjacent pairs of its sorted marker set).
+    """
+    elements = np.asarray(mesh.elements, dtype=np.int64)
+    if elements.size == 0:
+        return {}, 0
+    faces = elements[:, np.asarray(_TET_FACE_NODE_INDICES, dtype=np.intp)]
+    face_keys, boundary_keys = _tri_face_keys(faces, mesh.boundary_faces)
+    markers = np.repeat(np.asarray(mesh.element_markers, dtype=np.int64), 4)
+
+    order = np.argsort(face_keys, kind="stable")
+    sorted_keys = face_keys[order]
+    first_of_face = np.empty(len(sorted_keys), dtype=np.bool_)
+    first_of_face[0] = True
+    first_of_face[1:] = sorted_keys[1:] != sorted_keys[:-1]
+    face_ids = np.cumsum(first_of_face) - 1
+    unique_faces = sorted_keys[first_of_face]
+
+    pair_order = np.lexsort((markers[order], face_ids))
+    pair_faces = face_ids[pair_order]
+    pair_markers = markers[order][pair_order]
+    first_of_pair = np.empty(len(pair_faces), dtype=np.bool_)
+    first_of_pair[0] = True
+    first_of_pair[1:] = (pair_faces[1:] != pair_faces[:-1]) | (
+        pair_markers[1:] != pair_markers[:-1]
+    )
+    pair_faces = pair_faces[first_of_pair]
+    pair_markers = pair_markers[first_of_pair]
+    interface_count = int(len(pair_faces) - len(unique_faces))
+
+    if boundary_keys.size == 0:
+        return {}, interface_count
+    positions = np.searchsorted(unique_faces, boundary_keys)
+    found = positions < len(unique_faces)
+    found[found] = unique_faces[positions[found]] == boundary_keys[found]
+    boundary_face_ids = positions[found]
+    first = np.searchsorted(pair_faces, boundary_face_ids, side="left")
+    owner_counts = np.searchsorted(pair_faces, boundary_face_ids, side="right") - first
+    total = int(owner_counts.sum())
+    if total == 0:
+        return {}, interface_count
+    run_starts = np.repeat(first - (np.cumsum(owner_counts) - owner_counts), owner_counts)
+    owner_markers = pair_markers[run_starts + np.arange(total, dtype=np.int64)]
+    marker_ids, counts = np.unique(owner_markers, return_counts=True)
+    return (
+        {int(marker): int(count) for marker, count in zip(marker_ids, counts, strict=True)},
+        interface_count,
+    )
+
+
+_MESH_FACE_KEY_DTYPE = np.dtype(
+    [("arity", np.int64), ("n0", np.int64), ("n1", np.int64), ("n2", np.int64), ("n3", np.int64)]
+)
+
+
+def _canonical_face_keys(nodes: NDArray[np.int32]) -> NDArray[Any]:
+    ordered = np.sort(np.asarray(nodes, dtype=np.int32), axis=1)
+    keys = np.empty(len(ordered), dtype=_MESH_FACE_KEY_DTYPE)
+    keys["arity"] = ordered.shape[1]
+    for index in range(4):
+        keys[f"n{index}"] = ordered[:, index] if index < ordered.shape[1] else -1
+    return keys
+
+
+def _mixed_marker_face_statistics(
+    mesh: MeshData,
+) -> tuple[dict[int, int], int, int]:
+    """Match explicit mixed facets to their owner markers with bounded arrays."""
+    if mesh.n_boundary_faces == 0 or mesh.n_elements == 0:
+        return {}, 0, 0
+
+    explicit_keys: list[NDArray[Any]] = []
+    explicit_ordinals: list[NDArray[np.int64]] = []
+    for family, arity in FEM_FACET_ARITIES.items():
+        facet_indices = np.flatnonzero(mesh.facet_types == family).astype(np.int64)
+        if not facet_indices.size:
+            continue
+        starts = mesh.facet_offsets[facet_indices]
+        connectivity = mesh.facet_nodes[
+            starts[:, np.newaxis] + np.arange(arity, dtype=np.int64)
+        ]
+        explicit_keys.append(_canonical_face_keys(connectivity))
+        explicit_ordinals.append(facet_indices)
+    if not explicit_keys:
+        return {}, 0, 0
+    all_keys = np.concatenate(explicit_keys)
+    facet_order = np.concatenate(explicit_ordinals)
+    order = np.argsort(all_keys, kind="stable")
+    sorted_keys = all_keys[order]
+    owners_by_facet: dict[int, set[int]] = {}
+
+    for family in sorted(set(str(value) for value in mesh.cell_types.tolist())):
+        cell_indices = np.flatnonzero(mesh.cell_types == family).astype(np.int64)
+        for chunk_start in range(0, len(cell_indices), 16_384):
+            chunk_stop = min(chunk_start + 16_384, len(cell_indices))
+            chunk_indices = cell_indices[chunk_start:chunk_stop]
+            connectivity = _mesh_cell_connectivity(mesh, chunk_indices, family)
+            markers = mesh.element_markers[chunk_indices]
+            for local_face in _MIXED_CELL_LOCAL_FACETS[family]:
+                face_nodes = connectivity[:, local_face]
+                face_keys = _canonical_face_keys(face_nodes)
+                positions = np.searchsorted(sorted_keys, face_keys)
+                in_bounds = positions < sorted_keys.size
+                if not np.any(in_bounds):
+                    continue
+                candidate_positions = positions[in_bounds]
+                candidate_keys = face_keys[in_bounds]
+                matches = sorted_keys[candidate_positions] == candidate_keys
+                if not np.any(matches):
+                    continue
+                matched_cells = np.flatnonzero(in_bounds)[matches]
+                matched_facets = facet_order[order[candidate_positions[matches]]]
+                for facet_index, cell_index in zip(matched_facets, matched_cells, strict=True):
+                    owners_by_facet.setdefault(int(facet_index), set()).add(
+                        int(markers[int(cell_index)])
+                    )
+
+    boundary_counts: dict[int, int] = {}
+    interface_count = 0
+    for owner_markers in owners_by_facet.values():
+        for marker in owner_markers:
+            boundary_counts[marker] = boundary_counts.get(marker, 0) + 1
+        if len(owner_markers) > 1:
+            interface_count += 1
+    exterior_count = int(np.count_nonzero(mesh.facet_roles == "exterior"))
+    return boundary_counts, interface_count, exterior_count
 
 
 def _quality_histogram_bins(counts: list[int], lo: float, hi: float) -> list[dict[str, object]]:
@@ -5660,19 +6131,32 @@ def _size_histogram_bins(
         return []
     min_value = float(np.min(finite_values))
     max_value = float(np.max(finite_values))
-    if math.isclose(min_value, max_value):
+    edges = _size_histogram_edges(min_value, max_value, bin_count=bin_count)
+    if edges is None:
         return [{"lo": min_value, "hi": max_value, "count": int(finite_values.size)}]
-    if min_value > 0.0:
-        edges = np.geomspace(min_value, max_value, num=bin_count + 1)
-    else:
-        edges = np.linspace(min_value, max_value, num=bin_count + 1)
-    if not np.all(np.diff(edges) > 0.0):
-        return [{"lo": min_value, "hi": max_value, "count": int(finite_values.size)}]
+
     counts, edges = np.histogram(finite_values, bins=edges)
     return [
         {"lo": float(edges[index]), "hi": float(edges[index + 1]), "count": int(count)}
         for index, count in enumerate(counts)
     ]
+
+
+def _size_histogram_edges(
+    min_value: float,
+    max_value: float,
+    *,
+    bin_count: int,
+) -> NDArray[np.float64] | None:
+    if math.isclose(min_value, max_value):
+        return None
+    if min_value > 0.0:
+        edges = np.geomspace(min_value, max_value, num=bin_count + 1)
+    else:
+        edges = np.linspace(min_value, max_value, num=bin_count + 1)
+    if not np.all(np.diff(edges) > 0.0):
+        return None
+    return edges
 
 
 def _quality_below_threshold(
@@ -5713,6 +6197,11 @@ def _quality_metric_from_report(
             "histogram": _quality_histogram_bins(report.sicn_histogram, -1.0, 1.0),
         }
     if metric == "gamma":
+        if (
+            report.gamma_element_count is not None
+            and report.gamma_element_count != report.n_elements
+        ):
+            return None
         below_threshold_count, below_threshold_fraction = _quality_below_threshold(
             report.element_gamma,
             GAMMA_MIN_QUALITY_THRESHOLD,
@@ -5730,6 +6219,308 @@ def _quality_metric_from_report(
     return None
 
 
+def _unavailable_metric(reason: str) -> dict[str, object]:
+    return {"status": "unavailable", "reason": reason}
+
+
+def _quality_family_summary_from_arrays(
+    *,
+    family: str,
+    cell_count: int,
+    quality: MeshQualityReport | None,
+    selected: NDArray[np.bool_],
+    source: str,
+) -> dict[str, object]:
+    """Return exact, bounded per-family summaries when aligned arrays exist."""
+    summary: dict[str, object] = {
+        "cell_count": cell_count,
+        "source": source,
+        "sicn": _unavailable_metric("Gmsh SICN was not requested or retained."),
+        "gamma": _unavailable_metric("Gmsh gamma was not requested or retained."),
+    }
+    if quality is None or quality.quality_source != "gmsh":
+        return summary
+
+    def metric_payload(values: NDArray[np.float64], metric: str) -> dict[str, object]:
+        if metric == "sicn":
+            lower, upper = -1.0, 1.0
+            threshold = SICN_P05_QUALITY_THRESHOLD
+            p05 = float(np.percentile(values, 5.0))
+        else:
+            lower, upper = 0.0, 1.0
+            threshold = GAMMA_MIN_QUALITY_THRESHOLD
+            p05 = float(np.percentile(values, 5.0))
+        histogram, _ = np.histogram(values, bins=20, range=(lower, upper))
+        below = int(np.count_nonzero(values < threshold))
+        return {
+            "status": "available",
+            "source": "gmsh",
+            "min": float(np.min(values)),
+            "p05": p05,
+            "mean": float(np.mean(values)),
+            "max": float(np.max(values)),
+            "threshold": threshold,
+            "below_threshold_count": below,
+            "below_threshold_fraction": below / float(values.size),
+            "histogram": _quality_histogram_bins(histogram.tolist(), lower, upper),
+        }
+
+    if quality.element_sicn is not None:
+        values = np.asarray(quality.element_sicn, dtype=np.float64)
+        if values.size == selected.size:
+            family_values = values[selected]
+            if family_values.size:
+                summary["sicn"] = metric_payload(family_values, "sicn")
+    if family in {"tet4", "prism6"} and quality.element_gamma is not None:
+        values = np.asarray(quality.element_gamma, dtype=np.float64)
+        if values.size == selected.size:
+            family_values = values[selected]
+            if family_values.size and np.all(np.isfinite(family_values)):
+                summary["gamma"] = metric_payload(family_values, "gamma")
+    elif family not in {"tet4", "prism6"}:
+        summary["gamma"] = _unavailable_metric(
+            f"Gmsh gamma is not defined for {family}."
+        )
+    return summary
+
+
+def _certificate_scaled_jacobian_for_scope(
+    mesh: MeshData,
+    family: str,
+    marker: int | None,
+) -> dict[str, object]:
+    certificate = mesh.mixed_layer_topology_certificate
+    if certificate is None:
+        return _unavailable_metric(
+            "No accepted mixed topology quality certificate is attached."
+        )
+    minimums = certificate.scaled_jacobian_minima_by_family
+    percentiles = certificate.scaled_jacobian_p05_by_family
+    if family not in minimums or family not in percentiles:
+        return _unavailable_metric(
+            f"{certificate.quality_metric} has no published summary for {family}."
+        )
+    counts_by_marker = certificate.cell_family_counts_by_marker
+    mesh_family_count = int(np.count_nonzero(mesh.cell_types == family))
+    certificate_family_count = sum(
+        int(counts.get(family, 0)) for counts in counts_by_marker.values()
+    )
+    if certificate_family_count != mesh_family_count:
+        return _unavailable_metric(
+            "The certificate family counts do not cover the current mesh scope."
+        )
+    if marker is not None:
+        marker_family_count = int(
+            np.count_nonzero(
+                (mesh.cell_types == family) & (mesh.element_markers == marker)
+            )
+        )
+        certified_marker_count = int(
+            counts_by_marker.get(marker, {}).get(family, 0)
+        )
+        if marker_family_count != mesh_family_count:
+            return _unavailable_metric(
+                f"The certificate publishes a mesh-wide {family} summary only; "
+                f"{family} spans multiple markers, so its min and p05 are not "
+                f"available for marker {marker}."
+            )
+        if certified_marker_count != marker_family_count:
+            return _unavailable_metric(
+                "The certificate does not publish the complete family for this marker scope."
+            )
+    return {
+        "status": "available",
+        "metric": certificate.quality_metric,
+        "source": certificate.schema_version,
+        "min": float(minimums[family]),
+        "p05": float(percentiles[family]),
+        "certificate_fingerprint": certificate.topology_fingerprint,
+    }
+
+
+def _quality_by_family_for_scope(
+    mesh: MeshData,
+    *,
+    element_mask: NDArray[np.bool_],
+    quality: MeshQualityReport | None,
+    marker: int | None,
+) -> dict[str, dict[str, object]]:
+    selected = np.asarray(element_mask, dtype=np.bool_)
+    selected_types = mesh.cell_types[selected]
+    if selected_types.size == 0:
+        return {}
+    result: dict[str, dict[str, object]] = {}
+    report_families = quality.quality_by_family if quality is not None else None
+    for family in sorted(str(value) for value in np.unique(selected_types)):
+        family_mask = selected & (mesh.cell_types == family)
+        family_count = int(np.count_nonzero(family_mask))
+        report_row = (
+            report_families.get(family)
+            if report_families is not None
+            else None
+        )
+        if report_row is None:
+            row = _quality_family_summary_from_arrays(
+                family=family,
+                cell_count=family_count,
+                quality=quality,
+                selected=family_mask,
+                source="gmsh" if quality is not None else "topology",
+            )
+        else:
+            reported_count_value = report_row.get("cell_count")
+            reported_count = (
+                int(reported_count_value)
+                if isinstance(reported_count_value, (int, np.integer))
+                and not isinstance(reported_count_value, (bool, np.bool_))
+                else None
+            )
+            if reported_count == family_count:
+                row = dict(report_row)
+            else:
+                row = _quality_family_summary_from_arrays(
+                    family=family,
+                    cell_count=family_count,
+                    quality=quality,
+                    selected=family_mask,
+                    source="gmsh" if quality is not None else "topology",
+                )
+                reported_count_label = (
+                    "missing or invalid"
+                    if reported_count is None
+                    else str(reported_count)
+                )
+                for metric in ("sicn", "gamma"):
+                    metric_summary = row.get(metric)
+                    if (
+                        not isinstance(metric_summary, dict)
+                        or metric_summary.get("status") != "available"
+                    ):
+                        row[metric] = _unavailable_metric(
+                            f"The preaggregated {family} {metric.upper()} summary "
+                            f"reports {reported_count_label} cells, while this "
+                            f"scope contains {family_count}; no aligned per-element "
+                            f"{metric.upper()} data is available for recomputation."
+                        )
+        row["cell_count"] = family_count
+        if "sicn" not in row:
+            row["sicn"] = _unavailable_metric(
+                "Gmsh SICN was not requested or retained."
+            )
+        if "gamma" not in row:
+            row["gamma"] = _unavailable_metric(
+                "Gmsh gamma was not requested or retained."
+            )
+        row["mixed_topology_scaled_jacobian"] = (
+            _certificate_scaled_jacobian_for_scope(mesh, family, marker)
+        )
+        result[family] = row
+    return result
+
+
+def _mesh_scope_node_count(
+    mesh: MeshData,
+    element_mask: NDArray[np.bool_],
+) -> int:
+    selected = np.asarray(element_mask, dtype=np.bool_)
+    if not np.any(selected):
+        return 0
+    if np.all(selected):
+        return int(np.unique(mesh.cell_nodes).size)
+    connectivity_blocks: list[NDArray[np.int32]] = []
+    for family in FEM_CELL_ARITIES:
+        ordinals = np.flatnonzero(selected & (mesh.cell_types == family)).astype(np.int64)
+        if ordinals.size:
+            connectivity_blocks.append(
+                _mesh_cell_connectivity(mesh, ordinals, family).reshape(-1)
+            )
+    if not connectivity_blocks:
+        return 0
+    return int(np.unique(np.concatenate(connectivity_blocks)).size)
+
+
+def _mesh_edge_length_chunks(
+    mesh: MeshData,
+    element_mask: NDArray[np.bool_],
+) -> Iterator[NDArray[np.float64]]:
+    selected = np.asarray(element_mask, dtype=np.bool_)
+    for family, local_edges in _MIXED_CELL_LOCAL_EDGES.items():
+        ordinals = np.flatnonzero(selected & (mesh.cell_types == family)).astype(np.int64)
+        if not ordinals.size:
+            continue
+        edge_pairs = np.asarray(local_edges, dtype=np.int64)
+        for chunk_start in range(0, len(ordinals), 16_384):
+            chunk_ordinals = ordinals[chunk_start : chunk_start + 16_384]
+            connectivity = _mesh_cell_connectivity(mesh, chunk_ordinals, family)
+            coordinates = mesh.nodes[connectivity]
+            lengths = np.linalg.norm(
+                coordinates[:, edge_pairs[:, 0], :]
+                - coordinates[:, edge_pairs[:, 1], :],
+                axis=2,
+            ).reshape(-1)
+            if lengths.size:
+                yield lengths
+
+
+def _mesh_edge_statistics(
+    mesh: MeshData,
+    element_mask: NDArray[np.bool_],
+) -> tuple[float, float, float, float]:
+    count = 0
+    mean = 0.0
+    m2 = 0.0
+    minimum = math.inf
+    maximum = -math.inf
+    for lengths in _mesh_edge_length_chunks(mesh, element_mask):
+        chunk_count = int(lengths.size)
+        chunk_mean = float(np.mean(lengths))
+        chunk_m2 = float(np.sum((lengths - chunk_mean) ** 2))
+        delta = chunk_mean - mean
+        combined_count = count + chunk_count
+        m2 += chunk_m2 + delta * delta * count * chunk_count / combined_count
+        mean += delta * chunk_count / combined_count
+        count = combined_count
+        minimum = min(minimum, float(np.min(lengths)))
+        maximum = max(maximum, float(np.max(lengths)))
+    if count == 0:
+        return 0.0, 0.0, 0.0, 0.0
+    return minimum, maximum, mean, math.sqrt(max(0.0, m2 / count))
+
+
+def _mesh_edge_histogram_bins(
+    mesh: MeshData,
+    element_mask: NDArray[np.bool_],
+    *,
+    min_value: float,
+    max_value: float,
+    bin_count: int = 30,
+) -> list[dict[str, object]]:
+    if not np.any(element_mask) or not math.isfinite(min_value) or not math.isfinite(max_value):
+        return []
+    edges = _size_histogram_edges(min_value, max_value, bin_count=bin_count)
+    if edges is None:
+        finite_count = sum(
+            int(np.count_nonzero(np.isfinite(lengths)))
+            for lengths in _mesh_edge_length_chunks(mesh, element_mask)
+        )
+        if finite_count == 0:
+            return []
+        return [{"lo": min_value, "hi": max_value, "count": finite_count}]
+
+    counts = np.zeros(edges.size - 1, dtype=np.int64)
+    for lengths in _mesh_edge_length_chunks(mesh, element_mask):
+        finite_lengths = lengths[np.isfinite(lengths)]
+        if finite_lengths.size:
+            chunk_counts, _ = np.histogram(finite_lengths, bins=edges)
+            counts += chunk_counts
+    if not np.any(counts):
+        return []
+    return [
+        {"lo": float(edges[index]), "hi": float(edges[index + 1]), "count": int(count)}
+        for index, count in enumerate(counts)
+    ]
+
+
 def _mesh_scope_statistics(
     mesh: MeshData,
     *,
@@ -5739,18 +6530,17 @@ def _mesh_scope_statistics(
     role: str,
     marker: int | None,
     element_mask: NDArray[np.bool_],
-    signed_volumes: NDArray[np.float64],
+    absolute_volumes: NDArray[np.float64],
+    inverted_mask: NDArray[np.bool_],
+    degenerate_mask: NDArray[np.bool_],
     quality: MeshQualityReport | None,
     boundary_face_count: int,
+    mixed_topology: bool,
 ) -> MeshStatisticsScope:
     selected = np.asarray(element_mask, dtype=np.bool_)
-    abs_volumes = np.abs(signed_volumes[selected])
+    abs_volumes = absolute_volumes[selected]
     element_count = int(np.count_nonzero(selected))
-    edge_lengths = _tetra_edge_lengths(mesh, selected)
-    if element_count > 0:
-        node_count = int(np.unique(mesh.elements[selected].reshape(-1)).size)
-    else:
-        node_count = 0
+    node_count = _mesh_scope_node_count(mesh, selected)
     volume_min = float(np.min(abs_volumes)) if abs_volumes.size else 0.0
     volume_max = float(np.max(abs_volumes)) if abs_volumes.size else 0.0
     volume_mean = float(np.mean(abs_volumes)) if abs_volumes.size else 0.0
@@ -5776,17 +6566,39 @@ def _mesh_scope_statistics(
         else None
     )
     characteristic_size_histogram = _size_histogram_bins(characteristic_sizes)
-    edge_length_min = float(np.min(edge_lengths)) if edge_lengths.size else 0.0
-    edge_length_max = float(np.max(edge_lengths)) if edge_lengths.size else 0.0
-    edge_length_mean = float(np.mean(edge_lengths)) if edge_lengths.size else 0.0
-    edge_length_std = float(np.std(edge_lengths)) if edge_lengths.size else 0.0
-    inverted_count = int(np.count_nonzero(signed_volumes[selected] <= 0.0))
-    degenerate_count = int(np.count_nonzero(abs_volumes <= 0.0))
+    volume_histogram = _size_histogram_bins(abs_volumes)
+    (
+        edge_length_min,
+        edge_length_max,
+        edge_length_mean,
+        edge_length_std,
+    ) = _mesh_edge_statistics(mesh, selected)
+    edge_length_histogram = _mesh_edge_histogram_bins(
+        mesh,
+        selected,
+        min_value=edge_length_min,
+        max_value=edge_length_max,
+    )
+    inverted_count = int(np.count_nonzero(inverted_mask[selected]))
+    degenerate_count = int(np.count_nonzero(degenerate_mask[selected]))
+    selected_families = set(str(value) for value in mesh.cell_types[selected].tolist())
+    quality_by_family = (
+        _quality_by_family_for_scope(
+            mesh,
+            element_mask=selected,
+            quality=quality,
+            marker=marker,
+        )
+        if mixed_topology
+        else {}
+    )
     warnings: list[str] = []
     if inverted_count:
-        warnings.append(f"{inverted_count} inverted tetrahedra")
+        cell_label = "tetrahedra" if selected_families == {"tet4"} else "cells"
+        warnings.append(f"{inverted_count} inverted {cell_label}")
     if degenerate_count:
-        warnings.append(f"{degenerate_count} degenerate tetrahedra")
+        cell_label = "tetrahedra" if selected_families == {"tet4"} else "cells"
+        warnings.append(f"{degenerate_count} degenerate {cell_label}")
     if volume_ratio is not None and volume_ratio > 1.0e5:
         warnings.append("extreme element volume ratio")
     if (
@@ -5795,8 +6607,19 @@ def _mesh_scope_statistics(
         and quality.sicn_p5 < 0.1
     ):
         warnings.append("worst 5% SICN below quality target")
-    if quality is not None and quality.gamma_min < 0.08:
+    scope_gamma = (
+        _quality_metric_from_report(quality, "gamma")
+        if selected_families.issubset({"tet4", "prism6"})
+        else None
+    )
+    if quality is not None and scope_gamma is not None and quality.gamma_min < 0.08:
         warnings.append("minimum gamma below quality target")
+    unavailable_gamma_families = sorted(
+        selected_families - {"tet4", "prism6"}
+    )
+    if unavailable_gamma_families:
+        families = ", ".join(unavailable_gamma_families)
+        warnings.append(f"Gmsh gamma is undefined for {families}; omitted for this scope")
     return MeshStatisticsScope(
         id=scope_id,
         kind=kind,
@@ -5825,17 +6648,34 @@ def _mesh_scope_statistics(
         inverted_count=inverted_count,
         degenerate_count=degenerate_count,
         sicn=_quality_metric_from_report(quality, "sicn"),
-        gamma=_quality_metric_from_report(quality, "gamma"),
+        gamma=scope_gamma,
+        quality_by_family=quality_by_family,
         warnings=warnings,
+        volume_histogram=volume_histogram,
+        edge_length_histogram=edge_length_histogram,
     )
 
 
 def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatisticsReport:
-    signed_volumes = _tetra_signed_volumes(mesh)
+    mixed_topology = bool(np.any(mesh.cell_types != "tet4"))
+    if mixed_topology:
+        (
+            signed_volumes,
+            absolute_volumes,
+            inverted_mask,
+            degenerate_mask,
+        ) = _mesh_cell_geometry(mesh)
+        boundary_face_counts, interface_count, exterior_face_count = (
+            _mixed_marker_face_statistics(mesh)
+        )
+    else:
+        signed_volumes = _tetra_signed_volumes(mesh)
+        absolute_volumes = np.abs(signed_volumes)
+        inverted_mask = signed_volumes <= 0.0
+        degenerate_mask = absolute_volumes <= 0.0
+        boundary_face_counts, interface_count = _tetra_marker_face_statistics(mesh)
+        exterior_face_count = mesh.n_boundary_faces
     all_mask = np.ones(mesh.n_elements, dtype=np.bool_)
-    boundary_face_counts = _boundary_face_counts_by_marker(mesh)
-    face_markers = _tetra_face_marker_sets(mesh)
-    interface_counts = _interface_face_count_by_marker_pair(face_markers)
     global_scope = _mesh_scope_statistics(
         mesh,
         scope_id="global",
@@ -5844,9 +6684,12 @@ def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatist
         role="global",
         marker=None,
         element_mask=all_mask,
-        signed_volumes=signed_volumes,
+        absolute_volumes=absolute_volumes,
+        inverted_mask=inverted_mask,
+        degenerate_mask=degenerate_mask,
         quality=mesh.quality,
-        boundary_face_count=mesh.n_boundary_faces,
+        boundary_face_count=exterior_face_count,
+        mixed_topology=mixed_topology,
     )
     scopes: list[MeshStatisticsScope] = []
     for marker in sorted(int(value) for value in np.unique(mesh.element_markers)):
@@ -5863,13 +6706,16 @@ def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatist
                 role=role,
                 marker=marker,
                 element_mask=marker_mask,
-                signed_volumes=signed_volumes,
+                absolute_volumes=absolute_volumes,
+                inverted_mask=inverted_mask,
+                degenerate_mask=degenerate_mask,
                 quality=quality,
                 boundary_face_count=boundary_face_counts.get(marker, 0),
+                mixed_topology=mixed_topology,
             )
         )
     empty_mask = np.zeros(mesh.n_elements, dtype=np.bool_)
-    if mesh.n_boundary_faces:
+    if exterior_face_count:
         scopes.append(
             _mesh_scope_statistics(
                 mesh,
@@ -5879,12 +6725,14 @@ def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatist
                 role="boundary",
                 marker=None,
                 element_mask=empty_mask,
-                signed_volumes=signed_volumes,
+                absolute_volumes=absolute_volumes,
+                inverted_mask=inverted_mask,
+                degenerate_mask=degenerate_mask,
                 quality=None,
-                boundary_face_count=mesh.n_boundary_faces,
+                boundary_face_count=exterior_face_count,
+                mixed_topology=mixed_topology,
             )
         )
-    interface_count = int(sum(interface_counts.values()))
     if interface_count:
         scopes.append(
             _mesh_scope_statistics(
@@ -5895,9 +6743,12 @@ def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatist
                 role="boundary",
                 marker=None,
                 element_mask=empty_mask,
-                signed_volumes=signed_volumes,
+                absolute_volumes=absolute_volumes,
+                inverted_mask=inverted_mask,
+                degenerate_mask=degenerate_mask,
                 quality=None,
                 boundary_face_count=interface_count,
+                mixed_topology=mixed_topology,
             )
         )
     scope_label_by_marker = {
@@ -5910,7 +6761,7 @@ def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatist
         if mesh.quality.element_gamma is not None:
             worst_elements_by_metric["gamma"] = _ranked_worst_elements(
                 mesh,
-                signed_volumes=signed_volumes,
+                absolute_volumes=absolute_volumes,
                 scope_label_by_marker=scope_label_by_marker,
                 metric="gamma",
                 values=mesh.quality.element_gamma,
@@ -5918,15 +6769,26 @@ def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatist
         if mesh.quality.element_sicn is not None:
             worst_elements_by_metric["sicn"] = _ranked_worst_elements(
                 mesh,
-                signed_volumes=signed_volumes,
+                absolute_volumes=absolute_volumes,
                 scope_label_by_marker=scope_label_by_marker,
                 metric="sicn",
                 values=mesh.quality.element_sicn,
             )
-    worst_elements = worst_elements_by_metric.get("gamma", [])
+    worst_elements = worst_elements_by_metric.get(
+        "gamma", worst_elements_by_metric.get("sicn", [])
+    )
+    quality_source = (
+        mesh.quality.quality_source
+        if mesh.quality is not None
+        else (
+            "mixed_topology_certificate"
+            if mixed_topology and mesh.mixed_layer_topology_certificate is not None
+            else "topology"
+        )
+    )
     return MeshStatisticsReport(
         mesh_name=mesh_name,
-        quality_source=mesh.quality.quality_source if mesh.quality is not None else "topology",
+        quality_source=quality_source,
         global_scope=global_scope,
         scopes=scopes,
         worst_elements=worst_elements,
@@ -5937,13 +6799,19 @@ def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatist
 def _ranked_worst_elements(
     mesh: MeshData,
     *,
-    signed_volumes: NDArray[np.float64],
+    absolute_volumes: NDArray[np.float64],
     scope_label_by_marker: dict[int, str],
     metric: str,
     values: list[float],
 ) -> list[dict[str, object]]:
     quality_values = np.asarray(values, dtype=np.float64)
     if quality_values.size != mesh.n_elements or quality_values.size == 0:
+        return []
+    valid = np.isfinite(quality_values)
+    if metric == "gamma":
+        valid &= np.isin(mesh.cell_types, ("tet4", "prism6"))
+    candidate_indices = np.flatnonzero(valid)
+    if candidate_indices.size == 0:
         return []
     gamma = (
         np.asarray(mesh.quality.element_gamma, dtype=np.float64)
@@ -5955,11 +6823,16 @@ def _ranked_worst_elements(
         if mesh.quality is not None and mesh.quality.element_sicn is not None
         else None
     )
-    count = min(10, quality_values.size)
+    count = min(10, candidate_indices.size)
     ranked: list[dict[str, object]] = []
-    for element_index in np.argsort(quality_values)[:count]:
+    for candidate_index in np.argsort(quality_values[candidate_indices])[:count]:
+        element_index = candidate_indices[candidate_index]
         elem = int(element_index)
         marker = int(mesh.element_markers[elem])
+        family = str(mesh.cell_types[elem])
+        connectivity = _mesh_cell_connectivity(
+            mesh, np.asarray([elem], dtype=np.int64), family
+        )[0]
         ranked.append(
             {
                 "element_index": elem,
@@ -5968,7 +6841,9 @@ def _ranked_worst_elements(
                 "scope_label": scope_label_by_marker.get(marker, f"Domain {marker}"),
                 "gamma": (
                     float(gamma[elem])
-                    if gamma is not None and elem < gamma.size
+                    if gamma is not None
+                    and elem < gamma.size
+                    and family in {"tet4", "prism6"}
                     else None
                 ),
                 "sicn": (
@@ -5976,8 +6851,8 @@ def _ranked_worst_elements(
                     if sicn is not None and elem < sicn.size
                     else None
                 ),
-                "volume": float(abs(signed_volumes[elem])),
-                "centroid": np.mean(mesh.nodes[mesh.elements[elem]], axis=0).tolist(),
+                "volume": float(absolute_volumes[elem]),
+                "centroid": np.mean(mesh.nodes[connectivity], axis=0).tolist(),
             }
         )
     return ranked
@@ -6008,7 +6883,7 @@ def _mesh_statistics_public_scope_id(scope: MeshStatisticsScope) -> str:
 
 
 def _mesh_statistics_scope_to_ir(scope: MeshStatisticsScope) -> dict[str, object]:
-    return {
+    result: dict[str, object] = {
         "id": scope.id,
         "scope_id": _mesh_statistics_public_scope_id(scope),
         "kind": scope.kind,
@@ -6019,14 +6894,19 @@ def _mesh_statistics_scope_to_ir(scope: MeshStatisticsScope) -> dict[str, object
         "element_count": scope.element_count,
         "boundary_face_count": scope.boundary_face_count,
         "volume": {
+            "definition": "absolute_canonical_tetrahedral_decomposition",
+            "unit": "m^3",
             "min": scope.volume_min,
             "max": scope.volume_max,
             "mean": scope.volume_mean,
             "std": scope.volume_std,
             "ratio": scope.volume_ratio,
             "total": scope.volume_total,
+            "histogram": scope.volume_histogram,
         },
         "characteristic_size": {
+            "definition": "volume_equivalent_regular_tetrahedron",
+            "unit": "m",
             "min": scope.characteristic_size_min,
             "max": scope.characteristic_size_max,
             "mean": scope.characteristic_size_mean,
@@ -6035,10 +6915,13 @@ def _mesh_statistics_scope_to_ir(scope: MeshStatisticsScope) -> dict[str, object
             "histogram": scope.characteristic_size_histogram,
         },
         "edge_length": {
+            "definition": "canonical_edges_per_cell",
+            "unit": "m",
             "min": scope.edge_length_min,
             "max": scope.edge_length_max,
             "mean": scope.edge_length_mean,
             "std": scope.edge_length_std,
+            "histogram": scope.edge_length_histogram,
         },
         "inverted_count": scope.inverted_count,
         "degenerate_count": scope.degenerate_count,
@@ -6046,6 +6929,9 @@ def _mesh_statistics_scope_to_ir(scope: MeshStatisticsScope) -> dict[str, object
         "gamma": scope.gamma,
         "warnings": scope.warnings,
     }
+    if scope.quality_by_family:
+        result["quality_by_family"] = scope.quality_by_family
+    return result
 
 
 def _mesh_statistics_report_to_ir(report: MeshStatisticsReport) -> dict[str, object]:

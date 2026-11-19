@@ -27,6 +27,8 @@ def _without_source_identity(problem_ir: dict[str, object]) -> dict[str, object]
     problem_meta.pop("source_hash", None)
     runtime_metadata = dict(problem_meta.get("runtime_metadata") or {})
     runtime_metadata.pop("output_storage_source_stem", None)
+    # The scene has an editor asset inventory that a hand-written script may omit.
+    runtime_metadata.pop("material_assets", None)
     problem_meta["runtime_metadata"] = runtime_metadata
     comparable["problem_meta"] = problem_meta
     return comparable
@@ -646,6 +648,31 @@ def test_scene_document_problem_ir_preserves_study_table_autosave(tmp_path: Path
     assert problem_ir["study"]["sampling"]["table_autosave"] == autosave
 
 
+def test_staged_scene_keeps_step_table_cadence_out_of_its_base_study(tmp_path: Path) -> None:
+    source = tmp_path / "staged_table_autosave.py"
+    source.write_text(
+        """import fullmag as fm
+study = fm.study('staged-table-autosave')
+study.engine('fdm')
+film = study.geometry(fm.Box(20e-9, 10e-9, 5e-9), name='film', object_id='film')
+film.Ms = 800000
+film.Aex = 13e-12
+film.m = fm.texture.uniform(0, 0, 1)
+study.tableautosave(every_steps=1, quantities=['t', 'step', 'mx'])
+study.stages.add_minimize(method='bb', max_steps=10, tolA=1e-4)
+""",
+        encoding="utf-8",
+    )
+    loaded = load_problem_from_script(source, lightweight_assets=True)
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    assert scene["study"]["table_autosave"]["every_steps"] == 1
+
+    problem_ir = _lower_scene_document(scene, tmp_path)
+
+    assert problem_ir["study"]["kind"] != "relaxation"
+    assert "table_autosave" not in problem_ir["study"]["sampling"]
+
+
 def test_scene_document_problem_ir_accepts_default_empty_field_drive_state(
     tmp_path: Path,
 ) -> None:
@@ -1072,3 +1099,46 @@ def _lower_scene_document(
         requested_mode="strict",
         source_root=source_root,
     )
+
+
+def test_scene_document_rejects_pinned_mesh_path_escape(tmp_path: Path) -> None:
+    scene = _minimal_scene_document(tmp_path)
+    scene["study"]["requested_backend"] = "fem"
+    scene["study"]["backend"] = "fem"
+    outside_root = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside_root.mkdir()
+    (tmp_path / "linked").symlink_to(outside_root, target_is_directory=True)
+    scene["study"]["fem_domain_mesh"] = {
+        "source": "linked/outside.fullmag-mesh",
+        "sha256": "a" * 64,
+        "build_requested": True,
+    }
+
+    with pytest.raises(ValueError, match="beneath source_root"):
+        scene_document_to_problem_ir(
+            scene,
+            requested_backend="fem",
+            requested_device="cpu",
+            requested_precision="double",
+            requested_mode="strict",
+            source_root=tmp_path,
+        )
+
+
+def test_scene_document_rejects_pinned_fem_mesh_for_explicit_fdm(tmp_path: Path) -> None:
+    scene = _minimal_scene_document(tmp_path)
+    scene["study"]["fem_domain_mesh"] = {
+        "source": "assets/domain.fullmag-mesh",
+        "sha256": "a" * 64,
+        "build_requested": True,
+    }
+
+    with pytest.raises(ValueError, match="requires the FEM backend"):
+        scene_document_to_problem_ir(
+            scene,
+            requested_backend="fdm",
+            requested_device="cpu",
+            requested_precision="double",
+            requested_mode="strict",
+            source_root=tmp_path,
+        )

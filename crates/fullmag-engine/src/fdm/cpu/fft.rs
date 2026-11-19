@@ -3,7 +3,11 @@
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 use sha2::{Digest, Sha256};
-use std::{mem::size_of, time::Instant};
+use std::{
+    mem::size_of,
+    sync::{Arc, Mutex, OnceLock},
+    time::Instant,
+};
 
 use super::r2c::R2c3dPlan;
 use crate::fdm::shared::types::{AxisBoundary, FdmBoundaryPolicy, ResolvedFdmPeriodicWorkspace};
@@ -13,7 +17,7 @@ use crate::Vector3;
 
 // ── FftWorkspace ───────────────────────────────────────────────────────
 
-pub const FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION: &str = "fullmag.fdm.fft_workspace.v2";
+pub const FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION: &str = "fullmag.fdm.fft_workspace.v3";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FftWorkspaceTelemetry {
@@ -46,6 +50,7 @@ fn execution_thread_count() -> u32 {
 
 fn fft_workspace_key_sha256(
     cells: [usize; 3],
+    padded: [usize; 3],
     cell_size: [f64; 3],
     periodic: [bool; 3],
     image_counts: [u32; 3],
@@ -55,6 +60,9 @@ fn fft_workspace_key_sha256(
     hasher.update(FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION.as_bytes());
     hasher.update(b"rustfft\0double\0half_spectrum_r2c");
     for value in cells {
+        hasher.update(u64::try_from(value).unwrap_or(u64::MAX).to_le_bytes());
+    }
+    for value in padded {
         hasher.update(u64::try_from(value).unwrap_or(u64::MAX).to_le_bytes());
     }
     for value in cell_size {
@@ -81,7 +89,7 @@ pub struct FftWorkspace {
     pub(crate) ny: usize,
     pub(crate) nz: usize,
     transform: R2c3dPlan,
-    /// Padded grid dimensions (2×N per axis).
+    /// Transform grid dimensions after boundary-aware padding.
     pub px: usize,
     pub py: usize,
     pub pz: usize,
@@ -219,6 +227,33 @@ impl FftWorkspace {
             .unwrap_or_else(|reason| panic!("FDM FFT workspace rejected: {reason}"))
     }
 
+    pub(crate) fn new_open_single_layer(nx: usize, ny: usize, dx: f64, dy: f64, dz: f64) -> Self {
+        checked_workspace_budget([nx, ny, 1], [false; 3], [0; 3])
+            .unwrap_or_else(|reason| panic!("FDM FFT workspace rejected: {reason}"));
+        let mut kernels = newell::compute_newell_kernels(nx, ny, 1, dx, dy, dz);
+        assert_eq!(
+            kernels.pz, 2,
+            "open single-layer Newell builder shape changed"
+        );
+        let plane_len = kernels
+            .px
+            .checked_mul(kernels.py)
+            .expect("checked single-layer kernel plane length");
+        for component in [
+            &mut kernels.n_xx,
+            &mut kernels.n_yy,
+            &mut kernels.n_zz,
+            &mut kernels.n_xy,
+            &mut kernels.n_xz,
+            &mut kernels.n_yz,
+        ] {
+            assert_eq!(component.len(), plane_len * 2);
+            component.truncate(plane_len);
+        }
+        kernels.pz = 1;
+        Self::from_real_kernels(nx, ny, 1, dx, dy, dz, kernels, [false; 3], [0; 3])
+    }
+
     fn new_unchecked(nx: usize, ny: usize, nz: usize, dx: f64, dy: f64, dz: f64) -> Self {
         let kernels = newell::compute_newell_kernels(nx, ny, nz, dx, dy, dz);
         Self::from_real_kernels(nx, ny, nz, dx, dy, dz, kernels, [false; 3], [0; 3])
@@ -288,6 +323,7 @@ impl FftWorkspace {
                 lifecycle_revision: 1,
                 lifecycle_key_sha256: fft_workspace_key_sha256(
                     [nx, ny, nz],
+                    [px, py, pz],
                     [dx, dy, dz],
                     periodic,
                     image_counts,
@@ -427,7 +463,7 @@ impl FftWorkspace {
         let pbc_x = matches!(boundary.x, AxisBoundary::Periodic);
         let pbc_y = matches!(boundary.y, AxisBoundary::Periodic);
         let pbc_z = matches!(boundary.z, AxisBoundary::Periodic);
-        let kernels = compute_periodic_newell_kernels(
+        let kernels = compute_periodic_newell_kernels_cached(
             nx,
             ny,
             nz,
@@ -994,7 +1030,10 @@ pub(crate) fn zero_vectors(len: usize) -> Vec<Vector3> {
 
 #[cfg(test)]
 mod normalization_tests {
-    use super::{compute_newell_kernel_spectra, fft3_core, padded_index};
+    use super::{
+        compute_newell_kernel_spectra, fft3_core, padded_index, FftWorkspace,
+        FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION,
+    };
     use crate::newell;
     use rustfft::{num_complex::Complex, FftPlanner};
     use std::f64::consts::TAU;
@@ -1130,6 +1169,143 @@ mod normalization_tests {
             }
         }
     }
+
+    #[test]
+    fn single_layer_workspace_shape_has_a_distinct_lifecycle_key() {
+        let legacy = FftWorkspace::new(3, 2, 1, 1.3e-9, 2.1e-9, 5.7e-9);
+        let single_layer = FftWorkspace::new_open_single_layer(3, 2, 1.3e-9, 2.1e-9, 5.7e-9);
+
+        assert_eq!(
+            FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION,
+            "fullmag.fdm.fft_workspace.v3"
+        );
+        assert_eq!([legacy.px, legacy.py, legacy.pz], [6, 4, 2]);
+        assert_eq!(
+            [single_layer.px, single_layer.py, single_layer.pz],
+            [6, 4, 1]
+        );
+        assert!(
+            single_layer.telemetry().workspace_bytes < legacy.telemetry().workspace_bytes,
+            "single-layer workspace should own fewer bytes than the legacy padded workspace"
+        );
+        assert_ne!(
+            legacy.telemetry().lifecycle_key_sha256,
+            single_layer.telemetry().lifecycle_key_sha256
+        );
+    }
+}
+
+const MAX_PERIODIC_NEWELL_KERNEL_CACHE_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PeriodicNewellKernelCacheKey {
+    cells: [usize; 3],
+    cell_size_bits: [u64; 3],
+    periodic: [bool; 3],
+    images: [u32; 3],
+}
+
+impl PeriodicNewellKernelCacheKey {
+    fn new(cells: [usize; 3], cell_size: [f64; 3], periodic: [bool; 3], images: [u32; 3]) -> Self {
+        Self {
+            cells,
+            cell_size_bits: cell_size.map(f64::to_bits),
+            periodic,
+            images,
+        }
+    }
+}
+
+fn periodic_newell_kernel_cache_bytes(cells: [usize; 3], periodic: [bool; 3]) -> Option<usize> {
+    let px = if periodic[0] {
+        cells[0]
+    } else {
+        cells[0].checked_mul(2)?
+    };
+    let py = if periodic[1] {
+        cells[1]
+    } else {
+        cells[1].checked_mul(2)?
+    };
+    let pz = if periodic[2] {
+        cells[2]
+    } else {
+        cells[2].checked_mul(2)?
+    };
+    let bytes = px
+        .checked_mul(py)?
+        .checked_mul(pz)?
+        .checked_mul(6)?
+        .checked_mul(size_of::<f64>())?;
+    if bytes <= MAX_PERIODIC_NEWELL_KERNEL_CACHE_BYTES {
+        Some(bytes)
+    } else {
+        None
+    }
+}
+
+type PeriodicNewellKernelCache =
+    Mutex<Option<(PeriodicNewellKernelCacheKey, Arc<newell::NewellKernels>)>>;
+
+fn periodic_newell_kernel_cache() -> &'static PeriodicNewellKernelCache {
+    static CACHE: OnceLock<PeriodicNewellKernelCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn clone_periodic_newell_kernels(kernels: &newell::NewellKernels) -> newell::NewellKernels {
+    newell::NewellKernels {
+        n_xx: kernels.n_xx.clone(),
+        n_yy: kernels.n_yy.clone(),
+        n_zz: kernels.n_zz.clone(),
+        n_xy: kernels.n_xy.clone(),
+        n_xz: kernels.n_xz.clone(),
+        n_yz: kernels.n_yz.clone(),
+        px: kernels.px,
+        py: kernels.py,
+        pz: kernels.pz,
+    }
+}
+
+fn compute_periodic_newell_kernels_cached(
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    dx: f64,
+    dy: f64,
+    dz: f64,
+    periodic: [bool; 3],
+    images: [u32; 3],
+) -> newell::NewellKernels {
+    let cells = [nx, ny, nz];
+    if periodic == [false; 3] || periodic_newell_kernel_cache_bytes(cells, periodic).is_none() {
+        return compute_periodic_newell_kernels(nx, ny, nz, dx, dy, dz, periodic, images);
+    }
+
+    let key = PeriodicNewellKernelCacheKey::new(cells, [dx, dy, dz], periodic, images);
+    let cache = match periodic_newell_kernel_cache().lock() {
+        Ok(cache) => cache,
+        Err(_) => {
+            return compute_periodic_newell_kernels(nx, ny, nz, dx, dy, dz, periodic, images);
+        }
+    };
+    let cached_kernels = cache
+        .as_ref()
+        .and_then(|(cached_key, kernels)| (*cached_key == key).then(|| Arc::clone(kernels)));
+    drop(cache);
+    if let Some(kernels) = cached_kernels {
+        return clone_periodic_newell_kernels(&kernels);
+    }
+
+    let kernels = Arc::new(compute_periodic_newell_kernels(
+        nx, ny, nz, dx, dy, dz, periodic, images,
+    ));
+    let previous = match periodic_newell_kernel_cache().lock() {
+        Ok(mut cache) => cache.replace((key, Arc::clone(&kernels))),
+        Err(_) => None,
+    };
+    drop(previous);
+
+    clone_periodic_newell_kernels(&kernels)
 }
 
 /// Compute PBC Newell kernels via truncated images.
@@ -1236,6 +1412,146 @@ fn compute_periodic_newell_kernels(
         px,
         py,
         pz,
+    }
+}
+
+#[cfg(test)]
+mod periodic_newell_kernel_cache_tests {
+    use super::{
+        compute_periodic_newell_kernels, compute_periodic_newell_kernels_cached,
+        periodic_newell_kernel_cache_bytes, PeriodicNewellKernelCacheKey,
+    };
+
+    type Parameters = ([usize; 3], [f64; 3], [bool; 3], [u32; 3]);
+
+    fn cached(parameters: Parameters) -> crate::newell::NewellKernels {
+        let ([nx, ny, nz], [dx, dy, dz], periodic, images) = parameters;
+        compute_periodic_newell_kernels_cached(nx, ny, nz, dx, dy, dz, periodic, images)
+    }
+
+    fn uncached(parameters: Parameters) -> crate::newell::NewellKernels {
+        let ([nx, ny, nz], [dx, dy, dz], periodic, images) = parameters;
+        compute_periodic_newell_kernels(nx, ny, nz, dx, dy, dz, periodic, images)
+    }
+
+    fn arrays(kernels: &crate::newell::NewellKernels) -> [&[f64]; 6] {
+        [
+            &kernels.n_xx,
+            &kernels.n_yy,
+            &kernels.n_zz,
+            &kernels.n_xy,
+            &kernels.n_xz,
+            &kernels.n_yz,
+        ]
+    }
+
+    fn arrays_mut(kernels: &mut crate::newell::NewellKernels) -> [&mut [f64]; 6] {
+        [
+            &mut kernels.n_xx,
+            &mut kernels.n_yy,
+            &mut kernels.n_zz,
+            &mut kernels.n_xy,
+            &mut kernels.n_xz,
+            &mut kernels.n_yz,
+        ]
+    }
+
+    fn first_values(kernels: &crate::newell::NewellKernels) -> [u64; 6] {
+        arrays(kernels).map(|array| array[0].to_bits())
+    }
+
+    fn assert_kernels_bit_identical(
+        actual: &crate::newell::NewellKernels,
+        expected: &crate::newell::NewellKernels,
+    ) {
+        assert_eq!(
+            [actual.px, actual.py, actual.pz],
+            [expected.px, expected.py, expected.pz]
+        );
+        for (actual, expected) in arrays(actual).into_iter().zip(arrays(expected)) {
+            assert_eq!(actual.len(), expected.len());
+            for (actual, expected) in actual.iter().zip(expected) {
+                assert_eq!(actual.to_bits(), expected.to_bits());
+            }
+        }
+    }
+
+    #[test]
+    fn cached_periodic_kernels_match_uncached_values_bit_for_bit() {
+        let parameters = ([2, 2, 1], [1.0, 1.25, 0.75], [true, true, false], [1, 2, 0]);
+        assert_kernels_bit_identical(&cached(parameters), &uncached(parameters));
+    }
+
+    #[test]
+    fn cache_key_covers_grid_cell_size_periodicity_and_images() {
+        let base = PeriodicNewellKernelCacheKey::new(
+            [2, 3, 1],
+            [1.0, 1.5, 2.0],
+            [true, false, true],
+            [1, 0, 2],
+        );
+
+        assert_eq!(
+            base,
+            PeriodicNewellKernelCacheKey::new(
+                [2, 3, 1],
+                [1.0, 1.5, 2.0],
+                [true, false, true],
+                [1, 0, 2],
+            )
+        );
+        for changed in [
+            PeriodicNewellKernelCacheKey::new(
+                [3, 3, 1],
+                [1.0, 1.5, 2.0],
+                [true, false, true],
+                [1, 0, 2],
+            ),
+            PeriodicNewellKernelCacheKey::new(
+                [2, 3, 1],
+                [1.0, 1.500_000_1, 2.0],
+                [true, false, true],
+                [1, 0, 2],
+            ),
+            PeriodicNewellKernelCacheKey::new(
+                [2, 3, 1],
+                [1.0, 1.5, 2.0],
+                [true, true, true],
+                [1, 0, 2],
+            ),
+            PeriodicNewellKernelCacheKey::new(
+                [2, 3, 1],
+                [1.0, 1.5, 2.0],
+                [true, false, true],
+                [1, 0, 3],
+            ),
+        ] {
+            assert_ne!(base, changed);
+        }
+    }
+
+    #[test]
+    fn cache_hit_returns_independently_mutable_kernel_arrays() {
+        let parameters = ([3, 2, 1], [0.75, 1.1, 0.35], [true, false, true], [2, 0, 1]);
+        let mut first = cached(parameters);
+        let second = cached(parameters);
+
+        for (first, second) in arrays(&first).into_iter().zip(arrays(&second)) {
+            assert_ne!(first.as_ptr(), second.as_ptr());
+        }
+        let original = first_values(&second);
+        for array in arrays_mut(&mut first) {
+            array[0] += 1.0;
+        }
+
+        assert_eq!(first_values(&second), original);
+        assert_eq!(first_values(&cached(parameters)), original);
+    }
+
+    #[test]
+    fn cache_rejects_oversized_and_overflowing_kernel_shapes_without_allocating() {
+        assert!(periodic_newell_kernel_cache_bytes([1_200, 1_200, 1], [true; 3]).is_none());
+        assert!(periodic_newell_kernel_cache_bytes([usize::MAX, 2, 2], [true; 3]).is_none());
     }
 }
 

@@ -40,6 +40,7 @@ export function createPlanarColorizer(
       options: {
         colormap: string;
         contours: boolean;
+        directionVectors?: Float32Array | Float64Array | null;
         height: number;
         level: number;
         opacity: number;
@@ -49,9 +50,13 @@ export function createPlanarColorizer(
       latestId = ++nextId;
       const workerMask = clonePlanarMaskForWorker(mask);
       const workerValues = clonePlanarValuesForWorker(values);
+      const workerDirection = options.directionVectors
+        ? clonePlanarValuesForWorker(options.directionVectors)
+        : undefined;
       const request: PlanarColorizeRequest = {
         colormap: options.colormap,
         contours: { enabled: options.contours, level: options.level },
+        directionVectors: workerDirection,
         height: options.height,
         id: latestId,
         kind: "colorize",
@@ -63,6 +68,7 @@ export function createPlanarColorizer(
       };
       const transfers: Transferable[] = [workerValues.buffer];
       if (workerMask) transfers.push(workerMask.buffer);
+      if (workerDirection) transfers.push(workerDirection.buffer);
       worker.postMessage(request, transfers);
     },
     invalidate() {

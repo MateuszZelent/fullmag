@@ -51,6 +51,7 @@ Raporter zachowuje ten manifest w `installed_manifest`; nie zamienia deklaracji 
 | CEED | `dependencies.libceed.ref` + `commit` | nazwa `libceed` zachowuje istniejący manifest |
 | HYPRE | `dependencies.hypre.ref` + `commit` | pamięć i architektury są osobno w `hypre` |
 | PETSc | `dependencies.petsc.ref` + `commit` | ref i source commit są raportowane osobno |
+| MUMPS, METIS, ScaLAPACK, OpenBLAS | `FULLMAG_PETSC_EXTERNAL_PACKAGE_FLAGS` (`--download-*`) + `share/fullmag/petsc-build-metadata.json` | wersje pobieranych pakietów przypina PETSc dla `PETSC_SOURCE_COMMIT`; metadane zapisują configure i makra `PETSC_HAVE_*` obu prefiksów; licencje: MUMPS CeCILL-C, METIS Apache-2.0, ScaLAPACK i OpenBLAS BSD-3-Clause |
 | SLEPc | `dependencies.slepc.ref` + `commit` | ref i source commit są raportowane osobno |
 | Python | `tools.python` + `artifact_hashes.python` | wersja i SHA archiwum |
 | Node | `tools.node` + `artifact_hashes.node` | osobny SHA dla amd64/arm64 |

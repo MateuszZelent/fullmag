@@ -1,0 +1,219 @@
+{
+  "fmtb_rows": {
+    "columnCount": 3,
+    "cursorEnd": 42,
+    "cursorStart": 40,
+    "resyncRequired": false,
+    "revision": 12,
+    "rowCount": 2,
+    "schemaRevision": 3,
+    "totalRows": 42,
+    "values": [
+      0.0,
+      1.0,
+      -0.5,
+      1e-12,
+      0.9,
+      -0.4
+    ]
+  },
+  "v2_grid": {
+    "formatVersion": 2,
+    "grid": [
+      2,
+      3,
+      1
+    ],
+    "indexing": "legacy_count_only",
+    "nComp": 3,
+    "quantityId": "m",
+    "values": [
+      -1.0,
+      -0.5,
+      0.0,
+      0.5,
+      1.0,
+      1.5,
+      2.0,
+      2.5,
+      3.0,
+      3.5,
+      4.0,
+      4.5,
+      5.0,
+      5.5,
+      6.0,
+      6.5,
+      7.0,
+      7.5
+    ]
+  },
+  "v3_full_domain": {
+    "domainGenerationId": "gen-3",
+    "formatVersion": 3,
+    "grid": [
+      2,
+      1,
+      1
+    ],
+    "indexing": "full_domain",
+    "meshTopologyHash": "9daf11aa0fd92cbcbec54ec4a6b0b38b9f1da981f58e8910a9dfbbe9ade2c20f",
+    "meshTopologyRevision": "7",
+    "nComp": 3,
+    "quantityId": "H_eff",
+    "scopeKind": "full",
+    "values": [
+      100000.0,
+      0,
+      0,
+      -100000.0,
+      0,
+      2.5
+    ]
+  },
+  "v4_live_explicit": {
+    "domainGenerationId": "gen-4",
+    "fieldGenerationId": "field-gen-9",
+    "formatVersion": 4,
+    "grid": [
+      3,
+      1,
+      1
+    ],
+    "indexing": "explicit_node_indices",
+    "meshTopologyHash": "9daf11aa0fd92cbcbec54ec4a6b0b38b9f1da981f58e8910a9dfbbe9ade2c20f",
+    "meshTopologyRevision": "3",
+    "nComp": 3,
+    "nodeIndices": [
+      10,
+      4,
+      99
+    ],
+    "quantityId": "m",
+    "scopeId": "disk",
+    "scopeKind": "object",
+    "sourceId": "run-1",
+    "sourceKind": "live",
+    "sourceRevision": "42",
+    "values": [
+      1,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      1
+    ]
+  },
+  "v5_absent_topology": {
+    "domainGenerationId": "gen-6",
+    "formatVersion": 5,
+    "grid": [
+      4,
+      1,
+      1
+    ],
+    "indexing": "legacy_count_only",
+    "meshTopologyHash": null,
+    "meshTopologyRevision": null,
+    "nComp": 1,
+    "quantityId": "E_density",
+    "values": [
+      1.0,
+      2.0,
+      3.0,
+      4.0
+    ]
+  },
+  "v5_long_id_qualified": {
+    "domainGenerationId": "gen-5",
+    "fieldGenerationId": "fg-5",
+    "formatVersion": 5,
+    "grid": [
+      1,
+      1,
+      1
+    ],
+    "indexing": "full_domain",
+    "meshTopologyHash": "9daf11aa0fd92cbcbec54ec4a6b0b38b9f1da981f58e8910a9dfbbe9ade2c20f",
+    "meshTopologyRevision": "11",
+    "nComp": 6,
+    "quantityId": "mode_eigen_k0__ąbranch_0007_real_imag",
+    "scopeKind": "magnetic_only",
+    "sourceId": "frame-2",
+    "sourceKind": "observation_frame",
+    "sourceRevision": "5",
+    "values": [
+      0.1,
+      -0.2,
+      0.3,
+      0.4,
+      0.0,
+      1.0
+    ]
+  },
+  "v6_source_nodes": {
+    "artifactIdentityIds": [
+      "1099511627783",
+      "3"
+    ],
+    "formatVersion": 6,
+    "grid": [
+      2,
+      1,
+      1
+    ],
+    "indexing": "source_nodes",
+    "nComp": 3,
+    "quantityId": "m_mode",
+    "scopeId": "bar",
+    "scopeKind": "object",
+    "sourceKind": "artifact_inspection",
+    "sourceRevision": "9",
+    "values": [
+      0.5,
+      0.5,
+      0.0,
+      -0.5,
+      0.5,
+      0.0
+    ]
+  },
+  "v6_tet4": {
+    "artifactIdentityIds": [
+      "100",
+      "101",
+      "102",
+      "103"
+    ],
+    "formatVersion": 6,
+    "grid": [
+      4,
+      1,
+      1
+    ],
+    "indexing": "tet4_cell_local_nodes",
+    "nComp": 3,
+    "quantityId": "m",
+    "scopeId": null,
+    "scopeKind": "full",
+    "sourceKind": "artifact_inspection",
+    "sourceRevision": "1",
+    "values": [
+      0.0,
+      1.0,
+      2.0,
+      3.0,
+      4.0,
+      5.0,
+      6.0,
+      7.0,
+      8.0,
+      9.0,
+      10.0,
+      11.0
+    ]
+  }
+}

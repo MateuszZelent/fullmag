@@ -14,6 +14,13 @@ const NO_IMPORTER = "No importer for this format ships in this build yet.";
 
 export const IMPORT_FORMATS: readonly ImportFormat[] = [
   {
+    id: "python",
+    label: "Fullmag Python",
+    extensions: [".py"],
+    fidelity: "Original UTF-8 source, reviewed before consent. Self-contained scripts only; companion files are not included.",
+    unavailableReason: null,
+  },
+  {
     id: "fms",
     label: "Fullmag",
     extensions: [".fms"],
@@ -44,9 +51,16 @@ export const IMPORT_FORMATS: readonly ImportFormat[] = [
     unavailableReason: NO_IMPORTER,
   },
   {
-    id: "mesh",
-    label: "Mesh",
-    extensions: [".stl", ".vtk", ".msh"],
+    id: "stl",
+    label: "STL surface mesh",
+    extensions: [".stl"],
+    fidelity: "Triangle surface only. Choose the length unit and scale explicitly during import.",
+    unavailableReason: null,
+  },
+  {
+    id: "mesh-unavailable",
+    label: "Other mesh formats",
+    extensions: [".vtk", ".msh"],
     fidelity: "Geometry only.",
     unavailableReason: NO_IMPORTER,
   },

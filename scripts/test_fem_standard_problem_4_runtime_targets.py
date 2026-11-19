@@ -56,7 +56,7 @@ def test_plain_user_scenario_target_keeps_physics_in_script_and_processes_bundle
     wrapper = (ROOT / "scripts/run_fem_sp4_scenario.sh").read_text()
     assert "fem-sp4-scenario device script attempt_id" in justfile
     assert "scripts/run_fem_sp4_scenario.sh" in justfile
-    assert 'just fullmag "build=$build" fem "$device" headless "$script"' in wrapper
+    assert 'just fullmag-reference "build=$build" fem "$device" headless "$script"' in wrapper
     assert 'bundle="${script%.py}.zarr"' in wrapper
     assert "tests.standard_problems.mumag.sp4.fem.collect_results" in wrapper
     assert "tests.standard_problems.mumag.sp4.fem.plot_results" in wrapper

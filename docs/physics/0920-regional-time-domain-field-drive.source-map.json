@@ -92,7 +92,8 @@
         "symbol-23"
       ],
       "sources": [
-        "fem-energy"
+        "fem-energy",
+        "cuda-drive-energy-split"
       ]
     },
     {
@@ -156,7 +157,8 @@
         "ir-clock",
         "fdm-time",
         "gamma-collector",
-        "clock-tests"
+        "clock-tests",
+        "cuda-publication-clock"
       ]
     },
     {
@@ -1004,6 +1006,60 @@
       "responsibility": "Auto-sinc guard i rzeczywista częstość próbkowania",
       "solver_backend": "wspólna",
       "evidence_status": "source_visible"
+    },
+    {
+      "id": "pipeline-clock",
+      "path": "crates/fullmag-application/src/script_pipeline_compilation.rs",
+      "symbol": "advance_physical_clock",
+      "responsibility": "Sequential Run clock before immutable capture; relaxation and inspection do not advance physical time",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "A8 CPU/double and A10 CUDA/single two Run absolute sinusoid PASS. Macro/cold/writer regressions passed ba739 bootstrap42472546682. No FEM dynamic qualification claimed."
+    },
+    {
+      "id": "pipeline-clock-tests",
+      "path": "crates/fullmag-application/src/script_pipeline_acceptance.rs",
+      "symbol": "physical_runs_keep_cumulative_clock_and_saved_waveform_origin",
+      "responsibility": "Clock continuity, saved waveform origin, overflow and rehashed cold-catalog reset refusals",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "A8 CPU/double and A10 CUDA/single two Run absolute sinusoid PASS. Macro/cold/writer regressions passed ba739 bootstrap42472546682. No FEM dynamic qualification claimed."
+    },
+    {
+      "id": "initial-artifact-clock",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "resumed_run_artifacts_preserve_stage_start_without_accepted_steps",
+      "responsibility": "Physical stage time in initial and zero-step final magnetization artifacts",
+      "solver_backend": "FDM/FEM",
+      "evidence_status": "source_visible",
+      "evidence": "A8 CPU/double and A10 CUDA/single two Run absolute sinusoid PASS. Macro/cold/writer regressions passed ba739 bootstrap42472546682. No FEM dynamic qualification claimed."
+    },
+    {
+      "id": "cuda-publication-clock",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/mod.rs",
+      "symbol": "canonical_fdm_publication_clock",
+      "responsibility": "Physical publication copies before accepted-state clock digest; native and relaxation clocks retain local semantics",
+      "solver_backend": "FDM GPU",
+      "evidence_status": "source_visible",
+      "evidence": "A9 RED preserved; A10 public CUDA/single two Run clock/digest, m/E partition and density integrals PASS; default-feature regressions require final CI. Adaptive identity stays unvalidated."
+    },
+    {
+      "id": "cuda-drive-energy-split",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs",
+      "symbol": "split_native_regional_drive_energy",
+      "responsibility": "Idempotent partition of native combined Zeeman into external and regional drive, preserving total and free scalar scope",
+      "solver_backend": "FDM GPU",
+      "evidence_status": "source_visible",
+      "evidence": "A9 RED preserved; A10 public CUDA/single two Run clock/digest, m/E partition and density integrals PASS; default-feature regressions require final CI. Adaptive identity stays unvalidated."
+    },
+    {
+      "id": "cuda-regional-drive-density",
+      "path": "backends/fdm/gpu/cuda/interactions/energy_density_fp64.cu",
+      "symbol": "energy_density_kernel",
+      "responsibility": "Separate regional density from external bias and static profiles; include exactly once in total, with local Ms and cell volume fraction",
+      "solver_backend": "FDM GPU",
+      "evidence_status": "source_visible",
+      "evidence": "Native RED A5 preserved; GREEN A6/A7 python -O: eight analytic, two legacy baseline, two expected FP32 sub-cell refusals; zero failures. A10 public density/integrals PASS."
     }
   ],
   "public_api": {

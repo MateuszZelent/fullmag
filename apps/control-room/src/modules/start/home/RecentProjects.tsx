@@ -34,6 +34,7 @@ import { startSettings } from "../model/startSettings";
 import type { RecentEntry, RecentFilter } from "../model/types";
 import type { RecentIndexController } from "../model/useRecentIndex";
 import type { WorkspaceItemId } from "../model/workspaceItems";
+import type { ApiWorkspaceItem } from "../model/workspaceApiTypes";
 import {
   addPathOutcome,
   type WorkspaceResultsView,
@@ -94,8 +95,6 @@ export const UNAVAILABLE_NOTE =
   "The recent-project index needs the desktop app or a Fullmag backend that serves the workspace database.";
 
 const SCRIPT_RUN_NOTE = "Use Run in new window in the details panel to run it.";
-const RESULT_OPEN_NOTE =
-  "A result folder has no viewer of its own yet. Open its source project from the details panel; the saved runs are listed under Results.";
 
 type Notice = { readonly tone: "warning" | "info"; readonly text: string };
 
@@ -132,6 +131,8 @@ export interface RecentProjectsProps {
   readonly scriptFlowNotice?: string | null;
   /** Resolves to the reason the project did not open, or null on success. */
   readonly onOpen: (entry: RecentEntry) => Promise<string | null>;
+  /** Opens one saved result folder in read-only playback. */
+  readonly onOpenResult: (item: ApiWorkspaceItem) => Promise<string | null>;
   readonly searchRef?: Ref<HTMLInputElement>;
 }
 
@@ -146,6 +147,7 @@ export function RecentProjects({
   canOpenScript,
   scriptFlowNotice = null,
   onOpen,
+  onOpenResult,
   searchRef,
 }: RecentProjectsProps) {
   const {
@@ -316,20 +318,22 @@ export function RecentProjects({
   );
 
   const activateResult = useCallback(
-    (id: string) => {
+    async (id: string) => {
       const row = selectable.find((r) => r.kind === "result" && r.item.id === id);
       if (!row || row.kind !== "result") return;
       startScreenStore.setSelectedResult(id);
-      setNotice(
-        row.item.status === "missing"
-          ? {
-              tone: "warning",
-              text: `${row.item.name} is no longer at ${row.item.path}. Remove it from the list or move it back.`,
-            }
-          : { tone: "info", text: RESULT_OPEN_NOTE },
-      );
+      setNotice(null);
+      if (row.item.status === "missing") {
+        setNotice({
+          tone: "warning",
+          text: `${row.item.name} is no longer at ${row.item.path}. Remove it from the list or move it back.`,
+        });
+        return;
+      }
+      const failure = await onOpenResult(row.item);
+      if (failure) setNotice({ tone: "warning", text: failure });
     },
-    [selectable],
+    [onOpenResult, selectable],
   );
 
   const submitAddPath = useCallback(async () => {

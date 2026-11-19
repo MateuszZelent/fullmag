@@ -51,6 +51,15 @@ interface UseResourceOptions<TData> {
   retryPolicy?: ResourceRetryPolicy | null;
   resolveRevision?: (data: TData) => ResourceRevision | null;
   resourceKey: ResourceKey;
+  /**
+   * Key whose invalidation revision drives refetches, when it differs from
+   * the data key (e.g. a query-specific key refreshed by a base-path
+   * invalidation). Use this instead of embedding `#revision=` in
+   * `resourceKey`: a revision-suffixed key creates an empty store entry on
+   * every invalidation, which drops the last good data (flicker) and
+   * defeats ETag reuse.
+   */
+  revisionKey?: ResourceKey;
 }
 
 interface UseResourceSelectorOptions<TData, TSelected>
@@ -96,6 +105,7 @@ export function useResource<TData>({
   retryPolicy,
   resolveRevision,
   resourceKey,
+  revisionKey,
 }: UseResourceOptions<TData>): ResourceResult<TData> {
   const { api, bus, diagnosticRecorder, resources } = useKernel();
   const runtimeStore = sharedResourceRuntimeStore as ResourceRuntimeStore<TData>;
@@ -110,16 +120,17 @@ export function useResource<TData>({
 
   // Stabilize the subscribe callback so useSyncExternalStore doesn't
   // unsubscribe/resubscribe on every render.
+  const externalRevisionKey = revisionKey ?? resourceKey;
   const subscribeStable = useCallback(
     (onStoreChange: () => void) =>
       enabled
-        ? resources.subscribe(resourceKey, onStoreChange)
+        ? resources.subscribe(externalRevisionKey, onStoreChange)
         : NOOP_SUBSCRIBE,
-    [enabled, resources, resourceKey],
+    [enabled, resources, externalRevisionKey],
   );
   const getSnapshot = useCallback(
-    () => resources.getRevision(resourceKey),
-    [resources, resourceKey],
+    () => resources.getRevision(externalRevisionKey),
+    [resources, externalRevisionKey],
   );
 
   const externalRevision = useSyncExternalStore(
@@ -208,6 +219,7 @@ export function useResourceSelector<TData, TSelected>({
   retryPolicy,
   resolveRevision,
   resourceKey,
+  revisionKey,
   selector,
 }: UseResourceSelectorOptions<TData, TSelected>): TSelected {
   const { api, bus, diagnosticRecorder, resources } = useKernel();
@@ -228,16 +240,17 @@ export function useResourceSelector<TData, TSelected>({
     selected: TSelected;
   } | null>(null);
 
+  const externalRevisionKey = revisionKey ?? resourceKey;
   const subscribeStable = useCallback(
     (onStoreChange: () => void) =>
       enabled
-        ? resources.subscribe(resourceKey, onStoreChange)
+        ? resources.subscribe(externalRevisionKey, onStoreChange)
         : NOOP_SUBSCRIBE,
-    [enabled, resources, resourceKey],
+    [enabled, resources, externalRevisionKey],
   );
   const getSnapshot = useCallback(
-    () => resources.getRevision(resourceKey),
-    [resources, resourceKey],
+    () => resources.getRevision(externalRevisionKey),
+    [resources, externalRevisionKey],
   );
 
   const externalRevision = useSyncExternalStore(
@@ -538,7 +551,10 @@ function resolveResourceRetryPolicy(
   if (policy === null) return undefined;
   return (
     policy ?? {
-      deadlineMs: 5_000,
+      // Large FEM resources can take longer than five seconds while native
+      // preparation shares the backend. Keep a bounded loading state instead
+      // of aborting a valid first response before the scene can be displayed.
+      deadlineMs: 30_000,
       maxAttempts: 3,
       retryAfterMs: errorRetryDelayMs(),
       retryableReasonCodes: DEFAULT_RESOURCE_RETRYABLE_REASON_CODES,

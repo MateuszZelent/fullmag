@@ -120,11 +120,16 @@ pub(crate) fn submit_run_json(path: &Path, api_url: &str, submit_only: bool) -> 
     submit_run_request(&request, api_url, submit_only)
 }
 
-pub(crate) fn submit_run_request(request: &Value, api_url: &str, submit_only: bool) -> Result<Value> {
+pub(crate) fn validate_submit_request_size(request: &Value) -> Result<()> {
     let encoded = serde_json::to_vec(request)?;
     if encoded.is_empty() || encoded.len() as u64 > MAX_SUBMIT_REQUEST_BYTES {
         bail!("accepted-run request exceeds public JSON transport limit");
     }
+    Ok(())
+}
+
+pub(crate) fn submit_run_request(request: &Value, api_url: &str, submit_only: bool) -> Result<Value> {
+    validate_submit_request_size(request)?;
     let intent: RunIntent = serde_json::from_value(
         request
             .get("run_intent")

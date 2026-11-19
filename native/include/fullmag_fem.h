@@ -25,7 +25,11 @@ extern "C" {
 #define FULLMAG_FEM_ERR_INTERNAL -3
 #define FULLMAG_FEM_ERR_INTERRUPTED -4
 
-#define FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION 3u
+/* v4: fullmag_fem_time_dependence_desc carries the time program of a
+ * FULLMAG_FEM_TIME_HOST_EXPRESSION waveform (mask terms, ADR 0081). */
+#define FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION 4u
+/* At most this many HOST_EXPRESSION drives per backend on the GPU lane. */
+#define FULLMAG_FEM_MAX_HOST_EXPRESSION_DRIVES 8u
 
 typedef enum {
     FULLMAG_FEM_PRECISION_SINGLE = 1,
@@ -122,6 +126,10 @@ typedef enum {
     FULLMAG_FEM_TIME_PULSE = 2,
     FULLMAG_FEM_TIME_PIECEWISE_LINEAR = 3,
     FULLMAG_FEM_TIME_SINC_PULSE = 4,
+    /* The multiplier is the value of the descriptor's time program
+     * (fullmag_time_expr.v1, native/include/fullmag_time_expression.h),
+     * evaluated on the host once per field build at the drive's clock. */
+    FULLMAG_FEM_TIME_HOST_EXPRESSION = 5,
 } fullmag_fem_time_dependence_kind;
 
 typedef enum {
@@ -191,6 +199,9 @@ typedef struct {
     fullmag_fem_time_dependence_parameters parameters;
     const fullmag_fem_time_point *points;
     uint64_t point_count;
+    /* HOST_EXPRESSION only: fullmag_time_expr.v1 words; null and 0 otherwise. */
+    const double *time_program;
+    uint64_t time_program_len;
 } fullmag_fem_time_dependence_desc;
 
 /*
@@ -812,6 +823,17 @@ typedef struct {
     fullmag_fem_plan_desc_v2 base;
     const fullmag_fem_mixed_body_certificate_v2 *mixed_body_certificate_v2;
 } fullmag_fem_plan_desc_v3;
+
+/* Full-width canonical Poisson selector. Legacy signed fields/layouts retain
+   their meaning; this explicit extension always takes precedence over base. */
+#define FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION 4u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    fullmag_fem_plan_desc_v3 base;
+    uint32_t poisson_boundary_marker;
+    uint32_t reserved; /* Must be zero. */
+} fullmag_fem_plan_desc_v4;
 
 /*
  * Standalone M1 steady charge/spin transport ABI.
@@ -1445,6 +1467,122 @@ FULLMAG_FEM_API int fullmag_fem_solve_prepared_closed_loop_rt0_oersted_v2(
     fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source);
 
 
+/* Additive inspection-only surface RT0 ABI. All numeric limits are caller-owned. */
+#define FULLMAG_FEM_SURFACE_RT0_ABI_VERSION 1u
+#define FULLMAG_FEM_SURFACE_RT0_WORK_KIND_COUNT 14u
+typedef struct {
+    uint64_t total[14], per_target[14];
+    uint64_t maximum_raw_integer_bits, maximum_reduced_fraction_bits;
+    uint64_t maximum_lifetime_peak_rss_bytes, guard_interval_events;
+    double maximum_total_seconds, maximum_target_seconds;
+} fullmag_fem_surface_rt0_work_limits_v1;
+typedef struct {
+    double absolute_field_apm, relative_field, cancellation_floor_apm;
+    double scalar_relative_80, scalar_relative_120;
+    double angle_relative_80, angle_relative_120;
+    double binary_scalar_epsilon_factor, binary_roundoff_epsilon_factor;
+    double binary_cancellation_limit, highprecision_cancellation_limit;
+} fullmag_fem_surface_rt0_tolerances_v1;
+typedef struct {
+    fullmag_fem_surface_rt0_work_limits_v1 work_limits;
+    fullmag_fem_surface_rt0_tolerances_v1 tolerances;
+    const char *policy_version;
+} fullmag_fem_surface_rt0_options_v1;
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_prepared_closed_loop_request_v2 rt0;
+    const double *target_points_xyz;
+    uint64_t target_points_xyz_len;
+    fullmag_fem_surface_rt0_options_v1 options;
+} fullmag_fem_prepared_closed_loop_rt0_surface_request_v1;
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_rt0_result_v1 rt0;
+    double *h_xyz_apm;
+    uint64_t h_xyz_apm_capacity, h_xyz_apm_len;
+    uint8_t *evidence_json;
+    uint64_t evidence_json_capacity, evidence_json_len;
+    char error_message[256];
+} fullmag_fem_prepared_closed_loop_rt0_surface_result_v1;
+#if defined(__cplusplus) && INTPTR_MAX == INT64_MAX
+static_assert(sizeof(fullmag_fem_surface_rt0_work_limits_v1) == 272, "surface limits ABI");
+static_assert(sizeof(fullmag_fem_surface_rt0_tolerances_v1) == 88, "surface tolerances ABI");
+static_assert(sizeof(fullmag_fem_surface_rt0_options_v1) == 368, "surface options ABI");
+static_assert(sizeof(fullmag_fem_prepared_closed_loop_rt0_surface_request_v1) == 1008, "surface request ABI");
+static_assert(sizeof(fullmag_fem_prepared_closed_loop_rt0_surface_result_v1) == 2072, "surface result ABI");
+static_assert(offsetof(fullmag_fem_prepared_closed_loop_rt0_surface_result_v1, evidence_json) == 1792, "surface evidence pointer ABI");
+#endif
+FULLMAG_FEM_API int fullmag_fem_solve_prepared_closed_loop_rt0_surface_v1(
+    const fullmag_fem_prepared_closed_loop_rt0_surface_request_v1 *request,
+    fullmag_fem_prepared_closed_loop_rt0_surface_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source);
+
+/* Optional caller-owned diagnostics, separate from scientific surface evidence.
+ * The legacy symbol remains unprofiled. A profile is available after kernel
+ * entry even when the native call refuses; no partial H is thereby published.
+ * Phase order: source_prepare, exact_geometry, binary64, precision80,
+ * precision120, consistency, reduction, serialization, unattributed. */
+#define FULLMAG_FEM_SURFACE_RT0_PROFILE_ABI_VERSION 1u
+#define FULLMAG_FEM_SURFACE_RT0_PROFILE_PHASE_COUNT 9u
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    uint64_t available, accounting_issue;
+    uint64_t operator_wall_time_ns;
+    uint64_t phase_wall_time_ns[9];
+} fullmag_fem_surface_rt0_profile_result_v1;
+#if defined(__cplusplus) && INTPTR_MAX == INT64_MAX
+static_assert(sizeof(fullmag_fem_surface_rt0_profile_result_v1) == 112, "surface profile ABI");
+static_assert(offsetof(fullmag_fem_surface_rt0_profile_result_v1, phase_wall_time_ns) == 40, "surface profile phase ABI");
+#endif
+FULLMAG_FEM_API int fullmag_fem_solve_prepared_closed_loop_rt0_surface_profiled_v1(
+    const fullmag_fem_prepared_closed_loop_rt0_surface_request_v1 *request,
+    fullmag_fem_prepared_closed_loop_rt0_surface_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source,
+    fullmag_fem_surface_rt0_profile_result_v1 *profile);
+
+
+/* Optional thin operation diagnostics. The callback must not block, allocate,
+ * access the session store, throw, or retain the transient progress pointer.
+ * Completed targets count only fully validated field values, never LLG steps. */
+#define FULLMAG_FEM_ANTENNA_OPERATION_PROGRESS_ABI_VERSION 1u
+#define FULLMAG_FEM_ANTENNA_PREPARING_SOURCE 0u
+#define FULLMAG_FEM_ANTENNA_SOLVING_POTENTIAL 1u
+#define FULLMAG_FEM_ANTENNA_RECONSTRUCTING_CURRENT 2u
+#define FULLMAG_FEM_ANTENNA_EVALUATING_FIELD 3u
+#define FULLMAG_FEM_ANTENNA_VALIDATING_RESULT 4u
+#define FULLMAG_FEM_ANTENNA_PUBLISHING_RESULT 5u
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    uint32_t phase, reserved;
+    uint64_t completed_targets, total_targets, source_cells;
+    double elapsed_seconds;
+} fullmag_fem_antenna_operation_progress_v1;
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    void (*callback)(void *user_data, const fullmag_fem_antenna_operation_progress_v1 *progress);
+    void *user_data;
+} fullmag_fem_antenna_operation_observer_v1;
+#if defined(__cplusplus) && INTPTR_MAX == INT64_MAX
+static_assert(sizeof(fullmag_fem_antenna_operation_progress_v1) == 56, "antenna progress ABI");
+static_assert(sizeof(fullmag_fem_antenna_operation_observer_v1) == 32, "antenna observer ABI");
+#endif
+FULLMAG_FEM_API int fullmag_fem_solve_prepared_closed_loop_rt0_surface_observed_v1(
+    const fullmag_fem_prepared_closed_loop_rt0_surface_request_v1 *request,
+    fullmag_fem_prepared_closed_loop_rt0_surface_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source,
+    fullmag_fem_surface_rt0_profile_result_v1 *profile,
+    const fullmag_fem_antenna_operation_observer_v1 *observer);
+
+
+
 typedef struct {
     uint32_t abi_version;
     uint32_t reserved_flags;
@@ -1733,6 +1871,30 @@ typedef struct {
     uint32_t cache_transport_valid;
     uint32_t cache_projection_valid;
 } fullmag_fem_endpoint_cache_telemetry_v1;
+
+/* Additive query of the CPU-owned fixed Poisson transfer workspaces. */
+#define FULLMAG_FEM_CPU_FIXED_COUPLING_V1_ABI_VERSION 1u
+typedef struct {
+    uint32_t state; /* 0 not-built, 1 ready, 2 quadrature */
+    char reason[256];
+    uint64_t build_count;
+    uint64_t reuse_count;
+    uint64_t nnz;
+    uint64_t persistent_bytes;
+    uint64_t setup_wall_time_ns;
+    uint64_t setup_rss_baseline_bytes;
+    uint64_t setup_observed_peak_rss_bytes;
+    uint64_t setup_observed_peak_delta_bytes;
+    uint64_t setup_estimated_peak_delta_bytes;
+} fullmag_fem_cpu_transfer_diagnostics_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t available;
+    fullmag_fem_cpu_transfer_diagnostics_v1 rhs;
+    fullmag_fem_cpu_transfer_diagnostics_v1 recovery;
+} fullmag_fem_cpu_fixed_coupling_v1;
 
 #define FULLMAG_FEM_REPRESENTATION_RECEIPT_V1_ABI_VERSION 1u
 
@@ -3415,6 +3577,8 @@ typedef enum {
 #define FULLMAG_FEM_GPU_OPERATOR_RK_STEPPER (UINT64_C(1) << 7)
 #define FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS (UINT64_C(1) << 8)
 #define FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER (UINT64_C(1) << 9)
+#define FULLMAG_FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB (UINT64_C(1) << 10)
+#define FULLMAG_FEM_GPU_OPERATOR_NONLINEAR_CG (UINT64_C(1) << 11)
 
 typedef struct {
     uint32_t abi_version;
@@ -3777,8 +3941,21 @@ FULLMAG_FEM_API fullmag_fem_backend *fullmag_fem_backend_create_v4(
     const fullmag_fem_adaptive_config_v2 *adaptive_config
 );
 
+FULLMAG_FEM_API fullmag_fem_backend *fullmag_fem_backend_create_v5(
+    const fullmag_fem_plan_desc_v4 *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config
+);
+
 FULLMAG_FEM_API int fullmag_fem_get_regional_field_drive_abi_layout(
     fullmag_fem_regional_field_drive_abi_layout *out_layout
+);
+
+/* Value of a fullmag_time_expr.v1 program at t_s, by the interpreter the
+ * library uses for HOST_EXPRESSION drives (NaN for a malformed program). */
+FULLMAG_FEM_API double fullmag_fem_time_expression_eval_v1(
+    const double *code,
+    uint64_t len,
+    double t_s
 );
 
 FULLMAG_FEM_API int fullmag_fem_backend_begin_stage(
@@ -3861,6 +4038,19 @@ FULLMAG_FEM_API int fullmag_fem_backend_average_m_for_nodes_f64(
     fullmag_fem_backend *handle,
     const uint32_t *node_indices,
     uint64_t node_count,
+    double *out_xyz,
+    uint64_t out_len
+);
+
+/* Exact element-set average for element-DG0 Ms. Element indices are zero-based
+ * positions in the cell_types/CSR arrays, not cell_global_ordinals.
+ * Inactive elements are ignored and duplicate
+ * indices have set semantics. Requires a non-empty element set and an
+ * element-DG0 Ms realization. */
+FULLMAG_FEM_API int fullmag_fem_backend_average_m_for_elements_f64(
+    fullmag_fem_backend *handle,
+    const uint32_t *element_indices,
+    uint64_t element_count,
     double *out_xyz,
     uint64_t out_len
 );
@@ -3972,6 +4162,11 @@ FULLMAG_FEM_API int fullmag_fem_backend_snapshot_stats(
 FULLMAG_FEM_API int fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_endpoint_cache_telemetry_v1 *out_telemetry
+);
+
+FULLMAG_FEM_API int fullmag_fem_backend_snapshot_cpu_fixed_coupling_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_cpu_fixed_coupling_v1 *out_telemetry
 );
 
 FULLMAG_FEM_API int fullmag_fem_backend_snapshot_representation_receipt_v1(
@@ -4095,6 +4290,15 @@ FULLMAG_FEM_API int fullmag_fem_backend_get_transfer_audit(
 FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_state_info(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_state_info *out_info
+);
+
+/*
+ * Returns the initialized GPU Poisson AMG coarse-cycle relax type, or -1
+ * when not applicable.
+ */
+FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
+    fullmag_fem_backend *handle,
+    int32_t *out_relax_type
 );
 
 FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_rk_plan_info(

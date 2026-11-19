@@ -222,6 +222,7 @@ pub(super) fn sample_boundary(
         occupancy,
         source_entity_ids,
         overlay: None,
+        section_extent: None,
     })
 }
 

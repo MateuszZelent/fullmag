@@ -54,6 +54,63 @@ def _eval_rendered(lines: list[str]) -> object:
 
 
 class SpinTorqueRuntimeRoundTripTests(unittest.TestCase):
+    def test_slonczewski_time_expression_round_trips_ir_scene_and_script(self) -> None:
+        expression = fm.TimeExpression(
+            "heaviside(t - on) - heaviside(t - off)",
+            constants={"off": 2.7e-7, "on": 7.0e-8},
+            event_times_s=(7.0e-8, 2.7e-7),
+        )
+        torque = fm.SlonczewskiSTT(
+            current_density=(0.0, 0.0, -2.6e10),
+            spin_polarization=(0.0, 1.0, 0.0),
+            free_layer_thickness_m=1.7e-9,
+            id="time-expression",
+            target=fm.RegionRef("layer"),
+            stack_normal=(0.0, 0.0, -1.0),
+            time_expression=expression,
+        )
+        geometry = fm.Box(size=(30e-9, 20e-9, 2e-9), name="layer")
+        material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
+        problem = fm.Problem(
+            name="time_expression_roundtrip",
+            magnets=[fm.Ferromagnet(name="layer", geometry=geometry, material=material)],
+            energy=[fm.Exchange(), fm.Demag()],
+            spin_torques=[torque],
+            study=fm.TimeEvolution(
+                dynamics=fm.LLG(), outputs=[fm.SaveScalar("E_total", every=1e-12)]
+            ),
+            discretization=fm.DiscretizationHints(
+                fdm=fm.FDM(cell=(2e-9, 2e-9, 2e-9))
+            ),
+        )
+        expected = problem.to_ir()["spin_torque_modules"]
+
+        with TemporaryDirectory() as tmpdir:
+            source_path = Path(tmpdir) / "source.py"
+            source_path.write_text("# source placeholder\n", encoding="utf-8")
+            loaded = LoadedProblem(
+                problem=problem,
+                source_path=source_path,
+                script_source=source_path.read_text(encoding="utf-8"),
+                entrypoint_kind="problem",
+                default_until_seconds=1e-12,
+            )
+            builder = export_builder_draft(loaded)
+            scene = build_scene_document_from_builder(builder)
+            inverse = build_builder_from_scene_document(scene)
+            overrides = builder_overrides_from_scene_document(scene)
+            rendered = rewrite_loaded_problem_script(loaded, overrides=overrides)[
+                "rendered_source"
+            ]
+            rendered_path = Path(tmpdir) / "rendered.py"
+            rendered_path.write_text(rendered, encoding="utf-8")
+            reloaded = load_problem_from_script(rendered_path)
+
+        self.assertEqual(builder["spin_torques"], expected)
+        self.assertEqual(inverse["spin_torques"], expected)
+        self.assertEqual(overrides["spin_torques"], expected)
+        self.assertEqual(reloaded.problem.to_ir()["spin_torque_modules"], expected)
+
     def test_spin_transport_round_trip_preserves_full_boundary_and_solver_policy(self) -> None:
         top = fm.SurfaceRef("layer", "top", (0.0, 0.0, 2.0))
         bottom = fm.SurfaceRef("layer", "bottom", (0.0, 0.0, -3.0))

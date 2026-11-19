@@ -32,6 +32,8 @@ pub(crate) struct AcceptedFemExecution {
     pub(crate) outputs: Vec<StudyOutputPayload>,
     pub(crate) attempt_output_dir: std::path::PathBuf,
     pub(crate) accepted_state_ref: fullmag_quantities::AcceptedStateRef,
+    pub(crate) terminal_stats: Option<fullmag_runner::StepStats>,
+    pub(crate) completion: Option<fullmag_ir::StageCompletionIR>,
 }
 
 /// The solver may acknowledge an interrupt after producing a prefix of steps.
@@ -60,6 +62,8 @@ pub(crate) struct AcceptedFemPreparedExecution {
     pub(crate) plan_digest: String,
     pub(crate) resolved_device: String,
     pub(crate) gpu_uuid: Option<String>,
+    pub(crate) cuda_trace: Option<crate::accepted_solver_profile::cuda_trace::Config>,
+    pub(crate) output_storage_budget: u64,
 }
 
 /// Resolve and validate every deterministic accepted FEM admission input
@@ -80,8 +84,9 @@ pub(crate) fn prepare_accepted_fem_execution(
     }
     validate_declared_outputs(&study_step.outputs)?;
 
+    // Receipts are keyed by the durable task id, not the study step id.
     let preparation = accepted
-        .read_task_preparation_receipt(store, &accepted_step.step_id)
+        .read_task_preparation_receipt(store, accepted_step.claim.task_id.as_str())
         .context("load exact accepted FEM preparation receipt")?;
     let preparation_binding = PreparationBinding::from_receipt(&preparation)
         .map_err(|error| anyhow::anyhow!(error.to_string()))
@@ -94,7 +99,32 @@ pub(crate) fn prepare_accepted_fem_execution(
     let execution_plan =
         crate::accepted_study_worker::materialize_resolved_study_inputs(store, accepted_step)
             .context("materialize accepted FEM CAS inputs for the runner")?;
+    if accepted.run.specification.parameters.get(crate::accepted_solver_profile::PARAMETER).is_some() {
+        crate::accepted_solver_profile::validate_fem_profile_plan(&accepted_step.problem, &execution_plan)
+            .context("validate the actual preparation-resolved profiling plan before native dispatch")?;
+    }
+    let cuda_trace = crate::accepted_solver_profile::cuda_trace::config(&accepted.run.specification.parameters)?;
+    let output_storage_budget = crate::accepted_solver_profile::cuda_trace::output_storage_budget(
+        cuda_trace.as_ref(), accepted_step.claim.lease.budget.storage_bytes)?;
+    if cuda_trace.is_some() {
+        crate::accepted_solver_profile::cuda_trace::validate_plan(&accepted_step.problem, &execution_plan)?;
+        if accepted_step.resolved_input.requested_execution.device != "gpu"
+            || runtime.resolved_device != "gpu" || runtime.gpu_uuid.as_deref().is_none_or(str::is_empty) {
+            bail!("CUDA trace requires the exact accepted GPU allocation without fallback");
+        }
+        if !fullmag_runner::fem_cuda_trace_available() {
+            bail!("requested CUDA trace is unavailable in the compiled native runtime");
+        }
+    }
     let mut problem = accepted_step.problem.clone();
+    problem.problem_meta.runtime_metadata.insert("performance_execution_identity".into(),
+        serde_json::json!({
+            "run_id": accepted_step.claim.run_id.as_str(),
+            "task_id": accepted_step.claim.task_id.as_str(),
+            "step_id": accepted_step.step_id,
+            "attempt_id": accepted_step.claim.attempt_id.as_str(),
+            "ownership_epoch": accepted_step.claim.ownership_epoch.value(),
+        }));
     problem.problem_meta.runtime_metadata.insert(
         "runtime_device_override".into(),
         serde_json::json!({
@@ -105,12 +135,8 @@ pub(crate) fn prepare_accepted_fem_execution(
     validate_native_fem_preflight(&problem, &execution_plan, runtime)?;
     let stage_mesh = StageFemMeshAsset::build_from_backend_plan(&execution_plan.backend_plan)
         .context("accepted FEM plan has no stage mesh identity")?;
-    let until_seconds = accepted_step
-        .until_seconds
-        .context("accepted FEM step has no pinned runner horizon")?;
-    if !until_seconds.is_finite() || until_seconds <= 0.0 {
-        bail!("accepted FEM runner horizon is invalid");
-    }
+    let until_seconds = crate::accepted_study_worker::accepted_runner_horizon(accepted_step)
+        .context("accepted FEM step runner horizon")?;
 
     Ok(AcceptedFemPreparedExecution {
         case_id: case_id.to_owned(),
@@ -123,6 +149,8 @@ pub(crate) fn prepare_accepted_fem_execution(
         plan_digest: accepted_plan_digest(accepted_step),
         resolved_device: runtime.resolved_device.clone(),
         gpu_uuid: runtime.gpu_uuid.clone(),
+        cuda_trace,
+        output_storage_budget,
     })
 }
 
@@ -139,6 +167,8 @@ pub(crate) fn execute_accepted_fem_attempt(
     attempt_output_dir: &Path,
     autosave_root: &Path,
     interrupt_requested: Option<&AtomicBool>,
+    profile: &mut crate::accepted_solver_profile::step_profile::Capture,
+    start_cuda_trace: impl FnOnce() -> Result<Option<crate::accepted_solver_profile::cuda_capture::Capture>>,
 ) -> Result<AcceptedFemExecutionOutcome> {
     let display_selection = fullmag_runner::DisplaySelectionState::default;
     let mut live_observation = crate::accepted_study_worker::AcceptedLiveObservationWriter::new(
@@ -147,7 +177,8 @@ pub(crate) fn execute_accepted_fem_attempt(
         &prepared.execution_plan,
         format!("fem_{}", prepared.resolved_device),
     );
-    let field_sampling_interval = live_observation.field_sampling_interval();
+    let field_cadence = live_observation.field_cadence();
+    let mut cuda_trace = start_cuda_trace()?;
     let runner_result = fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
         &prepared.problem,
         &prepared.execution_plan,
@@ -155,18 +186,30 @@ pub(crate) fn execute_accepted_fem_attempt(
         prepared.until_seconds,
         attempt_output_dir,
         autosave_root,
-        field_sampling_interval,
+        field_cadence,
         &display_selection,
         interrupt_requested,
         false,
         |update| {
+            profile.observe(&update.stats);
             live_observation.observe(&update);
             StepAction::Continue
         },
     );
+    if let Some(capture) = &mut cuda_trace {
+        let outcome = match &runner_result {
+            Ok(result) if result.status == RunStatus::Completed => "completed",
+            Ok(result) if result.status == RunStatus::Cancelled => "cancelled",
+            _ => "failed",
+        };
+        if let Err(error) = capture.finish(outcome) {
+            eprintln!("accepted FEM CUDA trace persistence failed: {error:#}");
+        }
+    }
     // Scalar and mapped live fields share the bounded sidecar; final state is
     // still committed only through the durable output path.
     live_observation.finish();
+    profile.finish(runner_result.as_ref().ok().and_then(|result| result.steps.last()));
     let result = runner_result
         .map_err(|error| anyhow::anyhow!(error.to_string()))
         .with_context(|| format!("execute accepted native FEM {} runner plan", prepared.resolved_device))?;
@@ -179,6 +222,7 @@ pub(crate) fn execute_accepted_fem_attempt(
     if result.status != RunStatus::Completed {
         bail!("accepted FEM {} runner did not complete successfully", prepared.resolved_device);
     }
+    let terminal_stats = result.steps.last().cloned();
 
     // The shared output collector performs the metadata-size preflight before
     // allocating each explicit artifact. Reuse its owned state bytes instead
@@ -188,7 +232,7 @@ pub(crate) fn execute_accepted_fem_attempt(
         &prepared.case_id,
         &result,
         &attempt_output_dir,
-        accepted_step.claim.lease.budget.storage_bytes,
+        prepared.output_storage_budget,
     )
     .context("collect bounded typed outputs from accepted FEM attempt")?;
     let state_output = outputs
@@ -266,6 +310,8 @@ pub(crate) fn execute_accepted_fem_attempt(
             outputs,
             attempt_output_dir: attempt_output_dir.to_path_buf(),
             accepted_state_ref,
+            terminal_stats,
+            completion: result.completion,
         },
     ))
 }
@@ -487,19 +533,20 @@ fn validate_projected_gradient_bb_receipt(
         bail!("accepted FEM GPU ProjectedGradientBb receipt records a fallback");
     }
 
-    let receipt: fullmag_runner::FemGpuExecutionReceipt = serde_json::from_value(
+    let receipt: fullmag_runner::FemGpuMinimizerExecutionReceipt = serde_json::from_value(
         provenance
-            .get("fem_gpu_execution_receipt")
+            .get("fem_gpu_minimizer_execution_receipt")
             .cloned()
             .context("accepted FEM GPU ProjectedGradientBb receipt is missing")?,
     )
     .context("decode accepted FEM GPU ProjectedGradientBb receipt")?;
-    if receipt.requested != "strict_device"
-        || receipt.resolved != "device_resident"
-        || receipt.executed != "cuda_fem"
-        || receipt.precision != "double"
-        || receipt.device_ordinal != 0
-        || receipt.accepted_step_count == 0
+    if receipt.algorithm != "projected_gradient_bb"
+        || receipt.accounting.requested != "strict_device"
+        || receipt.accounting.resolved != "device_resident"
+        || receipt.accounting.executed != "cuda_fem"
+        || receipt.accounting.precision != "double"
+        || receipt.accounting.device_ordinal != 0
+        || receipt.accounting.accepted_step_count == 0
     {
         bail!(
             "accepted FEM GPU ProjectedGradientBb receipt is not the strict double CUDA realization"
@@ -658,19 +705,22 @@ mod source_contract_tests {
             "requested_energy_minimizer": "projected_gradient_bb",
             "resolved_energy_minimizer": "projected_gradient_bb",
             "energy_minimizer_realization": "native_cuda_pgbb",
-            "fem_gpu_execution_receipt": {
+            "fem_gpu_minimizer_execution_receipt": {
+                "schema_version": "fullmag.fem.gpu.minimizer-execution-receipt.v1",
+                "algorithm": "projected_gradient_bb",
+                "accounting": {
                 "requested": "strict_device",
                 "resolved": "device_resident",
                 "executed": "cuda_fem",
                 "execution_class": "device_resident",
                 "device_ordinal": 0,
                 "precision": "double",
-                "integrator": "heun",
-                "required_operator_mask": 1023,
-                "resolved_device_operator_mask": 1023,
+                "integrator": "not_used",
+                "required_operator_mask": 1823,
+                "resolved_device_operator_mask": 1823,
                 "resolved_host_operator_mask": 0,
                 "resolved_unknown_operator_mask": 0,
-                "executed_device_operator_mask": 1023,
+                "executed_device_operator_mask": 1823,
                 "executed_host_operator_mask": 0,
                 "executed_unknown_operator_mask": 0,
                 "fallback_count": 0,
@@ -681,6 +731,7 @@ mod source_contract_tests {
                 "hot_loop_compute_d2h_bytes": 0,
                 "hot_loop_compute_host_sync_count": 0,
                 "accounting_valid": true
+                }
             }
         });
         assert!(validate_projected_gradient_bb_receipt(

@@ -12,7 +12,8 @@ use utoipa::{IntoParams, ToSchema};
 pub use fullmag_workspace_inspect::{
     Author, Citation, ExecutionSummary, FrameEntry, FramesPage, FramesStageCount, FramesSummary,
     HistoryEntry, ItemDetail, ModelSummary, OutputsSummary,
-    PreviewInfo, ProjectDetail, ProjectRun, ProjectSummary, ResultDetail, ResultGrid, ScriptDetail,
+    PreviewInfo, ProjectDetail, ProjectRun, ProjectSummary, ResultDetail, ResultGrid,
+    SavedPlaybackFemMesh, SavedPlaybackResource, SavedPlaybackStage, ScriptDetail,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -232,6 +233,24 @@ pub struct WorkspaceFramesQuery {
     pub from: Option<u64>,
     /// Frames per page (default 200, at most 1000).
     pub limit: Option<usize>,
+}
+
+/// Required identity for one saved playback frame request.
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+pub struct WorkspacePlaybackFrameQuery {
+    /// Exact stage id from `SavedPlaybackResource.stages`.
+    pub stage_id: String,
+    /// Revision returned by `GET /v2/workspace/items/{id}/playback`.
+    pub revision: String,
+}
+
+/// Revision-pinned binary topology/support selection for saved FEM playback.
+#[derive(Debug, Clone, Deserialize, IntoParams, ToSchema)]
+pub struct WorkspacePlaybackGeometryQuery {
+    /// Exact revision returned by `GET /v2/workspace/items/{id}/playback`.
+    pub revision: String,
+    /// `topology` returns FMMT v2; `support` returns FMSP v1.
+    pub part: String,
 }
 
 /// One allow-listed setting of the per-user workspace database (`kv`).

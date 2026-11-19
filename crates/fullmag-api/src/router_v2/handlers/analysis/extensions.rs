@@ -359,7 +359,7 @@ pub async fn get_object_topological_charge(
     .await?;
     let field_summary = resolved_field
         .as_ref()
-        .map(|field| field_summary_from_resolved_field(field, snapshot.fem_mesh.as_ref()))
+        .map(|field| field_summary_from_resolved_field(field, snapshot.fem_mesh.as_deref()))
         .transpose()?;
     let requested_plane = match query.plane {
         TopologicalChargePlaneV2::Auto => "auto",

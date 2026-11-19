@@ -196,6 +196,8 @@ export interface MicrostripCircuitDraft {
   enabled: boolean;
   parameters: Record<string, string>;
   potentialJumpV: string;
+  sourceCutOffsetM: string;
+  sourceCutNormal: string;
 }
 
 export function microstripCircuitDraft(geometry: JsonObject, scene: SceneResource | null, objectId: string): MicrostripCircuitDraft {
@@ -204,17 +206,25 @@ export function microstripCircuitDraft(geometry: JsonObject, scene: SceneResourc
     && current.domain.some((ref) => record(ref)?.object_id === objectId)) ?? [];
   const closure = record(currents.length === 1 ? currents[0]?.structured_current_closure : null);
   const cuts = Array.isArray(closure?.source_cuts) ? closure.source_cuts : [];
-  const drive = record(record(cuts.length === 1 ? cuts[0] : null)?.drive);
+  const cut = record(cuts.length === 1 ? cuts[0] : null);
+  const drive = record(cut?.drive);
+  const plane = record(cut?.plane);
+  const params = record(geometry.geometry_params);
+  const midpoint = -(Number(params?.thickness_m) + Number(params?.return_offset_m)) / 2;
   return { enabled: loop?.enabled === true,
     parameters: Object.fromEntries(MICROSTRIP_LOOP_FIELDS.map(({ key }) => [key, String(loop?.[key] ?? "")])),
-    potentialJumpV: String(drive?.potential_jump_V ?? "") };
+    potentialJumpV: String(drive?.potential_jump_V ?? ""),
+    sourceCutOffsetM: plane ? String(plane.offset_m ?? "") : String(midpoint),
+    sourceCutNormal: String(plane?.normal ?? "positive_axis") };
 }
 
 export function microstripCircuitEqual(left: MicrostripCircuitDraft, right: MicrostripCircuitDraft): boolean {
   return left.enabled === right.enabled && (!left.enabled || (
     MICROSTRIP_LOOP_FIELDS.every(({ key, numeric }) => numeric
       ? sameNumber(left.parameters[key], right.parameters[key]) : (left.parameters[key] ?? "").trim() === (right.parameters[key] ?? "").trim())
-    && sameNumber(left.potentialJumpV, right.potentialJumpV)));
+    && sameNumber(left.potentialJumpV, right.potentialJumpV)
+    && sameNumber(left.sourceCutOffsetM, right.sourceCutOffsetM)
+    && left.sourceCutNormal === right.sourceCutNormal));
 }
 
 /** One authored transaction: geometry, charge module and port share the same source-cut identity. */
@@ -311,12 +321,13 @@ export function buildMicrostripCircuitPatch(scene: SceneResource, objectId: stri
     || !["positive_axis", "negative_axis"].includes(String(oldPlane.normal)))) {
     throw new Error("The existing source cut must explicitly use object-local z and an axis normal.");
   }
-  const cutOffset = oldPlane ? finite(String(oldPlane.offset_m ?? ""), "Source-cut offset") : -(thickness + gap) / 2;
+  const cutOffset = finite(draft.sourceCutOffsetM, "Source-cut offset");
+  if (!["positive_axis", "negative_axis"].includes(draft.sourceCutNormal)) throw new Error("The source-cut normal must be positive_axis or negative_axis.");
   if (!(cutOffset > -thickness / 2 - gap && cutOffset < -thickness / 2)) throw new Error("The source cut must lie strictly inside the signal/return clearance.");
   const closure: JsonObject = { schema_version: "structured_current_closure.v2", closure_id: String(oldClosure?.closure_id ?? `${objectId}:closed-loop`), kind: "closed_geometry",
     source_cuts: [{ source_cut_id: cutId, circuit_id: String(oldCut?.circuit_id ?? `${objectId}:circuit`),
       region: { object_id: objectId, region_id: loop.inlet_connection_part_id },
-      plane: { coordinate_frame: "object", axis: "z", offset_m: cutOffset, normal: String(oldPlane?.normal ?? "positive_axis") },
+      plane: { coordinate_frame: "object", axis: "z", offset_m: cutOffset, normal: draft.sourceCutNormal },
       drive: { schema_version: "impressed_potential_jump.v1", kind: "impressed_potential_jump", drive_id: driveId, potential_jump_V: potential } }] };
   const patchedCurrent: JsonObject = { ...current, boundaries: [], gauge: "zero_mean",
     materials: ids.map((id, index) => ({ region: { object_id: objectId, region_id: id }, material: index < 2 ? mainMaterials[index] : { sigma_Spm: loop[`${index === 2 ? "inlet" : "outlet"}_connection_conductivity_s_per_m`] } })),
@@ -331,7 +342,8 @@ export function buildMicrostripCircuitPatch(scene: SceneResource, objectId: stri
       ? { ...port, schema_version: "antenna_port_mode.v3", normalization: { kind: "source_cut_rt0", source_cut_ref: cutId, orientation: "minus_outward" } } : candidate),
     antenna_field_solve_stages: (scene.antenna_field_solve_stages ?? []).map((stage) => {
       if (stage.source_object_id !== objectId || stage.current_transport_id !== current.name) return stage;
-      const patched = { ...stage };
+      const patched = { ...stage,
+        conductor_mesh_policy: "authored_shared_domain", solver_policy: "production_default" };
       delete patched.conservative_current_view_ref;
       return patched;
     }) } as JsonObject;

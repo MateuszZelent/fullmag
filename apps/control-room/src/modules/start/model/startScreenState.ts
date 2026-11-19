@@ -1,4 +1,5 @@
 import type { CommandContext, CommandResult } from "@/kernel/commands/commandTypes";
+import { homeView } from "@/kernel/layout/homeView";
 
 import type { WorkspaceItemId } from "./workspaceItems";
 
@@ -197,3 +198,7 @@ class StartScreenStore {
 }
 
 export const startScreenStore = new StartScreenStore();
+
+homeView.subscribeDocs((page) => {
+  startScreenStore.requestDocs(page);
+});

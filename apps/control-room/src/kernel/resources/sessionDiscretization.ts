@@ -104,6 +104,15 @@ function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
+/**
+ * Topology revisions are opaque backend `u64` tokens (an FDM grid revision is
+ * a 64-bit hash), so JSON may round them past `Number.MAX_SAFE_INTEGER`. Only
+ * their presence matters here.
+ */
+function isPublishedTopologyRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
 function isPublishedDomainGeneration(value: unknown): value is string {
   if (typeof value !== "string") return false;
   const generationId = value.trim();
@@ -134,7 +143,7 @@ export function resolveSessionTopologyDiscretization(
     !discretization ||
     !isPublishedDomainGeneration(generationId) ||
     !isPositiveSafeInteger(status?.domain?.cell_count) ||
-    !isPositiveSafeInteger(resources?.topology_revision) ||
+    !isPublishedTopologyRevision(resources?.topology_revision) ||
     resources?.domain_generation_id !== generationId
   ) {
     return null;

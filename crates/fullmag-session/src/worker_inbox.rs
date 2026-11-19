@@ -80,7 +80,11 @@ impl FmsWorkerInboxRecord {
                 .context("worker protocol schema version missing")?;
             if !matches!(
                 schema_version,
-                "worker_protocol.v1" | "worker_protocol.v2" | "worker_protocol.v3"
+                "worker_protocol.v1"
+                    | "worker_protocol.v2"
+                    | "worker_protocol.v3"
+                    | "worker_protocol.v4"
+                    | "worker_protocol.v5"
             ) || protocol_schema
                 .as_deref()
                 .is_some_and(|previous| previous != schema_version)

@@ -25,7 +25,10 @@ import {
 } from "@/kernel/resources/geometryLifecycleResources";
 import { resolveSessionAuthoringDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { publishCommittedMeshPolicyResource } from "@/kernel/resources/meshPolicyResourceCache";
-import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import {
+  SESSION_STATUS_RESOURCE_KEY,
+  useSessionStatusSelector,
+} from "@/kernel/resources/useSessionStatus";
 import {
   sessionRequestScopeKey,
 } from "@/kernel/resources/sessionResourceIdentity";
@@ -48,6 +51,7 @@ import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField, type FormFieldHelp } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import {
   asRecord,
   formatCount,
@@ -101,7 +105,7 @@ type UpdateObjectMeshPolicyDraft = (
   patch: Partial<ObjectMeshPolicyDraft>,
 ) => void;
 
-const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
+const RAW_OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
   algorithm2d: {
     description: "Gmsh 2D surface meshing algorithm used before tetrahedralization.",
     details: [
@@ -119,25 +123,31 @@ const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
   boundaryLayerCount: {
     description: "Number of boundary-layer elements generated on selected curves or surfaces.",
     details: ["Requires boundary-layer selectors or explicit Gmsh tags."],
+    docsPage: "python-api/meshing/fem/ferromagnet/boundary-layers.html",
   },
   boundaryLayerStretching: {
     description: "Growth ratio between consecutive boundary-layer elements.",
+    docsPage: "python-api/meshing/fem/ferromagnet/boundary-layers.html",
   },
   boundaryLayerTags: {
     description: "Raw Gmsh entity tags used as boundary-layer targets.",
     details: ["Prefer selectors when possible; raw tags are fragile across geometry rebuilds."],
+    docsPage: "python-api/meshing/fem/ferromagnet/boundary-layers.html",
   },
   boundaryLayerSelectors: {
     description: "JSON selector list that resolves boundary-layer target entities from geometry semantics.",
+    docsPage: "python-api/meshing/fem/ferromagnet/boundary-layers.html",
   },
   boundaryLayerThickness: {
     description: "Total physical thickness of the boundary-layer stack.",
+    docsPage: "python-api/meshing/fem/ferromagnet/boundary-layers.html",
   },
   calibrateFor: {
     description: "High-level calibration family for automatic mesh-size presets.",
   },
   computeQuality: {
     description: "Requests aggregate mesh quality diagnostics after mesh generation.",
+    docsPage: "python-api/meshing/fem/build-and-quality.html",
   },
   coreRelaxation: {
     description: "Adds an object-local size field that relaxes from fine surface/edge sizing to a coarser object core.",
@@ -192,6 +202,7 @@ const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
   meshStrategy: {
     description: "Requested meshing strategy for the selected object.",
     details: ["thin_film_tetrahedral is the current feature-aware path for thin films."],
+    docsPage: "python-api/meshing/fem/ferromagnet/thin-film-tetrahedral.html",
   },
   minimumElementSize: {
     description: "Lower bound for object mesh sizing. Local requests below this can be clamped.",
@@ -213,6 +224,7 @@ const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
   },
   perElementQuality: {
     description: "Requests per-element quality arrays in addition to aggregate quality diagnostics.",
+    docsPage: "python-api/meshing/fem/build-and-quality.html",
   },
   sizeFactor: {
     description: "Multiplier applied to preset-derived mesh sizes.",
@@ -228,9 +240,11 @@ const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
   },
   source: {
     description: "Optional external mesh source path for imported mesh workflows.",
+    docsPage: "python-api/meshing/fem/ferromagnet/imported-mesh.html",
   },
   sweep: {
     description: "Thin-film through-thickness sweep controls. These determine how many layers are placed across film thickness.",
+    docsPage: "python-api/meshing/fem/ferromagnet/thin-film-tetrahedral.html",
   },
   transitionDistance: {
     description: "Interface transition distance from near-interface sizing to bulk/far-field sizing.",
@@ -243,6 +257,16 @@ const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
     description: "Requested growth rate for transition sizing fields.",
   },
 };
+
+const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = Object.fromEntries(
+  Object.entries(RAW_OBJECT_MESH_HELP).map(([key, value]) => [
+    key,
+    {
+      docsPage: "frontend/meshing/object-mesh.html",
+      ...value,
+    },
+  ]),
+);
 
 function ObjectMeshPolicySummarySection({
   hasConfig,
@@ -291,6 +315,14 @@ export function FdmObjectMeshPolicySection({
   const statusKind = model.status === "error" ? "error" : "warning";
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Lane", value: "FDM", tone: "neutral" },
+          { label: "Grid shape", value: model.shape?.join(" × ") ?? "not materialized" },
+          { label: "Total cells", value: model.totalCells?.toLocaleString("en-US") ?? "not materialized" },
+          { label: "Status", value: model.status },
+        ]}
+      />
       <InspectorGroup title="Object Mesh" badge="structured-grid">
         {model.notice ? <FeedbackBanner kind={statusKind} message={model.notice} /> : null}
         <FieldRow label="Mesh policy" value="execution-plan owned (read-only)" />
@@ -825,11 +857,9 @@ export function ObjectMeshTransactionsSection({
   isDirty,
   objectId,
   sessionAvailable = true,
-  onApply,
   onBuild,
   onBuildSharedDomain,
   buildLabel,
-  onRevert,
   pending,
   buildPending = false,
   validationError,
@@ -841,10 +871,8 @@ export function ObjectMeshTransactionsSection({
   isDirty: boolean;
   objectId: string | null | undefined;
   sessionAvailable?: boolean;
-  onApply: () => void;
   onBuild: () => void;
   onBuildSharedDomain?: () => void;
-  onRevert: () => void;
   pending: boolean;
 }) {
   return (
@@ -852,13 +880,10 @@ export function ObjectMeshTransactionsSection({
       {isDirty ? (
         <FeedbackBanner
           kind="warning"
-          message="Unapplied changes. Apply Policy or Apply & Build Mesh before trusting the current mesh."
+          message="Unapplied changes. Use Apply in the Inspector footer or Apply & Build Mesh before trusting the current mesh."
         />
       ) : null}
       <div className="fm-inspector-toolbar">
-        <Button disabled={!sessionAvailable || pending || !objectId || Boolean(validationError)} size="sm" type="button" variant="primary" onClick={onApply}>
-          Apply Policy
-        </Button>
         <Button disabled={!sessionAvailable || pending || buildPending || !objectId || Boolean(validationError)} size="sm" type="button" variant="secondary" onClick={onBuild}>
           {buildPending ? "Waiting for mesh build…" : buildLabel}
         </Button>
@@ -867,9 +892,6 @@ export function ObjectMeshTransactionsSection({
             Build Shared-Domain Mesh
           </Button>
         ) : null}
-        <Button disabled={pending} size="sm" type="button" variant="ghost" onClick={onRevert}>
-          Revert
-        </Button>
       </div>
       {validationError ? <FeedbackBanner kind="error" message={validationError} /> : null}
       {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
@@ -1184,6 +1206,9 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
       resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, revision);
       resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, revision);
       resources.invalidate(SCENE_RESOURCE_KEY, revision);
+      // The write bumps the mesh revision without a realtime event; the build
+      // dialog's mesh_revision precondition reads it from the session status.
+      resources.invalidate(SESSION_STATUS_RESOURCE_KEY, `mesh-policy:object:${objectId}:${revision}`);
       if (!silentSuccess && !silentApplyInFlight.current) {
         setFeedback({
           kind: "success",
@@ -1367,6 +1392,22 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel" data-mesh-policy-draft="object">
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Lane", value: "FEM", tone: "neutral" },
+          { label: "Policy", value: draft.present ? "custom override" : "inherited" },
+          { label: "Topology", value: draft.topology || "inherited" },
+          {
+            label: "Quality",
+            value:
+              quality.status === "ready"
+                ? qualityStatistics
+                  ? "available"
+                  : "not published"
+                : quality.status,
+          },
+        ]}
+      />
       <Tabs value={activeTab} className="fm-inspector-tabs">
 
         <TabsContent value="policy" className="fm-tabs-content">
@@ -1377,19 +1418,8 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
             isDirty={isDirty}
             objectId={objectId}
             sessionAvailable={sessionScopeKey !== null}
-            onApply={() => void (inspectorEditSession?.apply() ?? applyPolicy())}
             onBuild={() => void buildMesh("mesh.build-selected")}
             onBuildSharedDomain={() => void buildMesh("mesh.build-shared-domain")}
-            onRevert={() => {
-              setDraftState(
-                initialInspectorDraftState({
-                  baseDraft,
-                  baseKey: draftKey,
-                  identityKey: draftIdentityKey,
-                }),
-              );
-              setFeedback(null);
-            }}
             pending={pending}
             buildPending={buildPending}
             validationError={"error" in validation ? validation.error : topologyCapabilityError}

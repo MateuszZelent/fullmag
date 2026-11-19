@@ -4,7 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: docs/physics/0700-frequency-domain-linearized-llg.md
+source_of_truth: response-solver, floquet-response
 ---
 
 (public-docs-numerical-methods-frequency-domain-root)=

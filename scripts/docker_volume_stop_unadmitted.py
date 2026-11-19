@@ -503,7 +503,12 @@ def _validate_network(
     project: str,
     *,
     allow_stopped_frontend: bool = False,
+    allow_stopped_backend: bool = False,
 ) -> None:
+    if allow_stopped_backend and (
+        allow_stopped_frontend or actual["backend"].get("State", {}).get("Running") is not False
+    ):
+        raise _fail("Stopped-backend network proof requires the exact stopped backend and running frontend")
     _assert_private_restart_network(actual, ids, project)
     backend_networks = actual["backend"].get("NetworkSettings", {}).get("Networks", {})
     frontend_networks = actual["frontend"].get("NetworkSettings", {}).get("Networks", {})
@@ -523,10 +528,11 @@ def _validate_network(
     network = documents[0]
     consumers = set(network.get("Containers", {}))
     allowed = set(ids.values())
-    expected = allowed if not allow_stopped_frontend else {ids["backend"]}
+    expected = ({ids["frontend"]} if allow_stopped_backend else
+                allowed if not allow_stopped_frontend else {ids["backend"]})
     if (network.get("Driver") != "bridge"
             or network.get("Labels", {}).get("com.docker.compose.project") != project
-            or ids["backend"] not in consumers
+            or (not allow_stopped_backend and ids["backend"] not in consumers)
             or consumers - allowed
             or (not allow_stopped_frontend and consumers != expected)
             or (allow_stopped_frontend and consumers not in (expected, allowed))):

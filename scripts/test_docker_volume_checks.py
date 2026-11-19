@@ -15,7 +15,9 @@ def valid_result():
         'source_files': {'/opt/fullmag/source/scripts/' + name + '.py': 'a' * 64
                          for name in ('test_fixture', 'docker_build_control', 'docker_volume_dev', 'docker_volume_activate',
                                       'docker_volume_stop_failed',
-                                      'docker_volume_checks')},
+                                      'docker_volume_checks', 'docker_shared_build_storage',
+                                      'docker_backend_volume_cache', 'docker_volume_cache_maintenance',
+                                      'docker_cache_retirement', 'docker_worktree_finish')},
     }
 
 
@@ -74,6 +76,758 @@ class OfflineCertificateTests(unittest.TestCase):
         bad['compose_project'] = 'foreign'
         with self.assertRaises(checks.BuildControlError):
             checks._validate_offline_result(bad, ['test_fixture'])
+
+
+import copy
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+from types import SimpleNamespace
+from unittest import mock
+import docker_dev_codegen as codegen
+
+
+class OfflineHostTests(unittest.TestCase):
+    def test_offline_linux_uses_the_host_adapter_before_inspecting_the_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory).resolve()
+            with mock.patch.object(checks.sys, 'platform', 'linux'), \
+                 mock.patch.object(checks.sys, 'argv', ['checks', '--source-root', str(source),
+                     '--offline', '--modules', 'test_docker_volume_receipts']), \
+                 mock.patch.object(checks, 'require_host') as host, \
+                 mock.patch.object(checks.storage, 'resolve_layout', side_effect=RuntimeError('selected group')):
+                with self.assertRaisesRegex(RuntimeError, 'selected group'):
+                    checks.main()
+            host.assert_called_once_with()
+
+    def test_unsupported_host_is_rejected_before_storage_or_docker(self):
+        with mock.patch.object(checks.sys, 'argv', ['checks', '--source-root', '/selected',
+                 '--offline', '--modules', 'test_docker_volume_receipts']), \
+             mock.patch.object(checks, 'require_host', side_effect=ValueError('unsupported host')), \
+             mock.patch.object(checks.storage, 'resolve_layout') as resolve, \
+             mock.patch.object(checks, 'docker_capture') as docker:
+            with self.assertRaisesRegex(ValueError, 'unsupported host'):
+                checks.main()
+        resolve.assert_not_called()
+        docker.assert_not_called()
+
+
+class FrontendImportCheckTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        paths = (*checks.IMPORT_FILES, *checks.MATERIAL_FILES, *checks.STL_FILES, *checks.ANTENNA_FILES, *checks.VISUALIZATION_FILES, *checks.FIELD_MAP_FILES, *checks.AIRBOX_FILES, *checks.CAMERA_FILES, *checks.TELEMETRY_FILES, 'scripts/typecheck-control-room.mjs', 'tsconfig.typecheck.json',
+                 'tsconfig.json', 'next.config.ts', 'next.config.test.ts', 'vitest.config.ts', 'eslint.config.mjs', 'package.json',
+                 'src/kernel/api/generated/openapi-v2.json', 'src/kernel/api/generated/openapi-v2-types.ts',
+                 'src/kernel/api/generated/openapi-v2-client.ts', 'src/kernel/api/generated/openapi-v2-paths.ts')
+        for path in paths:
+            target = self.root / 'apps/control-room' / path
+            target.parent.mkdir(parents=True, exist_ok=True); target.write_text('fixture')
+        self.control = mock.Mock(project='fullmag-selected')
+        self.documents = {name: {'Id': name+'-exact-id', 'Image': 'sha256:image',
+            'Config': {'Image': 'immutable-image', 'Env':['FULLMAG_FRONTEND_HOST_PORT=3202']}, 'State': {'Running': True, 'StartedAt': 'exact-start',
+            'Health': {'Status': 'healthy'}}} for name in ('backend', 'frontend')}
+        self.running = mock.patch.object(codegen, '_running_service', side_effect=lambda project,name,*args: (name,self.documents[name])).start()
+        self.volumes = mock.patch.object(codegen, '_inspect_technical_volumes', return_value={'volume': 'same'}).start()
+        self.execute = mock.patch.object(codegen, '_run_frontend', return_value=(b'pass', b'')).start()
+        self.head = mock.patch.object(checks.storage, 'git', return_value='a'*40).start()
+        import docker_development_inputs as frontend_inputs
+        self.metadata = mock.patch.object(frontend_inputs, 'describe', return_value={'files': []}).start()
+        self.view = mock.patch.object(frontend_inputs, 'frontend_view', return_value={'files': []}).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def run_checks(self, scope='frontend-import', identity=None):
+        result = checks.frontend_import_checks(self.control, self.root,
+            identity or {'worktree_id': 'selected'}, scope=scope)
+        return result, self.control.write.call_args.args[1]
+
+    def test_material_full_gate_is_fixed_bounded_and_preserves_each_attempt(self):
+        result, first = self.run_checks('frontend-materials-full')
+        self.assertEqual(result, 0)
+        commands = [item['arguments'] for item in first['commands']]
+        self.assertEqual([item['name'] for item in first['commands']],
+                         ['prepare', 'typecheck', 'lint', 'vitest-full', 'architecture', 'api-hygiene'])
+        self.assertIn('typecheck', commands[1])
+        self.assertIn('lint', commands[2])
+        self.assertEqual(commands[3][-2:], ['--pool=threads', '--maxWorkers=2'])
+        self.assertEqual([call.kwargs['timeout'] for call in self.execute.call_args_list],
+                         [600, 600, 1800, 1800, 600, 600])
+        self.assertTrue(set(checks.MATERIAL_FILES) <= set(first['selected_frontend_input_hashes']))
+        result, second = self.run_checks('frontend-materials-full')
+        self.assertEqual(result, 0)
+        self.assertNotEqual(first['receipt_path'], second['receipt_path'])
+        self.assertTrue(first['receipt_path'].startswith('verification/frontend-materials-full-checks/attempts/'))
+        self.documents['backend']['State']['Health']['Status'] = 'starting'
+        result, blocked = self.run_checks('frontend-materials-full')
+        self.assertNotEqual(result, 0)
+        self.assertEqual(blocked['commands'], [])
+
+    def test_stl_retry_preserves_failed_attempt_receipt_and_logs(self):
+        self.execute.side_effect = [
+            (b'pass', b''), (b'pass', b''), (b'pass', b''),
+            codegen.CodegenError('failed test', exit_code=1, stdout=b'first failure'),
+            (b'pass', b''),
+        ]
+        failed_code, failed = self.run_checks('frontend-stl')
+        first_root = self.control.write.call_args.args[0].removesuffix('/receipt.json')
+        self.assertEqual(failed_code, 1)
+        self.assertEqual(failed['state'], 'failed')
+        first_logs = {call.args[0] for call in self.control.write_bytes.call_args_list}
+        self.execute.side_effect = None
+        self.control.write_bytes.reset_mock()
+        passed_code, passed = self.run_checks('frontend-stl')
+        second_root = self.control.write.call_args.args[0].removesuffix('/receipt.json')
+        second_logs = {call.args[0] for call in self.control.write_bytes.call_args_list}
+        self.assertEqual(passed_code, 0)
+        self.assertEqual(passed['state'], 'succeeded')
+        self.assertNotEqual(first_root, second_root)
+        self.assertTrue(all(path.startswith(first_root + '/') for path in first_logs))
+        self.assertTrue(all(path.startswith(second_root + '/') for path in second_logs))
+        self.assertTrue(first_logs.isdisjoint(second_logs))
+
+    def enable_field_map_source_services(self):
+        namespace = 'namespaces/' + 'a' * 32
+        self.source_identity = {
+            'project_name': self.control.project,
+            'project_id': 'project-id',
+            'worktree_id': 'selected',
+            'checkout_kind': 'worktree',
+            'source_root': str(self.root),
+        }
+        labels = {
+            'com.docker.compose.project': self.control.project,
+            'org.fullmag.compose.project': self.control.project,
+            'org.fullmag.source.project-id': self.source_identity['project_id'],
+            'org.fullmag.source.worktree-id': self.source_identity['worktree_id'],
+            'org.fullmag.source.checkout-kind': self.source_identity['checkout_kind'],
+        }
+        self.documents = {}
+        self.service_ids = {}
+        backend_mounts = [
+            {'Type': 'bind', 'Source': str(self.root), 'Destination': '/opt/fullmag/source', 'RW': False,
+             'Mode': 'ro', 'Propagation': 'rprivate'},
+            {'Type': 'bind', 'Source': str(self.root / '.git'), 'Destination': '/opt/fullmag/source-git', 'RW': False,
+             'Mode': 'ro', 'Propagation': 'rprivate'},
+            {'Type': 'volume', 'Name': 'backend-build', 'Source': '/var/lib/docker/volumes/backend-build/_data',
+             'Destination': '/build', 'Driver': 'local', 'Mode': 'rw', 'RW': True, 'Propagation': ''},
+            {'Type': 'volume', 'Name': 'backend-package', 'Source': '/var/lib/docker/volumes/backend-package/_data',
+             'Destination': '/opt/fullmag/package', 'Driver': 'local', 'Mode': 'rw', 'RW': True, 'Propagation': ''},
+            {'Type': 'volume', 'Name': 'fullmag-selected-private', 'Source': '/var/lib/docker/volumes/fullmag-selected-private/_data',
+             'Destination': '/opt/fullmag/control', 'Driver': 'local', 'Mode': 'rw', 'RW': True, 'Propagation': ''},
+        ]
+        frontend_mounts = [
+            {'Type': 'bind', 'Source': str(self.root), 'Destination': '/opt/fullmag/source', 'RW': False,
+             'Mode': 'ro', 'Propagation': 'rprivate'},
+            {'Type': 'volume', 'Name': 'fullmag-selected-private', 'Source': '/var/lib/docker/volumes/fullmag-selected-private/_data',
+             'Destination': '/state/development', 'Driver': 'local', 'Mode': 'rw', 'RW': True, 'Propagation': ''},
+            {'Type': 'volume', 'Name': 'fullmag-selected-private', 'Source': '/var/lib/docker/volumes/fullmag-selected-private/_data',
+             'Destination': '/opt/fullmag/control', 'Driver': 'local', 'Mode': 'ro', 'RW': False, 'Propagation': ''},
+        ]
+        mounts_by_service = {'backend': backend_mounts, 'frontend': frontend_mounts}
+        for service in ('backend', 'frontend'):
+            identifier = ('e' if service == 'backend' else 'f') * 64
+            self.service_ids[service] = identifier
+            source_variable = 'FULLMAG_SOURCE_HOST_ROOT' if service == 'backend' else 'FULLMAG_SOURCE_ROOT'
+            environment = [source_variable + '=' + str(self.root),
+                           'FULLMAG_CONTROL_NAMESPACE=' + namespace]
+            if service == 'frontend':
+                environment.append('FULLMAG_FRONTEND_HOST_PORT=3202')
+            service_labels = {**labels, 'com.docker.compose.service': service}
+            config_mounts = []
+            for mount in mounts_by_service[service]:
+                host_mount = {'Type': mount['Type'], 'Source': mount['Name'] if mount['Type'] == 'volume' else mount['Source'],
+                              'Target': mount['Destination']}
+                if mount['Type'] == 'volume':
+                    host_mount['VolumeOptions'] = {'Subpath': namespace if mount['Destination'] == '/opt/fullmag/control'
+                                                   and service == 'backend' else
+                                                   namespace + '/frontend' if mount['Destination'] == '/opt/fullmag/control' else
+                                                   ''}
+                else:
+                    host_mount['ReadOnly'] = True
+                    host_mount['BindOptions'] = {'Propagation': 'rprivate'}
+                config_mounts.append(host_mount)
+            state = {'Running': service == 'frontend',
+                     'Status': 'running' if service == 'frontend' else 'exited',
+                     'Pid': 234 if service == 'frontend' else 0,
+                     'ExitCode': 0, 'StartedAt': 'stable-start', 'FinishedAt': 'stable-finish',
+                     'Paused': False, 'Restarting': False, 'Dead': False, 'OOMKilled': False,
+                     'Health': {'Status': 'healthy'}}
+            self.documents[service] = {
+                'Id': identifier,
+                'Image': 'sha256:' + ('b' if service == 'backend' else 'c') * 64,
+                'Config': {'Image': 'fullmag-' + service + ':dev', 'Env': environment,
+                           'Labels': service_labels},
+                'State': state,
+                'Mounts': mounts_by_service[service],
+                'HostConfig': {'Mounts': config_mounts},
+            }
+        def listed_services(*arguments, **_kwargs):
+            if arguments[:3] != ('ps', '--all', '--quiet'):
+                raise AssertionError('source scope must only inventory existing Compose containers')
+            service = next((value.rsplit('=', 1)[1] for value in arguments
+                            if value.startswith('label=com.docker.compose.service=')), None)
+            if service not in self.service_ids:
+                raise AssertionError('source scope queried an unexpected Compose service')
+            return SimpleNamespace(stdout=(self.service_ids[service] + '\n').encode())
+        self.inventory = mock.patch.object(checks, 'docker_capture', side_effect=listed_services).start()
+        self.inspect = mock.patch.object(codegen, '_inspect',
+            side_effect=lambda identifier: next(document for document in self.documents.values()
+                if document['Id'] == identifier)).start()
+        self.running.side_effect = lambda _project, service, *_args: (
+            self.service_ids[service][:12], self.documents[service])
+
+    def test_field_map_source_scope_accepts_cleanly_stopped_backend_without_runtime_claim(self):
+        self.enable_field_map_source_services()
+        result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['scope'], 'frontend-field-map-source')
+        self.assertEqual(receipt['runtime_qualification'], 'NOT VERIFIED')
+        self.assertEqual(receipt['backend_state_before'], {
+            'status': 'exited', 'running': False, 'pid': 0, 'exit_code': 0,
+            'qualification': 'stopped-clean-maintenance'})
+        self.assertEqual(receipt['backend_state_after'], receipt['backend_state_before'])
+        self.assertEqual(receipt['source_bindings_before'], receipt['source_bindings_after'])
+        self.assertEqual(receipt['technical_volumes_before'], receipt['technical_volumes_after'])
+        self.assertEqual(receipt['services_before'], receipt['services_after'])
+        self.assertEqual([entry['name'] for entry in receipt['commands']],
+                         ['prepare', 'typecheck', 'vitest', 'eslint'])
+        for entry, (name, arguments) in zip(receipt['commands'], checks.FIELD_MAP_COMMANDS):
+            self.assertEqual(entry['name'], name)
+            self.assertEqual(entry['arguments'], list(arguments))
+        self.assertEqual(self.execute.call_count, len(checks.FIELD_MAP_COMMANDS))
+        self.assertTrue(all(call.args[0] == self.service_ids['frontend']
+                            for call in self.execute.call_args_list))
+        self.assertNotIn('runtime', [entry['name'] for entry in receipt['commands']])
+        self.assertNotIn('api', [entry['name'] for entry in receipt['commands']])
+
+    def test_field_map_source_scope_accepts_backend_only_when_running_healthy(self):
+        self.enable_field_map_source_services()
+        self.documents['backend']['State'].update(Running=True, Status='running', Pid=345)
+        result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['backend_state_before']['qualification'], 'running-healthy')
+
+    def test_field_map_source_scope_rejects_wrong_source_or_compose_group_before_commands(self):
+        for mutation in ('source', 'group'):
+            with self.subTest(mutation=mutation):
+                self.enable_field_map_source_services()
+                if mutation == 'source':
+                    self.documents['backend']['Config']['Env'][0] = 'FULLMAG_SOURCE_HOST_ROOT=/foreign/source'
+                else:
+                    self.documents['frontend']['Config']['Labels']['com.docker.compose.project'] = 'foreign-group'
+                result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+                self.assertEqual(result, 1)
+                self.assertEqual(receipt['state'], 'failed')
+                self.assertEqual(self.execute.call_count, 0)
+
+    def test_field_map_source_scope_rejects_unhealthy_running_backend_before_commands(self):
+        self.enable_field_map_source_services()
+        self.documents['backend']['State'].update(Running=True, Status='running', Pid=345,
+                                                   Health={'Status': 'unhealthy'})
+        result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+        self.assertEqual(result, 1)
+        self.assertEqual(receipt['state'], 'failed')
+        self.assertEqual(self.execute.call_count, 0)
+
+    def test_field_map_source_scope_rejects_changed_service_image_pin(self):
+        self.enable_field_map_source_services()
+        def change_image(*_args, **_kwargs):
+            self.documents['frontend']['Image'] = 'sha256:' + 'd' * 64
+            return b'pass', b''
+        self.execute.side_effect = change_image
+        result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+        self.assertEqual(result, 1)
+        self.assertIn('changed during checks', receipt['error'])
+
+    def test_field_map_source_scope_requires_full_inspect_identity_after_short_docker_id(self):
+        self.enable_field_map_source_services()
+        wrong_frontend = {**self.documents['frontend'], 'Id': 'a' * 64}
+        self.running.side_effect = lambda _project, service, *_args: (
+            self.service_ids[service][:12],
+            wrong_frontend if service == 'frontend' else self.documents[service])
+        result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+        self.assertEqual(result, 1)
+        self.assertIn('inspected container identity changed', receipt['error'])
+        self.assertEqual(self.execute.call_count, 0)
+
+    def test_field_map_source_scope_rejects_changed_technical_volume_pin(self):
+        self.enable_field_map_source_services()
+        self.volumes.side_effect = [{'control_volume_name': 'before'},
+                                    {'control_volume_name': 'after'}]
+        result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+        self.assertEqual(result, 1)
+        self.assertEqual(receipt['technical_volumes_before'], {'control_volume_name': 'before'})
+        self.assertEqual(receipt['technical_volumes_after'], {'control_volume_name': 'after'})
+        self.assertIn('changed during checks', receipt['error'])
+
+    def test_field_map_source_scope_rejects_stopped_backend_unless_pid_and_exit_are_clean(self):
+        for pid, exit_code in ((1, 0), (0, 1)):
+            with self.subTest(pid=pid, exit_code=exit_code):
+                self.enable_field_map_source_services()
+                self.documents['backend']['State'].update(Pid=pid, ExitCode=exit_code)
+                result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+                self.assertEqual(result, 1)
+                self.assertEqual(self.execute.call_count, 0)
+
+    def test_fixed_commands_use_only_existing_frontend_and_volume_paths(self):
+        result, receipt = self.run_checks()
+        self.assertEqual(result, 0); self.assertEqual(receipt['state'], 'succeeded')
+        self.assertEqual(self.execute.call_count, 4)
+        for call in self.execute.call_args_list:
+            self.assertEqual(call.args[0], 'frontend-exact-id')
+            command = call.args[1]
+            self.assertEqual(command[:3], ('/usr/bin/flock', '-n', '/state/development/cache/.fullmag-frontend-import-checks.lock'))
+            self.assertIn('FULLMAG_FRONTEND_ROOT=/state/development/cache', command)
+            self.assertIn('TMPDIR=/state/development/tmp', command)
+            self.assertNotIn('install', command)
+        self.assertEqual([entry['name'] for entry in receipt['commands']], ['prepare','typecheck','vitest','eslint'])
+        self.assertEqual(self.execute.call_args_list[2].args[1][-2:], ('--pool=threads','--maxWorkers=1'))
+        self.assertIn(checks.IMPORT_FILES[1], self.execute.call_args_list[2].args[1])
+        self.assertIn(checks.IMPORT_FILES[3], self.execute.call_args_list[2].args[1])
+        for path in ('src/modules/start/model/pythonImport.test.ts', 'src/modules/start/model/importFormats.test.ts',
+                     'src/modules/start/sections/ImportSection.test.tsx', 'src/modules/start/ui/CreateProjectAction.test.tsx','src/kernel/layout/shellCommands.test.ts',
+                     'next.config.test.ts'):
+            self.assertIn(path, self.execute.call_args_list[2].args[1])
+
+    def test_known_typecheck_failure_preserves_failure_and_runs_other_independent_gates(self):
+        self.execute.side_effect = [(b'',b''),codegen.CodegenError('type mismatch', stdout=b'compiler diagnostic', stderr=b'wrapper failure', exit_code=7),(b'vitest pass',b''),(b'lint pass',b'')]
+        result, receipt = self.run_checks()
+        self.assertEqual(result, 1); self.assertEqual(receipt['state'], 'failed')
+        self.assertEqual(self.execute.call_count, 4)
+        self.assertEqual(receipt['commands'][1]['state'], 'failed')
+        self.assertEqual(receipt['commands'][1]['exit_code'], 7)
+        logs = dict(call.args for call in self.control.write_bytes.call_args_list)
+        self.assertEqual(logs['verification/frontend-import-checks/typecheck.stdout.log'], b'compiler diagnostic')
+        self.assertEqual(logs['verification/frontend-import-checks/typecheck.stderr.log'], b'wrapper failure')
+
+    def test_telemetry_source_scope_runs_gates_without_unit_builds(self):
+        result, receipt = self.run_checks('frontend-telemetry-source')
+        self.assertEqual(result, 0)
+        self.assertEqual([entry['name'] for entry in receipt['commands']],
+                         ['prepare', 'typecheck', 'eslint', 'architecture', 'api-hygiene'])
+        self.assertEqual(self.control.write.call_args.args[0],
+                         'verification/frontend-telemetry-source-checks/receipt.json')
+        for call in self.execute.call_args_list:
+            self.assertEqual(call.args[0], 'frontend-exact-id')
+            self.assertNotIn('vitest', call.args[1])
+            self.assertNotIn('install', call.args[1])
+        eslint = self.execute.call_args_list[2].args[1]
+        for name in checks.TELEMETRY_FILES:
+            self.assertIn(name, eslint)
+        self.assertIn('--max-warnings=0', eslint)
+
+    def test_telemetry_source_scope_rejects_changed_inputs(self):
+        def change(*args, **kwargs):
+            (self.root / 'apps/control-room' / checks.TELEMETRY_FILES[0]).write_text('changed')
+            return b'pass', b''
+        self.execute.side_effect = change
+        result, receipt = self.run_checks('frontend-telemetry-source')
+        self.assertEqual(result, 1)
+        self.assertIn('changed during checks', receipt['error'])
+
+    def test_unknown_exec_stops_followups_and_is_not_downgraded_by_later_probe_failure(self):
+        self.execute.side_effect = [(b'',b''),codegen.CodegenError('observation timeout',reconciliation_required=True)]
+        self.volumes.side_effect = [{'volume':'same'},codegen.CodegenError('inspection unavailable')]
+        result, receipt = self.run_checks()
+        self.assertEqual(result, 2); self.assertEqual(receipt['state'], 'outcome-unknown')
+        self.assertTrue(receipt['reconciliation_required']); self.assertEqual(self.execute.call_count, 2)
+
+    def test_service_restart_during_checks_refuses_success(self):
+        def change(*args,**kwargs):
+            self.documents['frontend']['State']['StartedAt'] = 'restarted'
+            return b'pass',b''
+        self.execute.side_effect = change
+        result, receipt = self.run_checks()
+        self.assertEqual(result, 1); self.assertEqual(receipt['state'], 'failed')
+        self.assertIn('changed during checks', receipt['error'])
+
+    def test_input_edit_during_checks_refuses_success(self):
+        def change(*args,**kwargs):
+            (self.root / 'apps/control-room' / checks.IMPORT_FILES[0]).write_text('edited')
+            return b'pass',b''
+        self.execute.side_effect = change
+        result, receipt = self.run_checks()
+        self.assertEqual(result, 1); self.assertIn('changed during checks', receipt['error'])
+
+
+
+    def test_stale_shadow_refuses_before_any_command(self):
+        self.view.side_effect = ValueError('frontend frozen metadata is stale')
+        result, receipt = self.run_checks()
+        self.assertEqual(result, 1); self.execute.assert_not_called()
+        self.assertEqual(receipt['state'], 'failed')
+
+    def test_shadow_changed_after_commands_refuses_qualification(self):
+        self.view.side_effect = [{'files': []}, ValueError('shadow changed')]
+        result, receipt = self.run_checks()
+        self.assertEqual(result, 1); self.assertEqual(self.execute.call_count, 4)
+        self.assertEqual(receipt['state'], 'failed')
+
+
+    def test_visualization_scope_runs_lint_in_separate_bounded_processes_without_vitest(self):
+        result, receipt = self.run_checks('frontend-visualization')
+        self.assertEqual(result, 0)
+        commands = receipt['commands']
+        lint = [command for command in commands if command['name'].startswith('eslint-')]
+        self.assertEqual(len(lint), len(checks.VISUALIZATION_FILES))
+        for command, path in zip(lint, checks.VISUALIZATION_FILES):
+            self.assertEqual(command['arguments'][-2:], [path, '--max-warnings=0'])
+            self.assertIn('NODE_OPTIONS=--max-old-space-size=4096', command['arguments'])
+        self.assertNotIn('vitest', str([command['arguments'] for command in commands]))
+        self.assertEqual(commands[-2]['name'], 'architecture')
+        self.assertEqual(commands[-1]['name'], 'api-hygiene')
+
+    def test_camera_scope_runs_gesture_regressions_in_existing_frontend(self):
+        result, receipt = self.run_checks('frontend-camera')
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['scope'], 'frontend-camera')
+        self.assertEqual(self.control.write.call_args.args[0],
+                         'verification/frontend-camera-checks/receipt.json')
+        vitest = next(command for command in receipt['commands'] if command['name'] == 'vitest')
+        for test in checks.CAMERA_TESTS:
+            self.assertIn(test, vitest['arguments'])
+        self.assertTrue(set(checks.CAMERA_FILES) <= set(receipt['selected_frontend_input_hashes']))
+
+    def test_airbox_scope_uses_authoritative_inspector_and_geometry_tests(self):
+        result, receipt = self.run_checks('frontend-airbox')
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['scope'], 'frontend-airbox')
+        self.assertEqual(self.control.write.call_args.args[0],
+                         'verification/frontend-airbox-checks/receipt.json')
+        vitest = next(command for command in receipt['commands'] if command['name'] == 'vitest')
+        for test in checks.AIRBOX_TESTS:
+            self.assertIn(test, vitest['arguments'])
+        self.assertTrue(set(checks.AIRBOX_FILES) <= set(receipt['selected_frontend_input_hashes']))
+
+    def test_field_map_scope_runs_canonical_planar_tests_in_existing_frontend(self):
+        result, receipt = self.run_checks('frontend-field-map')
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['scope'], 'frontend-field-map')
+        self.assertEqual(self.control.write.call_args.args[0],
+                         'verification/frontend-field-map-checks/receipt.json')
+        commands = receipt['commands']
+        vitest = next(command for command in commands if command['name'] == 'vitest')
+        self.assertIn('src/modules/field-map/components/FieldMapToolbar.test.tsx', vitest['arguments'])
+        self.assertIn('src/modules/field-map/model/fieldMapDataPlan.test.ts', vitest['arguments'])
+        self.assertIn('src/modules/inspector/visualization/VisualizationViewContext.test.ts', vitest['arguments'])
+        self.assertTrue(set(checks.FIELD_MAP_FILES) <= set(receipt['selected_frontend_input_hashes']))
+
+    def test_antenna_scope_uses_exact_geometry_tests_lint_and_separate_receipt(self):
+        result, receipt = self.run_checks('frontend-antenna')
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['scope'], 'frontend-antenna')
+        self.assertEqual(receipt['schema'], 'fullmag.volume-dev-frontend-antenna-checks.v1')
+        self.assertEqual(self.control.write.call_args.args[0], 'verification/frontend-antenna-checks/receipt.json')
+        self.assertTrue(set(checks.ANTENNA_FILES) <= set(receipt['selected_frontend_input_hashes']))
+        commands = [call.args[1] for call in self.execute.call_args_list]
+        self.assertEqual(commands[1][-len(checks.FRONTEND_COMMANDS[1][1]):], checks.FRONTEND_COMMANDS[1][1])
+        self.assertEqual(commands[2][-len(checks.ANTENNA_COMMANDS[2][1]):], checks.ANTENNA_COMMANDS[2][1])
+        self.assertEqual(commands[3][-len(checks.ANTENNA_COMMANDS[3][1]):], checks.ANTENNA_COMMANDS[3][1])
+        self.assertEqual(checks.ANTENNA_TESTS, (
+            'src/modules/inspector/panels/antenna/MicrostripGeometryEditorModel.test.ts',
+            'src/kernel/authoring/geometryLifecycleCommandContributions.test.ts'))
+        self.assertEqual(self.view.call_count, 2)
+        for command in commands:
+            self.assertEqual(command[:3], ('/usr/bin/flock', '-n', '/state/development/cache/.fullmag-frontend-import-checks.lock'))
+            self.assertNotIn('install', command)
+        for entry in receipt['commands']:
+            for stream in ('stdout', 'stderr'):
+                self.assertTrue(entry[stream]['path'].startswith('verification/frontend-antenna-checks/'))
+
+    def test_each_antenna_source_edit_during_checks_refuses_qualification(self):
+        for path in checks.ANTENNA_FILES:
+            with self.subTest(path=path):
+                target = self.root / 'apps/control-room' / path
+                def change(*args, **kwargs):
+                    target.write_text('edited')
+                    return b'pass', b''
+                self.execute.side_effect = change
+                try:
+                    result, receipt = self.run_checks('frontend-antenna')
+                    self.assertEqual(result, 1)
+                    self.assertIn('changed during checks', receipt['error'])
+                finally:
+                    target.write_text('fixture')
+
+    def test_antenna_scope_retains_stale_metadata_and_unknown_exec_guards(self):
+        self.view.side_effect = ValueError('stale antenna frozen metadata')
+        result, receipt = self.run_checks('frontend-antenna')
+        self.assertEqual(result, 1)
+        self.execute.assert_not_called()
+        self.view.side_effect = None
+        self.execute.side_effect = [(b'', b''), codegen.CodegenError('timeout', reconciliation_required=True)]
+        result, receipt = self.run_checks('frontend-antenna')
+        self.assertEqual(result, 2)
+        self.assertEqual(receipt['state'], 'outcome-unknown')
+        self.assertEqual(self.execute.call_count, 2)
+
+    def test_frontend_scope_is_closed_before_any_service_or_command(self):
+        for scope in ('all', 'frontend-antenna-extra', '--files arbitrary.ts', '../antenna'):
+            with self.subTest(scope=scope), self.assertRaises(checks.BuildControlError):
+                self.run_checks(scope)
+        self.running.assert_not_called()
+        self.execute.assert_not_called()
+
+    def test_cli_routes_only_the_closed_antenna_profile_to_existing_frontend(self):
+        identity = {'worktree_id': 'selected'}
+        configuration = {'services': {'fem-gpu-toolchain': {'build': {'args': {'FULLMAG_CUDA_BASE_IMAGE': 'fixed-helper'}}}}}
+        with mock.patch.object(checks.sys, 'argv', ['checks', '--source-root', str(self.root), '--scope', 'frontend-antenna']), \
+             mock.patch.object(checks.storage, 'resolve_layout', return_value='layout'), \
+             mock.patch.object(checks, 'compose_project_identity', return_value=identity), \
+             mock.patch('docker_build_control.toolchain_configuration', return_value=configuration), \
+             mock.patch.object(checks, 'BuildControl', return_value=self.control), \
+             mock.patch.object(checks, 'frontend_import_checks', return_value=0) as frontend, \
+             mock.patch.object(checks, 'docker_capture') as backend:
+            self.assertEqual(checks.main(), 0)
+        frontend.assert_called_once_with(self.control, self.root.resolve(), identity, scope='frontend-antenna')
+        backend.assert_not_called()
+        with mock.patch.object(checks.sys, 'argv', ['checks', '--source-root', str(self.root), '--scope', 'frontend-antenna-extra']), \
+             mock.patch.object(checks.sys, 'stderr'), mock.patch.object(checks.storage, 'resolve_layout') as resolve:
+            with self.assertRaises(SystemExit) as error:
+                checks.main()
+        self.assertEqual(error.exception.code, 2)
+        resolve.assert_not_called()
+
+    def test_cli_routes_source_only_field_map_scope_to_existing_frontend(self):
+        identity = {'worktree_id': 'selected'}
+        configuration = {'services': {'fem-gpu-toolchain': {'build': {'args': {'FULLMAG_CUDA_BASE_IMAGE': 'fixed-helper'}}}}}
+        with mock.patch.object(checks.sys, 'argv', ['checks', '--source-root', str(self.root),
+                 '--scope', 'frontend-field-map-source']), \
+             mock.patch.object(checks.storage, 'resolve_layout', return_value='layout'), \
+             mock.patch.object(checks, 'compose_project_identity', return_value=identity), \
+             mock.patch('docker_build_control.toolchain_configuration', return_value=configuration), \
+             mock.patch.object(checks, 'BuildControl', return_value=self.control), \
+             mock.patch.object(checks, 'frontend_import_checks', return_value=0) as frontend, \
+             mock.patch.object(checks, 'docker_capture') as backend:
+            self.assertEqual(checks.main(), 0)
+        frontend.assert_called_once_with(self.control, self.root.resolve(), identity,
+                                         scope='frontend-field-map-source')
+        backend.assert_not_called()
+        with mock.patch.object(checks.sys, 'argv', ['checks', '--source-root', str(self.root),
+                 '--scope', 'frontend-field-map-source-extra']), \
+             mock.patch.object(checks.sys, 'stderr'), \
+             mock.patch.object(checks.storage, 'resolve_layout') as resolve:
+            with self.assertRaises(SystemExit) as error:
+                checks.main()
+        self.assertEqual(error.exception.code, 2)
+        resolve.assert_not_called()
+
+
+class FrontendAntennaShellBoundaryTests(unittest.TestCase):
+    def dispatch(self, recipe):
+        source = (Path(__file__).resolve().parent / 'just_storage_shell.sh').read_text(encoding='utf8')
+        body = source.split('  *"scripts/docker_volume_checks.py"*)\n', 1)[1].split('\n    ;;', 1)[0]
+        with tempfile.TemporaryDirectory(prefix='fullmag-antenna-checks-shell-') as directory:
+            script_dir = Path(directory)
+            (script_dir / 'docker_volume_checks.py').write_text(
+                'import json,sys; print(json.dumps(sys.argv[1:]))\n', encoding='utf8')
+            environment = dict(os.environ, RECIPE_LITERAL=recipe, FIXED_PYTHON=sys.executable,
+                               FIXED_SCRIPT_DIR=str(script_dir))
+            program = ('set -euo pipefail\nrecipe="$RECIPE_LITERAL"\n'
+                       'python_cmd="$FIXED_PYTHON"\nscript_dir="$FIXED_SCRIPT_DIR"\n' + body)
+            bash = '/bin/bash' if os.name == 'posix' else (shutil.which('bash') or 'bash')
+            return subprocess.run([bash, '--noprofile', '--norc', '-c', program],
+                                  env=environment, capture_output=True, text=True, timeout=15)
+
+    def test_dispatches_literal_antenna_scope_as_fixed_argv(self):
+        source_root = '/selected/$(printf literal);worktree'
+        recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                  f"--source-root '{source_root}' --scope 'frontend-antenna'")
+        result = self.dispatch(recipe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), ['--source-root', source_root, '--scope', 'frontend-antenna'])
+
+    def test_dispatches_only_exact_activation_history_scope(self):
+        recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                  "--source-root '/selected' --scope 'activation-history'")
+        result = self.dispatch(recipe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         ['--source-root', '/selected', '--scope', 'activation-history'])
+        for invalid in (recipe + '; printf injected', recipe.replace('activation-history', 'activation-history-extra')):
+            rejected = self.dispatch(invalid)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertFalse(rejected.stdout.strip())
+
+    def test_dispatches_literal_field_map_scope_as_fixed_argv(self):
+        recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                  "--source-root '/selected' --scope 'frontend-field-map'")
+        result = self.dispatch(recipe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         ['--source-root', '/selected', '--scope', 'frontend-field-map'])
+
+    def test_dispatches_closed_material_and_authoring_scopes(self):
+        for scope in ('authoring-contracts', 'material-library-contracts',
+                      'material-library-python-contracts', 'frontend-materials', 'frontend-materials-full'):
+            with self.subTest(scope=scope):
+                recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                          f"--source-root '/selected' --scope '{scope}'")
+                result = self.dispatch(recipe)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), ['--source-root', '/selected', '--scope', scope])
+                self.assertEqual(self.dispatch(recipe.replace(scope, scope + '-extra')).returncode, 2)
+
+    def test_dispatches_only_exact_field_map_source_scope(self):
+        recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                  "--source-root '/selected' --scope 'frontend-field-map-source'")
+        result = self.dispatch(recipe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         ['--source-root', '/selected', '--scope', 'frontend-field-map-source'])
+        rejected = self.dispatch(recipe.replace('frontend-field-map-source',
+                                                'frontend-field-map-source-extra'))
+        self.assertEqual(rejected.returncode, 2)
+        self.assertFalse(rejected.stdout.strip())
+
+    def test_dispatches_only_exact_telemetry_source_scope(self):
+        recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                  "--source-root '/selected' --scope 'frontend-telemetry-source'")
+        result = self.dispatch(recipe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         ['--source-root', '/selected', '--scope', 'frontend-telemetry-source'])
+        for invalid in (recipe + '; printf injected',
+                        recipe.replace('frontend-telemetry-source', 'frontend-telemetry-source-extra')):
+            rejected = self.dispatch(invalid)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertFalse(rejected.stdout.strip())
+
+    def test_rejects_scope_suffix_extra_files_and_composite_commands(self):
+        recipe = 'python "/ignored/scripts/docker_volume_checks.py" --source-root \'/selected\' --scope \'frontend-antenna\''
+        for candidate in (recipe + '; printf injected', recipe + " --files 'arbitrary.ts'",
+                          recipe.replace('frontend-antenna', 'frontend-antenna-extra'),
+                          recipe.replace('frontend-antenna', 'frontend-antenna; printf injected')):
+            with self.subTest(candidate=candidate):
+                result = self.dispatch(candidate)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(result.stdout.strip())
+
+    def test_dispatches_pinned_oracle_as_one_literal_argument(self):
+        source = "/selected/$(printf literal);worktree"
+        wheel = "/opt/fullmag/control/verification/task/mpmath-1.3.0-py3-none-any.whl"
+        recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                  f"--source-root '{source}' --scope 'all' --oracle-wheel '{wheel}'")
+        result = self.dispatch(recipe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [
+            '--source-root', source, '--scope', 'all', '--oracle-wheel', wheel,
+        ])
+        for suffix in ("; printf injected", " --oracle-wheel '/other.whl'"):
+            rejected = self.dispatch(recipe + suffix)
+            self.assertEqual(rejected.returncode, 2, rejected.stderr)
+            self.assertFalse(rejected.stdout.strip())
+
+
+@unittest.skipIf(os.name == 'nt', 'Container wheel filesystem is POSIX')
+class OracleWheelBindingTests(unittest.TestCase):
+    def setUp(self):
+        import hashlib
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.source = self.root / 'source'
+        self.pin = self.source / 'scripts/antenna_triangle_surface_oracle.py'
+        self.pin.parent.mkdir(parents=True)
+        self.directory = self.root / 'verification'
+        self.wheel = self.directory / 'task/mpmath-1.3.0-py3-none-any.whl'
+        self.wheel.parent.mkdir(parents=True)
+        self.wheel.write_bytes(b'registered fixture wheel')
+        self.digest = hashlib.sha256(self.wheel.read_bytes()).hexdigest()
+        self.pin.write_text('WHEEL_SHA = ' + repr(self.digest) + '\n')
+        patcher = mock.patch.object(checks, '_ORACLE_WHEEL_ROOT', self.directory)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def binding(self):
+        return checks._oracle_wheel_binding(self.source, str(self.wheel))
+
+    def test_accepts_pinned_file_and_records_its_identity(self):
+        binding = self.binding()
+        self.assertEqual(binding['sha256'], self.digest)
+        verified = checks._verify_oracle_wheel(binding, self.source)
+        self.assertEqual(verified['path'], str(self.wheel))
+        self.assertEqual(verified['sha256'], self.digest)
+        self.assertEqual(checks._verify_oracle_wheel(binding, self.source), verified)
+        self.assertIsNone(checks._oracle_wheel_binding(self.source, None))
+
+    def test_rejects_unbound_or_noncanonical_references(self):
+        for reference in (
+            str(self.root / self.wheel.name),
+            str(self.directory / '../task' / self.wheel.name),
+            str(self.directory / 'task' / 'other.whl'),
+            str(self.directory / 'task:extra' / self.wheel.name),
+            str(self.directory) + '//task/' + self.wheel.name,
+        ):
+            with self.subTest(reference=reference), self.assertRaises(checks.BuildControlError):
+                checks._oracle_wheel_binding(self.source, reference)
+
+    def test_rejects_wrong_bytes_changed_pin_symlink_and_oversize(self):
+        binding = self.binding()
+        self.wheel.write_bytes(b'changed')
+        with self.assertRaisesRegex(checks.BuildControlError, 'digest'):
+            checks._verify_oracle_wheel(binding, self.source)
+        self.wheel.write_bytes(b'registered fixture wheel')
+        self.pin.write_text('WHEEL_SHA = ' + repr('f' * 64) + '\n')
+        with self.assertRaisesRegex(checks.BuildControlError, 'binding'):
+            checks._verify_oracle_wheel(binding, self.source)
+        self.pin.write_text('WHEEL_SHA = ' + repr(self.digest) + '\n')
+        target = self.directory / 'wheel-copy'
+        self.wheel.rename(target)
+        self.wheel.symlink_to(target)
+        with self.assertRaisesRegex(checks.BuildControlError, 'canonical'):
+            checks._verify_oracle_wheel(binding, self.source)
+        self.wheel.unlink()
+        self.wheel.write_bytes(b'x' * (2 * 1024 * 1024 + 1))
+        with self.assertRaisesRegex(checks.BuildControlError, 'bounded'):
+            checks._verify_oracle_wheel(binding, self.source)
+
+    def test_rejects_a_mutated_reference_without_reading_another_file(self):
+        binding = self.binding()
+        for update in ({'sha256': 'f' * 64}, {'extra': True}, {'source_sha256': 'f' * 64}):
+            with self.subTest(update=update), self.assertRaises(checks.BuildControlError):
+                checks._verify_oracle_wheel({**binding, **update}, self.source)
+
+    def test_rejects_oracle_for_other_scopes_before_storage(self):
+        for suffix in (['--scope', 'frontend-tools'], ['--offline', '--modules', 'test_fixture']):
+            with self.subTest(suffix=suffix), \
+                 mock.patch.object(checks.sys, 'argv', ['checks', '--source-root', str(self.source),
+                     '--oracle-wheel', str(self.wheel), *suffix]), \
+                 mock.patch.object(checks.storage, 'resolve_layout') as resolve:
+                with self.assertRaisesRegex(checks.BuildControlError, 'only.*all'):
+                    checks.main()
+            resolve.assert_not_called()
+
+
+
+
+
+class InitialOfflineImageTests(unittest.TestCase):
+    def test_image_is_bound_to_selected_attempt_source_and_compose(self):
+        identity = {'project_name': 'fullmag-worktree-test', 'source_root': '/source',
+                    'worktree_id': 'test', 'project_id': 'project'}
+        image = 'sha256:' + 'a' * 64
+        receipt = {'phase': 'development', 'attempt': 'b' * 32,
+                   'compose_project': identity['project_name'],
+                   'inputs': {'source_root': '/source', 'source_worktree_id': 'test',
+                              'source_project_id': 'project', 'image_id': image}}
+        document = {'name': identity['project_name'], 'services': {'backend': {'image': image}}}
+        self.assertEqual(checks._initial_offline_image(receipt, document, identity, 'b' * 32), image)
+        for field, value in [('source_root', '/foreign'), ('source_worktree_id', 'foreign'),
+                             ('source_project_id', 'foreign'), ('image_id', 'mutable:tag')]:
+            bad = copy.deepcopy(receipt)
+            bad['inputs'][field] = value
+            with self.subTest(field=field), self.assertRaises(checks.BuildControlError):
+                checks._initial_offline_image(bad, document, identity, 'b' * 32)
+        with self.assertRaises(checks.BuildControlError):
+            checks._initial_offline_image(receipt, document, identity, 'c' * 32)
+        bad_document = copy.deepcopy(document)
+        bad_document['services']['backend']['image'] = 'sha256:' + 'd' * 64
+        with self.assertRaises(checks.BuildControlError):
+            checks._initial_offline_image(receipt, bad_document, identity, 'b' * 32)
 
 
 if __name__ == '__main__':

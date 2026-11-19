@@ -1,7 +1,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   findElement,
@@ -16,7 +16,7 @@ import {
   type RunPhase,
   type ScriptRunStatus,
 } from "../model/scriptRun";
-import type { ScriptRunController } from "../model/useScriptRun";
+import { resetScriptRunStore, type ScriptRunController } from "../model/useScriptRun";
 import {
   unavailableExecutionAvailability,
   type ExecutionAvailability,
@@ -75,6 +75,29 @@ const confirmedGpuExecutionAvailability: ExecutionAvailability = {
 };
 
 describe("ScriptRunPanel", () => {
+  beforeEach(() => resetScriptRunStore());
+
+  it("retains prepared execution intent when the details panel remounts", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    let root = createRoot(container as unknown as Element);
+    const phase: RunPhase = { kind: "ready", handle, preflight: preflight() };
+    try {
+      await act(async () => root.render(<ScriptRunPanel controller={controller(phase)} />));
+      const device = findElement(container, (element) => element.tagName === "SELECT", "device selector");
+      device.value = "cpu";
+      await act(async () => device.dispatchEvent(new TestEvent("change", { bubbles: true })));
+      expect(device.value).toBe("cpu");
+      await act(async () => root.unmount());
+      root = createRoot(container as unknown as Element);
+      await act(async () => root.render(<ScriptRunPanel controller={controller(phase)} />));
+      const restoredDevice = findElement(container, (element) => element.tagName === "SELECT", "restored device selector");
+      expect(restoredDevice.value).toBe("cpu");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
   it("renders nothing while idle", () => {
     expect(render({ kind: "idle" })).toBe("");
   });

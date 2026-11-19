@@ -1,6 +1,6 @@
 ---
 title: First FEM Simulation
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -79,26 +79,39 @@ study.stages.add_relax(
   requested tolerance or the step budget is spent. This projected-gradient method does not need an
   LLG timestep, unlike the overdamped stage used on the FDM page.
 
-## Run headlessly
+## Run in the Docker DEV group
 
-Save the block as `first_fem_simulation.py`. The FEM runtime is built and executed through the
-repository's managed runtime recipes:
+Save the block inside your checkout (for example as `first_fem_simulation.py`) after ensuring the
+container toolchain image is prepared (`just docker-dev-toolchain`), then run through the Docker
+Compose DEV group:
 
 ```console
-just ensure-managed-fem-runtime
-just fem-managed-headless cpu first_fem_simulation.py
+just fullmag-dev-container first_fem_simulation.py
 ```
 
-The managed runtime records the resolved backend, device, and precision in the result. To request the
-FEM GPU lane instead, change the script to `study.device("gpu", precision="double")`,
-pass `gpu` as the execution mode to the same recipe, and verify the device
-identity in the produced provenance.
+If your group is already running with an empty workspace (`just docker-dev "$PWD"`), activate the
+script directly with `just docker-dev-script first_fem_simulation.py`, or attach interactively with
+`fm.connect()` ({doc}`interactive-python`).
+
+The runtime records the resolved backend, device, and precision in the result provenance. To
+request the FEM GPU lane instead, change the script to `study.device("gpu", precision="double")`,
+start the DEV group with GPU access (`--gpu-access auto` or `gpu`), and verify the device identity
+in the produced provenance. Dedicated release/qualification FEM gates preserve their own managed
+`justfile` recipes (`fem-managed-headless`).
 
 ## Reading the result
 
 `max_torque_T` is the maximum torque magnitude reported in tesla and is the relaxation stop signal,
 while `e_ex`, `e_demag` and `e_total` are the exchange, demagnetization and total energies. Autosave
 tables are scalar time series; mesh and field snapshots are separate artifacts.
+
+```{figure} /_static/images/ui/viewport-3d-fem-mesh-airbox.png
+:alt: Control Room 3D Viewport rendering conformal FEM mesh body and Poisson airbox boundary
+:class: fm-ui-figure
+:width: 100%
+
+Conformal tetrahedral ferromagnet mesh and surrounding Poisson airbox wireframe visualized in the Control Room 3D viewport.
+```
 
 ## Limits of this example
 
@@ -110,22 +123,11 @@ airbox-size convergence checks.
 Unstructured-mesh relaxation has stricter tolerance and meshing regimes than the small onboarding
 grid shown here. μMAG Standard Problem 4 and the analytical validation pages provide the
 qualification evidence for those regimes. FEM GPU execution requires a managed CUDA runtime and is
-not claimed by this snippet.
-## Control Room crosswalk
+not claimed by this snippet. Authoring and `ProblemIR` validation alone do not establish mesh
+convergence, solver execution, or GPU parity.
 
-Use the authoring path stated in this guide, normally `Model Explorer -> Objects` followed by the relevant Geometry, Material, Physics, Mesh, or Stage panel. Any parameter shown in Python but not shown in that path is `TODO: frontend support`; do not describe it as configurable in the UI. See {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked {doc}`/python-api/index` page rather than duplicating an unverified signature.
-
-## Physics, limitations, and bibliography
-
-Use the linked physics or numerical-methods page for governing equations and assumptions. This onboarding page does not add a new physical model. Bibliography: see the linked terminal API or physics page; no additional source is claimed here.
 ## Source-code index
 
 - `packages/fullmag-py/src/fullmag/world.py` — `StudyBuilder`, `StudyStagesBuilder`: stage-first authoring and capture.
 - `packages/fullmag-py/src/fullmag/model/problem.py` — `Problem.to_ir`: canonical serialization and validation.
-- `justfile` — `run-headless` (FDM), `fem-managed-headless` (FEM): launcher recipes and execution-mode selection.
-
-Authoring and IR validation do not establish mesh convergence, solver execution, or GPU parity.
+- `justfile` — `docker-dev-toolchain`, `docker-dev`, `docker-dev-script`, `fullmag-dev-container`, `fem-managed-headless`: container launch and managed FEM execution recipes.

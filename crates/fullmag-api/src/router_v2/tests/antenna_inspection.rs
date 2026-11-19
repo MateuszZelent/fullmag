@@ -190,7 +190,10 @@ async fn all_antenna_reads_reject_stale_scope_before_artifact_io_or_304() {
     // Verify this exact header is accepted before testing incarnation-only invalidation.
     let baseline = fixture.get_scoped(RESOURCE_PATH, None, Some(&scope)).await;
     assert_eq!(baseline.status(), StatusCode::OK);
-    assert_eq!(body_json(baseline).await["session_epoch"], "test-session@1700000000000:tombstone:0");
+    assert_eq!(
+        body_json(baseline).await["session_epoch"],
+        "test-session@1700000000000"
+    );
     // Same physical session, run, timestamps and artifact references: only incarnation changes.
     fixture.state.current_live_session_epoch.fetch_add(1, Ordering::Release);
     for path in paths {

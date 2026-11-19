@@ -25,9 +25,23 @@ mod run_intent_materialization;
 mod run_spec;
 mod script_antenna_inspection_planning;
 mod script_pipeline_compilation;
+pub mod script_source_capture;
 pub mod script_stage_contract;
 pub mod script_stage_materialization;
 mod study_artifact;
+mod study_frequency_response_artifact;
+
+pub use study_frequency_response_artifact::{
+    decode_frequency_response_index_bundle, decode_frequency_response_point_bundle,
+    encode_frequency_response_index_bundle, encode_frequency_response_point_bundle,
+    validate_frequency_response_sweep_bundles, FrequencyResponseBundle,
+    FrequencyResponseBundleIdentity, FrequencyResponseBundleManifest,
+    FrequencyResponsePayloadReference, FrequencyResponsePointMetadata,
+    FrequencyResponsePointReference, FREQUENCY_RESPONSE_BUNDLE_MAX_BYTES,
+    FREQUENCY_RESPONSE_CODEC_VERSION, FREQUENCY_RESPONSE_INDEX_CODEC_ID,
+    FREQUENCY_RESPONSE_MANIFEST_MAX_BYTES, FREQUENCY_RESPONSE_POINT_CODEC_ID,
+};
+
 mod study_execution_materialization;
 mod task_execution;
 
@@ -56,6 +70,8 @@ pub use coordinator::{
 };
 pub use declared_execution::bind_declared_execution;
 pub use execution::{
+    FrozenStageContextRefV1, FrozenStageSourceManifestRef,
+    TERMINAL_RESOLVED_TASK_INPUT_SCHEMA, TERMINAL_WORKER_PROTOCOL_SCHEMA,
     resolved_inputs_sha256, study_task_input_fingerprint, AttemptId, ClaimIdentity, ExecutionError,
     LeaseToken, ObservationState, OwnershipEpoch, ProtocolDisposition, ResolvedInput,
     ResolvedStudyArtifact, ResolvedTaskInput, ResourceBudget, ResourceKind, ResourceLease,
@@ -77,7 +93,7 @@ pub use legacy_live_execution::{
 };
 pub use file_repository::{FileProjectRepository, FileRepositoryError};
 pub use closed_loop_preparation::{AcceptedPreparationProof, AcceptedPreparationReceipt, ClosedLoopPreparationPlan, ClosedLoopPreparationReceipt, CLOSED_LOOP_PREPARATION_SCHEMA, CLOSED_LOOP_PREPARATION_BINDING_SCHEMA};
-pub use script_pipeline_acceptance::{compile_accepted_closed_loop_pipeline, validate_accepted_script_pipeline_source, validate_script_source_assets, AcceptedScriptPipeline, SCRIPT_PIPELINE_SOURCE_ASSET_ID, SCRIPT_PIPELINE_SOURCE_SCHEMA};
+pub use script_pipeline_acceptance::{bind_scene_study_authored_initial_state_ports, bind_scene_study_authored_initial_states, bind_scene_study_physical_state_flow, compile_accepted_closed_loop_pipeline, validate_accepted_script_pipeline_source, validate_script_source_assets, AcceptedScriptPipeline, SCRIPT_PIPELINE_SOURCE_ASSET_ID, SCRIPT_PIPELINE_SOURCE_SCHEMA};
 pub use preparation::{
     materialize_antenna_external_lead_inspection_preparation_from_problem,
     materialize_fdm_preparation_from_problem, materialize_fem_preparation_from_problem,
@@ -100,13 +116,19 @@ pub use run_spec::{
     RunDependency, RunId, RunIntent, RunIntentLedger, RunSpecError, RunSpecification, StudyId,
     StudyReference, SubmitDisposition, SubmitReceipt, RUN_INTENT_SCHEMA, RUN_SPEC_SCHEMA,
 };
-pub use run_intent_materialization::{materialize_run_intent, RunIntentAuthoring};
+pub use run_intent_materialization::{
+    materialize_run_intent, prepare_run_intent_materialization, PreparedRunIntentMaterialization,
+    RunIntentAuthoring,
+};
 pub use script_antenna_inspection_planning::plan_script_antenna_inspection;
 pub use script_pipeline_compilation::{
-    materialize_script_pipeline_with_output_policy_bounded, CompiledScriptExecution,
+    materialize_script_pipeline_with_output_policy_bounded, script_execution_id, CompiledScriptExecution,
     ScriptPipelineCompilation, ScriptPipelineNodeBinding, ScriptPipelineNodeKind,
 };
 pub use study_artifact::{
+    validate_study_history_field, validate_study_history_scalar_row, STUDY_HISTORY_SCALAR_COLUMNS,
+    materialize_study_state_at_terminal_clock, encode_frozen_study_state, FrozenMagnetizationStateArtifact, STUDY_FROZEN_STATE_CODEC_ID,
+    STUDY_FROZEN_STATE_CODEC_VERSION, STUDY_FROZEN_STATE_SCHEMA,
     decode_magnetization_field_semantics, decode_study_artifact, decode_study_artifact_bytes,
     encode_study_scalar_artifact, study_artifact_content_sha256, study_state_layout_sha256,
     AntennaInspectionArtifact, DecodedStudyArtifact, MagnetizationStateArtifact,
@@ -116,6 +138,7 @@ pub use study_artifact::{
     STUDY_SCALAR_CODEC_VERSION,
 };
 pub use study_execution_materialization::{
-    materialize_captured_study_input, materialize_study_execution, CapturedStudyExecutionInput,
+    bind_study_execution_entries, materialize_captured_study_input, materialize_study_execution,
+    CapturedStudyExecutionInput,
     StudyStepExecutionInput,
 };

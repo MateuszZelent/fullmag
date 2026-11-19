@@ -262,45 +262,94 @@ fn sample_plane(
     frame: ResolvedFrame,
 ) -> Result<PlanarSampleResult, ApiError> {
     let pixel_count = request.resolution[0] as usize * request.resolution[1] as usize;
+    let n_comp = field.n_comp();
     let mut occupancy = vec![Occupancy::Empty; pixel_count];
     let mut vectors = vec![[f64::NAN; 3]; pixel_count];
     let mut scalars = vec![f64::NAN; pixel_count];
-    let mut component_values = vec![f64::NAN; pixel_count * field.n_comp()];
+    let mut component_values = vec![f64::NAN; pixel_count * n_comp];
     let mut source_entity_ids = vec![None; pixel_count];
+    let du = (frame.bounds[1] - frame.bounds[0]) / request.resolution[0] as f64;
+    let dv = (frame.bounds[3] - frame.bounds[2]) / request.resolution[1] as f64;
+    let subsamples = plane_subsample_counts(&frame, field.spacing(), du, dv);
+    let mut sum = vec![0.0; n_comp];
     for y in 0..request.resolution[1] {
         for x in 0..request.resolution[0] {
-            let uv = frame.pixel_center(x, y, request.resolution);
-            let point = frame.point(uv[0], uv[1], 0.0);
             let index = (y * request.resolution[0] + x) as usize;
-            let Some((cell_id, value)) = cell_value_at(field, point) else {
+            let center = frame.pixel_center(x, y, request.resolution);
+            sum.fill(0.0);
+            let mut hits = 0usize;
+            let mut first_cell = None;
+            // Equal-area midpoint quadrature of the pixel footprint
+            // (eq-planar-fdm-plane-area); one sub-point is the pixel centre.
+            for b in 0..subsamples[1] {
+                for a in 0..subsamples[0] {
+                    let u = center[0] - 0.5 * du + (a as f64 + 0.5) * du / subsamples[0] as f64;
+                    let v = center[1] - 0.5 * dv + (b as f64 + 0.5) * dv / subsamples[1] as f64;
+                    let Some((cell_id, value)) = cell_value_at(field, frame.point(u, v, 0.0))
+                    else {
+                        continue;
+                    };
+                    first_cell.get_or_insert(cell_id);
+                    hits += 1;
+                    for (total, component) in sum.iter_mut().zip(value) {
+                        *total += component;
+                    }
+                }
+            }
+            if hits == 0 {
                 continue;
-            };
+            }
+            let center_cell = cell_value_at(field, frame.point(center[0], center[1], 0.0))
+                .map(|(cell_id, _)| cell_id);
             occupancy[index] = Occupancy::Occupied;
-            source_entity_ids[index] = Some(cell_id);
-            component_values[index * field.n_comp()..(index + 1) * field.n_comp()]
-                .copy_from_slice(value);
-            write_value(value, &mut scalars[index], &mut vectors[index]);
+            source_entity_ids[index] = center_cell.or(first_cell);
+            let mean = &mut component_values[index * n_comp..(index + 1) * n_comp];
+            for (target, total) in mean.iter_mut().zip(&sum) {
+                *target = total / hits as f64;
+            }
+            write_value(mean, &mut scalars[index], &mut vectors[index]);
         }
     }
     Ok(PlanarSampleResult {
-        meta: provenance::meta(
-            request,
-            "fdm_cell_constant_plane",
-            &occupancy,
-            0.0,
-            0,
-            0,
-            0,
-            0,
-        ),
-        n_comp: field.n_comp(),
+        meta: provenance::meta(request, "fdm_cell_area_plane", &occupancy, 0.0, 0, 0, 0, 0),
+        n_comp,
         component_values,
         scalar_values: scalars,
-        vector_values: (field.n_comp() == 3).then_some(vectors),
+        vector_values: (n_comp == 3).then_some(vectors),
         occupancy,
         source_entity_ids,
         overlay: None,
+        section_extent: None,
     })
+}
+
+/// Upper bound of quadrature sub-points per pixel axis for FDM plane sampling.
+const MAX_FDM_PLANE_SUBSAMPLES: usize = 32;
+
+/// Sub-points per pixel axis so that every covered cell is sampled at least
+/// once; pixels not larger than the cell pitch keep a single centre sample.
+fn plane_subsample_counts(
+    frame: &ResolvedFrame,
+    spacing: [f64; 3],
+    du: f64,
+    dv: f64,
+) -> [usize; 2] {
+    // Distance between successive cell faces met while moving along `axis`.
+    let pitch = |axis: [f64; 3]| {
+        (0..3)
+            .filter(|&k| axis[k].abs() > 1.0e-12)
+            .map(|k| spacing[k] / axis[k].abs())
+            .fold(f64::INFINITY, f64::min)
+    };
+    let count = |extent: f64, pitch: f64| {
+        if !(pitch.is_finite() && pitch > 0.0) || !extent.is_finite() {
+            return 1;
+        }
+        // Tolerate round-off so an exact multiple does not gain a sub-point.
+        let raw = ((extent / pitch) * (1.0 - 1.0e-9)).ceil().max(1.0);
+        (raw as usize).min(MAX_FDM_PLANE_SUBSAMPLES)
+    };
+    [count(du, pitch(frame.u)), count(dv, pitch(frame.v))]
 }
 
 fn sample_volume(
@@ -480,10 +529,11 @@ pub(super) fn finish_reduction(
         source_entity_ids: vec![None; occupancy.len()],
         occupancy,
         overlay: None,
+        section_extent: None,
     })
 }
 
-fn cell_value_at(field: &FdmPlanarField, point: [f64; 3]) -> Option<(u32, &[f64])> {
+pub(super) fn cell_value_at(field: &FdmPlanarField, point: [f64; 3]) -> Option<(u32, &[f64])> {
     let mut index = [0u32; 3];
     for axis in 0..3 {
         let coordinate = (point[axis] - field.origin()[axis]) / field.spacing()[axis];

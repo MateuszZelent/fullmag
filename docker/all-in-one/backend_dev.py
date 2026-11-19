@@ -11,12 +11,16 @@ then hands process ownership to the existing all-in-one entrypoint.
 
 This command deliberately has no public build-command option.  The source
 contract is data, never a shell script supplied by the caller, and the only
-native build command is the canonical ``make install-cli-dev`` or ``make install-cli`` target selected by the validated Cargo profile.
+application build command is the canonical ``make install-cli-dev`` or
+``make install-cli`` target selected by the validated Cargo profile. An
+explicit allowlisted native contract can additionally qualify that package
+before publication and API startup.
 """
 
 from __future__ import annotations
 
 import argparse
+import errno
 from collections.abc import Mapping
 from contextlib import contextmanager
 import hashlib
@@ -30,7 +34,8 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, NoReturn
+import uuid
+from typing import Any, Callable, NoReturn
 
 try:
     import fcntl
@@ -50,31 +55,9 @@ RECEIPT_SCHEMA = "fullmag.direct-compose.backend-build-receipt.v1"
 LIVE_SYNC_ATTEMPTS = 3
 # Conventional SIGTERM status recorded for a Make stopped with its container.
 INTERRUPTED_MAKE_EXIT_CODE = 143
-# DEV packages run on the GPU of the host that builds them.  "auto" compiles
-# CUDA for the visible devices only; "all" keeps the image's portable matrix.
+# The launcher pins one host target in the selected group's toolchain receipt.
 DEV_CUDA_ARCHITECTURES_ENV = "FULLMAG_DEV_CUDA_ARCHITECTURES"
-CUDA_ARCHITECTURE_LIST_RE = re.compile(
-    r"[1-9][0-9]{1,2}(?:-real|-virtual)?(?:;[1-9][0-9]{1,2}(?:-real|-virtual)?)*"
-)
-CUDA_CAPABILITY_PROBE = r"""import ctypes, json
-driver = ctypes.CDLL("libcuda.so.1")
-if driver.cuInit(0) != 0:
-    raise SystemExit(3)
-count = ctypes.c_int()
-if driver.cuDeviceGetCount(ctypes.byref(count)) != 0 or count.value < 1:
-    raise SystemExit(4)
-found = set()
-for ordinal in range(count.value):
-    device = ctypes.c_int()
-    major = ctypes.c_int()
-    minor = ctypes.c_int()
-    if (driver.cuDeviceGet(ctypes.byref(device), ordinal) != 0
-            or driver.cuDeviceGetAttribute(ctypes.byref(major), 75, device) != 0
-            or driver.cuDeviceGetAttribute(ctypes.byref(minor), 76, device) != 0):
-        raise SystemExit(5)
-    found.add(major.value * 10 + minor.value)
-print(json.dumps(sorted(found)))
-"""
+DEV_CUDA_TARGET_RE = re.compile(r"[1-9][0-9]{1,2}-real")
 LIVE_MANIFEST_SCHEMA = "fullmag.docker-backend-live-source.v1"
 LIVE_SOURCE_MODE = "live-shadow-v1"
 BACKEND_CARGO_PROFILE = "backend-dev"
@@ -109,6 +92,7 @@ WINDOWS_FOLDER_GATE_POLL_SECONDS = 0.25
 PACKAGE_DEVELOPMENT_SCHEMA = "fullmag.direct-compose.package-development.v1"
 PACKAGE_DEVELOPMENT_OWNER = "owner.json"
 PACKAGE_CANDIDATES_DIRNAME = "candidates"
+PACKAGE_QUARANTINE_DIRNAME = "quarantine"
 PACKAGE_BACKUPS_DIRNAME = "backups"
 PACKAGE_RETENTION_ARCHIVE_DIRNAME = "retired"
 PACKAGE_CANDIDATE_MARKER = ".candidate-owner.json"
@@ -144,6 +128,10 @@ PACKAGE_CACHE_CONTROL_DIRNAME = "cache-maintenance"
 PACKAGE_CACHE_MARKER_NAME = ".fullmag-backend-cache-owner.json"
 PACKAGE_CACHE_READBACK_NAME = ".fullmag-backend-cache-readback"
 PACKAGE_RETENTION_SCHEMA = "fullmag.direct-compose.package-retention.v1"
+PACKAGE_RETIREMENT_SCHEMA = "fullmag.direct-compose.package-backup-retirement.v1"
+PACKAGE_RETIREMENT_INTENTS_DIRNAME = "retirement-intents"
+PACKAGE_RETIREMENT_TOMBSTONES_DIRNAME = "retirement-tombstones"
+MAX_PACKAGE_RETIREMENT_ENTRIES = 65536
 PACKAGE_RETENTION_ARCHIVE_COUNT_LIMIT = 8
 PACKAGE_RETENTION_ARCHIVE_BYTES_LIMIT = 64 * 1024 * 1024
 FAILED_MAKE_DIAGNOSTICS_DIRNAME = "failed-candidate-diagnostics"
@@ -216,6 +204,10 @@ class BackendBuildError(RuntimeError):
     """A fail-closed direct backend build or package error."""
 
 
+class BackendBuildBusy(BackendBuildError):
+    """The exclusive shared runtime build lock is currently held."""
+
+
 class LiveSourceSyncChanged(BackendBuildError):
     """A live file differs from its fresh capture; a new capture is safe."""
 
@@ -279,7 +271,7 @@ def _log_phase(phase: str, state: str, **fields: object) -> None:
         pass
 
 
-def _sha256_file(path: Path, name: str, maximum: int | None = None) -> tuple[str, os.stat_result]:
+def _sha256_file(path: Path, name: str, maximum: int | None = None, *, package_artifact: bool = False) -> tuple[str, os.stat_result]:
     path = _absolute(path, name)
     descriptor = _open_regular(path, name, maximum)
     try:
@@ -295,7 +287,8 @@ def _sha256_file(path: Path, name: str, maximum: int | None = None) -> tuple[str
             if maximum is not None and total > maximum:
                 _fail(f"{name} exceeds its size bound")
         after = os.fstat(descriptor)
-        if _file_signature(before) != _file_signature(after):
+        signature = _package_file_signature if package_artifact else _file_signature
+        if signature(before) != signature(after):
             _fail(f"{name} changed while hashing")
         return digest.hexdigest(), before
     finally:
@@ -310,6 +303,16 @@ def _file_signature(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
         metadata.st_mtime_ns,
         metadata.st_ctime_ns,
     )
+
+
+def _package_file_signature(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    # link/unlink in another group changes ctime, not sealed package bytes.
+    # Keep mode in this signature and still verify content against the receipt.
+    # Source files and writable metadata keep the strict ctime-based signature.
+    if stat.S_ISREG(metadata.st_mode) and not metadata.st_mode & 0o222:
+        return (metadata.st_dev, metadata.st_ino, metadata.st_size,
+                metadata.st_mtime_ns, metadata.st_mode)
+    return _file_signature(metadata)
 
 
 def _absolute(path: Path, name: str) -> Path:
@@ -532,12 +535,17 @@ def _ensure_package_development_root(output: Path) -> Path:
     candidates = control / PACKAGE_CANDIDATES_DIRNAME
     backups = control / PACKAGE_BACKUPS_DIRNAME
     retired = control / PACKAGE_RETENTION_ARCHIVE_DIRNAME
+    retirement_intents = control / PACKAGE_RETIREMENT_INTENTS_DIRNAME
+    retirement_tombstones = control / PACKAGE_RETIREMENT_TOMBSTONES_DIRNAME
     cache_control = control / PACKAGE_CACHE_CONTROL_DIRNAME
     allowed = {
         PACKAGE_DEVELOPMENT_OWNER,
         PACKAGE_CANDIDATES_DIRNAME,
+        PACKAGE_QUARANTINE_DIRNAME,
         PACKAGE_BACKUPS_DIRNAME,
         PACKAGE_RETENTION_ARCHIVE_DIRNAME,
+        PACKAGE_RETIREMENT_INTENTS_DIRNAME,
+        PACKAGE_RETIREMENT_TOMBSTONES_DIRNAME,
         PACKAGE_CACHE_CONTROL_DIRNAME,
         PACKAGE_ROTATION_JOURNAL_NAME,
     }
@@ -551,6 +559,10 @@ def _ensure_package_development_root(output: Path) -> Path:
         metadata = entry.lstat()
         if stat.S_ISLNK(metadata.st_mode):
             _fail(f"backend package development control contains a symlink: {entry.name}")
+    quarantine = control / PACKAGE_QUARANTINE_DIRNAME
+    if quarantine.exists():
+        # Explicit recovery owns this archive; ordinary start/retention never removes it.
+        _ensure_directory(quarantine, "backend package recovery archive")
     journal = control / PACKAGE_ROTATION_JOURNAL_NAME
     if journal.exists() or journal.is_symlink():
         metadata = journal.lstat()
@@ -604,6 +616,8 @@ def _ensure_package_development_root(output: Path) -> Path:
     _ensure_directory(candidates, "backend package candidate directory")
     _ensure_directory(backups, "backend package backup directory")
     _ensure_directory(retired, "backend package retention archive directory")
+    _ensure_directory(retirement_intents, "backend package retirement intent directory")
+    _ensure_directory(retirement_tombstones, "backend package retirement tombstone directory")
     return control
 
 
@@ -1074,7 +1088,7 @@ def _copy_live_regular_file(source: Path, target: Path, relative: str, entry: Ma
         os.chmod(temporary, 0o555 if entry["mode"] == "100755" else 0o444)
         os.replace(temporary, target)
     except OSError as error:
-        _fail(f"cannot synchronize live source {entry['path']}: {error}")
+        _fail(f"cannot synchronize live source {relative}: {error}")
     finally:
         os.close(source_descriptor)
         temporary.unlink(missing_ok=True)
@@ -1936,8 +1950,14 @@ def _runtime_build_lock(build_root: Path):
             _fail("backend runtime lock is not one regular file")
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (BlockingIOError, OSError) as error:
-            _fail(f"backend runtime cache is already in use: {error}")
+        except OSError as error:
+            if isinstance(error, BlockingIOError) or error.errno in {
+                errno.EACCES,
+                errno.EAGAIN,
+                errno.EWOULDBLOCK,
+            }:
+                raise BackendBuildBusy(f"backend runtime cache is already in use: {error}") from error
+            _fail(f"cannot acquire backend runtime lock: {error}")
         try:
             yield
         finally:
@@ -1957,6 +1977,12 @@ def _toolchain_identity() -> tuple[str, dict[str, Any]]:
     for key in ("declared", "actual", "latest"):
         if not isinstance(dependency.get(key), dict):
             _fail(f"FEM dependency manifest field {key} is invalid")
+    if os.environ.get("FULLMAG_BACKEND_CARGO_PROFILE", BACKEND_CARGO_PROFILE) == BACKEND_CARGO_PROFILE:
+        target = _dev_cuda_architectures()
+        if target is not None:
+            declared_cuda = dependency["declared"].get("cuda", {})
+            if not isinstance(declared_cuda, dict) or declared_cuda.get("architectures") != target:
+                _fail("FEM dependency manifest CUDA target differs from the DEV launcher pin")
     commits = dependency["actual"].get("source_commits")
     if not isinstance(commits, dict) or any(not isinstance(commits.get(key), str) or not commits[key] for key in ("mfem", "libceed", "hypre", "petsc", "slepc")):
         _fail("FEM dependency manifest lacks pinned source commits")
@@ -1976,34 +2002,25 @@ def _validate_cargo_profile(value: str) -> str:
 
 
 def _dev_cuda_architectures() -> str | None:
-    """Resolve the CUDA targets of a DEV build, or None for the image matrix."""
+    """Read the launcher pin, permitting inspection of old unpinned packages."""
 
-    requested = os.environ.get(DEV_CUDA_ARCHITECTURES_ENV, "auto").strip()
-    if requested == "all":
+    requested = os.environ.get(DEV_CUDA_ARCHITECTURES_ENV, "").strip()
+    if not requested:
         return None
-    if requested != "auto":
-        if not CUDA_ARCHITECTURE_LIST_RE.fullmatch(requested):
-            _fail(f"{DEV_CUDA_ARCHITECTURES_ENV} must be auto, all, or a CMake list such as 89-real")
-        return requested
-    try:
-        result = subprocess.run(
-            [sys.executable, "-B", "-c", CUDA_CAPABILITY_PROBE],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
-        capabilities = json.loads(result.stdout) if result.returncode == 0 else None
-    except (OSError, subprocess.SubprocessError, ValueError):
-        capabilities = None
-    if (
-        not isinstance(capabilities, list)
-        or not capabilities
-        or not all(type(value) is int and 30 <= value <= 199 for value in capabilities)
-    ):
-        _log_phase("cuda", "architectures", reason="probe-unavailable", target="image-default")
-        return None
-    return ";".join(f"{value}-real" for value in capabilities)
+    if DEV_CUDA_TARGET_RE.fullmatch(requested) is None:
+        _fail(f"{DEV_CUDA_ARCHITECTURES_ENV} must be one real target, such as 86-real")
+    return requested
+
+
+def _cargo_home(build_root: Path) -> str:
+    value = os.environ.get("FULLMAG_SHARED_CARGO_HOME", "")
+    if not value:
+        return str(build_root / "cargo")
+    if value != "/opt/fullmag/shared-cargo":
+        _fail("shared Cargo cache must use the managed named-volume target")
+    _assert_no_links(Path(value), "shared Cargo cache")
+    _ensure_directory(Path(value), "shared Cargo cache")
+    return value
 
 
 def _build_environment(
@@ -2045,7 +2062,7 @@ def _build_environment(
             "CARGO_TARGET_DIR": "/workspace/.fullmag-build/cargo-targets/direct",
             "FULLMAG_CARGO_TARGET_ROOT": "/workspace/.fullmag-build/cargo-targets",
             "CARGO_TARGET_ROOT": "/workspace/.fullmag-build/cargo-targets",
-            "CARGO_HOME": str(build_root / "cargo"),
+            "CARGO_HOME": _cargo_home(build_root),
             "RUSTUP_HOME": "/root/.rustup",
             "RUSTUP_TOOLCHAIN": "nightly",
             "RUSTUP_AUTO_INSTALL": "0",
@@ -2078,12 +2095,11 @@ def _build_environment(
     )
     if cargo_profile == BACKEND_CARGO_PROFILE:
         architectures = _dev_cuda_architectures()
-        if architectures is not None:
-            # FEM reads FULLMAG_CUDA_ARCHITECTURES; FDM has its own variable so
-            # release builds keep their fixed FDM target list.
-            environment["FULLMAG_CUDA_ARCHITECTURES"] = architectures
-            environment["FULLMAG_FDM_CUDA_ARCHITECTURES"] = architectures
-            _log_phase("cuda", "architectures", target=architectures.replace(";", ","))
+        if architectures is None:
+            _fail(f"DEV compilation requires {DEV_CUDA_ARCHITECTURES_ENV} from the managed launcher")
+        environment["FULLMAG_CUDA_ARCHITECTURES"] = architectures
+        environment["FULLMAG_FDM_CUDA_ARCHITECTURES"] = architectures
+        _log_phase("cuda", "architectures", target=architectures)
     for path in (build_root / "cargo", build_root / "home", build_root / "tmp"):
         _ensure_directory(path, f"build directory {path}")
     return environment
@@ -2116,7 +2132,7 @@ def _hash_package(root: Path) -> list[dict[str, Any]]:
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
             _fail(f"built package contains an unsafe output: {path}")
-        digest, _ = _sha256_file(path, f"built package {path}", MAX_SOURCE_BYTES)
+        digest, _ = _sha256_file(path, f"built package {path}", MAX_SOURCE_BYTES, package_artifact=True)
         records.append(
             {
                 "path": path.relative_to(root).as_posix(),
@@ -2158,7 +2174,7 @@ def _package_children(
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
                 _fail(f"{name} candidate owner marker is not one regular file")
             continue
-        children[child.name] = _file_signature(metadata)
+        children[child.name] = _package_file_signature(metadata)
     return children
 
 
@@ -2335,20 +2351,56 @@ def _runtime_source_digest(capsule: Mapping[str, Any]) -> str:
     )
 
 
-def _package_matches_fresh_live_manifest(
+def _requested_native_contracts(args: argparse.Namespace) -> tuple[str, ...]:
+    requested = getattr(args, "native_contract", None)
+    if not requested:
+        return ()
+    import backend_native_contracts
+    try:
+        return backend_native_contracts.normalize_contracts(requested)
+    except backend_native_contracts.NativeContractError as error:
+        _fail(str(error))
+
+
+def _native_contract_receipt_matches(receipt: Mapping[str, Any], requested: tuple[str, ...]) -> bool:
+    if not requested:
+        return True
+    import backend_native_contracts
+    artifacts, source = receipt.get("artifacts"), receipt.get("source")
+    if not isinstance(artifacts, list) or not isinstance(source, Mapping):
+        return False
+    libraries = [record.get("sha256") for record in artifacts
+                 if isinstance(record, Mapping) and record.get("path") == "lib/libfullmag_fem.so"]
+    if len(libraries) != 1:
+        return False
+    # Callers already verify the package inventory. Shared producers are
+    # checked again against restored candidate files before publication.
+    return backend_native_contracts.receipt_satisfies(
+        receipt.get("native_contracts"), requested=requested,
+        source_snapshot_sha256=source.get("source_snapshot_sha256"),
+        package_root=None, package_library_sha256=libraries[0],
+    )
+
+
+def _package_source_matches_fresh_live_manifest(
     receipt: Mapping[str, Any],
     manifest_path: Path,
     toolchain: Mapping[str, Any],
     cargo_profile: str,
+    *,
+    required_native_contracts: tuple[str, ...] = (),
 ) -> bool:
-    """Check whether a verified package exactly matches a fresh source capture.
+    """Match a receipt to the captured source, toolchain, native, and build inputs.
 
     Capture ids, timestamps, the manifest digest, and the live-manifest digest
     are intentionally excluded: each start creates a new closed manifest even
     when its source identity is unchanged.  The source/native identities,
-    toolchain, and fixed build inputs remain exact bindings.
+    toolchain, native-contract proof, and fixed build inputs remain exact
+    bindings. This matcher deliberately says nothing about shared publication.
     """
 
+    if not _native_contract_receipt_matches(receipt, required_native_contracts):
+        return False
     source = receipt.get("source")
     native = receipt.get("native_source_identity")
     build = receipt.get("build")
@@ -2383,7 +2435,42 @@ def _package_matches_fresh_live_manifest(
     if receipt.get("toolchain") != dict(toolchain):
         return False
     expected_build = _expected_backend_build_identity(cargo_profile)
-    return all(build.get(field) == expected_build[field] for field in BACKEND_BUILD_IDENTITY_FIELDS)
+    if not all(build.get(field) == expected_build[field] for field in BACKEND_BUILD_IDENTITY_FIELDS):
+        return False
+    if os.environ.get("FULLMAG_SHARED_BACKEND_STORE"):
+        if build.get("cuda_architectures") != _dev_cuda_architectures():
+            return False
+    return True
+
+
+def _package_matches_fresh_live_manifest(
+    receipt: Mapping[str, Any],
+    manifest_path: Path,
+    toolchain: Mapping[str, Any],
+    cargo_profile: str,
+    *,
+    required_native_contracts: tuple[str, ...] = (),
+) -> bool:
+    """Require source identity and, when configured, publication eligibility."""
+
+    if not _package_source_matches_fresh_live_manifest(
+        receipt,
+        manifest_path,
+        toolchain,
+        cargo_profile,
+        required_native_contracts=required_native_contracts,
+    ):
+        return False
+    if os.environ.get("FULLMAG_SHARED_BACKEND_STORE"):
+        import backend_shared_store as shared
+        architectures = _dev_cuda_architectures()
+        expected_key = shared.key_for(_shared_package_identity(
+            manifest_path, toolchain, architectures,
+            **({"required_native_contracts": required_native_contracts} if required_native_contracts else {})))
+        binding = receipt.get("shared_package", {})
+        return (isinstance(binding, dict) and binding.get("schema") == shared.SCHEMA
+                and binding.get("key") == expected_key)
+    return True
 
 
 def _rename_package_child(source_root: Path, target_root: Path, name: str, label: str) -> None:
@@ -3220,7 +3307,9 @@ def _retention_receipt_identity(
     for field in BACKEND_BUILD_IDENTITY_FIELDS:
         if field not in build:
             _fail(f"{name} is missing build identity field {field}")
-    return source_mode, dict(build), dict(toolchain)
+    # Rotation links bind exact full receipts. Cache retention spans source and
+    # CUDA target changes within one stable toolchain/profile cache unit.
+    return source_mode, {field: build[field] for field in BACKEND_BUILD_IDENTITY_FIELDS}, dict(toolchain)
 
 
 def _retention_child_names(value: object, name: str) -> list[str]:
@@ -3241,14 +3330,18 @@ def _retention_child_names(value: object, name: str) -> list[str]:
 
 
 def _validate_retention_archives(
-    archive_root: Path, *, verify_disposable_logs: bool = True
+    archive_root: Path,
+    *,
+    verify_disposable_logs: bool = True,
+    entries: tuple[Path, ...] | None = None,
 ) -> list[dict[str, Any]]:
     """Validate archive structure and bindings, optionally hashing legacy logs."""
 
-    try:
-        entries = tuple(sorted(archive_root.iterdir(), key=lambda path: path.name))
-    except OSError as error:
-        _fail(f"cannot inspect backend package retention archive: {error}")
+    if entries is None:
+        try:
+            entries = tuple(sorted(archive_root.iterdir(), key=lambda path: path.name))
+        except OSError as error:
+            _fail(f"cannot inspect backend package retention archive: {error}")
     validated: list[dict[str, Any]] = []
     for archive in entries:
         if not re.fullmatch(r"\.backend-package-backup-[A-Za-z0-9._-]+", archive.name):
@@ -3375,6 +3468,10 @@ def _validate_retention_archives(
 def _prune_retention_archives(archive_root: Path) -> int:
     """Keep a bounded, verified set of compact package-retirement evidence."""
 
+    control_root = archive_root.parent
+    output = control_root.parent
+    _recover_retention_archive_staging(output, control_root)
+    _recover_package_backup_retirements(output, control_root)
     archives = _validate_retention_archives(archive_root, verify_disposable_logs=False)
     ordered = sorted(
         archives,
@@ -3391,8 +3488,6 @@ def _prune_retention_archives(archive_root: Path) -> int:
         retained.append(record)
         retained_bytes += record["size"]
     retained_names = {record["path"].name for record in retained}
-    # A legacy log can be kept only when the full retained archive set fits
-    # the byte budget and its content still matches the retention manifest.
     for record in retained:
         log_record = record["metadata"].get("direct-backend-build.log")
         if log_record is None:
@@ -3416,10 +3511,9 @@ def _prune_retention_archives(archive_root: Path) -> int:
         archive = record["path"]
         if archive.name in retained_names:
             continue
-        _remove_owned_tree(archive)
+        _create_archive_retirement_intent(output, control_root, record)
+        _recover_package_backup_retirements(output, control_root)
         removed += 1
-    if removed:
-        _fsync_directory(archive_root, "backend package retention archive directory")
     return removed
 
 
@@ -3464,6 +3558,14 @@ def _validate_candidate_marker(
     }
     if document.get("state") == "ready":
         required.add("artifact_inventory_sha256")
+    if "shared_restore" in document:
+        intent = document["shared_restore"]
+        if (document.get("state") != "building" or not isinstance(intent, dict)
+                or set(intent) not in ({"key", "artifacts"}, {"key", "artifacts", "diagnostics"})
+                or not isinstance(intent.get("key"), str) or not SHA256_RE.fullmatch(intent["key"])
+                or not isinstance(intent.get("artifacts"), list) or not intent["artifacts"]):
+            _fail("backend shared restore intent is invalid")
+        required.add("shared_restore")
     if set(document) != required:
         _fail("backend package candidate owner marker has unexpected fields")
     if (
@@ -3496,6 +3598,7 @@ def _write_candidate_marker(
     *,
     state: str,
     records: list[dict[str, Any]] | None = None,
+    shared_restore: dict[str, Any] | None = None,
 ) -> None:
     document: dict[str, Any] = {
         "schema": PACKAGE_CANDIDATE_SCHEMA,
@@ -3505,6 +3608,10 @@ def _write_candidate_marker(
         "build_root": str(_absolute(build_root, "backend build root")),
         "cargo_profile": BACKEND_CARGO_PROFILE,
     }
+    if shared_restore is not None:
+        if state != "building":
+            _fail("shared restore intent is reserved for building candidates")
+        document["shared_restore"] = shared_restore
     if records is not None:
         document["artifact_inventory_sha256"] = _sha256_bytes(_canonical(records))
     _write_json(
@@ -3513,6 +3620,22 @@ def _write_candidate_marker(
         "backend package candidate owner marker",
     )
     _fsync_directory(candidate, "backend package candidate directory")
+
+
+def _remove_shared_candidate(candidate: Path) -> None:
+    """Delete a qualified shared restore with its durable intent removed last."""
+    files, directories = _stage_tree_inventory(candidate)
+    for relative in sorted(files - {PACKAGE_CANDIDATE_MARKER}, reverse=True):
+        (candidate / relative).unlink()
+    for relative in sorted(directories, key=lambda item: (item.count("/"), item), reverse=True):
+        directory = candidate / relative
+        _fsync_directory(directory, "shared candidate directory before removal")
+        directory.rmdir()
+    _fsync_directory(candidate, "shared candidate payload removal")
+    (candidate / PACKAGE_CANDIDATE_MARKER).unlink()
+    _fsync_directory(candidate, "shared candidate marker removal")
+    candidate.rmdir()
+    _fsync_directory(candidate.parent, "shared candidate namespace")
 
 
 def _discard_interrupted_building_candidate(
@@ -3537,8 +3660,12 @@ def _discard_interrupted_building_candidate(
         except (BackendBuildError, OSError):
             # The attempt record stays as found; it never blocks a new build.
             pass
-    _remove_owned_tree(candidate)
-    _fsync_directory(candidate.parent, "backend package candidate directory")
+    marker, _ = _read_json(_candidate_marker_path(candidate), "candidate cleanup marker", 16 * 1024)
+    if "shared_restore" in marker:
+        _remove_shared_candidate(candidate)
+    else:
+        _remove_owned_tree(candidate)
+        _fsync_directory(candidate.parent, "backend package candidate directory")
     _log_phase("package", "candidate-discarded", reason="interrupted-build")
     return True
 
@@ -3731,6 +3858,8 @@ def _classify_ready_candidate_retirements(
         dict[str, Any], bytes, dict[str, tuple[int, int, int, int, int]]
     ]
     | None,
+    *,
+    required_native_contracts: tuple[str, ...] = (),
 ) -> Any | None:
     """Retire stale/duplicate candidates and return one fresh promotion."""
 
@@ -3752,6 +3881,7 @@ def _classify_ready_candidate_retirements(
             fresh_manifest,
             toolchain,
             cargo_profile,
+            **({"required_native_contracts": required_native_contracts} if required_native_contracts else {}),
         )
         and (current_artifacts is None or list(spec.artifacts) != current_artifacts)
     ]
@@ -3768,6 +3898,7 @@ def _classify_ready_candidate_retirements(
             toolchain,
             cargo_profile,
             current_package,
+            **({"required_native_contracts": required_native_contracts} if required_native_contracts else {}),
         )
         if result.action == "promote":
             if promotion is None or result.candidate != promotion.candidate:
@@ -3908,9 +4039,49 @@ def _known_failed_candidate_path(relative: str) -> bool:
     )
 
 
+def _shared_restore_inventory_is_known(candidate: Path, intent: Mapping[str, Any]) -> bool:
+    """Qualify only the receipt-bound links of an interrupted shared restore."""
+    try:
+        import backend_shared_store as shared
+        records = intent["artifacts"]
+        diagnostics = intent.get("diagnostics", [])
+        if not isinstance(diagnostics, list):
+            return False
+        artifact_paths = {record["path"] for record in records}
+        paths = {}
+        for record in [*records, *diagnostics]:
+            relative = shared._relative(record["path"])
+            if not _known_failed_candidate_path(str(relative)) or str(relative) in paths:
+                return False
+            paths[str(relative)] = record
+        allowed_files = set(paths) | {PACKAGE_CANDIDATE_MARKER, "backend-build-receipt.json"}
+        allowed_directories = {str(parent) for name in paths
+            for parent in PurePosixPath(name).parents if str(parent) != "."}
+        actual_files, actual_directories = _stage_tree_inventory(candidate)
+        if actual_files - allowed_files or actual_directories - allowed_directories:
+            return False
+        for relative in actual_files:
+            path = candidate / relative
+            if relative in paths:
+                if relative not in artifact_paths and path.lstat().st_nlink != 1:
+                    return False
+                shared._verify(path, paths[relative], sealed=relative in artifact_paths)
+            elif path.lstat().st_nlink != 1:
+                return False
+        return True
+    except (BackendBuildError, shared.StoreError, OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def _failed_candidate_inventory_is_known(candidate: Path) -> bool:
     """Accept only bounded, marker-owned Make output for failure cleanup."""
 
+    try:
+        marker, _ = _read_json(_candidate_marker_path(candidate), "candidate recovery intent", 16 * 1024)
+        if "shared_restore" in marker:
+            return _shared_restore_inventory_is_known(candidate, marker["shared_restore"])
+    except (BackendBuildError, OSError):
+        return False
     allowed_files = {
         PACKAGE_CANDIDATE_MARKER,
         "direct-backend-build.log",
@@ -4250,8 +4421,12 @@ def _discard_failed_candidate_if_owned(
             return False
         if attempt is not None:
             _prune_failed_make_logs(build_root, package_root)
-        _remove_owned_tree(candidate)
-        _fsync_directory(candidate.parent, "backend package candidate directory")
+        marker, _ = _read_json(_candidate_marker_path(candidate), "candidate cleanup marker", 16 * 1024)
+        if "shared_restore" in marker:
+            _remove_shared_candidate(candidate)
+        else:
+            _remove_owned_tree(candidate)
+            _fsync_directory(candidate.parent, "backend package candidate directory")
         return True
     except (BackendBuildError, OSError):
         return False
@@ -4393,11 +4568,1027 @@ def _archive_retired_backup(
         raise
 
 
+def _retirement_dir_identity(path: Path, name: str) -> list[int]:
+    path = _absolute(path, name)
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        _fail(f"cannot inspect {name}: {error}")
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)
+    ):
+        _fail(f"{name} is not a plain directory")
+    return [metadata.st_dev, metadata.st_ino]
+
+
+def _retirement_inventory(root: Path) -> list[dict[str, Any]]:
+    """Record identities of one verified backup without following any links."""
+
+    _retirement_dir_identity(root, "obsolete backend package backup")
+    result: list[dict[str, Any]] = []
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            children = tuple(sorted(directory.iterdir(), key=lambda child: child.name))
+        except OSError as error:
+            _fail(f"cannot inspect obsolete backend package backup: {error}")
+        for child in children:
+            metadata = child.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or bool(
+                getattr(metadata, "st_file_attributes", 0) & 0x400
+            ):
+                _fail(f"obsolete backend package backup contains a link: {child}")
+            relative = child.relative_to(root).as_posix()
+            if (
+                not relative
+                or relative.startswith("/")
+                or "\\" in relative
+                or any(part in {"", ".", ".."} for part in relative.split("/"))
+            ):
+                _fail("obsolete backend package backup contains an unsafe relative path")
+            if stat.S_ISDIR(metadata.st_mode):
+                result.append(
+                    {
+                        "path": relative,
+                        "kind": "directory",
+                        "identity": [metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode)],
+                    }
+                )
+                pending.append(child)
+            elif stat.S_ISREG(metadata.st_mode):
+                result.append(
+                    {
+                        "path": relative,
+                        "kind": "file",
+                        "signature": list(_package_file_signature(metadata)),
+                    }
+                )
+            else:
+                _fail(f"obsolete backend package backup contains a special file: {child}")
+            if len(result) > MAX_PACKAGE_RETIREMENT_ENTRIES:
+                _fail("obsolete backend package backup exceeds the retirement inventory limit")
+    result.sort(key=lambda item: str(item["path"]))
+    return result
+
+
+def _retirement_inventory_map(value: object) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, list) or len(value) > MAX_PACKAGE_RETIREMENT_ENTRIES:
+        _fail("backend package retirement inventory is invalid")
+    result: dict[str, dict[str, Any]] = {}
+    previous = ""
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) not in (
+            {"path", "kind", "identity"},
+            {"path", "kind", "signature"},
+        ):
+            _fail("backend package retirement inventory entry is invalid")
+        relative = item.get("path")
+        kind = item.get("kind")
+        if (
+            not isinstance(relative, str)
+            or not relative
+            or relative <= previous
+            or relative.startswith("/")
+            or "\\" in relative
+            or any(part in {"", ".", ".."} for part in relative.split("/"))
+            or kind not in {"file", "directory"}
+        ):
+            _fail("backend package retirement inventory path is invalid")
+        previous = relative
+        if kind == "file":
+            signature = item.get("signature")
+            if set(item) != {"path", "kind", "signature"} or not isinstance(signature, list) or len(signature) != 5:
+                _fail("backend package retirement file identity is invalid")
+            if any(isinstance(number, bool) or not isinstance(number, int) or number < 0 for number in signature):
+                _fail("backend package retirement file identity is invalid")
+        else:
+            identity = item.get("identity")
+            if set(item) != {"path", "kind", "identity"} or not isinstance(identity, list) or len(identity) != 3:
+                _fail("backend package retirement directory identity is invalid")
+            if any(isinstance(number, bool) or not isinstance(number, int) or number < 0 for number in identity):
+                _fail("backend package retirement directory identity is invalid")
+        result[relative] = dict(item)
+    return result
+
+
+def _retirement_entry_matches(path: Path, expected: Mapping[str, Any]) -> bool:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        _fail(f"cannot inspect backend package retirement entry {path}: {error}")
+    if stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, "st_file_attributes", 0) & 0x400
+    ):
+        _fail(f"backend package retirement contains a link or reparse point: {path}")
+    if expected.get("kind") == "file":
+        if not stat.S_ISREG(metadata.st_mode):
+            _fail(f"backend package retirement file changed type: {path}")
+        if list(_package_file_signature(metadata)) != expected.get("signature"):
+            _fail(f"backend package retirement file identity changed: {path}")
+    elif expected.get("kind") == "directory":
+        if not stat.S_ISDIR(metadata.st_mode):
+            _fail(f"backend package retirement directory changed type: {path}")
+        identity = [metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode)]
+        if identity != expected.get("identity"):
+            _fail(f"backend package retirement directory identity changed: {path}")
+    else:
+        _fail(f"backend package retirement entry has an unknown type: {path}")
+    return True
+
+
+def _retirement_tree_is_subset(root: Path, expected_value: object) -> bool:
+    """Verify that a partially unlinked tombstone contains only bound entries."""
+
+    expected = _retirement_inventory_map(expected_value)
+    root_identity = _retirement_dir_identity(root, "backend package retirement tombstone")
+    actual: dict[str, str] = {}
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        for child in directory.iterdir():
+            relative = child.relative_to(root).as_posix()
+            item = expected.get(relative)
+            if item is None:
+                _fail(f"backend package retirement tombstone has an unexpected entry: {relative}")
+            if not _retirement_entry_matches(child, item):
+                _fail(f"backend package retirement tombstone entry disappeared during inspection: {relative}")
+            actual[relative] = str(item["kind"])
+            if item["kind"] == "directory":
+                pending.append(child)
+    for relative, item in expected.items():
+        if item["kind"] == "directory" and relative not in actual:
+            prefix = relative + "/"
+            if any(path.startswith(prefix) and path in actual for path in actual):
+                _fail("backend package retirement tombstone has content below a missing directory")
+    return bool(root_identity)
+
+
+def _retirement_owner_binding(output: Path, control_root: Path) -> dict[str, Any]:
+    owner = control_root / PACKAGE_DEVELOPMENT_OWNER
+    raw, metadata = _read_regular(owner, "backend package development owner marker", 16 * 1024)
+    return {
+        "identity": [metadata.st_dev, metadata.st_ino],
+        "sha256": _sha256_bytes(raw),
+    }
+
+
+def _retirement_environment_binding(
+    output: Path, control_root: Path, *, check_document: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    intents = control_root / PACKAGE_RETIREMENT_INTENTS_DIRNAME
+    tombstones = control_root / PACKAGE_RETIREMENT_TOMBSTONES_DIRNAME
+    backups = control_root / PACKAGE_BACKUPS_DIRNAME
+    archives = control_root / PACKAGE_RETENTION_ARCHIVE_DIRNAME
+    binding = {
+        "package_root": str(output),
+        "root_identity": _retirement_dir_identity(output, "backend package root"),
+        "control_identity": _retirement_dir_identity(control_root, "backend package development root"),
+        "owner": _retirement_owner_binding(output, control_root),
+        "directories": {
+            "backups": _retirement_dir_identity(backups, "backend package backup directory"),
+            "archives": _retirement_dir_identity(archives, "backend package retention archive directory"),
+            "intents": _retirement_dir_identity(intents, "backend package retirement intent directory"),
+            "tombstones": _retirement_dir_identity(tombstones, "backend package retirement tombstone directory"),
+        },
+    }
+    if check_document is not None:
+        for key, value in binding.items():
+            if check_document.get(key) != value:
+                _fail(f"backend package retirement {key} binding changed")
+    return binding
+
+
+def _retirement_intent_path(
+    intents_root: Path, backup_name: str, target_kind: str = "backup"
+) -> Path:
+    if not re.fullmatch(r"\.backend-package-backup-[A-Za-z0-9._-]+", backup_name):
+        _fail("backend package retirement has an invalid backup name")
+    prefix = "archive-" if target_kind == "archive" else "" if target_kind == "backup" else None
+    if prefix is None:
+        _fail("backend package retirement target kind is invalid")
+    return intents_root / f"{prefix}{backup_name}.json"
+
+
+def _retirement_target_paths(
+    control_root: Path, target_kind: str, backup_name: str
+) -> tuple[Path, Path, Path]:
+    intents_root = control_root / PACKAGE_RETIREMENT_INTENTS_DIRNAME
+    tombstones_root = control_root / PACKAGE_RETIREMENT_TOMBSTONES_DIRNAME
+    if target_kind == "backup":
+        return (
+            control_root / PACKAGE_BACKUPS_DIRNAME / backup_name,
+            tombstones_root / backup_name,
+            _retirement_intent_path(intents_root, backup_name, target_kind),
+        )
+    if target_kind == "archive":
+        tombstone_name = f"archive-{backup_name}"
+        return (
+            control_root / PACKAGE_RETENTION_ARCHIVE_DIRNAME / backup_name,
+            tombstones_root / tombstone_name,
+            _retirement_intent_path(intents_root, backup_name, target_kind),
+        )
+    _fail("backend package retirement target kind is invalid")
+
+def _write_retirement_intent(path: Path, document: Mapping[str, Any]) -> None:
+    """Atomically publish a durable intent before moving any backup payload."""
+
+    parent = _ensure_directory(path.parent, "backend package retirement intent directory")
+    temporary = parent / f".{path.name}.tmp"
+    if temporary.exists() or temporary.is_symlink():
+        metadata = temporary.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            _fail("backend package retirement intent temporary is unsafe")
+        temporary.unlink()
+        _fsync_directory(parent, "backend package retirement intent directory")
+    data = _canonical(document)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(temporary, flags, 0o600)
+        try:
+            view = memoryview(data)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    _fail("short write while publishing backend package retirement intent")
+                view = view[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(temporary, path)
+        _fsync_directory(parent, "backend package retirement intent directory")
+    except OSError as error:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        _fail(f"cannot publish backend package retirement intent: {error}")
+
+
+def _rename_backup_to_tombstone(source: Path, target: Path, backup_name: str) -> None:
+    if source.name not in {backup_name, f"archive-{backup_name}"} or target.name not in {backup_name, f"archive-{backup_name}"} or source.parent == target.parent:
+        _fail("backend package retirement rename paths are invalid")
+    _retirement_dir_identity(source.parent, "backend package backup directory")
+    _retirement_dir_identity(target.parent, "backend package retirement tombstone directory")
+    _retirement_dir_identity(source, "obsolete backend package backup")
+    if target.exists() or target.is_symlink():
+        _fail("backend package retirement tombstone already exists")
+    try:
+        os.rename(source, target)
+    except OSError as error:
+        _fail(f"cannot atomically move obsolete backend package backup: {error}")
+    _fsync_directory(source.parent, "backend package backup directory")
+    _fsync_directory(target.parent, "backend package retirement tombstone directory")
+
+
+def _unlink_retirement_entry(parent: Path, entry_name: str) -> None:
+    """Unlink exactly one verified regular file in an authorized tombstone."""
+
+    if not entry_name or entry_name in {".", ".."} or "/" in entry_name or "\\" in entry_name:
+        _fail("backend package retirement unlink name is invalid")
+    path = parent / entry_name
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        _fail(f"cannot inspect backend package retirement file {path}: {error}")
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_nlink < 1
+        or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)
+    ):
+        _fail(f"backend package retirement entry is not a regular file: {path}")
+    try:
+        path.unlink()
+    except OSError as error:
+        _fail(f"cannot unlink backend package retirement file {path}: {error}")
+    _fsync_directory(parent, "backend package retirement tombstone directory")
+
+
+def _remove_retirement_intent(
+    intents_root: Path, backup_name: str, target_kind: str = "backup"
+) -> None:
+    path = _retirement_intent_path(intents_root, backup_name, target_kind)
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        _fail(f"cannot inspect backend package retirement intent: {error}")
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        _fail("backend package retirement intent is not one regular file")
+    try:
+        path.unlink()
+    except OSError as error:
+        _fail(f"cannot remove backend package retirement intent: {error}")
+    _fsync_directory(intents_root, "backend package retirement intent directory")
+
+
+def _read_retirement_intent(path: Path, output: Path, control_root: Path) -> dict[str, Any]:
+    document, _raw = _read_json(path, "backend package retirement intent", 32 * 1024 * 1024)
+    required = {
+        "schema", "state", "target_kind", "backup_name", "package_root",
+        "root_identity", "control_identity", "owner", "directories",
+        "backup_identity", "current_receipt_sha256", "receipt_sha256",
+        "rotation_sha256", "archive_manifest_sha256", "inventory",
+    }
+    if set(document) != required or document.get("schema") != PACKAGE_RETIREMENT_SCHEMA:
+        _fail("backend package retirement intent schema is invalid")
+    backup_name = document.get("backup_name")
+    target_kind = document.get("target_kind")
+    if not isinstance(backup_name, str) or not isinstance(target_kind, str):
+        _fail("backend package retirement intent identity is invalid")
+    expected_path = _retirement_intent_path(path.parent, backup_name, target_kind)
+    if path != expected_path:
+        _fail("backend package retirement intent name does not match its path")
+    if target_kind not in {"backup", "archive"}:
+        _fail("backend package retirement intent target kind is invalid")
+    if document.get("state") not in {"prepared", "retiring"}:
+        _fail("backend package retirement intent state is invalid")
+    for key in ("current_receipt_sha256", "receipt_sha256", "rotation_sha256", "archive_manifest_sha256"):
+        value = document.get(key)
+        if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
+            _fail(f"backend package retirement intent {key} is invalid")
+    backup_identity = document.get("backup_identity")
+    if not isinstance(backup_identity, list) or len(backup_identity) != 3 or any(
+        isinstance(number, bool) or not isinstance(number, int) or number < 0 for number in backup_identity
+    ):
+        _fail("backend package retirement target identity is invalid")
+    _retirement_inventory_map(document.get("inventory"))
+    _retirement_environment_binding(output, control_root, check_document=document)
+    return document
+
+
+def _validate_retirement_archive(
+    archive_root: Path, document: Mapping[str, Any]
+) -> None:
+    backup_name = str(document["backup_name"])
+    archive = archive_root / backup_name
+    _assert_safe_tree(archive, f"backend package retention archive {backup_name}")
+    manifest_path = archive / "retention.json"
+    manifest, raw = _read_json(
+        manifest_path, f"backend package retention archive {backup_name} manifest", 1024 * 1024
+    )
+    if (
+        _sha256_bytes(raw) != document.get("archive_manifest_sha256")
+        or manifest.get("schema") != PACKAGE_RETENTION_SCHEMA
+        or manifest.get("state") != "succeeded"
+        or manifest.get("backup_name") != backup_name
+        or manifest.get("receipt_sha256") != document.get("receipt_sha256")
+        or manifest.get("rotation_sha256") != document.get("rotation_sha256")
+        or manifest.get("current_receipt_sha256") != document.get("current_receipt_sha256")
+    ):
+        _fail(f"backend package retention archive {backup_name} is not bound to its intent")
+    _validate_retention_archives(archive_root, verify_disposable_logs=False)
+
+
+def _validate_archive_retirement_content(
+    archive_path: Path, document: Mapping[str, Any], *, require_full: bool
+) -> None:
+    backup_name = str(document["backup_name"])
+    manifest_path = archive_path / "retention.json"
+    if not (manifest_path.exists() or manifest_path.is_symlink()):
+        if require_full or any(archive_path.iterdir()):
+            _fail(f"backend package archive retirement lost its manifest: {backup_name}")
+        return
+    manifest, raw = _read_json(
+        manifest_path, f"backend package archive retirement {backup_name} manifest", 1024 * 1024
+    )
+    if (
+        _sha256_bytes(raw) != document.get("archive_manifest_sha256")
+        or manifest.get("schema") != PACKAGE_RETENTION_SCHEMA
+        or manifest.get("state") != "succeeded"
+        or manifest.get("backup_name") != backup_name
+        or manifest.get("receipt_sha256") != document.get("receipt_sha256")
+        or manifest.get("rotation_sha256") != document.get("rotation_sha256")
+        or manifest.get("current_receipt_sha256") != document.get("current_receipt_sha256")
+    ):
+        _fail(f"backend package archive retirement manifest changed: {backup_name}")
+    records = manifest.get("metadata")
+    if not isinstance(records, list):
+        _fail(f"backend package archive retirement metadata is invalid: {backup_name}")
+    by_path: dict[str, Mapping[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, Mapping) or not isinstance(record.get("path"), str):
+            _fail(f"backend package archive retirement metadata is invalid: {backup_name}")
+        filename = str(record["path"])
+        if filename in by_path or filename not in {
+            "backend-build-receipt.json", "rotation.json", "direct-backend-build.log"
+        }:
+            _fail(f"backend package archive retirement metadata is invalid: {backup_name}")
+        by_path[filename] = record
+    if not {"backend-build-receipt.json", "rotation.json"}.issubset(by_path):
+        _fail(f"backend package archive retirement metadata is incomplete: {backup_name}")
+    if (
+        by_path["backend-build-receipt.json"].get("sha256") != document.get("receipt_sha256")
+        or by_path["rotation.json"].get("sha256") != document.get("rotation_sha256")
+    ):
+        _fail(f"backend package archive retirement receipt binding changed: {backup_name}")
+    for filename, record in by_path.items():
+        archived = archive_path / filename
+        if not (archived.exists() or archived.is_symlink()):
+            if require_full:
+                _fail(f"backend package archive retirement lost {filename}: {backup_name}")
+            continue
+        if filename == "direct-backend-build.log":
+            metadata = archived.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != record.get("size"):
+                _fail(f"backend package archive retirement file changed: {backup_name}/{filename}")
+            continue
+        digest, metadata = _sha256_file(
+            archived, f"backend package archive retirement {backup_name}/{filename}", 8 * 1024 * 1024
+        )
+        if digest != record.get("sha256") or metadata.st_size != record.get("size"):
+            _fail(f"backend package archive retirement file changed: {backup_name}/{filename}")
+    if require_full:
+        expected_names = {"retention.json", *by_path}
+        if {child.name for child in archive_path.iterdir()} != expected_names:
+            _fail(f"backend package archive retirement has an unknown file: {backup_name}")
+
+
+def _retire_tombstone_payload(
+    tombstone: Path,
+    document: Mapping[str, Any],
+    tombstones_root: Path,
+    *,
+    proof_last: bool = False,
+) -> None:
+    expected = _retirement_inventory_map(document.get("inventory"))
+    _retirement_tree_is_subset(tombstone, document.get("inventory"))
+    file_entries = [
+        (relative, item) for relative, item in expected.items() if item["kind"] == "file"
+    ]
+    file_entries.sort(key=lambda pair: (pair[0] == "retention.json" if proof_last else False, pair[0].count("/"), pair[0]))
+    for relative, item in file_entries:
+        entry = tombstone / PurePosixPath(relative)
+        if _retirement_entry_matches(entry, item):
+            _unlink_retirement_entry(entry.parent, entry.name)
+    directories = [
+        (relative, item) for relative, item in expected.items() if item["kind"] == "directory"
+    ]
+    for relative, item in sorted(
+        directories, key=lambda pair: (pair[0].count("/"), pair[0]), reverse=True
+    ):
+        entry = tombstone / PurePosixPath(relative)
+        if not _retirement_entry_matches(entry, item):
+            continue
+        try:
+            entry.rmdir()
+        except OSError as error:
+            _fail(f"cannot remove backend package retirement directory {entry}: {error}")
+        _fsync_directory(entry.parent, "backend package retirement tombstone directory")
+    try:
+        tombstone.rmdir()
+    except OSError as error:
+        _fail(f"cannot remove backend package retirement tombstone: {error}")
+    _fsync_directory(tombstones_root, "backend package retirement tombstone directory")
+
+
+def _resume_retirement_intent(
+    output: Path, control_root: Path, document: dict[str, Any]
+) -> None:
+    backup_name = str(document["backup_name"])
+    target_kind = str(document["target_kind"])
+    archive_root = control_root / PACKAGE_RETENTION_ARCHIVE_DIRNAME
+    intents_root = control_root / PACKAGE_RETIREMENT_INTENTS_DIRNAME
+    tombstones_root = control_root / PACKAGE_RETIREMENT_TOMBSTONES_DIRNAME
+    source, tombstone, intent_path = _retirement_target_paths(
+        control_root, target_kind, backup_name
+    )
+    source_exists = source.exists() or source.is_symlink()
+    tombstone_exists = tombstone.exists() or tombstone.is_symlink()
+    if source_exists and tombstone_exists:
+        _fail(f"backend package retirement has both source and tombstone: {backup_name}")
+    if document["state"] == "prepared":
+        if source_exists:
+            _retirement_dir_identity(source, "retirement source")
+            metadata = source.lstat()
+            identity = [metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode)]
+            if identity != document["backup_identity"] or _retirement_inventory(source) != document["inventory"]:
+                _fail(f"backend package retirement source changed: {backup_name}")
+            if tombstone_exists:
+                _fail("backend package retirement tombstone appeared before atomic rename")
+            _rename_backup_to_tombstone(source, tombstone, backup_name)
+            tombstone_exists = True
+        elif not tombstone_exists:
+            _fail(f"prepared backend package retirement has no source or tombstone: {backup_name}")
+        metadata = tombstone.lstat()
+        if [metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode)] != document["backup_identity"]:
+            _fail(f"backend package retirement tombstone identity changed: {backup_name}")
+        if _retirement_inventory(tombstone) != document["inventory"]:
+            _fail(f"prepared backend package retirement tombstone changed: {backup_name}")
+        document = dict(document)
+        document["state"] = "retiring"
+        _write_retirement_intent(intent_path, document)
+    elif source_exists:
+        _fail(f"retiring backend package source unexpectedly reappeared: {backup_name}")
+
+    if target_kind == "backup":
+        _validate_retirement_archive(archive_root, document)
+    else:
+        _validate_retention_archives(archive_root, verify_disposable_logs=False)
+        if tombstone_exists:
+            _validate_archive_retirement_content(tombstone, document, require_full=False)
+    if tombstone_exists:
+        _retire_tombstone_payload(
+            tombstone, document, tombstones_root, proof_last=(target_kind == "archive")
+        )
+    elif document["state"] != "retiring":
+        _fail(f"prepared backend package retirement lost its tombstone: {backup_name}")
+    _remove_retirement_intent(intents_root, backup_name, target_kind)
+
+
+
+def _validate_orphan_retirement_temp(
+    backup_name: str,
+    source: Path,
+    tombstone: Path,
+    archive_root: Path,
+) -> None:
+    """Authenticate cleanup of a partial initial intent while source is intact."""
+
+    if source.exists() is False or source.is_symlink() or tombstone.exists() or tombstone.is_symlink():
+        _fail(f"orphan backend package retirement temporary is ambiguous: {backup_name}")
+    _assert_safe_tree(source, f"obsolete backend package backup {backup_name}")
+    receipt, receipt_bytes, _children = _validated_package(
+        source, f"obsolete backend package backup {backup_name}"
+    )
+    _assert_exact_backup_inventory(source, receipt, f"obsolete backend package backup {backup_name}")
+    rotation, rotation_bytes = _read_json(
+        source / "rotation.json", f"obsolete backend package backup {backup_name} rotation", 1024 * 1024
+    )
+    receipt_sha256 = _sha256_bytes(receipt_bytes)
+    rotation_sha256 = _sha256_bytes(rotation_bytes)
+    if (
+        rotation.get("schema") != "fullmag.direct-compose.package-rotation.v1"
+        or rotation.get("state") != "succeeded"
+        or rotation.get("old_receipt_sha256") != receipt_sha256
+    ):
+        _fail(f"orphan backend package retirement source is not receipt-bound: {backup_name}")
+    archive = archive_root / backup_name
+    _assert_safe_tree(archive, f"backend package retention archive {backup_name}")
+    manifest, _raw = _read_json(
+        archive / "retention.json", f"backend package retention archive {backup_name} manifest", 1024 * 1024
+    )
+    _validate_retention_archives(archive_root, verify_disposable_logs=False)
+    metadata = manifest.get("metadata")
+    records = {
+        item.get("path"): item
+        for item in metadata
+        if isinstance(item, Mapping) and isinstance(item.get("path"), str)
+    } if isinstance(metadata, list) else {}
+    if (
+        manifest.get("backup_name") != backup_name
+        or not isinstance(manifest.get("current_receipt_sha256"), str)
+        or not SHA256_RE.fullmatch(str(manifest.get("current_receipt_sha256")))
+        or manifest.get("receipt_sha256") != receipt_sha256
+        or manifest.get("rotation_sha256") != rotation_sha256
+        or records.get("backend-build-receipt.json", {}).get("sha256") != receipt_sha256
+        or records.get("rotation.json", {}).get("sha256") != rotation_sha256
+    ):
+        _fail(f"orphan backend package retirement temporary is not archive-bound: {backup_name}")
+
+
+def _remove_retirement_intent_temp(path: Path, intents_root: Path) -> None:
+    if path.parent != intents_root or not re.fullmatch(
+        r"^\.(?:archive-)?\.backend-package-backup-[A-Za-z0-9._-]+\.json\.tmp$", path.name
+    ):
+        _fail("backend package retirement temporary has an invalid private name")
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        _fail("backend package retirement temporary is not one regular file")
+    path.unlink()
+    _fsync_directory(intents_root, "backend package retirement intent directory")
+
+
+
+
+def _unlink_archive_staging_entry(stage: Path, entry_name: str) -> None:
+    if entry_name not in {"backend-build-receipt.json", "rotation.json", "retention.json"} and not (
+        re.fullmatch(r"\.(?:backend-build-receipt\.json|rotation\.json)\.[A-Za-z0-9_-]+", entry_name)
+        or re.fullmatch(r"\.retention\.json\.[0-9]+\.tmp", entry_name)
+    ):
+        _fail(f"backend package archive staging has an unknown entry: {entry_name}")
+    entry = stage / entry_name
+    try:
+        metadata = entry.lstat()
+    except OSError as error:
+        _fail(f"cannot inspect backend package archive staging entry {entry_name}: {error}")
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)
+    ):
+        _fail(f"backend package archive staging entry is unsafe: {entry_name}")
+    entry.unlink()
+    _fsync_directory(stage, "backend package archive staging directory")
+
+def _recover_retention_archive_staging(output: Path, control_root: Path) -> None:
+    """Discard only incomplete private archive stages while source backups remain intact."""
+
+    archive_root = control_root / PACKAGE_RETENTION_ARCHIVE_DIRNAME
+    backups_root = control_root / PACKAGE_BACKUPS_DIRNAME
+    stage_pattern = re.compile(
+        r"^\.(?P<backup>\.backend-package-backup-[A-Za-z0-9._-]+)\.retention-[A-Za-z0-9_-]+$"
+    )
+    copy_temp_pattern = re.compile(
+        r"^\.(?:backend-build-receipt\.json|rotation\.json)\.[A-Za-z0-9_-]+$"
+    )
+    manifest_temp_pattern = re.compile(r"^\.retention\.json\.[0-9]+\.tmp$")
+    try:
+        entries = tuple(sorted(archive_root.iterdir(), key=lambda path: path.name))
+    except OSError as error:
+        _fail(f"cannot inspect backend package retention archive directory: {error}")
+    canonical_archives = tuple(
+        entry for entry in entries
+        if re.fullmatch(r"\.backend-package-backup-[A-Za-z0-9._-]+", entry.name)
+    )
+    _validate_retention_archives(
+        archive_root, verify_disposable_logs=False, entries=canonical_archives
+    )
+    stages: list[tuple[Path, str]] = []
+    for entry in entries:
+        if re.fullmatch(r"\.backend-package-backup-[A-Za-z0-9._-]+", entry.name):
+            continue
+        match = stage_pattern.fullmatch(entry.name)
+        if match is None:
+            _fail(f"backend package retention archive has an unknown entry: {entry.name}")
+        backup_name = match.group("backup")
+        target = archive_root / backup_name
+        source = backups_root / backup_name
+        if target.exists() or target.is_symlink():
+            _fail(f"backend package archive and staging directory both exist: {backup_name}")
+        _assert_safe_tree(source, f"obsolete backend package backup {backup_name}")
+        receipt, receipt_bytes, _children = _validated_package(
+            source, f"obsolete backend package backup {backup_name}"
+        )
+        _assert_exact_backup_inventory(source, receipt, f"obsolete backend package backup {backup_name}")
+        rotation, rotation_bytes = _read_json(
+            source / "rotation.json", f"obsolete backend package backup {backup_name} rotation", 1024 * 1024
+        )
+        receipt_sha = _sha256_bytes(receipt_bytes)
+        rotation_sha = _sha256_bytes(rotation_bytes)
+        if (
+            rotation.get("schema") != "fullmag.direct-compose.package-rotation.v1"
+            or rotation.get("state") != "succeeded"
+            or rotation.get("old_receipt_sha256") != receipt_sha
+        ):
+            _fail(f"backend package archive staging source is not receipt-bound: {backup_name}")
+        stage_metadata = entry.lstat()
+        if (
+            not stat.S_ISDIR(stage_metadata.st_mode)
+            or stat.S_ISLNK(stage_metadata.st_mode)
+            or bool(getattr(stage_metadata, "st_file_attributes", 0) & 0x400)
+        ):
+            _fail(f"backend package archive staging entry is not a plain directory: {entry.name}")
+        published: set[str] = set()
+        staged_manifest: dict[str, Any] | None = None
+        try:
+            children = tuple(sorted(entry.iterdir(), key=lambda child: child.name))
+        except OSError as error:
+            _fail(f"cannot inspect backend package archive staging directory: {error}")
+        for child in children:
+            child_metadata = child.lstat()
+            if (
+                stat.S_ISLNK(child_metadata.st_mode)
+                or bool(getattr(child_metadata, "st_file_attributes", 0) & 0x400)
+                or not stat.S_ISREG(child_metadata.st_mode)
+                or child_metadata.st_nlink != 1
+            ):
+                _fail(f"backend package archive staging contains an unsafe entry: {child.name}")
+            if child.name in {"backend-build-receipt.json", "rotation.json"}:
+                expected = (
+                    (receipt_sha, len(receipt_bytes))
+                    if child.name == "backend-build-receipt.json"
+                    else (rotation_sha, len(rotation_bytes))
+                )
+                digest, metadata = _sha256_file(child, f"archive staging {backup_name}/{child.name}", 8 * 1024 * 1024)
+                if (digest, metadata.st_size) != expected:
+                    _fail(f"backend package archive staging metadata changed: {backup_name}/{child.name}")
+                published.add(child.name)
+            elif child.name == "retention.json":
+                staged_manifest, _raw = _read_json(
+                    child, f"backend package archive staging {backup_name} manifest", 1024 * 1024
+                )
+                published.add(child.name)
+            elif copy_temp_pattern.fullmatch(child.name) or manifest_temp_pattern.fullmatch(child.name):
+                continue
+            else:
+                _fail(f"backend package archive staging has an unknown entry: {child.name}")
+        if staged_manifest is not None:
+            if not {"backend-build-receipt.json", "rotation.json", "retention.json"}.issubset(published):
+                _fail(f"backend package archive staging manifest is incomplete: {backup_name}")
+            if (
+                staged_manifest.get("schema") != PACKAGE_RETENTION_SCHEMA
+                or staged_manifest.get("state") != "succeeded"
+                or staged_manifest.get("backup_name") != backup_name
+                or staged_manifest.get("receipt_sha256") != receipt_sha
+                or staged_manifest.get("rotation_sha256") != rotation_sha
+                or not isinstance(staged_manifest.get("current_receipt_sha256"), str)
+                or not SHA256_RE.fullmatch(str(staged_manifest.get("current_receipt_sha256")))
+            ):
+                _fail(f"backend package archive staging manifest is not source-bound: {backup_name}")
+            records = staged_manifest.get("metadata")
+            if not isinstance(records, list) or len(records) != 2:
+                _fail(f"backend package archive staging manifest metadata is invalid: {backup_name}")
+            record_map = {
+                record.get("path"): record
+                for record in records
+                if isinstance(record, Mapping) and isinstance(record.get("path"), str)
+            }
+            if (
+                set(record_map) != {"backend-build-receipt.json", "rotation.json"}
+                or record_map["backend-build-receipt.json"].get("sha256") != receipt_sha
+                or record_map["backend-build-receipt.json"].get("size") != len(receipt_bytes)
+                or record_map["rotation.json"].get("sha256") != rotation_sha
+                or record_map["rotation.json"].get("size") != len(rotation_bytes)
+                or published != {"backend-build-receipt.json", "rotation.json", "retention.json"}
+            ):
+                _fail(f"backend package archive staging manifest inventory is invalid: {backup_name}")
+        stages.append((entry, backup_name))
+    # Staging exists only before a retirement intent can be published. An
+    # overlap with any retirement record is ambiguous and must block cleanup.
+    if stages:
+        intents_root = control_root / PACKAGE_RETIREMENT_INTENTS_DIRNAME
+        tombstones_root = control_root / PACKAGE_RETIREMENT_TOMBSTONES_DIRNAME
+        if any(intents_root.iterdir()) or any(tombstones_root.iterdir()):
+            _fail("backend package archive staging overlaps a retirement record")
+        for backup in backups_root.iterdir():
+            metadata = backup.lstat()
+            if (
+                not re.fullmatch(r"\.backend-package-backup-[A-Za-z0-9._-]+", backup.name)
+                or not stat.S_ISDIR(metadata.st_mode)
+                or stat.S_ISLNK(metadata.st_mode)
+                or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)
+            ):
+                _fail(f"backend package backup namespace has an unknown or unsafe entry: {backup.name}")
+    # Staging is uncommitted and the source backup remains intact. Remove its
+    # manifest first so cleanup itself can resume after any payload unlink.
+    for stage, _backup_name in stages:
+        if (stage / "retention.json").exists():
+            _unlink_archive_staging_entry(stage, "retention.json")
+        for child in sorted(stage.iterdir(), key=lambda path: path.name):
+            _unlink_archive_staging_entry(stage, child.name)
+        stage.rmdir()
+        _fsync_directory(archive_root, "backend package retention archive directory")
+
+def _recover_package_backup_retirements(output: Path, control_root: Path) -> None:
+    """Preflight and resume only owner-bound package/archive retirement records."""
+
+    intents_root = control_root / PACKAGE_RETIREMENT_INTENTS_DIRNAME
+    tombstones_root = control_root / PACKAGE_RETIREMENT_TOMBSTONES_DIRNAME
+    archive_root = control_root / PACKAGE_RETENTION_ARCHIVE_DIRNAME
+    _ensure_directory(intents_root, "backend package retirement intent directory")
+    _ensure_directory(tombstones_root, "backend package retirement tombstone directory")
+    binding = _retirement_environment_binding(output, control_root)
+    backups_root = control_root / PACKAGE_BACKUPS_DIRNAME
+    try:
+        intent_entries = tuple(sorted(intents_root.iterdir(), key=lambda path: path.name))
+        tombstone_entries = tuple(sorted(tombstones_root.iterdir(), key=lambda path: path.name))
+        backup_entries = tuple(sorted(backups_root.iterdir(), key=lambda path: path.name))
+    except OSError as error:
+        _fail(f"cannot inspect backend package retirement records: {error}")
+    for path in backup_entries:
+        metadata = path.lstat()
+        if (
+            not re.fullmatch(r"\.backend-package-backup-[A-Za-z0-9._-]+", path.name)
+            or not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)
+        ):
+            _fail(f"backend package backup namespace has an unknown or unsafe entry: {path.name}")
+
+    documents: list[dict[str, Any]] = []
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    temporary_entries: list[tuple[Path, str, str]] = []
+    temp_pattern = re.compile(
+        r"^\.(?P<intent>(?:archive-)?\.backend-package-backup-[A-Za-z0-9._-]+\.json)\.tmp$"
+    )
+    for path in intent_entries:
+        temp = temp_pattern.fullmatch(path.name)
+        if temp is not None:
+            metadata = path.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                _fail(f"backend package retirement temporary is unsafe: {path.name}")
+            intent_name = temp.group("intent")
+            if intent_name.startswith("archive-"):
+                kind, backup_name = "archive", intent_name[len("archive-"):-5]
+            else:
+                kind, backup_name = "backup", intent_name[:-5]
+            _retirement_intent_path(intents_root, backup_name, kind)
+            temporary_entries.append((path, kind, backup_name))
+            continue
+        kind = "archive" if path.name.startswith("archive-") else "backup"
+        match_name = path.name[len("archive-"):] if kind == "archive" else path.name
+        if not re.fullmatch(r"\.backend-package-backup-[A-Za-z0-9._-]+\.json", match_name):
+            _fail(f"backend package retirement intent directory has an unknown entry: {path.name}")
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            _fail(f"backend package retirement intent is unsafe: {path.name}")
+        document = _read_retirement_intent(path, output, control_root)
+        if document.get("target_kind") != kind:
+            _fail(f"backend package retirement intent target kind changed: {path.name}")
+        if any(document.get(key) != value for key, value in binding.items()):
+            _fail("backend package retirement environment changed during preflight")
+        key = (kind, str(document["backup_name"]))
+        if key in by_key:
+            _fail("backend package retirement contains duplicate intents")
+        by_key[key] = document
+        documents.append(document)
+
+    tombstone_keys: set[tuple[str, str]] = set()
+    for path in tombstone_entries:
+        if path.name.startswith("archive-"):
+            kind, backup_name = "archive", path.name[len("archive-"):]
+        else:
+            kind, backup_name = "backup", path.name
+        if not re.fullmatch(r"\.backend-package-backup-[A-Za-z0-9._-]+", backup_name):
+            _fail(f"backend package retirement tombstone directory has an unknown entry: {path.name}")
+        key = (kind, backup_name)
+        if key not in by_key:
+            _fail(f"backend package retirement tombstone has no matching intent: {path.name}")
+        tombstone_keys.add(key)
+
+    pending_temporary_cleanup: list[Path] = []
+    for temporary, kind, backup_name in temporary_entries:
+        key = (kind, backup_name)
+        document = by_key.get(key)
+        source, tombstone, _intent = _retirement_target_paths(control_root, kind, backup_name)
+        source_exists = source.exists() or source.is_symlink()
+        tombstone_exists = tombstone.exists() or tombstone.is_symlink()
+        if document is None:
+            if kind == "backup":
+                _validate_orphan_retirement_temp(
+                    backup_name, source, tombstone, archive_root
+                )
+            else:
+                if not source_exists or tombstone_exists:
+                    _fail(f"orphan archive retirement temporary is ambiguous: {backup_name}")
+                _validate_retention_archives(archive_root, verify_disposable_logs=False)
+        else:
+            if document["state"] != "prepared" or source_exists == tombstone_exists:
+                _fail(f"backend package retirement temporary is ambiguous: {backup_name}")
+            observed = source if source_exists else tombstone
+            metadata = observed.lstat()
+            if not stat.S_ISDIR(metadata.st_mode) or [metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode)] != document["backup_identity"]:
+                _fail(f"backend package retirement temporary target identity changed: {backup_name}")
+            if _retirement_inventory(observed) != document["inventory"]:
+                _fail(f"backend package retirement temporary target contents changed: {backup_name}")
+            if kind == "backup":
+                _validate_retirement_archive(archive_root, document)
+            else:
+                _validate_retention_archives(archive_root, verify_disposable_logs=False)
+                _validate_archive_retirement_content(observed, document, require_full=True)
+        pending_temporary_cleanup.append(temporary)
+
+    for document in documents:
+        kind = str(document["target_kind"])
+        backup_name = str(document["backup_name"])
+        source, tombstone, _intent = _retirement_target_paths(control_root, kind, backup_name)
+        source_exists = source.exists() or source.is_symlink()
+        tombstone_exists = tombstone.exists() or tombstone.is_symlink()
+        if document["state"] == "prepared":
+            if source_exists == tombstone_exists:
+                _fail(f"prepared backend package retirement is ambiguous: {backup_name}")
+        elif source_exists:
+            _fail(f"retiring backend package source reappeared: {backup_name}")
+        if source_exists:
+            metadata = source.lstat()
+            if not stat.S_ISDIR(metadata.st_mode) or [metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode)] != document["backup_identity"]:
+                _fail(f"backend package retirement source identity changed: {backup_name}")
+            if _retirement_inventory(source) != document["inventory"]:
+                _fail(f"backend package retirement source contents changed: {backup_name}")
+        if tombstone_exists:
+            metadata = tombstone.lstat()
+            if not stat.S_ISDIR(metadata.st_mode) or [metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode)] != document["backup_identity"]:
+                _fail(f"backend package retirement tombstone identity changed: {backup_name}")
+            if document["state"] == "prepared":
+                if _retirement_inventory(tombstone) != document["inventory"]:
+                    _fail(f"prepared backend package retirement tombstone changed: {backup_name}")
+            else:
+                _retirement_tree_is_subset(tombstone, document["inventory"])
+        if kind == "backup":
+            _validate_retirement_archive(archive_root, document)
+        else:
+            _validate_retention_archives(archive_root, verify_disposable_logs=False)
+            if source_exists:
+                _validate_archive_retirement_content(source, document, require_full=True)
+            elif tombstone_exists:
+                _validate_archive_retirement_content(
+                    tombstone, document, require_full=(document["state"] == "prepared")
+                )
+
+    # Every path and archive binding passed preflight before a temp or payload is removed.
+    for temporary in pending_temporary_cleanup:
+        _remove_retirement_intent_temp(temporary, intents_root)
+    for document in documents:
+        _resume_retirement_intent(output, control_root, document)
+
+
+
+def _create_retirement_intent(
+    output: Path, control_root: Path, node: Mapping[str, Any]
+) -> dict[str, Any]:
+    backup = Path(node["path"])
+    backup_name = backup.name
+    intents_root = control_root / PACKAGE_RETIREMENT_INTENTS_DIRNAME
+    tombstones_root = control_root / PACKAGE_RETIREMENT_TOMBSTONES_DIRNAME
+    if backup.parent != control_root / PACKAGE_BACKUPS_DIRNAME:
+        _fail("obsolete backend package backup is outside its exact private namespace")
+    intent_path = _retirement_intent_path(intents_root, backup_name)
+    tombstone = tombstones_root / backup_name
+    if intent_path.exists() or intent_path.is_symlink() or tombstone.exists() or tombstone.is_symlink():
+        _fail(f"backend package retirement already has records for {backup_name}")
+    archive_manifest_path = (
+        control_root / PACKAGE_RETENTION_ARCHIVE_DIRNAME / backup_name / "retention.json"
+    )
+    manifest, archive_raw = _read_json(
+        archive_manifest_path,
+        f"backend package retention archive {backup_name} manifest",
+        1024 * 1024,
+    )
+    if (
+        manifest.get("schema") != PACKAGE_RETENTION_SCHEMA
+        or manifest.get("state") != "succeeded"
+        or manifest.get("backup_name") != backup_name
+        or manifest.get("receipt_sha256") != node.get("receipt_sha256")
+        or manifest.get("rotation_sha256") != node.get("rotation_sha256")
+        or not isinstance(manifest.get("current_receipt_sha256"), str)
+        or not SHA256_RE.fullmatch(str(manifest.get("current_receipt_sha256")))
+    ):
+        _fail(f"backend package retention archive is not bound to backup {backup_name}")
+    archive_current_receipt_sha256 = str(manifest["current_receipt_sha256"])
+    metadata = backup.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        _fail(f"obsolete backend package backup is not a plain directory: {backup_name}")
+    document = {
+        "schema": PACKAGE_RETIREMENT_SCHEMA,
+        "state": "prepared",
+        "target_kind": "backup",
+        "backup_name": backup_name,
+        **_retirement_environment_binding(output, control_root),
+        "backup_identity": [metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode)],
+        "current_receipt_sha256": archive_current_receipt_sha256,
+        "receipt_sha256": str(node["receipt_sha256"]),
+        "rotation_sha256": str(node["rotation_sha256"]),
+        "archive_manifest_sha256": _sha256_bytes(archive_raw),
+        "inventory": _retirement_inventory(backup),
+    }
+    _write_retirement_intent(intent_path, document)
+    return document
+
+
+def _create_archive_retirement_intent(
+    output: Path, control_root: Path, record: Mapping[str, Any]
+) -> dict[str, Any]:
+    archive = Path(record["path"])
+    backup_name = archive.name
+    archive_root = control_root / PACKAGE_RETENTION_ARCHIVE_DIRNAME
+    intents_root = control_root / PACKAGE_RETIREMENT_INTENTS_DIRNAME
+    if archive.parent != archive_root:
+        _fail("retention archive is outside its exact private namespace")
+    intent_path = _retirement_intent_path(intents_root, backup_name, "archive")
+    tombstone = control_root / PACKAGE_RETIREMENT_TOMBSTONES_DIRNAME / f"archive-{backup_name}"
+    if intent_path.exists() or intent_path.is_symlink() or tombstone.exists() or tombstone.is_symlink():
+        _fail(f"backend package archive retirement already has records for {backup_name}")
+    manifest, raw = _read_json(
+        archive / "retention.json", f"backend package retention archive {backup_name} manifest", 1024 * 1024
+    )
+    _validate_retention_archives(archive_root, verify_disposable_logs=False)
+    metadata = archive.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        _fail(f"backend package retention archive is not a plain directory: {backup_name}")
+    document = {
+        "schema": PACKAGE_RETIREMENT_SCHEMA,
+        "state": "prepared",
+        "target_kind": "archive",
+        "backup_name": backup_name,
+        **_retirement_environment_binding(output, control_root),
+        "backup_identity": [metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode)],
+        "current_receipt_sha256": manifest["current_receipt_sha256"],
+        "receipt_sha256": manifest["receipt_sha256"],
+        "rotation_sha256": manifest["rotation_sha256"],
+        "archive_manifest_sha256": _sha256_bytes(raw),
+        "inventory": _retirement_inventory(archive),
+    }
+    if any(not isinstance(document[key], str) or not SHA256_RE.fullmatch(document[key]) for key in (
+        "current_receipt_sha256", "receipt_sha256", "rotation_sha256", "archive_manifest_sha256"
+    )):
+        _fail(f"backend package archive retirement manifest is invalid: {backup_name}")
+    _validate_archive_retirement_content(archive, document, require_full=True)
+    _write_retirement_intent(intent_path, document)
+    return document
+
 def _retain_package_backups(
     output: Path,
     control_root: Path,
     current_receipt: Mapping[str, Any],
     current_receipt_bytes: bytes,
+    *,
+    cache_identity: Mapping[str, Any] | None = None,
 ) -> None:
     """Retain the direct rollback and retire only a verified older chain."""
 
@@ -4405,6 +5596,15 @@ def _retain_package_backups(
     control_root = _absolute(control_root, "backend package development control directory")
     if control_root != output / PACKAGE_DEVELOPMENT_DIRNAME:
         _fail("backend package retention control directory is not under the package mount")
+    group_binding = None
+    if os.environ.get("FULLMAG_PRIVATE_GROUP_STORAGE") == "group-volume-v1":
+        import backend_group_cache_cleanup as group_cache_cleanup
+        try:
+            group_binding = group_cache_cleanup.validate_group_cache_identity(
+                cache_identity, package_root=output
+            )
+        except group_cache_cleanup.BackendGroupCacheCleanupError as error:
+            _fail(f"group package retention identity is invalid: {error}")
     _ensure_package_development_root(output)
     archive_root = control_root / PACKAGE_RETENTION_ARCHIVE_DIRNAME
     backups_root = control_root / PACKAGE_BACKUPS_DIRNAME
@@ -4419,7 +5619,6 @@ def _retain_package_backups(
     _fsync_directory(output, "backend package output directory")
     _fsync_directory(control_root, "backend package development control directory")
     _fsync_directory(backups_root, "backend package backup directory")
-    _validate_retention_archives(archive_root, verify_disposable_logs=False)
     current_mode, current_build, current_toolchain = _retention_receipt_identity(
         current_receipt, "current backend package"
     )
@@ -4429,6 +5628,11 @@ def _retain_package_backups(
     )
     if observed_receipt_bytes != current_receipt_bytes:
         _fail("current backend package receipt changed before backup retention")
+    # Resume private archive stages and atomic retirements before validating
+    # either archive inventory or the live backup chain.
+    _recover_retention_archive_staging(output, control_root)
+    _recover_package_backup_retirements(output, control_root)
+    _validate_retention_archives(archive_root, verify_disposable_logs=False)
     current_children = _package_children(
         output, "current backend package", exclude_development_control=True
     )
@@ -4454,8 +5658,13 @@ def _retain_package_backups(
         mode, build, toolchain = _retention_receipt_identity(
             receipt, f"backend package backup {backup.name}"
         )
-        if mode != current_mode or build != current_build or toolchain != current_toolchain:
-            _fail(f"backend package backup {backup.name} has a different cache identity")
+        if group_binding is None:
+            if mode != current_mode or build != current_build or toolchain != current_toolchain:
+                _fail(f"backend package backup {backup.name} has a different cache identity")
+        elif mode != current_mode:
+            # The group-bound namespace retains one direct rollback across ABI
+            # changes, but retention never activates or runs that old package.
+            _fail(f"backend package backup {backup.name} has a different source mode")
         rotation, rotation_bytes = _read_json(
             backup / "rotation.json",
             f"backend package backup {backup.name} rotation metadata",
@@ -4539,8 +5748,8 @@ def _retain_package_backups(
             str(node["receipt_sha256"]),
             str(node["rotation_sha256"]),
         )
-        _remove_owned_tree(node["path"])
-        _fsync_directory(backups_root, "backend package backup directory")
+        _create_retirement_intent(output, control_root, node)
+        _recover_package_backup_retirements(output, control_root)
     removed_archives = _prune_retention_archives(archive_root)
     if obsolete or removed_archives:
         _log_phase(
@@ -4668,6 +5877,166 @@ def _run_canonical_make(command: list[str], workspace: Path, environment: Mappin
         _fail(f"cannot execute canonical Make target: {error}")
 
 
+def _shared_package_identity(manifest: Path, toolchain: Mapping[str, Any], architectures: str | None,
+                             *, required_native_contracts: tuple[str, ...] = ()) -> dict[str, Any]:
+    document, _ = _read_json(manifest, "shared package source manifest", 64 * 1024 * 1024)
+    capsule, native, _, _ = _validate_live_manifest(document)
+    # The commit and native snapshot are compiled into fullmag-build-info.
+    # Never relabel a package from another commit as a newly compiled binary.
+    helpers = {}
+    names = ("backend_dev.py", "backend_source.py", "backend_shared_store.py", "backend_shared_recovery.py", "backend_group_cache_cleanup.py")
+    if required_native_contracts:
+        names += ("backend_native_contracts.py",)
+    for name in names:
+        helpers[name] = _sha256_file(Path(__file__).with_name(name), "trusted builder helper")[0]
+    return {
+        **({"native_contracts": list(required_native_contracts)} if required_native_contracts else {}),
+        "runtime_source_digest": _runtime_source_digest(capsule),
+        "resolved_commit": capsule["resolved_commit"],
+        "native_source_identity": native,
+        "toolchain": dict(toolchain),
+        "build": {**_expected_backend_build_identity(BACKEND_CARGO_PROFILE),
+                  "cuda_architectures": architectures},
+        "builder_helpers": helpers,
+        "compiler_environment": {key: os.environ.get(key, "") for key in (
+            "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CFLAGS", "CXXFLAGS", "CPPFLAGS",
+            "LDFLAGS", "CMAKE_BUILD_TYPE", "CUDAHOSTCXX", "NVCC_PREPEND_FLAGS", "NVCC_APPEND_FLAGS",
+        )},
+    }
+
+
+def _cleanup_group_build_outputs(workspace: Path, *, phase: str) -> dict[str, Any]:
+    """Run the exact owned compiler-tree cleanup and record its phase."""
+
+    if os.environ.get("FULLMAG_PRIVATE_GROUP_STORAGE") != "group-volume-v1":
+        _fail("group build cleanup is reserved for private group storage")
+    import backend_group_cache_cleanup as group_cache_cleanup
+
+    cache_identity = _backend_cache_receipt()
+    try:
+        if cache_identity is None:
+            _fail("private group build has no backend cache receipt")
+        cleanup = group_cache_cleanup.cleanup_group_compiler_outputs(
+            workspace, cache_identity=cache_identity, phase=phase
+        )
+    except group_cache_cleanup.BackendGroupCacheCleanupError as error:
+        _fail(f"private group compiler cleanup failed: {error}")
+    _log_phase(
+        "group-cache-cleanup", "complete", cleanup_phase=phase,
+        removed_files=cleanup["removed_files"], removed_bytes=cleanup["removed_bytes"],
+        receipt=cleanup["receipt_path"],
+    )
+    return cleanup
+
+
+def _prepare_with_shared_package(
+    args,
+    build_root,
+    output,
+    jobs,
+    toolchain,
+    direct_install_root,
+    *,
+    on_actual_build: Callable[[], None] | None = None,
+):
+    configured = os.environ.get("FULLMAG_SHARED_BACKEND_STORE", "")
+    if not configured:
+        if on_actual_build is None:
+            return _prepare_locked(args, build_root, output, jobs, toolchain, direct_install_root)
+        return _prepare_locked(
+            args, build_root, output, jobs, toolchain, direct_install_root,
+            on_actual_build=on_actual_build,
+        )
+    import backend_shared_store as shared
+    if configured != str(shared.ROOT) or direct_install_root != output:
+        _fail("shared packages require the fixed managed volume and direct candidate")
+    architectures = _dev_cuda_architectures()
+    required_contracts = _requested_native_contracts(args)
+    identity = _shared_package_identity(Path(args.manifest), toolchain, architectures,
+        **({"required_native_contracts": required_contracts} if required_contracts else {}))
+    try:
+        store = shared.Store(Path(configured))
+        alias = store.private_alias(PACKAGE_ROOT, output, os.environ.get("FULLMAG_SHARED_BACKEND_GROUP", ""))
+        _log_phase("shared-package", "waiting", key=shared.key_for(identity))
+        with store.claim(identity) as entry:
+            cached = entry.read()
+            if cached is not None:
+                producer = cached["receipt"]
+                if (not _package_matches_fresh_live_manifest(producer, Path(args.manifest), toolchain, BACKEND_CARGO_PROFILE,
+                        **({"required_native_contracts": required_contracts} if required_contracts else {}))
+                        or producer.get("build", {}).get("cuda_architectures") != architectures):
+                    _fail("shared package receipt does not match its build inputs")
+                _validate_candidate_marker(output, PACKAGE_ROOT, build_root, state="building")
+                _assert_direct_candidate_empty_for_make(output)
+                _write_candidate_marker(output, PACKAGE_ROOT, build_root, state="building",
+                    shared_restore={"key": entry.key, "artifacts": producer["artifacts"]})
+                entry.restore(alias, cached)
+                if required_contracts:
+                    import backend_native_contracts
+                    if not backend_native_contracts.receipt_satisfies(
+                        producer.get("native_contracts"), requested=required_contracts,
+                        source_snapshot_sha256=producer["source"]["source_snapshot_sha256"],
+                        package_root=output,
+                    ):
+                        _fail("shared native contract proof does not match restored package")
+                document, raw = _read_json(Path(args.manifest), "shared package consumer manifest", 64 * 1024 * 1024)
+                capsule, native, _, live_hash = _validate_live_manifest(document)
+                receipt = dict(producer)
+                receipt["operation"] = "direct-compose-cache-reuse"
+                receipt["source"] = {
+                    "manifest_sha256": _sha256_bytes(raw), "source_mode": LIVE_SOURCE_MODE,
+                    "source_snapshot_sha256": native["source_snapshot_sha256"],
+                    "source_digest": capsule["source_digest"],
+                    "runtime_source_digest": _runtime_source_digest(capsule),
+                    "resolved_commit": capsule["resolved_commit"], "live_manifest_sha256": live_hash,
+                }
+                receipt["shared_package"] = {"schema": shared.SCHEMA, "key": entry.key,
+                    "producer_receipt_sha256": _sha256_bytes(shared.canonical(producer)),
+                    "inputs": identity, "reuse": "verified-hardlinks"}
+                records = _hash_package(output)
+                if records != producer["artifacts"]:
+                    _fail("shared package differs after linking")
+                _write_json(output / "backend-build-receipt.json", receipt, "shared package consumer receipt")
+                _assert_direct_candidate_inventory(output, records, include_receipt=True)
+                _write_candidate_marker(output, PACKAGE_ROOT, build_root, state="ready", records=records)
+                _log_phase("shared-package", "hit", key=entry.key)
+                return 0
+            if on_actual_build is None:
+                result = _prepare_locked(args, build_root, output, jobs, toolchain, direct_install_root)
+            else:
+                result = _prepare_locked(
+                    args, build_root, output, jobs, toolchain, direct_install_root,
+                    on_actual_build=on_actual_build,
+                )
+            if result == 0:
+                receipt, _, _ = _validated_package(output, "shared package publisher", exclude_candidate_marker=True)
+                if receipt["build"].get("cuda_architectures") != architectures:
+                    _fail("published CUDA target differs from shared build key")
+                # Materialization may recapture a checkout edited after the
+                # claim was acquired. Never publish that build under the old
+                # immutable key or silently switch keys without their lock.
+                final_identity = _shared_package_identity(
+                    Path(args.manifest), toolchain, architectures,
+                    **({"required_native_contracts": required_contracts} if required_contracts else {}))
+                if final_identity != identity:
+                    _fail(
+                        "shared package source identity changed during preparation; "
+                        "candidate retained without shared publication; retry with stable sources"
+                    )
+                receipt["shared_package"] = {"schema": shared.SCHEMA, "key": entry.key,
+                    "inputs": identity, "reuse": "publisher"}
+                if not _package_matches_fresh_live_manifest(
+                    receipt, Path(args.manifest), toolchain, BACKEND_CARGO_PROFILE,
+                    **({"required_native_contracts": required_contracts} if required_contracts else {})):
+                    _fail("shared package producer receipt identity does not match its claimed source")
+                _write_json(output / "backend-build-receipt.json", receipt, "shared package producer receipt")
+                entry.publish(alias, receipt)
+                _log_phase("shared-package", "published", key=entry.key)
+            return result
+    except shared.StoreError as error:
+        _fail(str(error))
+
+
 def _prepare_locked(
     args: argparse.Namespace,
     build_root: Path,
@@ -4675,9 +6044,14 @@ def _prepare_locked(
     jobs: int,
     toolchain: Mapping[str, Any],
     direct_install_root: Path | None = None,
+    *,
+    on_actual_build: Callable[[], None] | None = None,
 ) -> int:
     source_tar = Path(args.source_tar) if args.source_tar is not None else None
     direct_install = direct_install_root is not None
+    required_contracts = _requested_native_contracts(args)
+    if required_contracts and not direct_install:
+        _fail("native contract qualification requires the direct DEV candidate")
     legacy_stage_before_materialize = (
         _snapshot_legacy_install_stage(build_root / "workspace")
         if direct_install
@@ -4702,7 +6076,25 @@ def _prepare_locked(
     cargo_profile = _validate_cargo_profile(
         os.environ.get("FULLMAG_BACKEND_CARGO_PROFILE", BACKEND_CARGO_PROFILE)
     )
+    if required_contracts and cargo_profile != BACKEND_CARGO_PROFILE:
+        _fail("native contract qualification requires the backend-dev profile")
+    # _requested_native_contracts already validates one allowlisted selector.
     environment = _build_environment(workspace, build_root, native, jobs, cargo_profile)
+    # These selectors and paths are internal Make inputs. Never trust inherited
+    # values from the host or Compose environment.
+    environment.pop("FULLMAG_INTERNAL_NATIVE_CONTRACTS", None)
+    environment.pop("FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER", None)
+    environment.pop("FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT", None)
+    if required_contracts:
+        environment["FULLMAG_INTERNAL_NATIVE_CONTRACTS"] = required_contracts[0]
+        environment["FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER"] = str(
+            Path(__file__).resolve().with_name("backend_native_contracts.py")
+        )
+        environment["FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT"] = str(
+            BACKEND_CONTROL_ROOT
+            / "native-contracts"
+            / f"preparation-{uuid.uuid4().hex}"
+        )
     if direct_install:
         if direct_install_root != output or cargo_profile != BACKEND_CARGO_PROFILE:
             _fail("direct package publication is reserved for the backend-dev candidate")
@@ -4717,11 +6109,15 @@ def _prepare_locked(
         build_log = workspace / ".fullmag" / "local" / "direct-backend-build.log"
     make_target = "install-cli-dev" if cargo_profile == "backend-dev" else "install-cli"
     command = [shutil.which("make") or "/usr/bin/make", make_target]
+    if direct_install and os.environ.get("FULLMAG_PRIVATE_GROUP_STORAGE") == "group-volume-v1":
+        _cleanup_group_build_outputs(workspace, phase="pre-build")
     if direct_install:
         build_log = _begin_failed_make_attempt(build_root, output, make_target)
     else:
         _ensure_directory(build_log.parent, "backend build log parent")
     assert build_log is not None
+    if on_actual_build is not None:
+        on_actual_build()
     return_code = _run_canonical_make(command, workspace, environment, build_log)
     if direct_install:
         _finish_failed_make_attempt(build_root, output, return_code)
@@ -4735,6 +6131,32 @@ def _prepare_locked(
         _fail(f"canonical Make target failed with exit code {return_code}")
     if source_mode == LIVE_SOURCE_MODE:
         _verify_shadow_source(workspace, capsule)
+    native_contract_report = None
+    if required_contracts:
+        _flatten_package_library_aliases(output)
+        import backend_native_contracts
+        _log_phase("native-contract", "start", contracts=",".join(required_contracts))
+        try:
+            native_contract_report = backend_native_contracts.run_contracts(
+                requested=required_contracts,
+                native_build_root=Path(environment["FULLMAG_FEM_NATIVE_BUILD_ROOT"]),
+                package_root=output, evidence_root=BACKEND_CONTROL_ROOT / "native-contracts",
+                source_snapshot_sha256=native["source_snapshot_sha256"],
+                environment=environment, jobs=jobs,
+                preparation_root=Path(
+                    environment["FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT"]
+                ),
+            )
+        except backend_native_contracts.NativeContractError as error:
+            _fail(f"native contract qualification failed: {error}")
+        if not backend_native_contracts.receipt_satisfies(
+            native_contract_report, requested=required_contracts,
+            source_snapshot_sha256=native["source_snapshot_sha256"], package_root=output,
+        ):
+            _fail("native contract result does not qualify the candidate library")
+        if source_mode == LIVE_SOURCE_MODE:
+            _verify_shadow_source(workspace, capsule)
+        _log_phase("native-contract", "complete")
     if direct_install:
         attempt = _read_failed_make_attempt(build_root, output)
         if attempt is None or attempt[0].get("state") != "succeeded":
@@ -4755,6 +6177,7 @@ def _prepare_locked(
         package_root=PACKAGE_ROOT if direct_install else None,
         build_root=build_root if direct_install else None,
         cuda_architectures=environment.get("FULLMAG_CUDA_ARCHITECTURES"),
+        **({"native_contract_report": native_contract_report} if native_contract_report is not None else {}),
     )
     if direct_install:
         attempt = _read_failed_make_attempt(build_root, output)
@@ -4783,6 +6206,7 @@ def _publish_completed_build(
     package_root: Path | None = None,
     build_root: Path | None = None,
     cuda_architectures: str | None = None,
+    native_contract_report: Mapping[str, Any] | None = None,
 ) -> int:
     """Publish verified artifacts after the canonical Make invocation succeeded."""
     started = time.monotonic()
@@ -4808,6 +6232,7 @@ def _publish_completed_build(
     else:
         source_record["live_manifest_sha256"] = capsule.get("_live_manifest_sha256", manifest_hash)
     receipt: dict[str, Any] = {
+        **({"native_contracts": dict(native_contract_report)} if native_contract_report is not None else {}),
         "schema": RECEIPT_SCHEMA,
         "state": "succeeded",
         "qualification": "NOT VERIFIED",
@@ -5054,6 +6479,7 @@ def _start(args: argparse.Namespace) -> int:
     """Build and hand off to the API in this same backend container."""
 
     _log_phase("start", "begin", mode="backend-dev")
+    required_contracts = _requested_native_contracts(args)
     build_root = _absolute(Path(args.build_root), "build root")
     output = _absolute(Path(args.output), "backend output")
     jobs = int(args.jobs)
@@ -5072,6 +6498,14 @@ def _start(args: argparse.Namespace) -> int:
     provenance_publish_started = False
     publication_committed = False
     promotion_spec: Any | None = None
+    group_storage = os.environ.get("FULLMAG_PRIVATE_GROUP_STORAGE") == "group-volume-v1"
+    actual_build_started = False
+
+    def mark_actual_build_started() -> None:
+        nonlocal actual_build_started
+        if actual_build_started:
+            _fail("backend build start callback was invoked more than once")
+        actual_build_started = True
     # Keep the lock across package verification and the exec handoff.  The
     # descriptor is O_CLOEXEC, so the API process does not inherit a stale
     # build lock after execvpe.  A failed build therefore cannot start API.
@@ -5101,6 +6535,9 @@ def _start(args: argparse.Namespace) -> int:
                 build_root,
                 previous_receipt,
             )
+            if os.environ.get("FULLMAG_SHARED_BACKEND_STORE"):
+                import backend_shared_recovery
+                backend_shared_recovery.recover_ready(sys.modules[__name__], output, control_root, build_root)
             ready_retirements = _qualify_ready_candidate_retirements(
                 output,
                 control_root,
@@ -5118,6 +6555,7 @@ def _start(args: argparse.Namespace) -> int:
                 toolchain,
                 cargo_profile,
                 previous_receipt,
+                **({"required_native_contracts": required_contracts} if required_contracts else {}),
             )
             if promotion_spec is None:
                 _reject_partial_package_candidates(
@@ -5129,7 +6567,8 @@ def _start(args: argparse.Namespace) -> int:
                 promotion_spec is None
                 and previous_receipt is not None
                 and _package_matches_fresh_live_manifest(
-                    previous_receipt[0], start_args.manifest, toolchain, cargo_profile
+                    previous_receipt[0], start_args.manifest, toolchain, cargo_profile,
+                    **({"required_native_contracts": required_contracts} if required_contracts else {})
                 )
             ):
                 _log_phase("start", "cache-hit", source="verified-package")
@@ -5154,14 +6593,25 @@ def _start(args: argparse.Namespace) -> int:
                     state="building",
                 )
                 try:
-                    result = _prepare_locked(
-                        start_args,
-                        build_root,
-                        candidate,
-                        jobs,
-                        toolchain,
-                        candidate,
-                    )
+                    if group_storage:
+                        result = _prepare_with_shared_package(
+                            start_args,
+                            build_root,
+                            candidate,
+                            jobs,
+                            toolchain,
+                            candidate,
+                            on_actual_build=mark_actual_build_started,
+                        )
+                    else:
+                        result = _prepare_with_shared_package(
+                            start_args,
+                            build_root,
+                            candidate,
+                            jobs,
+                            toolchain,
+                            candidate,
+                        )
                 except (BackendBuildError, OSError):
                     if _discard_failed_candidate_if_owned(candidate, output, build_root):
                         candidate = None
@@ -5192,6 +6642,11 @@ def _start(args: argparse.Namespace) -> int:
                 _candidate_receipt = dict(promotion_spec.receipt)
                 candidate_receipt_bytes = promotion_spec.receipt_bytes
 
+            if required_contracts and not _package_matches_fresh_live_manifest(
+                _candidate_receipt, start_args.manifest, toolchain, cargo_profile,
+                required_native_contracts=required_contracts,
+            ):
+                _fail("candidate does not satisfy requested native contract qualification")
             if previous_receipt is not None:
                 _validated_package(
                     output,
@@ -5238,6 +6693,18 @@ def _start(args: argparse.Namespace) -> int:
                 _log_phase("retention", "deferred", reason="outside-startup", backups="retained")
             else:
                 _log_phase("retention", "skipped", reason="pending-rotation-journal")
+            if group_storage and (actual_build_started or promotion_spec is not None):
+                # A package is copied into its own verified inventory before
+                # compiler scratch is reclaimed.  Its ELF launchers use the
+                # package-relative lib directory, not this workspace cache.
+                _validated_package(
+                    output,
+                    "published backend package before group build cleanup",
+                    exclude_development_control=True,
+                )
+                _cleanup_group_build_outputs(
+                    build_root / "workspace", phase="post-publish"
+                )
         except (BackendBuildError, OSError) as error:
             if publication_committed:
                 _log_phase(
@@ -5295,9 +6762,10 @@ def _read_optional_storage_attestation(path: Path, name: str) -> dict[str, Any] 
         value, _ = _read_json(path, name, 1024 * 1024)
     except BackendBuildError as error:
         # The host writer updates this bound file in place.  A read racing its
-        # truncate/write window is retryable; a parsed identity conflict below
-        # remains fail-closed.
-        if "not valid JSON" in str(error):
+        # truncate/write window (a torn document, or a file that changed while
+        # it was read) is retryable; a parsed identity conflict below remains
+        # fail-closed.
+        if "not valid JSON" in str(error) or str(error).endswith("changed while reading"):
             return None
         raise
     return value
@@ -5566,6 +7034,14 @@ def _serve(extra: list[str]) -> int:
         files=len(actual_artifacts),
         duration_ms=round((time.monotonic() - package_started) * 1000),
     )
+    source = receipt.get("source")
+    if (not isinstance(source, Mapping) or not isinstance(source.get("resolved_commit"), str)
+            or not GIT_OBJECT_RE.fullmatch(source["resolved_commit"])):
+        _fail("runtime package receipt has no pinned source commit")
+    native = _validate_native_identity(receipt.get("native_source_identity"), source["resolved_commit"])
+    if (source.get("source_snapshot_sha256") != native["source_snapshot_sha256"]
+            or receipt.get("native_source_identity_sha256") != _sha256_bytes(_canonical(native))):
+        _fail("runtime package source snapshot identity differs from its receipt")
     receipt_sha256 = _sha256_bytes(receipt_bytes)
     if os.environ.get("FULLMAG_SESSION_STORAGE_PROFILE") == WINDOWS_FOLDER_STORAGE_PROFILE:
         _log_phase("gate", "start", profile=WINDOWS_FOLDER_STORAGE_PROFILE)
@@ -5617,17 +7093,68 @@ def _serve(extra: list[str]) -> int:
             "FULLMAG_RUNTIME_PACKAGE_ROOT": str(PACKAGE_ROOT),
             "FULLMAG_PACKAGE_PROVENANCE": str(PROVENANCE_PATH),
             "FULLMAG_RUNTIME_PROVENANCE": str(PROVENANCE_PATH),
+            # Python mesh caches must use the same verified source identity as the binaries.
+            "FULLMAG_SOURCE_GIT_COMMIT": native["head_commit_full"],
+            "FULLMAG_SOURCE_SNAPSHOT_SHA256": native["source_snapshot_sha256"],
+            "FULLMAG_SOURCE_WORKTREE_STATE": "dirty" if native["source_snapshot_dirty"] else "clean",
             "FULLMAG_WEB_STATIC_DIR": str(PACKAGE_ROOT / "web"),
             "PATH": f"{PACKAGE_ROOT / 'bin'}:/opt/fullmag-deps/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin",
         }
     )
     command = [sys.executable, "/opt/fullmag/entrypoint.py", *extra]
-    _log_phase("api", "exec", mode="backend")
+    if environment.get("FULLMAG_RUNTIME_UNCLAIMED_CANCELLATION_REQUEST"):
+        _log_phase("maintenance", "exec", mode="unclaimed-cancellation")
+    else:
+        _log_phase("api", "exec", mode="backend")
     os.execvpe(sys.executable, command, environment)
     return 0
 
 
+def _maintain_packages(args) -> int:
+    """Explicit maintenance: preserve current/direct rollback, never gate startup."""
+    if args.max_shared_entries < 0 or args.max_shared_bytes < 0:
+        _fail("shared cache limits must be nonnegative")
+    output, build_root = PACKAGE_ROOT, BUILD_ROOT
+    with _runtime_build_lock(build_root):
+        control = _ensure_package_development_root(output)
+        if (control / PACKAGE_ROTATION_JOURNAL_NAME).exists():
+            _fail("package rotation is pending; retention refused")
+        receipt, raw, _ = _validated_package(output, "current backend package", exclude_development_control=True)
+        cache_identity = (
+            _backend_cache_receipt()
+            if os.environ.get("FULLMAG_PRIVATE_GROUP_STORAGE") == "group-volume-v1"
+            else None
+        )
+        _retain_package_backups(
+            output, control, receipt, raw, cache_identity=cache_identity
+        )
+        shared_result = None
+        configured = os.environ.get("FULLMAG_SHARED_BACKEND_STORE", "")
+        if configured:
+            import backend_shared_store as shared
+            if configured != str(shared.ROOT):
+                _fail("shared package maintenance requires the fixed managed volume")
+            try:
+                shared_result = shared.Store(Path(configured)).collect(
+                    max_entries=args.max_shared_entries, max_bytes=args.max_shared_bytes)
+            except shared.StoreBusy:
+                shared_result = {"state": "deferred-busy", "reason": "another group holds a package claim"}
+            except shared.StoreError as error:
+                _fail(str(error))
+        from backend_compiler_cache import BackendCompilerCacheError, collect as collect_compiler_cache
+        try:
+            compiler_result = collect_compiler_cache(build_root / "workspace")
+        except BackendCompilerCacheError as error:
+            _fail(str(error))
+        print(json.dumps({"schema": "fullmag.package-maintenance.v1", "state": "succeeded",
+                  "current_receipt_sha256": _sha256_bytes(raw),
+                  "retained": ["current", "direct-rollback"], "shared_cache": shared_result,
+                  "compiler_cache": compiler_result}, sort_keys=True))
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
+    import backend_native_contracts
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="operation", required=True)
     for name in ("prepare", "build"):
@@ -5661,6 +7188,12 @@ def _parser() -> argparse.ArgumentParser:
     start.add_argument("--output", default=PACKAGE_ROOT, type=Path)
     start.add_argument("--build-root", default=BUILD_ROOT, type=Path)
     start.add_argument("--jobs", default=int(os.environ.get("CARGO_BUILD_JOBS", "2")), type=int)
+    start.add_argument("--native-contract", action="append", default=None,
+                       choices=tuple(sorted(backend_native_contracts.ALLOWED_CONTRACTS)),
+                       help="require an allowlisted native contract before package publication and API start")
+    maintenance = subparsers.add_parser("maintain-packages", help="retain current/direct rollback and bound shared package cache")
+    maintenance.add_argument("--max-shared-entries", type=int, default=8)
+    maintenance.add_argument("--max-shared-bytes", type=int, default=64 * 1024**3)
     subparsers.add_parser("serve", help="serve the receipt-validated package")
     return parser
 
@@ -5677,7 +7210,14 @@ def main(argv: list[str] | None = None) -> int:
             if extra:
                 parser.error(f"unexpected arguments for start: {' '.join(extra)}")
             return _start(args)
+        if args.operation == "maintain-packages":
+            if extra:
+                parser.error("unexpected package-maintenance arguments")
+            return _maintain_packages(args)
         return _serve(extra)
+    except BackendBuildBusy as error:
+        print(f"backend-dev: {error}", file=sys.stderr)
+        return 75 if getattr(args, "operation", None) == "maintain-packages" else 2
     except BackendBuildError as error:
         print(f"backend-dev: {error}", file=sys.stderr)
         return 2

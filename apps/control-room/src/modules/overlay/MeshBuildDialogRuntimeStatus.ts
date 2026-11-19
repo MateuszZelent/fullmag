@@ -12,7 +12,7 @@ export type MeshBuildDialogRuntimeStatus = {
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
     LiveStatusResource["resources"],
-    "mesh_build_revision" | "mesh_revision"
+    "mesh_build_revision" | "mesh_revision" | "scene_revision"
   >;
 };
 
@@ -39,6 +39,7 @@ export function selectMeshBuildDialogRuntimeStatus(status: {
     resources: {
       mesh_build_revision: status.data.resources.mesh_build_revision,
       mesh_revision: status.data.resources.mesh_revision,
+      scene_revision: status.data.resources.scene_revision,
     },
   };
 }
@@ -83,6 +84,7 @@ export function meshBuildDialogRuntimeStatusEquals(
     previous.domain.discretization === next.domain.discretization &&
     previous.resources.mesh_build_revision ===
       next.resources.mesh_build_revision &&
-    previous.resources.mesh_revision === next.resources.mesh_revision
+    previous.resources.mesh_revision === next.resources.mesh_revision &&
+    previous.resources.scene_revision === next.resources.scene_revision
   );
 }

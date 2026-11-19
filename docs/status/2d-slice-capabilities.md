@@ -12,13 +12,195 @@ rastrem, zanim może zapisać `pass: true`.
 | Session `Default` source: slab average | implemented, source-tested | implemented, source-tested | implemented, source-tested; runtime pending | managed science/browser qualification not yet available on current HEAD |
 | Plane heatmap and probe | yes | yes | yes | historycznie validated; wymaga świeżego smoke HEAD |
 | Slab average | yes | yes | yes | historycznie validated; wymaga świeżego smoke HEAD |
-| Depth projection | yes | yes | yes | historycznie validated; wymaga świeżego smoke HEAD |
-| Surface projection | not applicable in fixture | yes | yes | historycznie validated dla FEM; wymaga świeżego smoke HEAD |
+| Depth projection (tylko monitor autorski) | yes | yes | yes | historycznie validated; wymaga świeżego smoke HEAD |
+| Surface projection | unsupported (422) | yes | yes | historycznie validated dla FEM; wymaga świeżego smoke HEAD |
 | Magnetic vectors | yes | yes | yes | historycznie browser verified; wymaga świeżego smoke HEAD |
 | Contours and masked holes | yes | yes | yes | focused model tested |
 | Mesh overlay | structured outline | exact FEM section | exact FEM section | historycznie browser verified; wymaga świeżego smoke HEAD |
 | PNG export | yes | yes | yes | contract tested |
 | 3D frame preview | yes | yes | yes | historycznie browser verified; wymaga świeżego smoke HEAD |
+
+## Parity z forkiem MuMax3 (2026-10-27)
+
+Wzorzec: `external_solvers/3` @ `984c6e9d`. Szczegóły i luki:
+`docs/audits/2026-10-27-viewport-2d-mumax3-fork-parity-audit.md`.
+
+| Element | Stan | Dowód |
+|---|---|---|
+| Ilość wybrana w 2D w zapotrzebowaniu runtime (`observation_quantities`) | implemented | test API `observation_demand_includes_visible_planar_quantity_only` (napisany, nieuruchomiony: zakaz kompilacji testów) |
+| Pełnorozdzielcze pola obserwowane w trakcie runu FDM CPU / FEM CPU | implemented | testy runnera (nie uruchomione lokalnie) |
+| FDM `plane_sample` jako średnia powierzchniowa (`fdm_cell_area_plane`) | implemented | nota 0970 PM-N15, testy samplera (napisane, nieuruchomione) |
+| Pasek sekcji nad powierzchnią: płaszczyzna, `Single layer / Average`, warstwa FDM | implemented, browser smoke | vitest `PlanarSectionStrip`, `planarSectionModel` (napisane, nieuruchomione); smoke 2026-10-27 niżej |
+| Inspector: dyskretna warstwa FDM, średnia po pełnej grubości | implemented | vitest `PlanarVisualizationSection` (napisane, nieuruchomione) |
+| Presety rozdzielczości siatki natywnej FDM | implemented | vitest `planarSectionModel` (napisane, nieuruchomione) |
+| Zakres `layer` (multilayer FDM) i odblokowany FDM Airbox | implemented | vitest `fieldMapDataPlan`, `VisualizationViewContext` (napisane, nieuruchomione) |
+| `render.png` z paletą i zakresem sesji | implemented (palety backendu: viridis, gray, coolwarm; inne → viridis) | — |
+| Push klatek 2D przez WebSocket, sampler GPU | not implemented | — |
+
+## Etap F1 planu `viewport-2d-mumax-parity-2026-10-27` (2026-10-27)
+
+Dowody: produkcyjny typecheck i ESLint `apps/control-room` w kontenerze
+frontendu grupy `fullmag-worktree-viewport-2d-production-20261027-…` (exit 0);
+backend skompilowany w kontenerze `backend` tej grupy; codegen OpenAPI z
+receiptem; smoke przeglądarkowy (Playwright 1.62.1, Chromium 1234 headless,
+fixture `examples/viewport_2d_mumax_parity_fdm_smoke.py`, FDM CPU double,
+128×128×2): otwarcie 2D klawiszem `2` → gotowa klatka w 0,3 s, krok warstwy
+`[`/`]` w ~20 ms bez placeholdera, składowa `z`, 98 glifów ze strzałkami,
+powrót do 3D z `isContextLost=false` i niezerowym buforem, 0 błędów konsoli i
+strony. Smoke jest sesyjny (nie jest receptą repozytorium) i nie jest
+kwalifikacją produkcyjną. Testy jednostkowe są napisane, ale nieuruchomione
+(zakaz kompilacji testów).
+
+| Element | FDM CPU | FEM | Dowód |
+|---|---|---|---|
+| Pasek kontrolek nad mapą (wielkość, składowa, sekcja, strzałki, siatka) | browser smoke | source | smoke 2026-10-27 |
+| Koło barw mumax3 (`hsl_direction`) w 2D, 3D i `render.png` | browser smoke | source | smoke; zrzut z ciemnymi strzałkami |
+| Strzałki na siatce ekranowej z grotami, min. długość, ⊙/⊗ | browser smoke | source | smoke (98 glifów) |
+| Retencja klatki przy kroku warstwy, odczyt `showing … · loading …` | browser smoke | source | smoke (`placeholderSeen=false`) |
+| Proporcje fizyczne u:v (kontener rozmiaru) | browser smoke | source | zrzut: dysk okrągły |
+| `meta.section` (żądane/rozwiązane, indeks warstwy) i Inspector | implemented | implemented | testy Rust napisane; codegen OK |
+| Skróty `[ ] { } V X Y Z M A G`, `fit`, `reset-view`, `export-data` | browser smoke (`[ ] z a v`) | source | smoke |
+| Inspector `Live` tylko po dowodzie klatki | implemented | implemented | typecheck |
+
+## Etapy F2–F4 (2026-10-28)
+
+Zmiany skompilowane w kontenerze `backend` grupy DEV; codegen OpenAPI z
+receiptem; typecheck i ESLint frontendu zielone. Testy jednostkowe Rust i
+vitest napisane, nieuruchomione (zakaz kompilacji testów).
+
+| Element | FDM CPU | FEM CPU/GPU | Dowód |
+|---|---|---|---|
+| Cache operatora płaszczyzny FEM (wagi kształtu per piksel, gather przy nowej rewizji) | n/d | compiled | `planar_sampling/operator.rs`; test `planar_fem_plane_operator_cache_matches_direct_sampling_and_builds_once` (nieuruchomiony) |
+| Single-flight próbek, `spawn_blocking`, fence epoki sesji przed wpisem do cache | runtime (smoke FDM 2026-10-27 po zmianie) | compiled | smoke FDM run8 PASS |
+| Sonda: ewaluacja punktowa, statusy `occupied/outside/empty` bez clampu | runtime | compiled | `curl …/probe`: `outside`, `occupied` (wektor, `cell_id`), `empty` na sesji FDM |
+| Ekstrema meta tylko z pikseli zajętych | runtime | compiled | — |
+| Hex8 (trilinearny) i Pyramid5 (wymierny) z odwrotnością Newtona | n/d | compiled | testy PM-N18 napisane; **PM-N19: formuła identyczna z `mfem::LinearPyramidFiniteElement::CalcShape`** (`fem/fe/fe_fixed_order.cpp`, toolchain FullmagK0Native; różni się tylko tolerancja apeksu: 1e-6 w MFEM, 1e-12 tutaj) |
+| Slab/depth z kwadraturą elementową dla Prism6/Hex8/Pyramid5 (N-09) | n/d | compiled | test PM-N20 (`q = x·y·z` na sześcianie → 1/8) napisany |
+| Tolerancje względne w nakładce i współrzędnych barycentrycznych FEM | n/d | compiled | — |
+| Przystanki warstw FEM z certyfikatu swept (`fem_node_planes`, `layer_stops_m`) i suwak/`[ ]` na płaszczyznach węzłów | n/d | compiled + frontend | test Rust `default_section_snaps_fem_requests_to_certificate_node_planes`, vitest „FEM node-plane stops” (nieuruchomione) |
+| Krok nawigacji ciągłej sekcji FEM h⊥ = mediana rozciągłości przeciętych elementów (`navigation_step_kind=median_element_height`, `cut_element_count`), odczyt „N elements cut” | n/d | runtime FEM CPU + browser smoke (2026-10-28) | grupa DEV `viewport-2d-fem-layers-20261028`, fixture `examples/viewport_quantity_coloring_fem_cpu_smoke.py` (Tet4, film 20 nm): h⊥ = 20 nm, `cut_element_count` 252/225/224 dla z = 0/−8/9,6 nm, poza filmem `extent_fraction`; odczyt „252 elements cut”, `[` przesuwa o 20 nm; nota 0970 `eq-planar-navigation-step`, PM-N23 (unqualified); testy Rust i vitest napisane, nieuruchomione |
+| Capability zakresu Airbox w Inspectorze dopiero po meta backendu; błąd meta podaje dokładny kod (P1-04) | source | source | vitest `fieldMapCapabilities` (napisany, nieuruchomiony) |
+| Zakres `region` (`scope_kind=region`, `scope_id` = obiekt, `scope_region_id`), selekcja regionu → `view_scope.region`, sonda w zakresie regionu | runtime FDM CPU (2026-10-28) | compiled | grupa `viewport-2d-region-scope-20261028`: mapa `m_x` w zakresie `film:r2` ma tylko −1 (280 komórek), cel monitora ma [−1, 0]; sonda: `occupied` w regionie, `empty` poza nim; brak regionu → 422 `empty_target`, brak `scope_region_id` → 400, `scope_region_id` przy innym zakresie → 400. Testy Rust/vitest napisane, nieuruchomione |
+| Warstwy nazwane z obiektów (slab o grubości obiektu, środek bez snapu FDM/węzłów) | runtime FDM CPU + przeglądarka | source | wybór „film” → `film · z ∈ [−4.00 nm, 4.00 nm] · slab`; stan `slab_average 8 nm`, rozwiązane z = 0 (wcześniej snap do −2 nm); nota 0970, PM-N24 (unqualified) |
+| **Znany błąd (poza 2D):** kształt regionu przesunięty `translate` jest realizowany w środku obiektu (FDM: `film:r2` przesunięty o +32 nm zajmuje środek; FEM: konforemne meshowanie zgłasza nakładanie rozsuniętych regionów) | — | — | IR regionu ma poprawne `center`; do zgłoszenia osobno. Kryterium „dwa regiony o różnych polach” sprawdzone testem jednostkowym; fixture `examples/viewport_2d_region_scope_smoke.py` w wersji wyśrodkowanej nieaktywowany (`live_retirement_busy`) |
+| Budżety D2D-12 po poprawce (2026-10-28, ta sama sesja FDM GPU 128×128×2, headless SwiftShader, build dev) | krok warstwy ciepły P50 0,35 s / P95 0,45 s (było 0,94 / 1,02 s); przełączenie składowej P50 0,42 s (było 1,05 s), nadal 3 żądania; sterta +9,4 MiB / 40 cykli 2D↔3D z wymuszonym GC (~0,24 MiB/cykl, było 0,86) | — | przyczyny: 600 ms debounce kolejki patchy dla kontrolek tożsamości próbki (teraz `flushNow`), współdzielona geometria `Sprite` three.js trzymająca listener każdego renderera oraz refy domknięć R3F (zwalniane przy odmontowaniu); pozostaje: kliencka derywacja składowej (0 żądań), burza koloryzacji, warstwa w URL meta / prefetch |
+| Profil liniowy (F6 B1): `GET …/planar-{default|monitors/:id}/profile`, punkty równomierne + przecięcia ze ścianami elementów FEM, Shift+przeciągnięcie, wykres i eksport | runtime FEM (sesja `cofeb_ring_strayfield_demo`) + przeglądarka | compiled | 890 punktów (378 `element_face`), 0 błędów strony, `Esc` czyści; nota 0970 PM-N25 (unqualified); testy Rust i vitest napisane, nieuruchomione |
+| Smoke repozytorium `apps/control-room/scripts/smoke-viewport-2d.mjs` (tryb `default`) | slice domyślny xy/xz/yz, slab, monitor autorski PASS; **pamięć FAIL** | — | skrypt naprawiony: zakładki „2D View”/„3D Viewport”, snap FDM `eq-planar-default-layer`, oczekiwanie na klatkę żądanej sekcji (retencja); wyciek ~0,86 MiB/cykl 2D↔3D przy wymuszonym GC |
+| Zakres `region`, PM-N24 | runtime FDM CPU | — | `film:r1` m_x = +1 (320 komórek), `film:r2` m_x = −1 (280), cel 600 |
+| Środowisko: run w worktree | — | — | `FULLMAG_SCRIPT_OUTPUT_DIRECTORY=examples` wymaga zapisu grupy do `examples`; w nowym worktree katalog ma 755 i run kończy się „project storage preparation failed … Permission denied” przed solverem (`chmod g+w examples` w worktree) |
+| FDM GPU (F5) | runtime + przeglądarka (2026-10-28) | — | fixture vortex 128×128×2 z `gpu`: run `completed`, `requested_device=gpu`, `resolved_device=gpu` (`explicit_device_request`), meta 2D `field_device=gpu`; 0 błędów strony |
+| Budżety D2D-12 (pomiar sesyjny, headless Chromium + SwiftShader, FDM GPU 128×128×2) | krok warstwy zimny P50 3,3 s (n=2), ciepły P50 0,94 s / P95 1,02 s; przełączenie składowej P50 1,05 s i **3 żądania planarne na przełączenie**; pan/zoom 0 żądań; sterta +0,86 MiB/cykl 2D↔3D | — | **FAIL** względem 30/80 ms, „0 żądań, < 16 ms” i „< 30 MB / 100 przełączeń”; czasy zawyżone przez SwiftShader, liczby żądań i wzrost sterty nie zależą od rasteryzacji |
+| Nawigator migawek (F6 B4): ‹ › / odtwarzanie / Live dla migawek `m` etapu histerezy | source + typecheck (2026-10-28) | — | **runtime BLOCKED**: master odrzuca aktywację etapu histerezy (`study pipeline primitive stage 'hysteresis' is not yet executable by the runtime`); vitest napisany, nieuruchomiony lokalnie |
+| Gizmo płaszczyzny monitora w 3D (F6 B5): przesunięcie wzdłuż normalnej, pierścienie obrotu, Shift+[ / ], pick-from-face | przeglądarka (2026-10-28) | — | przeciągnięcie uchwytu: `Origin Z` 5 → 32,88 nm; Shift+]: obrót o 5° wokół u; pierścień: n = (0, −0,582, 0,813); pick-from-face: początek na ścianie (z = 10 nm), n = (0, 0, 1); 0 błędów; `docs/diagnostics/viewport-2d-level-b-b4-b6-2026-10-28/` |
+| BVH dla lokalizacji punktów i operatora płaszczyzny FEM (F6 B6) | runtime FEM CPU (2026-10-28) | compiled | profil 2121 punktów w 42 ms; 61 punktów profilu bitowo równych sondzie (PM-N28); operator płaszczyzny A/B: 12/12 przekrojów identycznych; 164k Tet4: 168/168 pikseli równych sondzie, czas 419 vs 380 ms bez przyspieszenia; 2,26M Tet4: 168/168 równych sondzie, 0 zgubionych, 11,6 s/płaszczyznę z indeksem, bez porównania (PM-N17); testy Rust napisane, nieuruchomione; gather GPU BLOCKED |
+| Multislice (F6 B2): 2–4 panele źródła Default z `position_fraction`, wspólna paleta i zakres | runtime FDM CPU + przeglądarka (2026-10-28) | — | PM-N27: panele XY (z = −2/−2/+2 nm) i XZ (y = −130/−2/+126 nm) równe pojedynczemu przekrojowi (współrzędna i raster bitowo), tokeny różne, monitor z `position_fraction` → 400; przeglądarka: przycisk Slices, 2/3/4 panele, proporcje u:v zachowane, 0 błędów; dowody `docs/diagnostics/viewport-2d-multislice-2026-10-28/`; vitest i testy Rust nieuruchomione lokalnie |
+| Streamlines w płaszczyźnie (F6 B3): warstwa `streamlines`, RK4 na dwuliniowym polu kierunku, rozsiew Jobard–Lefer, worker | runtime FDM CPU + przeglądarka (2026-10-28) | — | wir 128×128×2 (stan początkowy), `vector_budget` 256: 7 linii, `truncated=false`, linie styczne do strzałek, 0 błędów strony; zrzuty i porównanie z mumax3 w `docs/diagnostics/viewport-2d-mumax3-parity-2026-10-28/`; sprawdzenie algorytmu poza przeglądarką: wir 18 okręgów, rozrzut promienia 0,001 px, 17 ms dla 128²; nota 0970 PM-N26 (unqualified); vitest napisane, nieuruchomione lokalnie |
+| Kliencka derywacja składowych x/y/z/|v| i koniec burzy koloryzacji (D2D-12) | runtime FDM CPU + przeglądarka (2026-10-28) | — | przełączenie składowej: **0 żądań planarnych** (było 3) i 1 wiadomość do workera (było 3–13), 120–560 ms pod SwiftShader w buildzie dev; wartości równe backendowi (x, y: ±0,9999489887009642; |v| w granicy 1 ulp); tryb kliencki tylko dla `plane_sample` trójskładnikowej, nietensorowej wielkości ze źródła Default; tożsamość narysowanej klatki zawiera składową, więc `ready` nie zgłasza starego rastra; nota 0970 § Vector reduction and components |
+| Smoke przeglądarkowy FEM CPU | — | **session smoke PASS** (2026-10-28) | osobna grupa DEV `viewport-2d-fem-smoke-20261028` (checkout `ce1d587ff`; od gałęzi różni się tylko importami testów runnera, więc runtime jest ten sam), fixture `examples/viewport_2d_fem_mixed_smoke.py` (Prism6 ×3 warstwy + powłoka Pyramid5 + powietrze Tet4, CPU double; ścieżka mieszana przyjmuje 1–3 warstwy, więc fixture ma 3). Playwright 1.62.1 + Chromium 1234 headless: 2D otwiera się, 4 przystanki `fem_node_planes` [−4,5; −1,5; 1,5; 4,5] nm, krok `]` bez placeholdera, składowa `z`, 25 strzałek, WebGL zdrowy po powrocie do 3D, 0 błędów konsoli. Smoke wykrył dwa błędy frontendu (wieczne „loading” dla żądania między płaszczyznami; krok `]` z pozycji między płaszczyznami pomijał płaszczyznę), naprawione i sprawdzone ponownie: 0 → 1,5 → 4,5 → 1,5 → −1,5 → −4,5 nm. Pierwsze wejście na nową płaszczyznę (budowa operatora) do ~3,8 s pod SwiftShader; budżety D2D-12 niezmierzone. Grupa zadania nadal zablokowana: aktywacja `7a668d411d4a4ec9ae7e1aa8854149c1` `outcome-unknown-resources-retained` (HTTP 409) oraz odmowa podłączenia runtime po restarcie bez launchera |
+| Smoke przeglądarkowy FEM GPU, FDM GPU | — | NOT VERIFIED | FDM GPU zweryfikowane osobno (2026-10-28); FEM GPU **BLOCKED** — 2026-10-30 na `aee17a54d` run `fem_relax_gpu_smoke.py` kończy się SIGSEGV accepted workera w natywnym `fem_native_gpu` po `initial_pending_drain` (0 kroków), więc nie ma pola z toru GPU do pokazania w 2D |
+
+## Pasek ikon, narzędzia, kadr, inspektor węzła i lista warstw (2026-11-12)
+
+Plan `docs/superpowers/plans/2026-11-12-viewport-2d-toolbar-layers-crop-node-inspect.md`,
+ADR 0080, nota 0970 (`eq-planar-sampling-window`, `eq-planar-nearest-node`),
+gałąź `codex/viewport-2d-toolbar-20261112`. Pasek kontrolek nad mapą i pasek
+sekcji z wierszy F1 (`PlanarSectionStrip`, kontrolki Quantity/Scope nad płótnem)
+zostały zastąpione przez pasek ikon „2D view tools”, pasek stanu i inspektor 2D;
+tamte wiersze opisują już tylko stan historyczny.
+
+Stan dowodów dla całej sekcji:
+
+- **Implementacja: IMPLEMENTED** (frontend i backend w worktree; Vitest,
+  `tsc --noEmit` i ESLint frontendu uruchomione lokalnie).
+- **Weryfikacja przeglądarkowa FDM CPU: VERIFIED (ręcznie, 2026-11-12).** Grupa
+  Docker DEV odłączonego worktree weryfikacyjnego na tym samym kodzie (jawna
+  podsieć `10.234.73.0/24`, bo predefiniowane pule Dockera były wyczerpane),
+  przykład `examples/fdm_cpu_relax_smoke.py`, wbudowana przeglądarka:
+  widok 2D montuje się, raster warstwy `all` jest rysowany, scena wypełnia obszar,
+  legenda leży w lewym dolnym rogu płótna; Inspektor węzła po kliknięciu pokazuje
+  komórkę FDM 279 z pozycją, odległością w płaszczyźnie i składowymi m oraz
+  pierścień węzła; kadr ramką + Enter zapisuje `planar.crop`, osie pokazują zakres
+  okna, ✕ w pasku stanu czyści kadr i resetuje widok; „Add field for smoke_box”
+  dodaje warstwę obiektu (kompozycja `verified`, dwie nakładki, dwie karty legendy),
+  usunięcie przywraca jedną warstwę. W spoczynku odczyt montuje się raz na 5 s.
+  Ta weryfikacja ujawniła i naprawiła trzy błędy, których testy jednostkowe nie
+  łapały: pętlę renderowania nakładki („Maximum update depth exceeded”),
+  regenerację klatki kompozycji ~12 razy/s w spoczynku oraz przerywane żądania
+  `/probe` (każdy ma test regresyjny czerwony na poprzednim kodzie).
+- **API na żywym backendzie (FDM CPU): VERIFIED.** Okno daje `bounds_uv_m` = kadr
+  przy zachowanym `full_bounds_uv_m`, piksel 0,3125 nm zamiast 0,625/1,25 nm, inny
+  `sample_token`; okno poza ramką i niepełne okno → 400 `invalid_planar_window`;
+  `/probe?nearest=node` → `fdm_cell_center` (2,5; 2,5) nm, odległość 1,265 nm;
+  `nearest=cell` → 400; odwrócony kadr → 400 `invalid_planar_crop`; zmiana
+  płaszczyzny bez kadru w patchu czyści kadr.
+- **Smoke `smoke-viewport-2d.mjs`, tryb `default`, FDM CPU (grupa DEV, sesja
+  `examples/fdm_cpu_relax_smoke.py`):** przypadki `toolbar-six-tools`,
+  `toolbar-zoom-box`, `toolbar-crop-window`, `toolbar-inspect-node-fdm`,
+  `toolbar-field-layer-list`, `toolbar-vector-mask`, `toolbar-section-slider`
+  **PASS** (przebieg diagnostyczny `CONTROL_ROOM_PLANAR_TOOLBAR_ONLY=1`);
+  `toolbar-legacy-session-image` **NOT RUN** (brak fixture'u odtworzonej sesji
+  sprzed modelu warstw, `CONTROL_ROOM_PLANAR_LEGACY_FIXTURE`). Pełny przebieg
+  kwalifikacyjny **BLOCKED**: fixture `examples/viewport_2d_default_slice_fdm_smoke.py`
+  jest odrzucany już na `master` (etap `hysteresis` nie jest wykonywalny przez
+  runtime), a walidator naukowy uruchamia własny solver tego fixture'u. Bramka
+  pamięci (100 przełączeń 2D↔3D, próg 96 MiB) **FAIL**: 127 MiB (~1,27 MiB/cykl;
+  na `master` ta bramka też była czerwona, ~0,86 MiB/cykl — patrz tabela F1).
+  Bramka czyta `usedJSHeapSize` bez wymuszenia GC. Z wymuszonym GC (CDP) sterta
+  zatrzymana rośnie liniowo o ~620 KiB/cykl w modelu `layers` i ~695 KiB/cykl w
+  modelu `legacy` — wyciek nie pochodzi z kompozycji warstw. Różnica migawek
+  sterty po 20 cyklach: na cykl 1 `WebGL2RenderingContext`, ~57
+  `MeshBasicMaterial`, ~59 `BufferGeometry`, setki `Vector3`/`Matrix4` — to
+  cykl życia widoku 3D przy ponownym montowaniu (poza zakresem planu 2D; osobne
+  zadanie). Z widoku 2D może pochodzić 1 `CanvasRenderingContext2D`/cykl (~32 KiB).
+  Uruchomienie smoke ujawniło i naprawiło dwa błędy produktu (scalanie łatek
+  `field_overlays` gubiło kolejność warstw; przełącznik wieloprzekroju był
+  zawsze wyłączony w modelu warstw) oraz pięć założeń skryptu niezgodnych z
+  modelem warstw (płótno bazowe vs warstwa, dowód rastra, pomiar płótna,
+  podziałki ukrytego bufora, suwak dwóch warstw).
+- `smoke-inspector.mjs` (`qualifyPlanarLayerListStability`) przechodzi w CI
+  `browser-fixture-smoke`.
+- **FEM w przeglądarce: NOT VERIFIED** (najbliższy węzeł FEM sprawdzony tylko
+  testami Rust, które nie są uruchamiane).
+- **Testy jednostkowe Rust (Zadania 2–4): NOT RUN** — zakaz kompilacji testów
+  jednostkowych.
+- **Pomiary (Zadanie 12 Krok 4), FDM CPU, Next dev, checkout na ścieżce Windows:**
+  zatwierdzenie kadru → pierwsza klatka kadru 0,60 s (5 żądań 2D); warstwy o
+  różnych próbkach: 1 warstwa 0 nowych żądań (cache), 159 ms; 4 warstwy 9 żądań
+  (meta, skalar, maska na nową warstwę), 1,35 s; 16 warstw 34 żądania, 1,13 s.
+  Warstwy o tej samej próbce nie generują żądań (deduplikacja zasobów).
+
+| Element | FDM CPU | FEM CPU/GPU | Dowód |
+|---|---|---|---|
+| Pasek ikon „2D view tools”: sześć narzędzi (Navigate, Zoom to box, Crop, Inspect node, Line profile, Measure), nawigacja, maski widoku, eksport; jeden rejestr komend z wstążką i skrótami `H B C I P R F` | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarToolbar`, `fieldMapToolCommands`, `planarToolStore`, `ribbonStructure`; browser FDM VERIFIED ręcznie; smoke `toolbar-six-tools` NOT RUN |
+| Pasek stanu: płaszczyzna, suwak pozycji zatwierdzany raz po puszczeniu, kursor, zoom, znacznik kadru | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarStatusBar`; browser FDM VERIFIED ręcznie (kursor, zoom, chip kadru); smoke `toolbar-section-slider` NOT RUN |
+| Zoom ramką i linijka (próg 4 px ekranu) | IMPLEMENTED | IMPLEMENTED | Vitest `planarToolGeometry`, `PlanarToolOverlay`; browser NOT VERIFIED (`toolbar-zoom-box`) |
+| Kadr z ponownym próbkowaniem: `planar.crop`, okno `window_*` w zapytaniach meta/scalar/vectors/mask/mesh/probe/profile/PNG/CSV, `full_bounds_uv_m`, okno w tożsamości próbki i kanonicznym kluczu zasobu, czyszczenie kadru przy zmianie płaszczyzny lub źródła | IMPLEMENTED | IMPLEMENTED | Vitest `planarFieldResources`, `fieldMapDataPlan`, `planarCropPatch`, `VisualizationRegistrySyncController`; testy Rust `resolve_planar_window` NOT RUN; browser i API FDM VERIFIED ręcznie; smoke `toolbar-crop-window` NOT RUN |
+| Warstwy pola w kadrze próbkowane w rozdzielczości kadru, w ramce własnej warstwy; warstwa bez przecięcia z kadrem (`invalid_planar_window … does not intersect`) rysowana jako pusta, bez komunikatu błędu | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarCompositionSurface.window`, `planarFieldComposition`; browser NOT VERIFIED |
+| Inspektor węzła (`/probe?nearest=node`): FEM — najbliższy węzeł elementu zawierającego punkt, FDM — środek komórki; debounce 80 ms, przerywanie starych żądań, najwyżej 4 warstwy, przypięcie | IMPLEMENTED | IMPLEMENTED | Vitest `usePlanarNodeProbes`, `PlanarNodeReadout`; testy Rust `nearest_node` NOT RUN; browser i API FDM VERIFIED ręcznie (komórka 279, pierścień); FEM NOT VERIFIED; smoke NOT RUN |
+| Lista warstw pola w inspektorze (model `layers`, najwyżej 16 warstw, Obiekt/Airbox/Wszystkie obiekty, oko, przebiegi, kolejność przeciąganiem i `Alt+↑/↓`), edytor wybranej warstwy (wielkość, składowa, styl), reguła „maska widoku AND flaga warstwy”, legenda — jedna karta na widoczną warstwę | IMPLEMENTED | IMPLEMENTED | Vitest `planarFieldLayers`, `PlanarFieldLayerList`, `PlanarTargetFieldSection`, `PlanarVisualizationSection`, `PlanarCompositionSurface`; browser FDM VERIFIED ręcznie (dodanie/usunięcie warstwy obiektu, dwie karty legendy); smoke `toolbar-field-layer-list`, `toolbar-vector-mask` NOT RUN ( regresja Obiektu i Airboxa bez remontowania i resetu przewijania w `smoke-inspector.mjs`) |
+| Multislice w modelu `layers`: panele rysują pierwszą widoczną warstwę; legenda w jednostce kanonicznej warstwy z meta panelu | IMPLEMENTED | IMPLEMENTED | Vitest `planarMultislice`, `PlanarCompositionSurface`; browser NOT VERIFIED |
+| Sekcje inspektora „Płaszczyzna przekroju” i „Kadr i widok”; „Fit view” zależny od aktywnego modułu | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarSectionPlaneSection` (obejmuje też `PlanarCropViewSection`), `inspectorFitCommand`; browser NOT VERIFIED |
+| Migracja sesji `legacy → layers` (pole bazowe jako ostatnia warstwa `all`, nakładki z `visible = true`, idempotentna) | IMPLEMENTED | IMPLEMENTED | testy Rust `migrate_planar_layer_model` NOT RUN; browser NOT VERIFIED (`toolbar-legacy-session-image` wymaga fixture `CONTROL_ROOM_PLANAR_LEGACY_FIXTURE`, którego jeszcze nie ma) |
+
+## Uproszczony inspektor 2D i wybór płaszczyzny w pasku (2026-11-12)
+
+Zgłoszenie użytkownika: w inspektorze 2D nie było widać, jak zmienić wielkość
+(np. na H_demag w filmie i H_eff w airboxie), sesja w modelu `legacy` pokazywała
+„0 warstw”, choć płótno rysowało `m`, a wybór płaszczyzny XY/XZ/YZ był
+schowany w inspektorze. Kontrakt: spec 23 §5 (układ zakładki 2D) i spec 15
+§4.1 (grupa 0 paska).
+
+| Element | FDM CPU | FEM CPU/GPU | Dowód |
+|---|---|---|---|
+| Zakładka 2D zaczyna się od „Section plane” (XY/XZ/YZ, te same komendy co pasek) i grupy „Field in *nazwa*”: wiersz „Shown” (własne ustawienie / dziedziczone z All objects / nierysowane), wybór Quantity tworzy własną warstwę, Color i Arrows bezpośrednio, reszta przebiegów w „More drawing”, przycisk „Use All objects setting” / „Remove from 2D view” | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarTargetFieldSection`, `PlanarVisualizationSection`, `planarFieldLayers`; browser NOT VERIFIED |
+| Ustawienia całego widoku (lista warstw, płaszczyzna i źródło, kadr, styl punktów) w zwijanej grupie „2D view” z podsumowaniem | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarVisualizationSection`; browser NOT VERIFIED |
+| Brak osobnej sekcji „Base field (legacy)”: stan `legacy` pokazany jako lista warstw po migracji, konwertowany (`layer_model: "layers"`) przy pierwszej edycji warstwy | IMPLEMENTED | IMPLEMENTED | Vitest `planarFieldLayers` (zgodność z `migrate_planar_layer_model`), `PlanarVisualizationSection`; browser NOT VERIFIED |
+| Pasek 2D: grupa „Section plane” XY/XZ/YZ (`field-map.plane.*`), zmiana płaszczyzny czyści kadr i operator warstwy uśrednionej; zablokowana dla źródła z monitora | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarToolbar`; browser NOT VERIFIED |
+| Legenda pola bazowego `legacy` podpisana „All objects” / „Airbox” zamiast „2D field” | IMPLEMENTED | IMPLEMENTED | przegląd kodu; browser NOT VERIFIED |
+
+Dowód w przeglądarce jest **NOT VERIFIED**: grupa Docker DEV tego worktree nie
+wystartuje, bo dysk C: ma poniżej wymaganych 32 GiB wolnego miejsca
+(`Docker build filesystem has less than 32 GiB free; admission refused`).
 
 ## Status Language
 

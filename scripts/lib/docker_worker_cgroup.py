@@ -6,6 +6,7 @@ application backend keeps its unprivileged user and empty capability set.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -47,6 +48,34 @@ def run(*args: str) -> str:
     if len(result.stdout) + len(result.stderr) > 32768:
         fail("cgroup namespace command exceeded its output budget")
     return result.stdout
+
+
+def enable_cpu(host_root, controls, fence):
+    # A Docker exec/healthcheck can enter the parent after its last empty read.
+    # Keep the kernel enable inside the bounded, identity-fenced drain loop.
+    for _ in range(32):
+        fence()
+        for process in (host_root / "cgroup.procs").read_text().split():
+            if not process.isdecimal():
+                fail("invalid backend cgroup PID")
+            try:
+                (controls / "cgroup.procs").write_text(process + "\n")
+            except ProcessLookupError:
+                pass
+        if (host_root / "cgroup.procs").read_text().strip():
+            continue
+        fence()
+        try:
+            (host_root / "cgroup.subtree_control").write_text("+cpu\n")
+        except OSError as error:
+            if error.errno != errno.EBUSY:
+                raise
+            continue
+        if "cpu" not in (host_root / "cgroup.subtree_control").read_text().split():
+            fail("CPU controller enable readback differs")
+        fence()
+        return
+    fail("backend CPU delegation remained busy after 32 fenced attempts")
 
 
 def main():
@@ -135,24 +164,7 @@ def main():
     if controls.exists() or workers.exists():
         fail("backend cgroup already contains Fullmag children; recovery required")
     controls.mkdir()
-    # No-internal-processes: move only the processes already owned by this
-    # exact container into its control child before enabling CPU for workers.
-    for _ in range(32):
-        fence()
-        processes = (host_root / "cgroup.procs").read_text().split()
-        if not processes:
-            break
-        for process in processes:
-            if not process.isdecimal():
-                fail("invalid backend cgroup PID")
-            try:
-                (controls / "cgroup.procs").write_text(process + "\n")
-            except ProcessLookupError:
-                pass
-    if (host_root / "cgroup.procs").read_text().strip():
-        fail("backend control processes did not leave the delegation root")
-    fence()
-    (host_root / "cgroup.subtree_control").write_text("+cpu\n")
+    enable_cpu(host_root, controls, fence)
     workers.mkdir()
     worker_control = workers / "control"
     worker_control.mkdir()

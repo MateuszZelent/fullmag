@@ -14,10 +14,7 @@ algebraic torque coefficient. A charge solution drives vector spin accumulation,
 spin-current tensor transports angular momentum, and a named torque consumer transfers absorbed
 transverse spin to magnetization.
 
-This terminal page keeps the physics, public API, capability envelope, and source evidence in one
-auditable contract because the scientific-doc validator requires every scientific page to carry
-the complete model, API, and backend-lane contract. Jump to [equations](#governing-equations), [interfaces](#boundaries-and-interfaces),
-[Python](#python-api), [numerics](#discrete-realization), or [validation](#validation).
+This terminal page collects the physical model, public Python API, capability envelope, and source index in one reference. Jump to [equations](#governing-equations), [interfaces](#boundaries-and-interfaces), [Python](#python-api), [numerics](#discrete-realization), or [validation](#validation).
 
 (physics-drift-diffusion-spin-torque-problem-statement)=
 ## Physical problem
@@ -26,9 +23,11 @@ A heavy metal (HM) carries conventional charge current. Spin-orbit scattering ge
 spin current and spin accumulation $\boldsymbol\mu_s$. At an oriented HM/FM interface, longitudinal
 spin is transmitted or reflected while absorbed transverse spin torques the ferromagnet (FM).
 
-```{figure} ../../../_static/diagrams/spin-hall-hm-fm.svg
+```{figure} /_static/diagrams/spin-hall-hm-fm.svg
 :alt: HM and FM stack with charge current, electric field, spin Hall current, spin accumulation, interface normal, magnetization, and torque.
 :width: 100%
+:name: fig-spin-hall-hm-fm
+:figclass: fm-physics-figure
 
 Fullmag convention map. The first index of $Q_{ia}$ is flow direction and the second is spin
 polarization. Here the normal points from HM to FM.
@@ -67,7 +66,7 @@ G_{ia}=-\frac12\partial_i\mu_{s,a},\qquad
 Here $\sigma_f$ is accepted face charge conductivity and $\sigma_{s,L/R}$ are spin
 conductivities.
 
-<code>fv_spin_upwind_v1</code> chooses $\mathbf m_{\mathrm{up}}$ from the sign of $P_fJ_{c,i}$;
+`fv_spin_upwind_v1` chooses $\mathbf m_{\mathrm{up}}$ from the sign of $P_fJ_{c,i}$;
 the central reference operator averages neighbors. The steady balance is
 
 ```{math}
@@ -136,9 +135,7 @@ symmetric anisotropic term contains AMR/PHE and the cross product contains AHE.
 
 ## Boundaries and interfaces
 
-Authoring includes <code>SpinInsulating</code>, <code>SpinSink</code>,
-<code>SpecifiedSpinPotential</code>, outward <code>SpecifiedSpinFlux</code>, and
-<code>PeriodicSpin</code>. A negative-axis face reverses outward flux when stored in positive-axis
+Authoring includes `SpinInsulating`, `SpinSink`, `SpecifiedSpinPotential`, outward `SpecifiedSpinFlux`, and `PeriodicSpin`. A negative-axis face reverses outward flux when stored in positive-axis
 form. Transparent interfaces enforce continuity. With $\Delta V=V_N-V_F$ and
 $\Delta\boldsymbol\mu_s=\boldsymbol\mu_{s,N}-\boldsymbol\mu_{s,F}$, M1 longitudinal
 injection/backflow is
@@ -172,6 +169,15 @@ Optional spin-memory-loss reservoir data exists in authoring/reference FDM but i
 executable. The spin domain must be a subset of the conducting charge domain; material coverage
 must be complete and non-overlapping.
 
+```{figure} /_static/diagrams/drift-diffusion-reactions-and-interface.svg
+:alt: Finite-volume spin-channel splitting and face flux Q_i, MixingConductanceSpinInterface transmission versus full transverse absorption, and volumetric FM spin reaction triad R_sf, R_J, and R_phi with computed 1D spatial decay profiles.
+:width: 100%
+:name: fig-drift-diffusion-reactions-and-interface
+:figclass: fm-physics-figure
+
+Finite-volume transport operators and interface/volumetric torque extraction in Fullmag (`SpinDriftDiffusion` $\to$ `DriftDiffusionSpinTorque`). **(a)** Spin-channel potential splitting $V \pm \boldsymbol\mu_s/2$ and the three additive face-flux contributions in $\mathbf Q_i$. **(b)** `MixingConductanceSpinInterface` separating longitudinal transmission and backflow ($G_\uparrow, G_\downarrow$) from full transverse absorption ($G_r, G_i$). **(c)** Volumetric spin-reaction triad inside the ferromagnet showing torque-free spin-flip relaxation $\mathbf R_{\mathrm{sf}}$ versus precessional $\mathbf R_J$ and dephasing $\mathbf R_\phi$ (with 1D steady spatial decay computed for $\lambda_{\mathrm{sf}} = 5\,\mathrm{nm}$, $\lambda_J = 1.0\,\mathrm{nm}$, $\lambda_\phi = 1.4\,\mathrm{nm}$).
+```
+
 ### M1, M2, and prescribed SOT
 
 | Model | Charge path | Spin/torque path |
@@ -180,16 +186,13 @@ must be complete and non-overlapping.
 | M2 | coupled AMR/PHE/AHE, polarization, and iSHE | reciprocal block and named-solve torque |
 | Prescribed SOT | no drift-diffusion solve | authored drive, efficiencies, and FM thickness |
 
-Canonical <code>fm.DriftDiffusionSpinTorque(id, solve_id, target)</code> consumes a named solve.
-The same-named class in <code>fullmag.model.spin_torque</code> is a hidden legacy semantic
-placeholder; its current-density signature is not the public API.
+Canonical `fm.DriftDiffusionSpinTorque(id, solve_id, target)` consumes a named solve. The identically named class in `fullmag.model.spin_torque` is a legacy internal signature using current density rather than the public `fullmag` API.
 
 (physics-drift-diffusion-spin-torque-assumptions-and-validity)=
 ## Assumptions and validity
 
 The model is diffusive and continuum-scale. Active conductivities and lengths are positive; absent
-reactions use <code>None</code>. A realistic HM/FM model needs separate regions, oriented interface,
-charge contacts/gauge, HM <code>theta_sh</code>, FM $M_s$ and $\mathbf m$, and complete materials.
+reactions use `None`. A realistic HM/FM model needs separate regions, oriented interface, charge contacts/gauge, HM `theta_sh`, FM $M_s$ and $\mathbf m$, and complete materials.
 FDM cells must resolve each layer and shortest active length. FEM needs a conforming interface and
 local refinement. Mesh convergence must be demonstrated.
 
@@ -291,8 +294,7 @@ study.spin_torque(fm.DriftDiffusionSpinTorque("m2_torque", spin.id, region))
 study.stages.add_run(1.0e-15, stage_id="m2_run")
 ```
 
-This is a bounded reference pattern. The executable fixture
-<code>examples/fem_reciprocal_m2_public.py</code> adds conforming mesh and complete electrodes.
+This is a bounded reference pattern. The executable fixture `examples/fem_reciprocal_m2_public.py` adds conforming mesh and complete electrodes.
 
 ### C. Prescribed SOT comparison
 
@@ -320,44 +322,36 @@ study.stages.add_run(1.0e-15, stage_id="sot_run")
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| TransportExecution.discretization | str | fdm | 1 | fdm, fem, or auto | requested discretization | planner-resolved | spin_transport_modules[].requested_execution.discretization |
-| TransportExecution.device | str | cpu | 1 | cpu, gpu, or auto | requested device | planner-resolved | spin_transport_modules[].requested_execution.device |
-| SpinTransportMaterial.sigma_s_Spm | float | required | S/m | finite and positive | spin conductivity | FDM/FEM bounded lanes | spin_transport_modules[].materials[].material.sigma_s_spm |
-| SpinTransportMaterial.polarization_p | float | required | 1 | finite in [-1,1] | signed drift polarization | FDM/FEM bounded lanes | spin_transport_modules[].materials[].material.polarization_p |
-| SpinTransportMaterial.theta_sh | float | required | 1 | finite | signed spin Hall angle | direct SHE; M2 also iSHE | spin_transport_modules[].materials[].material.theta_sh |
-| SpinTransportMaterial.lambda_sf_m | float | required | m | finite and positive | spin-flip length | FDM/FEM bounded lanes | spin_transport_modules[].materials[].material.lambda_sf_m |
-| SpinDriftDiffusion.mode | str | steady | 1 | steady or transient; transient requires capacitance | temporal model | M3 not production-qualified | spin_transport_modules[].mode |
-| SpinSolverPolicy.engine | str | auto | 1 | non-empty; lane whitelist applies | spatial solver | lane-specific | spin_transport_modules[].solver.engine |
-| DriftDiffusionSpinTorque.solve_id | str | required | 1 | active named spin solve | solved-spin consumer | canonical lane-specific | spin_torque_modules[].solve_id |
-| CurrentTransport.coupling | str | one_way | 1 | one_way or bidirectional | selects M1/M2 | bounded CPU lanes | current_modules[].coupling |
-| TransportExecution.precision | str | double | 1 | single or double | requested precision | transport lanes require double | spin_transport_modules[].requested_execution.precision |
-| TransportExecution.execution_mode | str | strict | 1 | strict or extended | fallback policy | strict lanes fail closed | spin_transport_modules[].requested_execution.execution_mode |
-| SpinTransportMaterial.lambda_j_m | float or None | None | m | positive when enabled | exchange length | magnetic reactions | spin_transport_modules[].materials[].material.lambda_j_m |
-| SpinTransportMaterial.lambda_phi_m | float or None | None | m | positive when enabled | dephasing length | magnetic reactions | spin_transport_modules[].materials[].material.lambda_phi_m |
-| SpinDriftDiffusion.interfaces | Sequence | empty | 1 | typed oriented interfaces | internal transfer | lane-specific | spin_transport_modules[].interfaces |
-| SpinDriftDiffusion.boundaries | Sequence | empty | 1 | typed non-conflicting faces | external spin BC | lane-specific | spin_transport_modules[].boundaries |
-| SpinSolverPolicy.relative_tolerance | float | 1e-8 | 1 | finite and positive | algebraic tolerance | bounded CPU lanes | spin_transport_modules[].solver.linear.relative_tolerance |
-| SpinSolverPolicy.operator_version | str | fv_spin_upwind_v1 | 1 | exact lane identifier | discrete operator | lane-specific | spin_transport_modules[].solver.operator_version |
-| DriftDiffusionSpinTorque.target | RegionRef | required | 1 | magnetic subset with positive Ms | torque target | canonical lane-specific | spin_torque_modules[].target |
-| MixingConductanceSpinInterface.g_r_Spm2 | float | required | S/m^2 | finite and non-negative | real mixing conductance | FDM reference/native subsets | spin_transport_modules[].interfaces[].g_r_spm2 |
-| PrescribedSpinOrbitTorque.xi_dl | float | required | 1 | finite | damping-like efficiency | separate prescribed-SOT lanes | spin_torque_modules[].xi_dl |
-| PrescribedSpinOrbitTorque.xi_fl | float | 0 | 1 | finite | field-like efficiency | separate prescribed-SOT lanes | spin_torque_modules[].xi_fl |
-| PrescribedSpinOrbitTorque.free_layer_thickness_m | float | required | m | finite and positive | FM thickness | separate prescribed-SOT lanes | spin_torque_modules[].free_layer_thickness_m |
+| `TransportExecution.discretization` | `str` | `fdm` | $1$ | `fdm`, `fem`, or `auto` | requested discretization | planner-resolved | `spin_transport_modules[].requested_execution.discretization` |
+| `TransportExecution.device` | `str` | `cpu` | $1$ | `cpu`, `gpu`, or `auto` | requested device | planner-resolved | `spin_transport_modules[].requested_execution.device` |
+| `SpinTransportMaterial.sigma_s_Spm` | `float` | required | $\mathrm{S\,m^{-1}}$ | finite and positive | spin conductivity | FDM/FEM bounded lanes | `spin_transport_modules[].materials[].material.sigma_s_spm` |
+| `SpinTransportMaterial.polarization_p` | `float` | required | $1$ | finite in $[-1, 1]$ | signed drift polarization | FDM/FEM bounded lanes | `spin_transport_modules[].materials[].material.polarization_p` |
+| `SpinTransportMaterial.theta_sh` | `float` | required | $1$ | finite | signed spin Hall angle | direct SHE; M2 also iSHE | `spin_transport_modules[].materials[].material.theta_sh` |
+| `SpinTransportMaterial.lambda_sf_m` | `float` | required | $\mathrm{m}$ | finite and positive | spin-flip length | FDM/FEM bounded lanes | `spin_transport_modules[].materials[].material.lambda_sf_m` |
+| `SpinDriftDiffusion.mode` | `str` | `steady` | $1$ | `steady` or `transient`; `transient` requires capacitance | temporal model | M3 not production-qualified | `spin_transport_modules[].mode` |
+| `SpinSolverPolicy.engine` | `str` | `auto` | $1$ | non-empty; lane whitelist applies | spatial solver | lane-specific | `spin_transport_modules[].solver.engine` |
+| `DriftDiffusionSpinTorque.solve_id` | `str` | required | $1$ | active named spin solve | solved-spin consumer | canonical lane-specific | `spin_torque_modules[].solve_id` |
+| `CurrentTransport.coupling` | `str` | `one_way` | $1$ | `one_way` or `bidirectional` | selects M1/M2 | bounded CPU lanes | `current_modules[].coupling` |
+| `TransportExecution.precision` | `str` | `double` | $1$ | `single` or `double` | requested precision | transport lanes require `double` | `spin_transport_modules[].requested_execution.precision` |
+| `TransportExecution.execution_mode` | `str` | `strict` | $1$ | `strict` or `extended` | fallback policy | strict lanes fail closed | `spin_transport_modules[].requested_execution.execution_mode` |
+| `SpinTransportMaterial.lambda_j_m` | `float \| None` | `None` | $\mathrm{m}$ | positive when enabled | exchange length | magnetic reactions | `spin_transport_modules[].materials[].material.lambda_j_m` |
+| `SpinTransportMaterial.lambda_phi_m` | `float \| None` | `None` | $\mathrm{m}$ | positive when enabled | dephasing length | magnetic reactions | `spin_transport_modules[].materials[].material.lambda_phi_m` |
+| `SpinDriftDiffusion.interfaces` | `Sequence` | empty | $1$ | typed oriented interfaces | internal transfer | lane-specific | `spin_transport_modules[].interfaces` |
+| `SpinDriftDiffusion.boundaries` | `Sequence` | empty | $1$ | typed non-conflicting faces | external spin BC | lane-specific | `spin_transport_modules[].boundaries` |
+| `SpinSolverPolicy.relative_tolerance` | `float` | `1e-8` | $1$ | finite and positive | algebraic tolerance | bounded CPU lanes | `spin_transport_modules[].solver.linear.relative_tolerance` |
+| `SpinSolverPolicy.operator_version` | `str` | `fv_spin_upwind_v1` | $1$ | exact lane identifier | discrete operator | lane-specific | `spin_transport_modules[].solver.operator_version` |
+| `DriftDiffusionSpinTorque.target` | `RegionRef` | required | $1$ | magnetic subset with positive $M_s$ | torque target | canonical lane-specific | `spin_torque_modules[].target` |
+| `MixingConductanceSpinInterface.g_r_Spm2` | `float` | required | $\mathrm{S\,m^{-2}}$ | finite and non-negative | real mixing conductance | FDM reference/native subsets | `spin_transport_modules[].interfaces[].g_r_spm2` |
+| `PrescribedSpinOrbitTorque.xi_dl` | `float` | required | $1$ | finite | damping-like efficiency | separate prescribed-SOT lanes | `spin_torque_modules[].xi_dl` |
+| `PrescribedSpinOrbitTorque.xi_fl` | `float` | `0` | $1$ | finite | field-like efficiency | separate prescribed-SOT lanes | `spin_torque_modules[].xi_fl` |
+| `PrescribedSpinOrbitTorque.free_layer_thickness_m` | `float` | required | $\mathrm{m}$ | finite and positive | FM thickness | separate prescribed-SOT lanes | `spin_torque_modules[].free_layer_thickness_m` |
 
-TransportExecution also defaults to double precision and strict mode. SpinTransportMaterial accepts
-optional exchange/dephasing lengths and versioned capacitance/DOS metadata. SpinDriftDiffusion
-requires keyword-only id, current_source_id, domain, and materials; interfaces, boundaries, solver,
-requested execution, and mode have the defaults shown by the source. Interfaces, SML reservoir,
-and all five boundary constructors are typed public objects.
+`TransportExecution` also defaults to double precision and strict mode. `SpinTransportMaterial` accepts optional exchange/dephasing lengths and versioned capacitance/DOS metadata. `SpinDriftDiffusion` requires keyword-only `id`, `current_source_id`, `domain`, and `materials`; `interfaces`, `boundaries`, `solver`, `requested_execution`, and `mode` have the defaults shown by the source. Interfaces, SML reservoir, and all five boundary constructors are typed public objects.
 
 (physics-drift-diffusion-spin-torque-problem-ir)=
 ## ProblemIR
 
-SpinDriftDiffusion lowers under spin_transport_modules[] with schema spin_transport.v1, current
-source, mode, domains, materials, interfaces, boundaries, solver, requested execution, and the
-one-way or reciprocal constitutive version. Canonical torque lowers with kind
-drift_diffusion_spin_torque, schema drift_diffusion_spin_torque.v1, solve_id, target, and formula
-transport_torque_angular_momentum.fullmag.v1.
+`SpinDriftDiffusion` lowers under `spin_transport_modules[]` with schema `spin_transport.v1`, current source, mode, domains, materials, interfaces, boundaries, solver, requested execution, and the one-way or reciprocal constitutive version. Canonical torque lowers with kind `drift_diffusion_spin_torque`, schema `drift_diffusion_spin_torque.v1`, `solve_id`, `target`, and formula `transport_torque_angular_momentum.fullmag.v1`.
 
 ```json
 {
@@ -390,8 +384,8 @@ Opaque round trip is not execution support.
 
 | Lane | Executable boundary | Evidence boundary |
 |---|---|---|
-| FDM CPU Rust | M1 reference and bounded CPU-double M2; M3 authoring only | unvalidated and not production-qualified |
-| FDM CPU native | strict steady one-way native_m1_v1 | M2/M3/SML/periodic/specified flux fail closed |
+| FDM CPU Rust | M1 reference and bounded CPU-double M2; M3 schema only | unvalidated and not production-qualified |
+| FDM CPU native | strict steady one-way `native_m1_v1` | M2/M3/SML/periodic/specified flux fail closed |
 | FDM GPU | bounded M1 descriptors and CUDA slices | aggregate capability semantic-only/unvalidated; no fallback |
 | FEM CPU | strict steady conforming H1/P1 M1 and bounded M2 | one-way torque fails; M2 torque only; unqualified |
 | FEM GPU | no native transport realization | strict request rejected without CPU rebinding |
@@ -410,8 +404,7 @@ unknown variants are opaque/read-only.
 
 M1 can carry spin potential, face spin current, reactions, balance diagnostics, torque, and
 telemetry. M2 additionally carries solved charge potential, charge current, spin-current tensor,
-and interface observations. The server recognizes V_electric, J_charge, spin_potential, and
-spin_current_tensor. Dedicated transport visualization/export and browser materialization were not
+and interface observations. The server recognizes `V_electric`, `J_charge`, `spin_potential`, and `spin_current_tensor`. Dedicated transport visualization/export and browser materialization were not
 verified.
 
 (physics-drift-diffusion-spin-torque-implementation-mapping)=
@@ -426,8 +419,7 @@ API/UI preservation does not prove runtime realization.
 
 Python tests verify serialization, named-solve references, material validation, and round trip;
 round-trip tests do not run a solver. FDM CPU tests cover one-dimensional SHE profile/sign, exact
-removal at $\theta_{\mathrm{SH}}=0$, balance, and torque sign. Managed recipes exist, but this
-page does not claim they ran for this revision.
+removal at $\theta_{\mathrm{SH}}=0$, balance, and torque sign. Automated verification suites exist in the repository but are not part of this reference summary.
 
 Promotion requires analytic diffusion and mesh convergence; zero-SHE and sign reversal; charge
 conservation/gauge invariance; spin residuals; interface and angular-momentum balance; M1 recovery
@@ -444,11 +436,15 @@ converted into these units and signs.
 (physics-drift-diffusion-spin-torque-scientific-bibliography)=
 ## Scientific bibliography
 
-1. S. Zhang, P. M. Levy, and A. Fert, Physical Review Letters 88, 236601 (2002), [doi:10.1103/PhysRevLett.88.236601](https://doi.org/10.1103/PhysRevLett.88.236601).
-2. C. Abert et al., Scientific Reports 5, 14855 (2015), [doi:10.1038/srep14855](https://doi.org/10.1038/srep14855).
-3. C. Abert et al., Scientific Reports 6, 16 (2016), [doi:10.1038/s41598-016-0019-y](https://doi.org/10.1038/s41598-016-0019-y).
-4. J. Sinova et al., Reviews of Modern Physics 87, 1213 (2015), [doi:10.1103/RevModPhys.87.1213](https://doi.org/10.1103/RevModPhys.87.1213).
-5. S. Zhang, Physical Review Letters 85, 393 (2000), [doi:10.1103/PhysRevLett.85.393](https://doi.org/10.1103/PhysRevLett.85.393).
+1. S. Zhang, "Spin Hall Effect in the Presence of Spin Diffusion," *Physical Review Letters* **85**(2), 393–396 (2000), [doi:10.1103/PhysRevLett.85.393](https://doi.org/10.1103/PhysRevLett.85.393).
+2. S. Zhang, P. M. Levy, and A. Fert, "Mechanisms of Spin-Polarized Current-Driven Magnetization Switching," *Physical Review Letters* **88**(23), 236601 (2002), [doi:10.1103/PhysRevLett.88.236601](https://doi.org/10.1103/PhysRevLett.88.236601) ([arXiv:cond-mat/0202363](https://arxiv.org/abs/cond-mat/0202363)).
+3. Y. Tserkovnyak, A. Brataas, G. E. W. Bauer, and B. I. Halperin, "Nonlocal magnetization dynamics in ferromagnetic heterostructures," *Reviews of Modern Physics* **77**(4), 1375–1421 (2005), [doi:10.1103/RevModPhys.77.1375](https://doi.org/10.1103/RevModPhys.77.1375) ([arXiv:cond-mat/0409242](https://arxiv.org/abs/cond-mat/0409242)).
+4. P. M. Haney, H.-W. Lee, K.-J. Lee, A. Manchon, and M. D. Stiles, "Current induced torques and interfacial spin-orbit coupling: Semiclassical modeling," *Physical Review B* **87**(17), 174411 (2013), [doi:10.1103/PhysRevB.87.174411](https://doi.org/10.1103/PhysRevB.87.174411) ([arXiv:1301.4513](https://arxiv.org/abs/1301.4513)).
+5. J. Sinova, S. O. Valenzuela, J. Wunderlich, C. H. Back, and T. Jungwirth, "Spin Hall effects," *Reviews of Modern Physics* **87**(4), 1213–1260 (2015), [doi:10.1103/RevModPhys.87.1213](https://doi.org/10.1103/RevModPhys.87.1213) ([arXiv:1411.3249](https://arxiv.org/abs/1411.3249)).
+6. C. Abert, M. Ruggeri, F. Bruckner, C. Vogler, G. Hrkac, D. Praetorius, and D. Suess, "A three-dimensional spin-diffusion model for micromagnetics," *Scientific Reports* **5**(1), 14855 (2015), [doi:10.1038/srep14855](https://doi.org/10.1038/srep14855) ([Nature PDF](https://www.nature.com/articles/srep14855.pdf), CC-BY; [arXiv:1410.6067](https://arxiv.org/abs/1410.6067)).
+7. C. Abert, M. Ruggeri, F. Bruckner, C. Vogler, A. Manchon, D. Praetorius, and D. Suess, "A self-consistent spin-diffusion model for micromagnetics," *Scientific Reports* **6**(1), 16 (2016), [doi:10.1038/s41598-016-0019-y](https://doi.org/10.1038/s41598-016-0019-y) ([Nature PDF](https://www.nature.com/articles/s41598-016-0019-y.pdf), CC-BY; [arXiv:1512.05519](https://arxiv.org/abs/1512.05519)).
+8. A. Manchon, J. Železný, I. M. Miron, T. Jungwirth, J. Sinova, A. Thiaville, K. Garello, and P. Gambardella, "Current-induced spin-orbit torques in ferromagnetic and antiferromagnetic systems," *Reviews of Modern Physics* **91**(3), 035004 (2019), [doi:10.1103/RevModPhys.91.035004](https://doi.org/10.1103/RevModPhys.91.035004) ([arXiv:1801.09636](https://arxiv.org/abs/1801.09636)).
+9. N. P. Jørstad, W. Goes, S. Selberherr, and V. A. Sverdlov, "Modeling spin-orbit torque driven magnetization dynamics in emerging magnetoresistive devices: a finite element method approach," *npj Spintronics* **4**(1) (2026), [doi:10.1038/s44306-026-00162-y](https://doi.org/10.1038/s44306-026-00162-y) ([Nature PDF](https://www.nature.com/articles/s44306-026-00162-y.pdf), CC-BY).
 
 (physics-drift-diffusion-spin-torque-source-code-index)=
 ## Source-code index

@@ -39,7 +39,7 @@ function normalizeResource(value: unknown): ProjectDocumentResource {
       "revision",
       "schema_version",
     ],
-    ["persisted_revision", "source_hash"],
+    ["persisted_revision", "source_hash", "authoring_scene_document"],
   );
 
   const archiveBase64 = boundedString(
@@ -104,6 +104,14 @@ function normalizeResource(value: unknown): ProjectDocumentResource {
       record.source_hash === null
         ? null
         : boundedString(record.source_hash, "project document source hash", 512);
+  }
+
+  if (record.authoring_scene_document != null) {
+    const scene = cloneBoundedProjectJsonObject(record.authoring_scene_document);
+    if (resource.mode.kind !== "read_write" || resource.schema_version !== "fullmag.project.v1" || scene.version !== "scene.v2") {
+      throw new Error("Invalid authoring scene projection for this project.");
+    }
+    resource.authoring_scene_document = scene;
   }
   return resource;
 }
