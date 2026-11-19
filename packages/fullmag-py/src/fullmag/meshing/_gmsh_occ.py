@@ -20,6 +20,8 @@ from fullmag.model.geometry import (
     Union,
 )
 from ._gmsh_types import MeshData, SharedDomainMeshResult
+from ._gmsh_infra import _quality_volumes_in_si
+from ._airbox_feature_fields import add_airbox_feature_fields
 from ._airbox_grading import (
     _add_airbox_grading_field,
     _airbox_boundary_distance_from_bbox,
@@ -918,6 +920,21 @@ def generate_shared_domain_mesh_via_occ(
                 if field_id is not None:
                     airbox_field_ids.append(field_id)
 
+        if airbox_scaled is not None:
+            interface_set = set(interface_list)
+            airbox_field_ids.extend(
+                add_airbox_feature_fields(
+                    gmsh,
+                    airbox_scaled,
+                    air_volume_tags=air_vols,
+                    body_surface_groups={
+                        name: sorted(set(tags) & interface_set)
+                        for name, tags in component_surface_tags.items()
+                    },
+                    outer_surface_tags=gamma_out,
+                )
+            )
+
         # 7 - Apply Sizing Options & Local Fields
         preexisting = list(airbox_field_ids)
         airbox_lower_bound_field_ids: list[int] = []
@@ -1002,6 +1019,12 @@ def generate_shared_domain_mesh_via_occ(
         scaled_mesh = _dc_replace(
             mesh,
             nodes=mesh.nodes / SCALE,
+            quality=_quality_volumes_in_si(mesh.quality, SCALE),
+            per_domain_quality=(
+                {marker: _quality_volumes_in_si(report, SCALE)
+                 for marker, report in mesh.per_domain_quality.items()}
+                if mesh.per_domain_quality is not None else None
+            ),
             periodic_boundary_pairs=_scale_periodic_boundary_pairs(
                 mesh.periodic_boundary_pairs,
                 scale=SCALE,

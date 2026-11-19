@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-mechanical_boundary",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_mechanical_boundary"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_mechanical_boundary",
@@ -63,8 +46,8 @@
         "python": "MechanicalBoundaryCondition.kind",
         "type": "Literal[str]",
         "default": "required",
-        "si_unit": "1",
-        "validation": "prescribed_displacement or prescribed_traction",
+        "si_unit": "$1$",
+        "validation": "`prescribed_displacement` or `prescribed_traction`",
         "meaning": "boundary data family",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
         "problem_ir": "kind"
@@ -73,7 +56,7 @@
         "python": "MechanicalBoundaryCondition.surface",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "surface selector",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
@@ -83,7 +66,7 @@
         "python": "MechanicalBoundaryCondition.u",
         "type": "tuple[float,float,float]",
         "default": "None",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "required for displacement; finite",
         "meaning": "displacement vector",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
@@ -93,7 +76,7 @@
         "python": "MechanicalBoundaryCondition.t",
         "type": "tuple[float,float,float]",
         "default": "None",
-        "si_unit": "Pa",
+        "si_unit": "$\\mathrm{Pa}$",
         "validation": "required for traction; finite",
         "meaning": "traction vector",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
@@ -103,8 +86,8 @@
         "python": "MechanicalLoad.kind",
         "type": "Literal[str]",
         "default": "required",
-        "si_unit": "1",
-        "validation": "body_force, prescribed_strain, or prescribed_stress",
+        "si_unit": "$1$",
+        "validation": "`body_force`, `prescribed_strain`, or `prescribed_stress`",
         "meaning": "volume load family",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
         "problem_ir": "kind"
@@ -113,7 +96,7 @@
         "python": "MechanicalLoad.f/strain/stress",
         "type": "tuple[float,...]",
         "default": "None",
-        "si_unit": "N/m^3, 1, or Pa",
+        "si_unit": "$\\mathrm{N\\,m^{-3}}$, $1$, or $\\mathrm{Pa}$",
         "validation": "payload required by kind; strain/stress six Voigt values",
         "meaning": "body force, strain, or stress",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",

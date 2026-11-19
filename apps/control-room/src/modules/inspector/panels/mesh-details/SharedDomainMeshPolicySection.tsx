@@ -2,7 +2,6 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import type { JsonObject } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -10,13 +9,19 @@ import {
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
   MESH_SEMANTICS_RESOURCE_KEY,
   MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY,
+  SCENE_RESOURCE_KEY,
   useMeshSemanticsResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { publishCommittedMeshPolicyResource } from "@/kernel/resources/meshPolicyResourceCache";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
-import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+import { useRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
+import {
+  SESSION_STATUS_RESOURCE_KEY,
+  useSessionResourceIdentity,
+} from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
+import { useRegisterInspectorEditSession } from "../../InspectorEditSession";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FormField } from "../../primitives/FormField";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -26,151 +31,25 @@ import {
   updateInspectorDraftState,
   type InspectorDraftState,
 } from "../inspectorDraftState";
-
-interface SharedDomainPolicyDraft {
-  authoredPresent: boolean;
-  configText: string;
-  curvatureFactor: string;
-  growthRate: string;
-  hMax: string;
-  hMin: string;
-  narrowRegionResolution: string;
-  optimize: boolean;
-}
-
-interface SharedDomainResourceLike {
-  config?: Record<string, unknown> | null;
-  effective_config?: Record<string, unknown> | null;
-  revision?: number;
-}
+import {
+  buildSharedDomainPolicyConfig,
+  draftFromEffectiveSharedDomainResource,
+  draftFromSharedDomainResource,
+  formatPolicyJson,
+  isSharedDomainDraftDirty,
+  readAuthoredText,
+  type SharedDomainPolicyDraft,
+  type SharedDomainResourceLike,
+} from "./sharedDomainMeshPolicyDraft";
 
 type Feedback = { kind: "error" | "success" | "warning"; message: string } | null;
-
-function readPositiveNumberString(value: unknown): string {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
-  }
-  return "";
-}
-
-function formatPolicyJson(
-  config: Record<string, unknown> | null | undefined,
-): string {
-  if (!config || Object.keys(config).length === 0) return "{}";
-  return JSON.stringify(config, null, 2);
-}
-
-function draftFromSharedDomainResource(
-  resource: SharedDomainResourceLike | null,
-): SharedDomainPolicyDraft {
-  const config = resource?.config ?? {};
-  return {
-    authoredPresent: Boolean(
-      resource?.config && Object.keys(resource.config).length > 0,
-    ),
-    configText: formatPolicyJson(resource?.config),
-    curvatureFactor: readPositiveNumberString(config.curvature_factor),
-    growthRate: readPositiveNumberString(
-      config.growth_rate ?? config.airbox_growth_rate,
-    ),
-    hMax: readPositiveNumberString(
-      config.h_max ?? config.h_target ?? config.airbox_hmax,
-    ),
-    hMin: readPositiveNumberString(config.h_min ?? config.airbox_hmin),
-    narrowRegionResolution: readPositiveNumberString(
-      config.narrow_region_resolution,
-    ),
-    optimize: config.optimize !== false,
-  };
-}
-
-function draftFromEffectiveSharedDomainResource(
-  resource: SharedDomainResourceLike | null,
-): SharedDomainPolicyDraft {
-  const source = resource?.config ?? resource?.effective_config ?? {};
-  return {
-    ...draftFromSharedDomainResource({
-      config: source,
-      effective_config: resource?.effective_config ?? null,
-      revision: resource?.revision ?? 0,
-    }),
-    authoredPresent: true,
-  };
-}
-
-function isSharedDomainDraftDirty(
-  left: SharedDomainPolicyDraft,
-  right: SharedDomainPolicyDraft,
-): boolean {
-  return (
-    left.hMax !== right.hMax ||
-    left.hMin !== right.hMin ||
-    left.growthRate !== right.growthRate ||
-    left.curvatureFactor !== right.curvatureFactor ||
-    left.narrowRegionResolution !== right.narrowRegionResolution ||
-    left.optimize !== right.optimize ||
-    left.configText !== right.configText
-  );
-}
-
-function buildSharedDomainPolicyConfig(
-  draft: SharedDomainPolicyDraft,
-): { config: JsonObject; ok: true } | { error: string; ok: false } {
-  let base: JsonObject = {};
-  try {
-    const parsed = JSON.parse(draft.configText || "{}") as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {
-        error: "Shared-domain mesh policy JSON must be an object.",
-        ok: false,
-      };
-    }
-    base = { ...(parsed as JsonObject) };
-  } catch {
-    return {
-      error: "Shared-domain mesh policy JSON must be valid JSON.",
-      ok: false,
-    };
-  }
-
-  const numericEntries: readonly [string, string, string][] = [
-    ["h_max", draft.hMax, "Global maximum element size (h_max)"],
-    ["h_min", draft.hMin, "Global minimum element size (h_min)"],
-    ["growth_rate", draft.growthRate, "Element growth rate"],
-    ["curvature_factor", draft.curvatureFactor, "Curvature factor"],
-    [
-      "narrow_region_resolution",
-      draft.narrowRegionResolution,
-      "Narrow region resolution",
-    ],
-  ];
-
-  for (const [key, raw, label] of numericEntries) {
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      delete base[key];
-      continue;
-    }
-    const parsed = Number(trimmed);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      return { error: `${label} must be greater than 0.`, ok: false };
-    }
-    base[key] = parsed;
-  }
-
-  base.optimize = draft.optimize;
-  return { config: base, ok: true };
-}
 
 export function SharedDomainMeshPolicySection() {
   const kernel = useKernel();
   const { api, commands, resources } = kernel;
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const semanticsResource = useMeshSemanticsResource();
-  const resource = useMemo<SharedDomainResourceLike>(() => {
+  const observedPolicy = useMemo<SharedDomainResourceLike>(() => {
     const data = semanticsResource.data as Record<string, unknown> | null;
     const sharedConfig =
       data?.shared_domain_config &&
@@ -185,12 +64,21 @@ export function SharedDomainMeshPolicySection() {
     };
   }, [semanticsResource.data]);
 
+  const identityKey = sessionScopeKey ?? "no-session";
+  const [acknowledged, setAcknowledged] = useState<{
+    identityKey: string;
+    policy: SharedDomainResourceLike & { revision: number };
+  } | null>(null);
+  const resource = acknowledged?.identityKey === identityKey &&
+    acknowledged.policy.revision > (observedPolicy.revision ?? 0)
+    ? acknowledged.policy
+    : observedPolicy;
   const baseDraft = useMemo(
     () => draftFromSharedDomainResource(resource),
     [resource],
   );
-  const baseKey = `${sessionScopeKey ?? "no-session"}:${resource.revision ?? 0}:${formatPolicyJson(resource.config)}`;
-  const identityKey = "shared-domain-policy";
+  const baseKey = `${identityKey}:${resource.revision ?? 0}:${formatPolicyJson(resource.config)}`;
+  const draftEditVersion = useRef(0);
 
   const [draftState, setDraftState] = useState<
     InspectorDraftState<SharedDomainPolicyDraft>
@@ -214,18 +102,26 @@ export function SharedDomainMeshPolicySection() {
   const [buildPending, setBuildPending] = useState(false);
   const operationGuard = useRef(0);
 
+  // The mesh build command resolves its FEM lane from the session status in
+  // the command context; without it the build is refused as "unknown lane".
+  const runtimeResourceData = useRuntimeCommandControlResourceData({
+    includeSharedDomainReadiness: false,
+    includeStageExecution: false,
+  });
   const commandContext = useMemo(
     () =>
       createCommandContext("inspector", kernel, {
+        resourceData: runtimeResourceData,
         sessionScopeKey,
         sourceDetail: "shared-domain-mesh-policy",
         input: { origin: "shared-domain" },
       }),
-    [kernel, sessionScopeKey],
+    [kernel, runtimeResourceData, sessionScopeKey],
   );
 
   const updateField = useCallback(
     (patch: Partial<SharedDomainPolicyDraft>) => {
+      draftEditVersion.current += 1;
       const merged: SharedDomainPolicyDraft = {
         ...draft,
         ...patch,
@@ -248,10 +144,11 @@ export function SharedDomainMeshPolicySection() {
         }),
       );
     },
-    [baseDraft, baseKey, draft],
+    [baseDraft, baseKey, draft, identityKey],
   );
 
   const loadEffectiveDefaults = () => {
+    draftEditVersion.current += 1;
     const seeded = draftFromEffectiveSharedDomainResource(resource);
     setDraftState({
       baseKey,
@@ -267,6 +164,7 @@ export function SharedDomainMeshPolicySection() {
   };
 
   const revert = () => {
+    draftEditVersion.current += 1;
     setDraftState(
       initialInspectorDraftState({ baseDraft, baseKey, identityKey }),
     );
@@ -276,8 +174,18 @@ export function SharedDomainMeshPolicySection() {
   const validation = buildSharedDomainPolicyConfig(draft);
   const validationError = validation.ok ? null : validation.error;
 
-  const applyPolicy = async ({ silent = false } = {}) => {
-    if (!sessionScopeKey) {
+  const acknowledgePolicyDraft = useRegisterInspectorEditSession(
+    "staged",
+    pending,
+    dirty,
+    sessionScopeKey !== null && validationError === null,
+    undefined,
+    applyPolicy,
+    revert,
+  );
+
+  async function applyPolicy({ silent = false } = {}) {
+    if (!sessionScopeKey || commandContext.isCurrentSessionScope?.() === false) {
       if (!silent) {
         setFeedback({
           kind: "error",
@@ -292,18 +200,36 @@ export function SharedDomainMeshPolicySection() {
       return false;
     }
     const opId = ++operationGuard.current;
+    const submittedEditVersion = draftEditVersion.current;
+    const isCurrentOperation = () => operationGuard.current === opId &&
+      commandContext.isCurrentSessionScope?.() !== false;
     setPending(true);
     try {
       const next = await api.meshing.sharedDomain.replacePolicy(
         { config: checked.config },
         { sessionScopeKey },
       );
-      if (operationGuard.current !== opId) return false;
-      publishCommittedMeshPolicyResource?.(
+      if (!isCurrentOperation()) return false;
+      const policy = { ...next, effective_config: next.config };
+      setAcknowledged({ identityKey, policy });
+      const draftWasEdited = draftEditVersion.current !== submittedEditVersion;
+      if (draftWasEdited) {
+        // An edit can match the old baseline while the new one is in flight.
+        setDraftState((current) => ({ ...current, dirty: true }));
+      } else {
+        setDraftState(initialInspectorDraftState({
+          baseDraft: draftFromSharedDomainResource(policy),
+          baseKey: `${identityKey}:${policy.revision}:${formatPolicyJson(policy.config)}`,
+          identityKey,
+        }));
+        acknowledgePolicyDraft();
+      }
+      publishCommittedMeshPolicyResource(
         resources,
         MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY,
         sessionScopeKey,
         next,
+        api.resourceCacheScope,
       );
       resources.invalidate(
         MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY,
@@ -315,7 +241,14 @@ export function SharedDomainMeshPolicySection() {
         MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
         next.revision,
       );
-      if (!silent) {
+      // The policy is stored in the scene document and bumps the scene and
+      // mesh revisions without a realtime event. Refetch both, so open object
+      // drafts and the build dialog's mesh_revision precondition stay current.
+      resources.invalidate(SCENE_RESOURCE_KEY, `mesh-policy:shared-domain:${next.revision}`);
+      resources.invalidate(SESSION_STATUS_RESOURCE_KEY, `mesh-policy:shared-domain:${next.revision}`);
+      if (draftWasEdited) {
+        setFeedback({ kind: "warning", message: "Shared-domain policy saved. Newer draft edits still need Apply or Revert." });
+      } else if (!silent) {
         setFeedback({
           kind: "success",
           message:
@@ -324,7 +257,7 @@ export function SharedDomainMeshPolicySection() {
       }
       return true;
     } catch (error) {
-      if (operationGuard.current !== opId) return false;
+      if (!isCurrentOperation()) return false;
       setFeedback({
         kind: "error",
         message:
@@ -334,20 +267,23 @@ export function SharedDomainMeshPolicySection() {
     } finally {
       if (operationGuard.current === opId) setPending(false);
     }
-  };
+  }
 
   const buildSharedDomain = async () => {
     if (!sessionScopeKey || pending || buildPending) return;
     setBuildPending(true);
     try {
       if (dirty) {
+        const submittedEditVersion = draftEditVersion.current;
         const saved = await applyPolicy({ silent: true });
-        if (!saved) return;
+        if (!saved || draftEditVersion.current !== submittedEditVersion) return;
       }
+      if (commandContext.isCurrentSessionScope?.() === false) return;
       const result = await commands.execute(
         "mesh.build-shared-domain",
         commandContext,
       );
+      if (commandContext.isCurrentSessionScope?.() === false) return;
       setFeedback({
         kind:
           result.status === "completed"
@@ -362,6 +298,7 @@ export function SharedDomainMeshPolicySection() {
             : "Shared-domain mesh build submitted."),
       });
     } catch (error) {
+      if (commandContext.isCurrentSessionScope?.() === false) return;
       setFeedback({
         kind: "error",
         message:
@@ -372,14 +309,13 @@ export function SharedDomainMeshPolicySection() {
     }
   };
 
-  const effectiveHMax = readPositiveNumberString(
-    resource.effective_config?.h_max ?? resource.effective_config?.h_target,
-  );
-  const effectiveHMin = readPositiveNumberString(
-    resource.effective_config?.h_min,
-  );
-  const effectiveGrowthRate = readPositiveNumberString(
-    resource.effective_config?.growth_rate,
+  const effectiveConfig = resource.effective_config ?? {};
+  const effectiveHMax = readAuthoredText(effectiveConfig, "hmax", "maximum_element_size");
+  const effectiveHMin = readAuthoredText(effectiveConfig, "hmin", "minimum_element_size");
+  const effectiveGrowthRate = readAuthoredText(
+    effectiveConfig,
+    "growth_rate",
+    "maximum_element_growth_rate",
   );
 
   return (
@@ -401,7 +337,7 @@ export function SharedDomainMeshPolicySection() {
       ) : null}
       <div className="fm-inspector-toolbar">
         <Button
-          disabled={!sessionScopeKey || pending || validationError !== null}
+          disabled={!sessionScopeKey || pending || !dirty || validationError !== null}
           size="sm"
           type="button"
           variant="primary"

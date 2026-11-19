@@ -47,15 +47,19 @@ fn relaxation_algorithms_available() -> Vec<String> {
     tag = "sessions"
 )]
 pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveStatus>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
-    let _transition = state.current_live_session_transition.lock().await;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
+    // Native probing may wait on its bounded socket timeout. Do not hold the
+    // session transition while observing the separately owned service.
+    let connectivity = refresh_current_live_connectivity(&state).await;
+    // Read the last committed snapshot during long RunIntent commits too.
+    // Session identity is checked under the snapshot read lock and again
+    // before returning, without waiting behind the mutation transition.
     crate::validate_current_live_request_context(&state, &request_context).await?;
     let display_sel = state.current_display_selection.read().await.clone();
     let display_presentation = state.current_display_presentation.read().await.clone();
     let workspace_selection = state.current_workspace_selection.read().await.clone();
     let workspace_ribbon = state.current_workspace_ribbon.read().await.clone();
     let workspace_layout = state.current_workspace_layout.read().await.clone();
-    let connectivity = refresh_current_live_connectivity(&state).await;
     let (commands_revision, command_completion_revision) = {
         let ledger = state.current_command_ledger.lock().await;
         let revisions = command_ledger_revisions(
@@ -73,6 +77,11 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state.current_live_session_epoch.load(Ordering::Acquire),
+    )?;
 
     let response = build_live_status(
         state.current_workspace_root.as_path(),
@@ -87,14 +96,30 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
         command_completion_revision,
         connectivity,
     );
+    drop(guard);
     crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(Json(response))
 }
 
-/// Advances backend-owned connectivity from the real runner publication
-/// heartbeat. Only an accepted publication may restore `Connected`; this path
-/// can only preserve or worsen connectivity when the heartbeat becomes stale.
+/// Native accepted-run execution uses the verified service, including while
+/// idle before Compute. Legacy runners retain their publication heartbeat.
 pub(crate) async fn refresh_current_live_connectivity(state: &AppState) -> SessionConnectivity {
+    if crate::live_accepted_execution::docker_api_only_runtime() {
+        use crate::schemas::runtime_service::RuntimeServiceStatusState;
+        let observed =
+            crate::router_v2::handlers::platform::runtime_service::observe_runtime_service(state)
+                .await;
+        return match observed.map(|status| status.state) {
+            Ok(RuntimeServiceStatusState::Ready) => SessionConnectivity::Connected,
+            Ok(
+                RuntimeServiceStatusState::Starting
+                | RuntimeServiceStatusState::ObservationUnknown
+                | RuntimeServiceStatusState::Unknown,
+            )
+            | Err(_) => SessionConnectivity::Degraded,
+            Ok(_) => SessionConnectivity::Disconnected,
+        };
+    }
     refresh_current_live_connectivity_at(state, current_unix_ms()).await
 }
 
@@ -199,7 +224,7 @@ pub(crate) fn build_live_status(
     command_completion_revision: u64,
     connectivity: SessionConnectivity,
 ) -> LiveStatus {
-    let solver_lifecycle = crate::session::effective_runtime_status_code(snapshot);
+    let solver_lifecycle = session_lifecycle_solver_code(snapshot);
     let lifecycle = lifecycle_contract(
         &solver_lifecycle,
         snapshot.runtime_status.can_accept_commands && !snapshot.runtime_status.is_busy,
@@ -219,6 +244,7 @@ pub(crate) fn build_live_status(
         ),
     };
 
+    let current_accepted_scalar = accepted_live_scalar_row(snapshot, request_scope_epoch);
     let run = snapshot.run.as_ref().map(|r| {
         let stage_exec = snapshot.stage_execution.as_ref();
         let crossover = snapshot.session.fem_crossover_decision.as_ref();
@@ -230,9 +256,16 @@ pub(crate) fn build_live_status(
                 .unwrap_or_default(),
             stage_count: stage_exec.map(|se| se.total_stages as u32).unwrap_or(0),
             started_at: snapshot.session.started_at_unix_ms.to_string(),
-            solver_steps: r.total_steps as u64,
-            solver_time: r
-                .final_time
+            solver_steps: if crate::live_accepted_execution::docker_api_only_runtime() {
+                current_accepted_scalar
+                    .map(|row| row.step)
+                    .unwrap_or_else(|| accepted_solver_steps(snapshot, &r.run_id))
+            } else {
+                r.total_steps as u64
+            },
+            solver_time: current_accepted_scalar
+                .map(|row| row.time)
+                .or(r.final_time)
                 .or_else(|| snapshot.live_state.as_ref().map(|ls| ls.latest_step.time))
                 .unwrap_or(0.0),
             requested_device: snapshot.session.requested_device.clone(),
@@ -269,7 +302,7 @@ pub(crate) fn build_live_status(
     let solver = SolverSummary {
         state: solver_lifecycle.clone(),
         algorithm: None,
-        relaxation_algorithm: relaxation_algorithm_from_metadata(snapshot.metadata.as_ref()),
+        relaxation_algorithm: relaxation_algorithm_from_metadata(snapshot.metadata.as_deref()),
         dt: latest.map(|s| s.dt),
         max_torque_t: max_torque_apm.and_then(torque_t_from_apm),
         max_torque_apm,
@@ -353,13 +386,29 @@ pub(crate) fn build_live_status(
         transport_authoring: Some(crate::router_v2::handlers::transport_authoring_policy::transport_authoring_capabilities()),
     };
 
-    let energies = EnergySummary {
-        total: latest.map(|s| s.e_total),
-        exchange: latest.map(|s| s.e_ex),
-        demag: latest.map(|s| s.e_demag),
-        zeeman: latest.map(|s| s.e_ext),
-        anisotropy: latest.map(|s| s.e_ani),
-        dmi: latest.map(|s| s.e_dmi),
+    // Before the first physical step the source-qualified current observation
+    // (for example the prepared state before Compute) supplies the energies.
+    let observation = latest
+        .is_none()
+        .then(|| crate::accepted_field_materialization::current_energy_observation(snapshot))
+        .flatten();
+    let energies = match observation {
+        Some(observation) => EnergySummary {
+            total: Some(observation.total),
+            exchange: Some(observation.exchange),
+            demag: Some(observation.demag),
+            zeeman: Some(observation.zeeman),
+            anisotropy: Some(observation.anisotropy),
+            dmi: Some(observation.dmi),
+        },
+        None => EnergySummary {
+            total: latest.map(|s| s.e_total),
+            exchange: latest.map(|s| s.e_ex),
+            demag: latest.map(|s| s.e_demag),
+            zeeman: latest.map(|s| s.e_ext),
+            anisotropy: latest.map(|s| s.e_ani),
+            dmi: latest.map(|s| s.e_dmi),
+        },
     };
 
     let uptime = std::time::SystemTime::now()
@@ -375,6 +424,11 @@ pub(crate) fn build_live_status(
         total_steps,
         steps_per_second,
     };
+    let solver_energy_current_available = crate::router_v2::handlers::simulation::runtime::current_solver_energy_resource_for_snapshot(
+        snapshot,
+        request_scope_epoch,
+    )
+    .is_some();
 
     LiveStatus {
         api_contract_version: "1.0.0".into(),
@@ -388,6 +442,7 @@ pub(crate) fn build_live_status(
         resources,
         capabilities,
         energies,
+        solver_energy_current_available,
         metrics,
     }
 }
@@ -416,12 +471,141 @@ pub(crate) fn lifecycle_contract(
     }
 }
 
+/// The accepted scalar pin is current only when it belongs to the exact active
+/// run scope and the sole active accepted stage reports the same worker stats
+/// clock. This prevents a prepared-state row or a previous stage's reused
+/// (step, time) pair from overriding a live solver clock.
+pub(crate) fn accepted_live_scalar_row<'a>(
+    snapshot: &'a SessionStateResponse,
+    request_scope_epoch: &str,
+) -> Option<&'a crate::types::ScalarRow> {
+    let run = snapshot.run.as_ref()?;
+    select_current_accepted_scalar_row(
+        &snapshot.session.session_id,
+        &run.session_id,
+        &run.run_id,
+        snapshot.scalar_revision,
+        &snapshot.scalar_rows,
+        snapshot.latest_scalar_source.as_ref(),
+        snapshot.stage_execution.as_ref(),
+        request_scope_epoch,
+        crate::session::effective_runtime_status_code(snapshot) == "running",
+    )
+}
+
+fn select_current_accepted_scalar_row<'a>(
+    session_id: &str,
+    run_session_id: &str,
+    run_id: &str,
+    scalar_revision: u64,
+    scalar_rows: &'a [crate::types::ScalarRow],
+    source_state: Option<&crate::types::CurrentScalarSourceState>,
+    stage_execution: Option<&crate::types::StageExecutionState>,
+    request_scope_epoch: &str,
+    runtime_is_running: bool,
+) -> Option<&'a crate::types::ScalarRow> {
+    if !runtime_is_running || run_session_id != session_id {
+        return None;
+    }
+    let source_state = source_state?;
+    let source = source_state.public_source.as_ref()?;
+    let accepted_live_identity = source_state.accepted_live_identity.as_ref()?;
+    let active_live_identity = source_state.active_live_identity.as_ref()?;
+    if accepted_live_identity != active_live_identity
+        || accepted_live_identity.run_id != run_id
+        || source.session_id != session_id
+        || source.run_id != run_id
+        || source.request_scope_epoch != request_scope_epoch
+        || source.scalar_revision != scalar_revision
+    {
+        return None;
+    }
+    let row = scalar_rows.last()?;
+    if !row.is_physical_observation()
+        || row.step != source.source_step
+        || !row.time.is_finite()
+        || row.time < 0.0
+    {
+        return None;
+    }
+
+    let execution = stage_execution?;
+    if execution.runtime_state != crate::types::RuntimeLifecycleState::Running
+        || execution
+            .stages
+            .iter()
+            .filter(|stage| stage.status == crate::types::StageLifecycleState::Running)
+            .count()
+            != 1
+    {
+        return None;
+    }
+    let active_index = execution.active_stage_index?;
+    let stage = execution.stages.get(active_index)?;
+    if stage.status != crate::types::StageLifecycleState::Running
+        || stage.stage_id.as_deref() != Some(accepted_live_identity.step_id.as_str())
+        || stage.applied_step != Some(row.step)
+        || stage.applied_time_seconds != Some(row.time)
+    {
+        return None;
+    }
+    Some(row)
+}
+
+fn accepted_solver_steps(snapshot: &SessionStateResponse, run_id: &str) -> u64 {
+    let Some(magnetization) = snapshot.latest_fields.get("m") else {
+        return 0;
+    };
+    let Some(accepted_state) = magnetization.get("accepted_state_ref") else {
+        return 0;
+    };
+    let Some(accepted_id) = accepted_state.get("id") else {
+        return 0;
+    };
+    if accepted_id.get("run_id").and_then(Value::as_str) != Some(run_id) {
+        return 0;
+    }
+
+    let Some(source_step) = magnetization.get("source_step").and_then(Value::as_u64) else {
+        return 0;
+    };
+    let Some(accepted_step) = accepted_id.get("accepted_step").and_then(Value::as_u64) else {
+        return 0;
+    };
+    let Some(observation_frame) = magnetization.get("observation_frame").and_then(|value| {
+        serde_json::from_value::<crate::schemas::common::AcceptedObservationFrameRef>(value.clone())
+            .ok()
+    }) else {
+        return 0;
+    };
+    let expected_session_epoch = format!(
+        "{}@{}",
+        snapshot.session.session_id, snapshot.session.started_at_unix_ms
+    );
+    if source_step != accepted_step
+        || observation_frame.source_step != source_step
+        || observation_frame.session_epoch != expected_session_epoch
+    {
+        return 0;
+    }
+
+    source_step
+}
+
 fn terminal_solver_lifecycle(solver: &str) -> bool {
-    matches!(solver, "completed" | "failed" | "cancelled" | "closed")
+    solver == "closed"
+}
+
+fn session_lifecycle_solver_code(snapshot: &SessionStateResponse) -> String {
+    if snapshot.session.status == "closed" {
+        "closed".to_string()
+    } else {
+        crate::session::effective_runtime_status_code(snapshot)
+    }
 }
 
 pub(crate) fn snapshot_session_epoch(snapshot: &SessionStateResponse) -> String {
-    let solver = crate::session::effective_runtime_status_code(snapshot);
+    let solver = session_lifecycle_solver_code(snapshot);
     session_epoch(
         &snapshot.session.session_id,
         snapshot.session.started_at_unix_ms,
@@ -450,7 +634,7 @@ pub(crate) fn session_epoch(
 /// receives this value in `LiveStatus.session.session_epoch` and echoes it in
 /// `x-fullmag-session-scope`.
 pub(crate) fn current_live_session_epoch(snapshot: &SessionStateResponse) -> String {
-    let solver_lifecycle = crate::session::effective_runtime_status_code(snapshot);
+    let solver_lifecycle = session_lifecycle_solver_code(snapshot);
     let lifecycle = lifecycle_contract(
         &solver_lifecycle,
         snapshot.runtime_status.can_accept_commands && !snapshot.runtime_status.is_busy,
@@ -1119,7 +1303,7 @@ fn normalize_lane_discretization(value: &str, fallback: &str) -> String {
     }
 }
 
-fn relaxation_algorithm_from_metadata(metadata: Option<&Value>) -> Option<RelaxationAlgorithm> {
+pub(crate) fn relaxation_algorithm_from_metadata(metadata: Option<&Value>) -> Option<RelaxationAlgorithm> {
     metadata
         .and_then(|value| value.get("relaxation_algorithm"))
         .and_then(Value::as_str)
@@ -1130,6 +1314,7 @@ fn relaxation_algorithm_from_metadata(metadata: Option<&Value>) -> Option<Relaxa
                 .and_then(|value| value.get("relax_algorithm"))
                 .and_then(Value::as_str)
         })
+        .or_else(|| metadata?.pointer("/execution_plan/backend_plan/relaxation/algorithm")?.as_str())
         .and_then(RelaxationAlgorithm::parse)
 }
 
@@ -1548,12 +1733,196 @@ fn compat_end_to_end_steps_per_second(
 mod tests {
     use super::{
         compat_end_to_end_steps_per_second, connectivity_from_liveness_at, lifecycle_contract,
-        relaxation_algorithms_available, session_epoch, solver_completion_record,
-        CONNECTIVITY_DEGRADED_AFTER_MS, CONNECTIVITY_DISCONNECTED_AFTER_MS,
+        relaxation_algorithms_available, select_current_accepted_scalar_row, session_epoch,
+        solver_completion_record, CONNECTIVITY_DEGRADED_AFTER_MS,
+        CONNECTIVITY_DISCONNECTED_AFTER_MS,
     };
     use crate::schemas::status::{
         SessionCommandability, SessionConnectivity, SessionResourceLifecycle,
     };
+
+    fn scalar_row(step: u64, time: f64) -> crate::types::ScalarRow {
+        serde_json::from_value(serde_json::json!({
+            "kind": "physical_observation",
+            "step": step,
+            "time": time,
+            "solver_dt": 1.0e-15,
+            "mx": 0.1,
+            "my": 0.0,
+            "mz": 0.9,
+            "e_ex": 11.0,
+            "e_demag": 22.0,
+            "e_ext": 33.0,
+            "e_total": 66.0,
+            "max_dm_dt": 7.0,
+            "max_h_eff": 8.0,
+            "max_h_demag": 9.0
+        }))
+        .expect("physical scalar row fixture")
+    }
+
+    fn stage_execution(
+        records: Vec<crate::types::StageExecutionRecord>,
+        active_stage_index: Option<usize>,
+        runtime_state: crate::types::RuntimeLifecycleState,
+    ) -> crate::types::StageExecutionState {
+        crate::types::StageExecutionState {
+            total_stages: records.len(),
+            completed_stage_indexes: Vec::new(),
+            stage_statuses: records.iter().map(|record| record.status).collect(),
+            stages: records,
+            active_stage_index,
+            active_stage_kind: Some("relax".into()),
+            runtime_state,
+        }
+    }
+
+    fn stage_record(
+        stage_id: Option<&str>,
+        status: &str,
+        step: Option<u64>,
+        time: Option<f64>,
+    ) -> crate::types::StageExecutionRecord {
+        serde_json::from_value(serde_json::json!({
+            "stage_id": stage_id,
+            "status": status,
+            "applied_step": step,
+            "applied_time_seconds": time
+        }))
+        .expect("stage record fixture")
+    }
+
+    fn scalar_source(
+        step: u64,
+        task_id: &str,
+        attempt_id: &str,
+    ) -> crate::types::CurrentScalarSourceState {
+        let identity = crate::types::AcceptedLiveScalarIdentity {
+            run_id: "run".into(),
+            task_id: task_id.into(),
+            step_id: "relax-stage".into(),
+            case_id: "default".into(),
+            attempt_id: attempt_id.into(),
+            ownership_epoch: 5,
+        };
+        crate::types::CurrentScalarSourceState {
+            series: None,
+            public_source: Some(crate::schemas::scalars::ScalarObservationSource {
+                session_id: "session".into(),
+                run_id: "run".into(),
+                request_scope_epoch: "instance:7".into(),
+                source_step: step,
+                scalar_revision: 23,
+            }),
+            accepted_live_identity: Some(identity.clone()),
+            active_live_identity: Some(identity),
+        }
+    }
+
+    fn select<'a>(
+        rows: &'a [crate::types::ScalarRow],
+        source: Option<&crate::types::CurrentScalarSourceState>,
+        execution: Option<&crate::types::StageExecutionState>,
+        request_scope_epoch: &str,
+        scalar_revision: u64,
+        running: bool,
+    ) -> Option<&'a crate::types::ScalarRow> {
+        select_current_accepted_scalar_row(
+            "session",
+            "session",
+            "run",
+            scalar_revision,
+            rows,
+            source,
+            execution,
+            request_scope_epoch,
+            running,
+        )
+    }
+
+    #[test]
+    fn current_accepted_stage_pin_uses_step_even_when_physical_time_is_zero() {
+        let rows = vec![scalar_row(0, 0.0), scalar_row(1_567, 0.0)];
+        let source = scalar_source(1_567, "task-a", "attempt-a");
+        let execution = stage_execution(
+            vec![stage_record(Some("relax-stage"), "running", Some(1_567), Some(0.0))],
+            Some(0),
+            crate::types::RuntimeLifecycleState::Running,
+        );
+
+        let selected = select(&rows, Some(&source), Some(&execution), "instance:7", 23, true)
+            .expect("pinned accepted step N is current at t=0");
+        assert_eq!(selected.step, 1_567);
+        assert_eq!(selected.time, 0.0);
+    }
+
+    #[test]
+    fn current_accepted_stage_pin_rejects_stale_scope_run_revision_step_and_stage() {
+        let rows = vec![scalar_row(1_567, 0.0)];
+        let source = scalar_source(1_567, "task-a", "attempt-a");
+        let execution = stage_execution(
+            vec![stage_record(Some("relax-stage"), "running", Some(1_567), Some(0.0))],
+            Some(0),
+            crate::types::RuntimeLifecycleState::Running,
+        );
+        assert!(select(&rows, Some(&source), Some(&execution), "instance:8", 23, true).is_none());
+        assert!(select(&rows, Some(&source), Some(&execution), "instance:7", 22, true).is_none());
+        assert!(select(&rows, Some(&source), Some(&execution), "instance:7", 23, false).is_none());
+
+        let mut stale_run = source.clone();
+        stale_run.public_source.as_mut().unwrap().run_id = "older-run".into();
+        assert!(select(&rows, Some(&stale_run), Some(&execution), "instance:7", 23, true).is_none());
+
+        let mut stale_attempt = source.clone();
+        stale_attempt.active_live_identity.as_mut().unwrap().attempt_id = "attempt-b".into();
+        assert!(select(&rows, Some(&stale_attempt), Some(&execution), "instance:7", 23, true).is_none());
+
+        let wrong_row = vec![scalar_row(0, 0.0)];
+        assert!(select(&wrong_row, Some(&source), Some(&execution), "instance:7", 23, true).is_none());
+
+        let stale_stage = stage_execution(
+            vec![stage_record(Some("relax-stage"), "running", Some(1_566), Some(0.0))],
+            Some(0),
+            crate::types::RuntimeLifecycleState::Running,
+        );
+        assert!(select(&rows, Some(&source), Some(&stale_stage), "instance:7", 23, true).is_none());
+
+        let mismatched_stage_time = stage_execution(
+            vec![stage_record(Some("relax-stage"), "running", Some(1_567), Some(1.0e-15))],
+            Some(0),
+            crate::types::RuntimeLifecycleState::Running,
+        );
+        assert!(select(&rows, Some(&source), Some(&mismatched_stage_time), "instance:7", 23, true).is_none());
+    }
+
+    #[test]
+    fn current_accepted_stage_pin_rejects_ambiguous_or_terminal_stage_state() {
+        let rows = vec![scalar_row(1_567, 0.0)];
+        let source = scalar_source(1_567, "task-a", "attempt-a");
+        let ambiguous = stage_execution(
+            vec![
+                stage_record(Some("relax-a"), "running", Some(1_567), Some(0.0)),
+                stage_record(Some("relax-b"), "running", Some(1_567), Some(0.0)),
+            ],
+            Some(0),
+            crate::types::RuntimeLifecycleState::Running,
+        );
+        assert!(select(&rows, Some(&source), Some(&ambiguous), "instance:7", 23, true).is_none());
+
+        let terminal = stage_execution(
+            vec![stage_record(Some("relax-stage"), "completed", Some(1_567), Some(0.0))],
+            None,
+            crate::types::RuntimeLifecycleState::Completed,
+        );
+        assert!(select(&rows, Some(&source), Some(&terminal), "instance:7", 23, false).is_none());
+
+        let unidentified_stage = stage_execution(
+            vec![stage_record(None, "running", Some(1_567), Some(0.0))],
+            Some(0),
+            crate::types::RuntimeLifecycleState::Running,
+        );
+        assert!(select(&rows, Some(&source), Some(&unidentified_stage), "instance:7", 23, true).is_none());
+    }
 
     #[test]
     fn awaiting_command_is_an_active_commandable_session_resource() {
@@ -1566,13 +1935,20 @@ mod tests {
     }
 
     #[test]
-    fn completed_session_is_a_read_only_tombstone_with_a_new_epoch() {
-        let lifecycle = lifecycle_contract("completed", false, SessionConnectivity::Connected);
+    fn solver_terminal_outcomes_keep_the_session_until_explicit_close() {
+        for solver in ["completed", "failed", "cancelled"] {
+            let lifecycle = lifecycle_contract(solver, false, SessionConnectivity::Connected);
+            assert_eq!(lifecycle.solver, solver);
+            assert_eq!(lifecycle.session_resource, SessionResourceLifecycle::Active);
+            assert_eq!(lifecycle.commandability, SessionCommandability::Forbidden);
+        }
+
+        let closed = lifecycle_contract("closed", true, SessionConnectivity::Connected);
         assert_eq!(
-            lifecycle.session_resource,
+            closed.session_resource,
             SessionResourceLifecycle::Tombstoned
         );
-        assert_eq!(lifecycle.commandability, SessionCommandability::ReadOnly);
+        assert_eq!(closed.commandability, SessionCommandability::ReadOnly);
         assert_eq!(session_epoch("session-1", 1000, 0, false), "session-1@1000");
         assert_eq!(
             session_epoch("session-1", 1000, 2000, true),

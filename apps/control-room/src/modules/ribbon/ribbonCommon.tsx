@@ -9,44 +9,44 @@ export function icon(Icon: typeof Play, props?: Record<string, unknown>) {
 }
 
 export const C = {
-  blue: "var(--fm-accent)",
-  lavender: "var(--fm-stale)",
-  pink: "var(--fm-stale)",
+  blue: "var(--fm-category-runtime)",
+  lavender: "var(--fm-category-magnetization)",
+  pink: "var(--fm-category-magnetization)",
   red: "var(--fm-danger)",
-  peach: "var(--fm-degraded)",
-  yellow: "var(--fm-warning)",
-  green: "var(--fm-success)",
+  peach: "var(--fm-category-energy)",
+  yellow: "var(--fm-category-energy)",
+  green: "var(--fm-category-solver)",
   teal: "var(--fm-accent-strong)",
-  sky: "var(--fm-accent)",
-  sapphire: "var(--fm-accent-strong)",
+  sky: "var(--fm-category-runtime)",
+  sapphire: "var(--fm-category-runtime)",
 } as const;
 
 // Single canonical map from Tailwind-style color names to design tokens. The
 // `C` shorthand above is the direct-token variant; this map is what the
 // `text-<name>-<shade>` strings in ribbon definitions resolve through.
 export const ICON_COLOR_ALIASES: Record<string, string> = {
-  amber: "var(--fm-warning)",
-  blue: "var(--fm-accent)",
-  cyan: "var(--fm-accent)",
-  emerald: "var(--fm-success)",
-  fuchsia: "var(--fm-stale)",
-  green: "var(--fm-success)",
-  indigo: "var(--fm-accent-strong)",
-  lime: "var(--fm-success)",
+  amber: "var(--fm-category-energy)",
+  blue: "var(--fm-category-runtime)",
+  cyan: "var(--fm-category-runtime)",
+  emerald: "var(--fm-category-solver)",
+  fuchsia: "var(--fm-category-magnetization)",
+  green: "var(--fm-category-solver)",
+  indigo: "var(--fm-category-runtime)",
+  lime: "var(--fm-category-solver)",
   muted: "var(--fm-text-muted)",
-  orange: "var(--fm-degraded)",
-  peach: "var(--fm-degraded)",
-  pink: "var(--fm-stale)",
-  purple: "var(--fm-stale)",
+  orange: "var(--fm-category-energy)",
+  peach: "var(--fm-category-energy)",
+  pink: "var(--fm-category-magnetization)",
+  purple: "var(--fm-category-magnetization)",
   red: "var(--fm-danger)",
-  rose: "var(--fm-danger)",
-  sapphire: "var(--fm-accent-strong)",
-  sky: "var(--fm-accent)",
+  rose: "var(--fm-category-magnetization)",
+  sapphire: "var(--fm-category-runtime)",
+  sky: "var(--fm-category-runtime)",
   slate: "var(--fm-text-muted)",
   stone: "var(--fm-text-muted)",
   teal: "var(--fm-accent-strong)",
-  violet: "var(--fm-stale)",
-  yellow: "var(--fm-warning)",
+  violet: "var(--fm-category-magnetization)",
+  yellow: "var(--fm-category-energy)",
 };
 
 // Compile-time-checked icon color vocabulary. Unknown names become a type
@@ -69,6 +69,7 @@ export function menu(
         type: "item" as const,
         id: `${id}:item:${index}`,
         label: entryLabel,
+        preview: true,
         disabled: true,
         shortcut: shortcut || undefined,
       };
@@ -95,6 +96,7 @@ export function radioMenu(
         return {
           value: itemValue,
           label: itemLabel,
+          preview: true,
           disabled: true,
         };
       }),

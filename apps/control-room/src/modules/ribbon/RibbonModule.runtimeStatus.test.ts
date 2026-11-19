@@ -94,7 +94,9 @@ describe("RibbonModule runtime status selection", () => {
     const source = readFileSync(new URL("./RibbonModule.tsx", import.meta.url), "utf8");
     const sceneHook = source.match(/const scene = useSceneResource\(\{[\s\S]*?\}\);/)?.[0];
     expect(sceneHook).toContain('activeTab === "physics"');
-    expect(source).toContain('[MODEL_SCENE_PATH]: scene.status === "ready" ? scene.data : null');
+    expect(source).toContain('[MODEL_SCENE_PATH]: scene.status === "ready" &&');
+    expect(source).toContain('(activeTab !== "physics" || scene.sessionScopeKey === kernel.commands.getSessionScopeKey?.())');
+    expect(source).toContain('? scene.data : null');
   });
 
   it("wires the runtime field catalog into ribbon tab construction", () => {

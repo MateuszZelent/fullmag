@@ -7,6 +7,7 @@ network, Docker socket, host writes, or application execution responsibility.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections.abc import Mapping
 import errno
 import hashlib
 import json
@@ -37,9 +38,7 @@ CACHE_CONTROL_DOCUMENTS_PER_ATTEMPT = 6
 MIN_FREE_CONTROL_BYTES = CACHE_CONTROL_ATTEMPT_WINDOW * (
     MAX_LOG_BYTES + CACHE_CONTROL_DOCUMENTS_PER_ATTEMPT * MAX_DOCUMENT_BYTES
 )
-# Package retention uses the same durable control lease as builds, but only
-# reads/removes verified package backups and does not reserve build capacity.
-CACHE_ONLY_PHASES = frozenset(("toolchain", "image-dev", "image-backend", "package-retention"))
+CACHE_ONLY_PHASES = frozenset(("toolchain", "image-dev", "image-backend", "cache-maintenance", "cache-retirement"))
 LABEL_SCHEMA = "fullmag.build-control.v1"
 
 
@@ -49,6 +48,27 @@ class BuildControlError(RuntimeError):
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def semantic_build_inputs(inputs):
+    """Project build identity while retaining console ownership in receipts.
+
+    Only the exact, validated operation token is non-semantic. Every other
+    input, including unknown future keys, remains covered by the digest.
+    """
+    if not isinstance(inputs, Mapping):
+        raise BuildControlError("Build inputs must be an object")
+    result = dict(inputs)
+    if "console_session_id" in result:
+        token = result["console_session_id"]
+        if not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None:
+            raise BuildControlError("Build input console session identity is invalid")
+        del result["console_session_id"]
+    return result
+
+
+def build_input_digest(inputs):
+    return hashlib.sha256(canonical(semantic_build_inputs(inputs))).hexdigest()
 
 
 def _available_space(space):
@@ -100,6 +120,11 @@ def control_read_script(path, maximum=MAX_DOCUMENT_BYTES):
         raise BuildControlError("Invalid control-volume absolute path")
     if type(maximum) is not int or maximum <= 0 or maximum > MAX_DOCUMENT_BYTES:
         raise BuildControlError("Invalid control-document byte budget")
+
+    from docker_activation_history_reader import activation_history_read_script
+    historical = activation_history_read_script(path, maximum)
+    if historical is not None:
+        return historical
 
     components = parsed.parts[2:]  # omit the root slash and ``control``
     checks = [
@@ -163,19 +188,14 @@ class ControlOutcomeUnknown(BuildControlError):
     """The client observation ended without proving a daemon-side outcome."""
 
 
-def _publish_operation_records(control, phase, root, receipt):
-    """Publish a terminal operation with the wake-up marker written last."""
-
-    control.write(root + "/receipt.json", receipt)
-    control.write(phase + "/current.json", receipt)
-    if receipt.get("state") == "succeeded":
-        control.write(phase + "/verified.json", receipt)
-    # The control helper waits for this marker.  It must be the last durable
-    # record so a woken lease holder observes current/verified consistently.
-    control.write(root + "/terminal.json", receipt)
+class DockerObservationBudgetExceeded(ControlOutcomeUnknown):
+    """A Docker client observation did not finish within its bounded budget."""
 
 
 def bounded_capture(command, *, data=None, timeout=90, env=None, maximum=MAX_DOCUMENT_BYTES):
+    # Identify the failing control step without logging command arguments,
+    # stdin, or environment values (which may contain private runtime data).
+    caller = sys._getframe(1).f_code.co_name
     process = subprocess.Popen(command, stdin=subprocess.PIPE if data is not None else subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
@@ -223,7 +243,10 @@ def bounded_capture(command, *, data=None, timeout=90, env=None, maximum=MAX_DOC
     if sender is not None and not sender.is_alive() and not process.stdin.closed:
         process.stdin.close()
     if interrupted or exceeded.is_set() or any(t.is_alive() for t in readers) or (sender and sender.is_alive()):
-        raise ControlOutcomeUnknown("Docker observation exceeded its time/output budget; daemon resources retained")
+        raise DockerObservationBudgetExceeded(
+            f"Docker observation exceeded its time/output budget during {caller} "
+            f"(timeout={timeout}s); daemon resources retained"
+        )
     if failures and not process.returncode:
         raise ControlOutcomeUnknown("Docker control pipes did not complete; daemon resources retained")
     return subprocess.CompletedProcess(command, process.returncode, bytes(buffers["stdout"]), bytes(buffers["stderr"]))
@@ -281,6 +304,7 @@ class BuildControl:
         self.namespace = ""
         self.namespace_registry = None
         self.namespace_registry_sha256 = None
+        self._active_operation = None
         from docker_control_namespace import resolve_namespace
         resolve_namespace(self)
 
@@ -347,13 +371,14 @@ class BuildControl:
                 "available_bytes": usage.free, "filesystem": native["host_filesystem"],
                 "volume_serial": native["host_volume_serial"]}
 
-    def assert_windows_pre_pull_space(self):
+    @staticmethod
+    def assert_windows_pre_pull_space():
         """Guard physical Docker Desktop storage before a cold helper pull.
 
         Linux/WSL cannot observe the Docker VM filesystem before its first
         helper image exists; the existing cold pull order is retained there.
         """
-        backing = self._windows_backing_volume()
+        backing = BuildControl._windows_backing_volume()
         if backing is not None:
             _assert_free_space({"available_bytes": backing["available_bytes"]},
                                MIN_FREE_BUILD_BYTES, "cold helper pull admission refused")
@@ -399,8 +424,7 @@ class BuildControl:
         mount = "type=volume,src=" + self.volume + ",dst=/control,volume-nocopy"
         if self.namespace:
             mount += ",volume-subpath=" + self.namespace
-            script = ("test \"$(sha256sum /registry/namespaces/current.json | cut -d' ' -f1)\" = '"
-                      + self.namespace_registry_sha256 + "'; " + script)
+            script = self._namespace_guard(script)
         args = [*docker_argv("run"), "--rm", "-i",
                 "--pull", "never", "--network", "none", "--runtime", "runc",
                 "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
@@ -433,6 +457,186 @@ class BuildControl:
             raise BuildControlError("Invalid control-volume relative path")
         return "/control/" + str(path)
 
+    def _namespace_guard(self, script):
+        if not self.namespace:
+            return script
+        return ("test \"$(sha256sum /registry/namespaces/current.json | cut -d' ' -f1)\" = '"
+                + self.namespace_registry_sha256 + "'; " + script)
+
+    def _inspect_operation_helper(self, operation, *, expected_id=None):
+        receipt = operation.get("receipt") if isinstance(operation, dict) else None
+        attempt = receipt.get("attempt") if isinstance(receipt, dict) else None
+        name = receipt.get("helper_container") if isinstance(receipt, dict) else None
+        if (not isinstance(attempt, str) or not re.fullmatch(r"[0-9a-f]{32}", attempt)
+                or name != "fullmag-control-" + attempt):
+            raise ControlOutcomeUnknown("Active operation has no exact control-helper identity")
+        target = expected_id or name
+        try:
+            rows = json.loads(docker_capture("inspect", target, timeout=60).stdout)
+        except Exception as error:
+            raise ControlOutcomeUnknown(
+                "Active operation control-helper observation failed; resources retained"
+            ) from error
+        if not isinstance(rows, list) or len(rows) != 1:
+            raise ControlOutcomeUnknown("Active operation control helper is ambiguous; resources retained")
+        row = rows[0]
+        identifier = row.get("Id") if isinstance(row, dict) else None
+        config = row.get("Config") if isinstance(row, dict) else None
+        labels = config.get("Labels") if isinstance(config, dict) else None
+        state = row.get("State") if isinstance(row, dict) else None
+        host = row.get("HostConfig") if isinstance(row, dict) else None
+        expected_labels = {
+            "com.docker.compose.project": self.project,
+            "com.docker.compose.service": "build-control",
+            **self.labels,
+        }
+        from docker_compose_identity import source_labels
+        expected_labels.update(source_labels(self.identity))
+        if (not isinstance(identifier, str) or not re.fullmatch(r"[0-9a-f]{64}", identifier)
+                or (expected_id is not None and identifier != expected_id)
+                or row.get("Name") != "/" + name
+                or not isinstance(config, dict) or config.get("Image") != self.image
+                or config.get("Entrypoint") != ["/bin/bash"]
+                or config.get("User") != "65532:65532"
+                or not isinstance(labels, dict)
+                or any(labels.get(key) != value for key, value in expected_labels.items())
+                or not isinstance(state, dict) or state.get("Running") is not True
+                or type(state.get("Pid")) is not int or state["Pid"] <= 0
+                or not isinstance(host, dict) or host.get("NetworkMode") != "none"):
+            raise ControlOutcomeUnknown(
+                "Active operation control helper no longer matches its pinned identity; resources retained"
+            )
+        mounts = row.get("Mounts")
+        control_mounts = [mount for mount in mounts if isinstance(mount, dict)
+                          and mount.get("Destination") == "/control"] if isinstance(mounts, list) else []
+        expected_mount_count = 2 if self.namespace else 1
+        if (not isinstance(mounts, list) or len(mounts) != expected_mount_count
+                or len(control_mounts) != 1 or control_mounts[0].get("Type") != "volume"
+                or control_mounts[0].get("Name") != self.volume
+                or control_mounts[0].get("RW") is not True):
+            raise ControlOutcomeUnknown(
+                "Active operation control helper has a different control-volume mount; resources retained"
+            )
+        if self.namespace:
+            registry_mounts = [mount for mount in mounts if isinstance(mount, dict)
+                               and mount.get("Destination") == "/registry"] if isinstance(mounts, list) else []
+            if (len(registry_mounts) != 1 or registry_mounts[0].get("Type") != "volume"
+                    or registry_mounts[0].get("Name") != self.volume
+                    or registry_mounts[0].get("RW") is not False):
+                raise ControlOutcomeUnknown(
+                    "Active operation control helper has a different namespace-registry mount; resources retained"
+                )
+        host_mounts = host.get("Mounts")
+        if not isinstance(host_mounts, list) or len(host_mounts) != expected_mount_count:
+            raise ControlOutcomeUnknown(
+                "Active operation helper HostConfig mounts are incomplete; resources retained"
+            )
+        if host.get("Binds") not in (None, []) or host.get("Tmpfs") not in (None, {}):
+            raise ControlOutcomeUnknown(
+                "Active operation helper has an unexpected additional mount; resources retained"
+            )
+        expected_targets = {"/control": (False, self.namespace or None)}
+        if self.namespace:
+            expected_targets["/registry"] = (True, None)
+        for mount in host_mounts:
+            if not isinstance(mount, dict):
+                raise ControlOutcomeUnknown("Active operation helper mount is malformed; resources retained")
+            target_path = mount.get("Target")
+            expected = expected_targets.get(target_path)
+            options = mount.get("VolumeOptions")
+            expected_read_only, expected_subpath = expected if expected is not None else (None, None)
+            actual_subpath = options.get("Subpath") if isinstance(options, dict) else None
+            actual_read_only = mount["ReadOnly"] if "ReadOnly" in mount else False
+            if (expected is None or mount.get("Type") != "volume"
+                    or mount.get("Source") != self.volume
+                    or type(actual_read_only) is not bool
+                    or actual_read_only is not expected_read_only
+                    or not isinstance(options, dict) or options.get("NoCopy") is not True
+                    or actual_subpath != expected_subpath):
+                raise ControlOutcomeUnknown(
+                    "Active operation helper HostConfig mount differs from its pinned namespace; resources retained"
+                )
+        command = config.get("Cmd")
+        phase = receipt.get("phase")
+        expected_command = [
+            "-euo", "pipefail", "-c",
+            self._namespace_guard(self.operation_script(phase, attempt)),
+        ] if isinstance(phase, str) else None
+        if command != expected_command:
+            raise ControlOutcomeUnknown(
+                "Active operation control helper command no longer matches its lease; resources retained"
+            )
+        return identifier
+
+    def _pin_operation_helper(self, operation):
+        logger = operation.get("logger")
+        if not operation.get("lease_ready") or logger is None or logger.poll() is not None:
+            raise ControlOutcomeUnknown("Control helper exited before its lease identity was pinned")
+        identifier = self._inspect_operation_helper(operation)
+        if logger.poll() is not None:
+            raise ControlOutcomeUnknown("Control helper logger exited while its identity was pinned")
+        operation["helper_container_id"] = identifier
+        return identifier
+
+    def _assert_live_operation_helper(self, operation):
+        if self._active_operation is not operation:
+            raise ControlOutcomeUnknown("No active control-helper lease is available; resources retained")
+        logger = operation.get("logger")
+        if logger is None or logger.poll() is not None:
+            raise ControlOutcomeUnknown("Active operation logger exited; resources retained")
+        identifier = operation.get("helper_container_id")
+        if not isinstance(identifier, str):
+            raise ControlOutcomeUnknown("Active operation helper ID is not pinned; resources retained")
+        if not re.fullmatch(r"[0-9a-f]{64}", identifier):
+            raise ControlOutcomeUnknown("Active operation helper ID pin is malformed; resources retained")
+        return identifier
+
+    def _read_control_bytes_from_operation(self, operation, path, maximum, timeout):
+        identifier = self._assert_live_operation_helper(operation)
+        script = self._namespace_guard(control_read_script(path, maximum))
+        command = [*docker_argv("exec"), "--user", "65532:65532", identifier,
+                   "/bin/bash", "-euo", "pipefail", "-c", script]
+        try:
+            result = bounded_capture(
+                command, timeout=timeout, maximum=maximum + 64 * 1024
+            )
+        except BaseException as error:
+            try:
+                self._assert_live_operation_helper(operation)
+            except BaseException as status_error:
+                raise ControlOutcomeUnknown(
+                    "Control read failed and the pinned helper state is no longer observable; resources retained: "
+                    + str(error)
+                ) from error
+            raise
+        else:
+            # A failed exec observation never falls back to a fresh helper.
+            self._assert_live_operation_helper(operation)
+        return result
+
+    def read_bytes(self, relative, *, optional=False, maximum=MAX_DOCUMENT_BYTES, timeout=90):
+        path = self.path(relative)
+        script = control_read_script(path, maximum)
+        operation = self._active_operation
+        if operation is None:
+            result = bounded_capture(
+                self.helper_args(script), data=b"", timeout=timeout,
+                maximum=maximum + 64 * 1024,
+            )
+        else:
+            result = self._read_control_bytes_from_operation(operation, path, maximum, timeout)
+        if optional and result.returncode == 44:
+            return None
+        if result.returncode:
+            raise BuildControlError(
+                result.stderr.decode("utf-8", "replace")[-1024:]
+                or "Control-volume read failed"
+            )
+        raw = bytes(result.stdout)
+        if len(raw) > maximum:
+            raise BuildControlError("Control document exceeds its byte budget")
+        return raw
+
     def write(self, relative, value):
         self.write_bytes(relative, canonical(value) + b"\n")
 
@@ -442,8 +646,20 @@ class BuildControl:
         if len(data) > MAX_DOCUMENT_BYTES:
             raise BuildControlError("Control document exceeds its byte budget")
         path = self.path(relative)
+        if relative == "activation/history-v1" or relative.startswith("activation/history-v1/"):
+            raise BuildControlError("Archived activation records are immutable")
+        archive_guard = ""
+        activation = re.match(r"/control/activation/attempts/([0-9a-f]{32})(?:/|$)", path)
+        if activation is not None:
+            history = "/control/activation/history-v1"
+            archived = history + "/" + activation[1]
+            archive_guard = (
+                f"test ! -L {history}; if test -e {history}; then test -d {history}; "
+                f"test \"$(readlink -f {history})\" = {history}; fi; "
+                f"test ! -L {archived}; test ! -e {archived}; "
+            )
         parent = str(PurePosixPath(path).parent)
-        script = (f"umask 027; mkdir -p '{parent}'; "
+        script = (archive_guard + f"umask 027; mkdir -p '{parent}'; "
                   f"test \"$(readlink -f '{parent}')\" = '{parent}'; test ! -L '{path}'; "
                   f"if test -e '{path}'; then test -f '{path}'; test $(stat -c %h '{path}') = 1; fi; "
                   f"t=$(mktemp '{parent}/.publish.XXXXXXXX'); "
@@ -454,16 +670,10 @@ class BuildControl:
             raise BuildControlError(result.stderr.decode("utf-8", "replace"))
 
     def read(self, relative, *, optional=False):
-        path = self.path(relative)
-        script = control_read_script(path)
-        result = bounded_capture(self.helper_args(script), data=b"", timeout=90)
-        if optional and result.returncode == 44:
+        raw = self.read_bytes(relative, optional=optional)
+        if raw is None:
             return None
-        if result.returncode:
-            raise BuildControlError(result.stderr.decode("utf-8", "replace"))
-        if len(result.stdout) > MAX_DOCUMENT_BYTES:
-            raise BuildControlError("Control document exceeds its byte budget")
-        return json.loads(result.stdout)
+        return json.loads(raw)
 
     def read_pinned_resume_evidence(
         self,
@@ -515,6 +725,8 @@ class BuildControl:
                          "\"$(stat -c '%d:%i' /registry/operation.lock)\"; "
                          "test \"$(sha256sum /registry/namespaces/current.json | cut -d' ' -f1)\" = '"
                          + self.namespace_registry_sha256 + "'; ")
+        if phase != "cache-retirement":
+            admission += "test ! -e /control/cache-retirement/closing.json; test ! -L /control/cache-retirement/closing.json; "
         return (admission +
                 "test ! -e /control/active; "
                 f"mkdir -p /control/{phase}/attempts; "
@@ -544,6 +756,15 @@ class BuildControl:
                 or (minimum_free_bytes < MIN_FREE_BUILD_BYTES
                     and phase not in CACHE_ONLY_PHASES)):
             raise BuildControlError("Invalid build-space admission for operation phase")
+        console_id = os.environ.get("FULLMAG_CONSOLE_SESSION_ID")
+        if console_id is not None:
+            if not re.fullmatch(r"[0-9a-f]{32}", console_id):
+                raise BuildControlError("Invalid console session identity")
+            if os.environ.get("FULLMAG_CONSOLE_CANCEL_REQUESTED") == console_id:
+                raise BuildControlError("Console startup cancelled before the next managed operation")
+            if "console_session_id" in inputs and inputs["console_session_id"] != console_id:
+                raise BuildControlError("Console session identity differs from operation inputs")
+            inputs = {**inputs, "console_session_id": console_id}
         token = uuid.uuid4().hex
         root = f"{phase}/attempts/{token}"
         path = self.path(root)
@@ -572,6 +793,10 @@ class BuildControl:
             if first != "READY":
                 raise BuildControlError("Control helper admission failed: " + first)
             operation["lease_ready"] = True
+            operation["helper_container_id"] = self._pin_operation_helper(operation)
+            if self._active_operation is not None:
+                raise ControlOutcomeUnknown("A control operation is already active on this BuildControl")
+            self._active_operation = operation
             self.write(root + "/receipt.json", receipt)
             yield operation
         except BaseException as error:
@@ -586,24 +811,27 @@ class BuildControl:
                 self.write(root + "/receipt.json", receipt)
             raise
         finally:
-            if operation["lease_ready"] and receipt.get("state") in {"succeeded", "failed-confirmed"}:
-                if logger.stdin and not logger.stdin.closed:
-                    logger.stdin.close()
-                if self._line(logger) != "LOGGED":
-                    raise BuildControlError("Build log was not durably acknowledged")
-                receipt["finished_at"] = time.time()
-                receipt["filesystem_after"] = self.space()
-                if "daemon_pending" in receipt:
-                    # The managed daemon is known terminal only at this
-                    # finalization boundary.  Retention keeps this true until
-                    # the operation has reached the shared publisher below.
-                    receipt["daemon_pending"] = False
-                _publish_operation_records(self, phase, root, receipt)
-                if logger.wait(timeout=30) != 0:
-                    raise BuildControlError("Control lease finalization failed")
-            summary = {key: receipt[key] for key in ("phase", "state", "attempt", "compose_project",
-                       "control_volume", "image_id", "cache_hit", "backend_package_cache_hit", "config_sha256", "url", "error") if key in receipt}
-            mirror_console(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
+            try:
+                if operation["lease_ready"] and receipt.get("state") in {"succeeded", "failed-confirmed"}:
+                    if logger.stdin and not logger.stdin.closed:
+                        logger.stdin.close()
+                    if self._line(logger) != "LOGGED":
+                        raise BuildControlError("Build log was not durably acknowledged")
+                    receipt["finished_at"] = time.time()
+                    receipt["filesystem_after"] = self.space()
+                    self.write(root + "/receipt.json", receipt)
+                    self.write(root + "/terminal.json", receipt)
+                    self.write(phase + "/current.json", receipt)
+                    if receipt["state"] == "succeeded":
+                        self.write(phase + "/verified.json", receipt)
+                    if logger.wait(timeout=30) != 0:
+                        raise BuildControlError("Control lease finalization failed")
+                summary = {key: receipt[key] for key in ("phase", "state", "attempt", "compose_project",
+                           "control_volume", "image_id", "cache_hit", "backend_package_cache_hit", "config_sha256", "url", "error") if key in receipt}
+                mirror_console(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
+            finally:
+                if self._active_operation is operation:
+                    self._active_operation = None
 
     def build(self, operation, document, service):
         command = [*docker_argv("compose"), "--project-name",
@@ -637,11 +865,10 @@ def build_volume_toolchain(repo):
     """Build the canonical dependency Dockerfile without host staging/receipts."""
     import fullmag_storage as storage
     from bootstrap_docker_toolchain import tracked_input_files, read_input, DEPENDENCY_MANIFEST
-    from docker_compose_identity import compose_project_identity
     require_host()
     repo = validate_host_path(Path(repo).absolute(), "source checkout").resolve(strict=True)
-    layout = storage.resolve_layout(repo, "docker-all-gpu")
-    identity = compose_project_identity(layout)
+    from docker_compose_identity import compose_source_identity
+    identity = compose_source_identity(repo)
     local_volume(repo)
     configured = toolchain_configuration(repo, identity)
     service = configured["services"]["fem-gpu-toolchain"]
@@ -655,7 +882,6 @@ def build_volume_toolchain(repo):
     helper = build["args"]["FULLMAG_CUDA_BASE_IMAGE"]
     if not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", helper):
         raise BuildControlError("CUDA bootstrap image must be pinned by digest")
-    control = BuildControl(identity, helper)
     # The control helper itself is pulled only when it is absent. Do not call
     # prepare() first: its --pull never helper cannot run on a cold host.
     probe_spec = {"name": identity["project_name"], "services": {"build-control": {
@@ -663,10 +889,14 @@ def build_volume_toolchain(repo):
     helper_present = not docker_capture("image", "inspect", helper, allow_failure=True).returncode
     if not helper_present:
         if os.name == "nt":
-            control.assert_windows_pre_pull_space()
+            BuildControl.assert_windows_pre_pull_space()
         # Linux/WSL has no Docker-VM measurement before this image exists; the
         # established cold ordering is retained and documented as such.
         compose_capture(probe_spec, "pull", "build-control", timeout=1800)
+    # Namespace authentication itself runs a --pull never helper. Resolve it
+    # only after the pinned image exists, including when an existing group's
+    # control volume survived an operator's image cleanup.
+    control = BuildControl(identity, helper)
     control.prepare(minimum_free_bytes=(MIN_FREE_CONTROL_BYTES if helper_present
                                         else MIN_FREE_BUILD_BYTES))
 
@@ -681,7 +911,7 @@ def build_volume_toolchain(repo):
         raise BuildControlError("Untracked dependency inputs require explicit Git staging before build")
     source_identity = {"source_inputs": manifest, "build_args": build.get("args", {}),
                        "target": build["target"]}
-    digest = hashlib.sha256(canonical(source_identity)).hexdigest()
+    digest = build_input_digest(source_identity)
     service["image"] = "fullmag/fem-gpu-toolchain:inputs-" + digest[:24]
     with control.operation("toolchain", source_identity,
                            minimum_free_bytes=MIN_FREE_CONTROL_BYTES) as operation:
@@ -726,12 +956,26 @@ def build_volume_toolchain(repo):
     return operation["receipt"]
 
 
-def build_volume_runtime_images(repo, control, toolchain):
+def build_volume_runtime_images(repo, control, toolchain, *, helper_source_binding=None):
     """Prepare trusted wrapper layers through this project's BuildKit only."""
     from docker_dev import BASE_CONTEXT_FILES, RUNTIME_IMAGE_CONTEXT_FILES
     from bootstrap_docker_toolchain import read_input
     require_host()
     repo = validate_host_path(Path(repo).absolute(), "source checkout").resolve(strict=True)
+    helper_source = None
+    if helper_source_binding is not None:
+        import docker_helper_source as helper_source
+        try:
+            helper_source_binding = helper_source.validate_binding_record(helper_source_binding)
+            if Path(helper_source_binding["root"]).resolve(strict=True) != repo:
+                raise helper_source.HelperSourceError("Runtime image context is not the pinned helper checkout")
+            helper_source.revalidate_binding(
+                helper_source_binding,
+                base_context_files=BASE_CONTEXT_FILES,
+                runtime_context_files=RUNTIME_IMAGE_CONTEXT_FILES,
+            )
+        except (OSError, helper_source.HelperSourceError) as error:
+            raise BuildControlError("Pinned helper source is unavailable before runtime image build: " + str(error)) from error
     parent = toolchain["image_id"]
     results = {}
     for kind, inventory in (("dev", BASE_CONTEXT_FILES), ("backend", RUNTIME_IMAGE_CONTEXT_FILES)):
@@ -744,20 +988,26 @@ def build_volume_runtime_images(repo, control, toolchain):
                     for name in names]
         manifest = inputs()
         identity = {"parent_image_id": parent, "files": manifest}
-        digest = hashlib.sha256(canonical(identity)).hexdigest()
+        if helper_source_binding is not None:
+            identity["helper_source"] = helper_source_binding
+        digest = build_input_digest(identity)
         tag = "fullmag/development-" + kind + ":inputs-" + digest[:24]
-        parent_ref = "fullmag/" + control.project + "-base:sha-" + parent.removeprefix("sha256:")
+        parent_digest = parent[7:] if parent.startswith("sha256:") else parent
+        parent_ref = "fullmag/" + control.project + "-base:sha-" + parent_digest
         arguments = {"FULLMAG_DOCKER_HELPERS": "docker/all-in-one/"}
         if kind == "dev":
             arguments.update(RUNTIME_BASE=parent_ref, FULLMAG_TOOLCHAIN_IMAGE_ID=parent,
                              FULLMAG_SCRIPT_HELPERS="scripts/")
         else:
             arguments["DEV_BASE"] = parent_ref
+        labels = {"org.fullmag.compose.project": control.project,
+                  "org.fullmag.build.input-digest": digest}
+        if helper_source_binding is not None:
+            labels.update(helper_source.image_labels(helper_source_binding))
         document = {"name": control.project, "services": {"image-" + kind: {
             "image": tag, "build": {"context": str(repo),
             "dockerfile": "docker/all-in-one/Dockerfile." + kind, "args": arguments,
-            "labels": {"org.fullmag.compose.project": control.project,
-                       "org.fullmag.build.input-digest": digest}}}}}
+            "labels": labels}}}}
         with control.operation("image-" + kind, identity,
                                minimum_free_bytes=MIN_FREE_CONTROL_BYTES) as operation:
             # FROM accepts a named local reference, not Docker's raw image ID.
@@ -780,7 +1030,25 @@ def build_volume_runtime_images(repo, control, toolchain):
             operation["receipt"].update(state="building", cache_hit=bool(cached))
             if not cached:
                 control.require_build_space(operation=operation)
+                if helper_source_binding is not None:
+                    try:
+                        helper_source.revalidate_binding(
+                            helper_source_binding,
+                            base_context_files=BASE_CONTEXT_FILES,
+                            runtime_context_files=RUNTIME_IMAGE_CONTEXT_FILES,
+                        )
+                    except helper_source.HelperSourceError as error:
+                        raise BuildControlError("Pinned helper source changed before BuildKit: " + str(error)) from error
                 control.build(operation, document, "image-" + kind)
+            if helper_source_binding is not None:
+                try:
+                    helper_source.revalidate_binding(
+                        helper_source_binding,
+                        base_context_files=BASE_CONTEXT_FILES,
+                        runtime_context_files=RUNTIME_IMAGE_CONTEXT_FILES,
+                    )
+                except helper_source.HelperSourceError as error:
+                    raise BuildControlError("Pinned helper source changed during BuildKit: " + str(error)) from error
             parent_documents = json.loads(docker_capture("image", "inspect", parent_ref).stdout)
             if (inputs() != manifest
                     or len(parent_documents) != 1
@@ -793,8 +1061,15 @@ def build_volume_runtime_images(repo, control, toolchain):
             if (labels.get("org.fullmag.compose.project") != control.project
                     or labels.get("org.fullmag.build.input-digest") != digest):
                 raise BuildControlError("Runtime image source labels differ")
+            if helper_source_binding is not None:
+                try:
+                    helper_source.startup_hashes_from_image_labels(labels, helper_source_binding)
+                except helper_source.HelperSourceError as error:
+                    raise BuildControlError("Runtime image helper-source labels differ: " + str(error)) from error
             parent = image[0]["Id"]
             operation["receipt"].update(state="succeeded", source_digest=digest, image=tag,
                                         image_id=parent)
+            if helper_source_binding is not None:
+                operation["receipt"]["helper_source"] = helper_source_binding
         results[kind] = operation["receipt"]
     return results

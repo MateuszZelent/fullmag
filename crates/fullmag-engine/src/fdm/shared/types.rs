@@ -170,6 +170,7 @@ impl GridShape {
         self.nx * self.ny * self.nz
     }
 
+    #[inline]
     pub(crate) fn index(self, x: usize, y: usize, z: usize) -> usize {
         x + self.nx * (y + self.ny * z)
     }

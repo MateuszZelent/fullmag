@@ -76,13 +76,37 @@ impl ReciprocalConstitutiveMaterial {
         Ok(())
     }
 
+    /// Validate coefficients against the explicitly resolved magnetic domain.
+    pub fn validate_magnetic_activity(self, magnetic_active: bool) -> Result<()> {
+        self.validate()?;
+        if !magnetic_active
+            && (self.polarization != 0.0
+                || self.sigma_parallel_s_per_m != self.sigma_perpendicular_s_per_m
+                || self.sigma_ahe_s_per_m != 0.0)
+        {
+            return Err(EngineError::new("M2 nonmagnetic material cannot carry P, AMR or AHE"));
+        }
+        Ok(())
+    }
+
     pub fn evaluate(
         self,
         electric_field_v_per_m: [f64; 3],
         spin_potential_gradient_v_per_m: [[f64; 3]; 3],
         magnetization: [f64; 3],
     ) -> Result<ReciprocalConstitutiveResponse> {
-        self.validate()?;
+        self.evaluate_with_magnetic_activity(electric_field_v_per_m, spin_potential_gradient_v_per_m, magnetization, true)
+    }
+
+    /// Evaluate one cell using the explicit magnetic-domain bit, never a material heuristic.
+    pub fn evaluate_with_magnetic_activity(
+        self,
+        electric_field_v_per_m: [f64; 3],
+        spin_potential_gradient_v_per_m: [[f64; 3]; 3],
+        magnetization: [f64; 3],
+        magnetic_active: bool,
+    ) -> Result<ReciprocalConstitutiveResponse> {
+        self.validate_magnetic_activity(magnetic_active)?;
         if electric_field_v_per_m
             .iter()
             .chain(spin_potential_gradient_v_per_m.iter().flatten())
@@ -94,12 +118,15 @@ impl ReciprocalConstitutiveMaterial {
             ));
         }
         let m_norm = dot(magnetization, magnetization).sqrt();
-        if (m_norm - 1.0).abs() > 1.0e-12 {
+        if magnetic_active && (m_norm - 1.0).abs() > 1.0e-12 {
             return Err(EngineError::new(
                 "M2 reciprocal magnetization must be unit length",
             ));
         }
 
+        if !magnetic_active && magnetization != [0.0; 3] {
+            return Err(EngineError::new("M2 nonmagnetic magnetization must be exactly zero"));
+        }
         let mut charge = [0.0; 3];
         let projection = dot(magnetization, electric_field_v_per_m);
         let hall = cross(magnetization, electric_field_v_per_m);
@@ -278,5 +305,39 @@ mod tests {
         (0..3)
             .flat_map(|i| (0..3).map(move |a| (total[i][a] - base[i][a]) * rhs[i][a]))
             .sum()
+    }
+}
+
+#[cfg(test)]
+mod magnetic_activity_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_nonmagnetic_state_preserves_direct_and_inverse_she() {
+        let material = ReciprocalConstitutiveMaterial {
+            sigma_s_per_m: 4.0,
+            sigma_spin_s_per_m: 3.0,
+            sigma_parallel_s_per_m: 4.0,
+            sigma_perpendicular_s_per_m: 4.0,
+            sigma_ahe_s_per_m: 0.0,
+            polarization: 0.0,
+            spin_hall_angle: 0.2,
+        };
+        let e = [1.0, 0.0, 0.0];
+        let mut g = [[0.0; 3]; 3];
+        g[1][2] = 2.0;
+        let response = material.evaluate_with_magnetic_activity(e, g, [0.0; 3], false).unwrap();
+        assert!((response.charge_current_density_a_per_m2[0] - 5.6).abs() < 1.0e-14);
+        assert!((response.spin_current_density_a_per_m2[1][2] - 5.2).abs() < 1.0e-14);
+        assert!(material.evaluate(e, g, [0.0; 3]).is_err());
+        assert!(material.evaluate_with_magnetic_activity(e, g, [1.0, 0.0, 0.0], false).is_err());
+        assert_eq!(material.evaluate(e, g, [1.0, 0.0, 0.0]).unwrap(), material.evaluate_with_magnetic_activity(e, g, [1.0, 0.0, 0.0], true).unwrap());
+        for conflict in [
+            ReciprocalConstitutiveMaterial { polarization: 0.1, ..material },
+            ReciprocalConstitutiveMaterial { sigma_parallel_s_per_m: 5.0, ..material },
+            ReciprocalConstitutiveMaterial { sigma_ahe_s_per_m: 0.1, ..material },
+        ] {
+            assert!(conflict.evaluate_with_magnetic_activity(e, g, [0.0; 3], false).is_err());
+        }
     }
 }

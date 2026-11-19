@@ -98,3 +98,33 @@ describe("field vector debug statistics", () => {
     expect(JSON.stringify(result)).not.toContain("null,null");
   });
 });
+
+describe("float32 field debug evidence", () => {
+  it("samples and scans decoded float32 values without widening the source", async () => {
+    const values = new Float32Array([0.1, -0.2, 0.3]);
+    const sampled = buildFieldVectorDebugSamples({
+      nComp: 3,
+      nodeIndices: new Uint32Array([7]),
+      pointCount: 1,
+      values,
+    });
+    const statistics = await scanFieldVectorDebugStatistics(values);
+
+    expect(sampled.samples[0]).toMatchObject({
+      componentValues: Array.from(values),
+      nodeIndex: 7,
+      pointIndex: 0,
+    });
+    expect(sampled.samples[0]?.magnitude).toBeCloseTo(Math.hypot(...values), 14);
+    expect(statistics).toMatchObject({
+      finiteCount: 3,
+      max: values[2],
+      min: values[1],
+      nonFiniteCount: 0,
+      source: "decoded-payload",
+      zeroCount: 0,
+    });
+    expect(statistics.mean).toBeCloseTo((values[0]! + values[1]! + values[2]!) / 3);
+    expect(values).toBeInstanceOf(Float32Array);
+  });
+});

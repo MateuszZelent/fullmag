@@ -43,6 +43,7 @@ import {
 } from "./model/viewport3DTargetFieldBuffer";
 import { buildViewport3DTopologyIndexBundle } from "./viewport3dTopologyIndexModel";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
+import { scalarColorRgb } from "@/shared/visualization/scalarColorPalette";
 import { resolveViewport3DAdaptiveVectorGlyphLength } from "./model/viewport3DVectorGlyphScale";
 import { resolveViewport3DTargetSurfaceLayerInput } from "./layers/viewport3DLayerPassInputs";
 
@@ -4490,4 +4491,33 @@ describe("viewport3dRenderModel", () => {
       ),
     ).toBe(0);
   });
+});
+
+
+it("uses Airbox vector mode and palette with exact scoped samples independently of global orientation", () => {
+  const topology = buildViewport3DTopologyRenderModel(topologyFixture(), [
+    { id: "magnetic", node_indices: [0] },
+  ], [
+    { id: "airbox", role: "air", node_indices: [1, 2, 3] },
+  ]);
+  const source = {
+    ...fieldVectorFixture(), quantityId: "H_demag", pointCount: 3, valueCount: 9,
+    grid: [3, 1, 1] as [number, number, number],
+    nodeIndices: new Uint32Array([3, 1, 2]),
+    values: new Float64Array([0, 0, 10, 3, 4, 0, 0, 0, 0]),
+  };
+  const render = (palette: string) => buildViewport3DFieldRenderModel(topology, null, 1, {
+    vectorColorMode: "orientation",
+    partVectorColorModes: new Map([["airbox", "magnitude"]]),
+    partScalarColorPalettes: new Map([["airbox", palette]]),
+    partScalarRangesByMode: new Map([["airbox", new Map([["magnitude", { min: 0, max: 10 }]])]]),
+    partVectorBudgets: new Map([["airbox", 3]]),
+    partFieldVectors: new Map([["airbox", source]]),
+    scalarColorsVisible: false,
+  })?.targetPasses.get("airbox")?.vectors;
+  const gray = render("grayscale");
+  expect(gray?.nodeIndices).toEqual(new Uint32Array([3, 1]));
+  expect(gray?.glyphColors).toEqual(new Float32Array([...scalarColorRgb(1, "grayscale"), ...scalarColorRgb(.5, "grayscale")]));
+  expect(gray?.colorScale).toEqual({ colorMode: "magnitude", colorPalette: "grayscale", quantityId: "H_demag", range: { min: 0, max: 10 } });
+  expect(render("turbo")?.glyphColors).not.toEqual(gray?.glyphColors);
 });

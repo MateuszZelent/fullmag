@@ -50,11 +50,14 @@ def _helper_document(**changes: object) -> dict[str, object]:
             "NetworkMode": "none",
             "DeviceRequests": [],
             "ReadonlyRootfs": True,
+            # The helper declares exactly its writable control volume.
+            "Mounts": [{"Target": "/control", "Source": VOLUME, "Type": "volume"}],
         },
         "Mounts": [{
             "Type": "volume",
             "Name": VOLUME,
             "Destination": "/control",
+            "RW": True,
         }],
     }
     for key, value in changes.items():

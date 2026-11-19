@@ -105,3 +105,91 @@ niepewny stop, częściową publikację oraz zachowanie journalu i nieznanego
 wyniku bez replayu Solve. Testy Rust wykonuje CI zgodnie z wyjątkiem użytkownika;
 lokalny build nie kompiluje testów. Rzeczywisty test Docker pozostaje osobnym
 dowodem. Brak tej weryfikacji oznacza **NOT VERIFIED**.
+
+## Rozszerzenie po ENOSPC: rozpoczęty claim bez receiptu wyjścia
+
+Status rozszerzenia: projekt przyjęty do implementacji 05.11.2026; źródła,
+zarządzane testy i wykonanie **NOT VERIFIED**. Dotychczasowy protokół V1
+zachowuje odmowę dla trwałego `Started` i wszystkie dotychczasowe bajty.
+
+W DEV potwierdzono przypadek: zadanie ma trwały `Started`, owner jest
+`Unknown`, a zapis potwierdzonego wyjścia workera nie powiódł się przez
+ENOSPC. Statystyki i częściowe pliki mogą istnieć, ale brak receiptu wyjścia,
+końcowego stanu i zwolnienia lease. Obserwacja nieistniejących PID nie
+poświadcza zakończenia całej prywatnej przestrzeni procesów. Zwykły restart,
+`service-ensure`, nowy request ani ścieżka `WorkerNoSpawn` nie mogą tego naprawić.
+
+Odrębny protokół `claimed_worker_interruption.v1` stosuje następujący kontrakt:
+
+1. Przygotowanie wiąże jeden claim/attempt/epoch, cały katalog i journal,
+   trwały `Started`, inbox i właściciela slotu, dokładny ACTIVE lease,
+   rezerwację COMMITTED i niezmieniony token Consumed. Wiąże również surowe
+   owner/process/launch/config, pakiet, wybrany lokalny ledger DEV, Engine,
+   prywatny namespace, kontener oraz manifest zachowanych plików. Stosuje
+   dotychczasową kolejność blokad startup/launch/owner oraz host→store.
+2. Przygotowanie publikuje trwały intent i kwarantannę. Capacity pozostaje
+   zajęte, a historyczne Started, heartbeat i Consumed nie zmieniają bajtów.
+   Przed kwarantanną zachowuje również oryginalne bajty process receiptu
+   w niezmiennym archiwum przypisanym do pełnego SHA żądania. Finalizacja
+   sprawdza ten dowód i jego lineage; terminalny zapis PID 1 przy zatrzymaniu
+   nie zastępuje historycznego dowodu ani nie unieważnia go samą zmianą pliku.
+3. Dopiero attestation rzeczywistego Engine dla tego samego kontenera
+   (`exited`, PID 0, zgodne StartedAt/FinishedAt, obraz, konfiguracja i
+   sole-worker/private PID namespace) pozwala finalizować przerwanie. Niepewny
+   stop, obcy konsument, dodatkowy claim, zmiana pinów lub shared/privileged
+   namespace blokują operację.
+4. Finalizacja zapisuje oddzielny operacyjny receipt
+   `interrupted-no-final-state`, istniejący stan Interrupted i dedykowany
+   typed release proof. Nie tworzy worker exit receiptu, exit code, zdarzenia
+   zakończenia obliczeń, magnetyzacji końcowej ani dowodu drain. Zwalnia
+   wyłącznie dokładny lease i rezerwację, archiwizuje slot i zapisuje własny
+   operacyjny dowód przejścia Unknown→Failed.
+5. API może prezentować przerwany przebieg jako failed z dokładnym powodem
+   braku stanu końcowego. Nie zmienia to fizycznego wyniku na completed ani
+   converged. Nie dodajemy nowego enum OpenAPI, Python DSL ani ProblemIR.
+   Nowe obliczenie od początku jest osobną jawną operacją; recovery nie
+   wywołuje Solve i nie deklaruje ExactResume.
+
+Każda częściowa publikacja pozostawia zachowany intent i capacity do
+uzgodnienia. Ponowienie dotyczy tego samego UUID i identycznych pinów;
+zmienione wejścia nie tworzą zastępczego dowodu. Żadne istniejące walidatory
+orphan V1, reaped-worker z prawdziwym receiptem ani container-recovery V2–V5
+nie uzyskują cichego wyjątku.
+
+### Bootstrap naprawy w martwym backendzie
+
+Gdy pakiet nie rozumie nowego protokołu, dopuszczalny jest osobny, jawnie
+przypięty tryb **build-only** istniejącego recovery builda. Może obejmować
+wyłącznie jeden dokładny martwy claim ze zużytym tokenem, przy zgodnych CAS
+store/ledger, fenced API i potwierdzonym braku procesów native. Pozostałe
+rezerwacje muszą być zwolnione. Kompilacja pozostaje w tym samym stałym
+backendzie i prywatnym wolumenie grupy. Owner pozostaje Unknown, a capacity
+pozostaje zajęte. Tryb nie uruchamia API, runtime ani solvera i nie poświadcza
+teardown. Brak dowodu któregokolwiek warunku blokuje również build.
+
+Przed wywołaniem nowego narzędzia wymagane może być opublikowanie pakietu
+do kanonicznej ścieżki: admission danych DEV wiąże skompilowany kod z current
+i jego provenance. Dopuszczalna jest jawna promocja z tym samym dokładnym
+permittem martwego claimu, blokadami i CAS przed/po, tylko przy fenced API,
+bez procesów native i bez zmiany ownera, lease, journalu ani tokenu Consumed.
+Obowiązują istniejący rotation journal, rollback oraz zgodność fresh manifest.
+Ogólny tryb diagnostyczny bez takiego claimu nadal nie zezwala na promocję.
+Publikacja pakietu nie stanowi gotowości runtime ani dowodu teardown;
+administracja używa następnie jawnie wybranego current z przypiętym receiptem.
+
+Po kwalifikacji pakietu przygotowanie i finalizacja używają powyższej
+procedury Engine i krótkiej administracyjnej usługi w tej samej grupie,
+bez sieci, GPU i kompilacji. Zwykły zarządzany start API jest dopiero następnym
+etapem po pełnej weryfikacji release i archiwum. DEV dotyczy lokalnego
+`group-ledger-v1`; nie migrujemy ani nie zatrzymujemy cudzych grup. Starsi
+czytelnicy tego samego ledgeru muszą odmówić nierozpoznanego proofu.
+
+### Weryfikacja rozszerzenia
+
+Wymagane są sukces i exact replay, odmowy dla każdego zmienionego pinu,
+żywego procesu, dodatkowej rezerwacji i obcego namespace, obowiązkowy Started
+oraz brak starego exit receiptu, testy przerwania na każdej granicy publikacji,
+bajtowa zgodność zachowanych plików i brak replayu, fikcyjnych zdarzeń lub
+końcowego stanu. Bootstrap ma osobne testy exact-claim-only i CAS przed/po.
+Zarządzane testy Rust/Python, review oraz jedna rzeczywista operacja operatora
+są oddzielnymi bramkami; zapis niniejszego kontraktu ich nie zastępuje.

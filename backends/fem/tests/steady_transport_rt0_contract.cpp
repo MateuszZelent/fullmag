@@ -341,6 +341,39 @@ void run_closed_geometry_rt0_contract()
                 &oersted_request, &oersted_result, &charge_snapshot) == FULLMAG_FEM_OK,
         "public RT0 OE-F1 charge snapshot solve failed");
     verify_charge_snapshot(oersted_result.source_view_identity_digest);
+    const auto legacy_h = h_xyz_apm;
+    std::vector<fullmag_fem_direct_oersted_target_record_v1> target_records(target_points_xyz.size() / 3u);
+    auto quadrature_snapshot = fullmag_fem_direct_oersted_snapshot_result_v1{};
+    quadrature_snapshot.abi_version = FULLMAG_FEM_DIRECT_OERSTED_SNAPSHOT_ABI_VERSION;
+    quadrature_snapshot.struct_size = sizeof(quadrature_snapshot);
+    quadrature_snapshot.target_records = target_records.data();
+    quadrature_snapshot.target_records_capacity = target_records.size();
+    for (const auto pair_limit : {std::uint64_t{1'000'000}, std::uint64_t{4'000'000}}) {
+        oersted_request.maximum_source_target_pairs = pair_limit;
+        require(fullmag_fem_solve_steady_transport_rt0_oersted_with_snapshots_v1(
+                    &oersted_request, &oersted_result, &charge_snapshot, &quadrature_snapshot) == FULLMAG_FEM_OK,
+            "public RT0 quadrature snapshot profile solve failed");
+        const auto work_limit = pair_limit == 1'000'000 ? 100'000'000u : 500'000'000u;
+        require(quadrature_snapshot.maximum_source_target_pairs == pair_limit &&
+                quadrature_snapshot.maximum_kernel_evaluations == work_limit &&
+                quadrature_snapshot.maximum_ledger_leaf_visits == work_limit &&
+                quadrature_snapshot.maximum_final_leaves_per_target == 1'000'000 &&
+                quadrature_snapshot.base_quadrature_order == 4 &&
+                quadrature_snapshot.maximum_subdivision_depth == 6 &&
+                quadrature_snapshot.absolute_tolerance_apm == 1.0e-9 &&
+                quadrature_snapshot.relative_tolerance == 1.0e-5 &&
+                h_xyz_apm == legacy_h,
+            "public RT0 snapshot did not publish the selected unchanged-accuracy work limits");
+        std::uint64_t samples = 0, visits = 0;
+        for (const auto &target : target_records) {
+            samples += target.kernel_evaluations; visits += target.ledger_leaf_visits;
+        }
+        require(quadrature_snapshot.target_records_len == target_records.size() &&
+                samples == quadrature_snapshot.kernel_evaluations &&
+                visits == quadrature_snapshot.ledger_leaf_visits,
+            "public RT0 snapshot reset work counters between targets");
+    }
+    oersted_request.maximum_source_target_pairs = 1'000'000;
     for (int failure = 0; failure < 7; ++failure) {
         auto failed_snapshot = charge_snapshot;
         auto failed_result = oersted_result;

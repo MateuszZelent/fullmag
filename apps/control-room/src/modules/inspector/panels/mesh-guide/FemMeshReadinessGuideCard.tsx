@@ -157,7 +157,7 @@ function FemMeshReadinessGuideCardInner({
             className="fm-mesh-guide__icon"
             size={15}
           />
-          <span className="fm-mesh-guide__title">FEM Mesh Readiness Guide</span>
+          <h3 className="fm-mesh-guide__title m-0">FEM Mesh Readiness Guide</h3>
           <Badge variant={overallBadgeVariant(guide.overallStatus)}>
             {guide.overallStatusLabel} ({guide.completedRequiredSteps}/
             {guide.totalRequiredSteps})
@@ -165,14 +165,12 @@ function FemMeshReadinessGuideCardInner({
         </div>
         <button
           aria-expanded={expanded}
-          aria-label={
-            expanded ? "Collapse FEM Mesh Guide" : "Expand FEM Mesh Guide"
-          }
+          aria-label="FEM Mesh Guide"
           className="fm-mesh-guide__toggle"
           type="button"
           onClick={() => setExpanded((prev) => !prev)}
         >
-          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          {expanded ? <ChevronDown aria-hidden="true" size={14} /> : <ChevronRight aria-hidden="true" size={14} />}
         </button>
       </div>
 

@@ -331,6 +331,59 @@ class StopUnadmittedTests(unittest.TestCase):
         ):
             stop._runtime_control_volume_mount(backend, "fullmag-master")
 
+    def test_runtime_control_mount_treats_empty_namespace_as_unnamespaced(self):
+        # BuildControl.namespace is "" for a group that never quarantined its
+        # control namespace; idle restart passes it through unchanged.
+        backend = {
+            "Mounts": [{
+                "Destination": "/opt/fullmag/runtime-control",
+                "Type": "volume",
+                "Name": "fullmag-build-control-test",
+                "RW": True,
+            }],
+            "HostConfig": {"Mounts": [{
+                "Target": "/opt/fullmag/runtime-control",
+                "Type": "volume",
+                "Source": "fullmag-build-control-test",
+                "ReadOnly": False,
+                "VolumeOptions": {"Subpath": "runtime-control"},
+            }]},
+        }
+        result = type("Result", (), {"stdout": json.dumps([{
+            "Name": "fullmag-build-control-test",
+            "Driver": "local",
+            "Options": {},
+            "Labels": {"com.fullmag.compose.project": "fullmag-master"},
+        }]).encode()})()
+        with patch.object(stop, "docker_capture", return_value=result):
+            self.assertEqual(
+                stop._runtime_control_volume_mount(backend, "fullmag-master", namespace=""),
+                ("fullmag-build-control-test", "runtime-control"),
+            )
+        namespace = "namespaces/" + "b" * 32
+        backend["HostConfig"]["Mounts"][0]["VolumeOptions"] = {
+            "Subpath": namespace + "/runtime-control",
+        }
+        with patch.object(stop, "docker_capture", return_value=result):
+            self.assertEqual(
+                stop._runtime_control_volume_mount(backend, "fullmag-master", namespace=namespace),
+                ("fullmag-build-control-test", namespace + "/runtime-control"),
+            )
+        for invalid in ("namespaces/", "namespaces/" + "B" * 32, "../runtime-control"):
+            with self.subTest(namespace=invalid), patch.object(
+                stop, "docker_capture", return_value=result
+            ), self.assertRaisesRegex(stop.StopUnadmittedError, "namespace is invalid"):
+                stop._runtime_control_volume_mount(backend, "fullmag-master", namespace=invalid)
+
+    def test_terminal_receipt_preflight_builds_the_same_helper_without_running_it(self):
+        backend = {"Image": "sha256:" + "a" * 64}
+        control = SimpleNamespace(project="fullmag-master", namespace="", volume="owned-volume")
+        with patch.object(stop, "_runtime_control_validation_helper") as helper, \
+                patch.object(stop, "bounded_capture") as capture:
+            stop._preflight_terminal_process_receipt(backend, control)
+        helper.assert_called_once_with(backend, control)
+        capture.assert_not_called()
+
     def test_retained_attempt_pins_config_source_and_image(self):
         args = self.args()
         selected = Path("/checkout").resolve()

@@ -1,10 +1,10 @@
 import { artifactSurfaceProjection } from "./artifactSurfaceProjection";
-import { buildAveragedSurfaceNodeNormals, resolveVectorSurfaceOffsetDistance } from "../viewport3dRenderModel";
-import { buildVertexScalarColors } from "../viewport3dFieldMapping";
+import { buildAveragedSurfaceNodeNormals, resolveVectorSurfaceOffsetDistance, resolveTopologyBounds } from "../viewport3dRenderModel";
+import { buildVertexScalarColors, resolveScalarRange } from "../viewport3dFieldMapping";
 import type { Viewport3DArtifactInspectionPresentation } from "../viewport3dStore";
-import { artifactCarrierPresentationKey, artifactSurfaceRangeKey } from "@/kernel/visualization/artifactFieldSelection";
-import { scalarColorRgb } from "@/shared/visualization/scalarColorPalette";
-import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import { artifactCarrierPresentationKey, artifactSurfaceRangeKey, artifactSelectionMatchesSession, artifactFieldLocatorHasAcceptedGlobalSampling, type ArtifactFieldSelection } from "@/kernel/visualization/artifactFieldSelection";
+import { resolveViewport3DVectorColorRgb } from "../viewport3dVectorColoring";
+import type { VisualizationTargetSettings, VisualizationTargetRef } from "@/kernel/visualization/ObjectVisualizationController";
 import { deviceBoundary, MAX_ANTENNA_DISPLAY_SAMPLES, MAX_ANTENNA_DISPLAY_CELLS, MAX_ANTENNA_DISPLAY_PAYLOAD_BYTES } from "./antennaFieldOverlayModel";
 import { admitArtifactFieldCarrier, parseArtifactFieldLocator } from "./artifactFieldCarrierModel";
 
@@ -58,10 +58,10 @@ export function prepareArtifactFieldOverlay(admitted: ReturnType<typeof admitArt
   if (surfaceTriangles) for (const index of surfaceTriangles) boundaryMask[index] = 1;
   const surfaceSampleIndices = surfaceTriangles ? allSampleIndices.filter(index => boundaryMask[index] === 1) : null;
   const rawSurface = { positions, triangles: surfaceTriangles, values: field.values, scalarValues: surfaceScalarValues, vectorValues: surfaceVectorValues };
-  return { rawSurface, field, locator, count, current, scalar, surfaceScalarValues, positions, magnitudes, maximumNorm, extent, surfaceTriangles, surfaceEdges, surfaceVectorScale, surfaceVectorValues, allSampleIndices, surfaceSampleIndices, surfaceNormals };
+  return { bounds: resolveTopologyBounds(topology), rawSurface, field, locator, count, current, scalar, surfaceScalarValues, positions, magnitudes, maximumNorm, extent, surfaceTriangles, surfaceEdges, surfaceVectorScale, surfaceVectorValues, allSampleIndices, surfaceSampleIndices, surfaceNormals };
 }
 
-export function presentArtifactFieldOverlay(data: ReturnType<typeof prepareArtifactFieldOverlay>, settings: VisualizationTargetSettings) {
+export function presentArtifactFieldOverlay(data: ReturnType<typeof prepareArtifactFieldOverlay>, settings: VisualizationTargetSettings, presentationTarget: VisualizationTargetRef | null = null) {
   const { field, locator, count, current, scalar, positions, magnitudes, maximumNorm, extent, surfaceTriangles, surfaceEdges, surfaceVectorScale, surfaceVectorValues } = data;
   if (!surfaceTriangles && (settings.shaderVisible || settings.wireframeVisible)) throw new Error("Point samples have no owned surface; enable points or vectors.");
   const component: "scalar" | "x" | "y" | "z" | "magnitude" = scalar ? "scalar" : settings.shaderColorMode === "x" || settings.shaderColorMode === "y" || settings.shaderColorMode === "z" ? settings.shaderColorMode : "magnitude";
@@ -104,13 +104,22 @@ export function presentArtifactFieldOverlay(data: ReturnType<typeof prepareArtif
     }
   }
   if (segments?.some(v => !Number.isFinite(v))) throw new Error("Owned vector glyph cannot be represented.");
-  const glyphColors = new Float32Array(glyphCount * 3);
-  for (let i = 0; i < glyphCount; i++) glyphColors.set(scalarColorRgb(maximumNorm > 0 ? magnitudes[vectorSampleIndices[i]] / maximumNorm : .5, settings.scalarColorPalette), i * 3);
+  // Use the complete physical carrier, never display-segment lengths or the sampled glyph subset.
+  const vectorColorRange = scalar ? null : settings.vectorColorMode === "magnitude" ? { min: 0, max: maximumNorm }
+    : settings.vectorColorMode === "x" || settings.vectorColorMode === "y" || settings.vectorColorMode === "z"
+      ? resolveScalarRange(field, settings.vectorColorMode, settings.scalarColorPalette) : null;
+  const glyphColors = vectorColorRange ? new Float32Array(glyphCount * 3) : null;
+  if (glyphColors && vectorColorRange) for (let i = 0; i < glyphCount; i++) {
+    const source = vectorSampleIndices[i], offset = source * 3;
+    const rgb = resolveViewport3DVectorColorRgb(settings.vectorColorMode, field.values[offset], field.values[offset + 1], field.values[offset + 2],
+      vectorColorRange, maximumNorm > 0 ? magnitudes[source] / maximumNorm : .5, settings.scalarColorPalette);
+    if (rgb) glyphColors.set(rgb, i * 3);
+  }
   const vectorSegments = encodeAntennaGlyphSegments(segments, glyphCount);
   if (vectorSegments) for (let i = 0; i < glyphCount; i++) vectorSegments[i * 7 + 6] = maximumNorm > 0 ? magnitudes[vectorSampleIndices[i]] / maximumNorm : 0;
   const glyphSelectionKey = JSON.stringify([settings.geometryScope ?? "full", glyphCount]);
   const glyphStyleKey = JSON.stringify([settings.geometryScope, settings.vectorBudget, settings.scalarColorPalette, settings.vectorColorMode, settings.vectorLengthScale, settings.vectorCenteringEnabled, surfaceOffsetDistance]);
-  return { scalar, geometry: data, glyphColors, glyphSelectionKey, glyphStyleKey, key: `${locator.carrier_id}:${field.fieldGenerationId}:${field.sourceRevision}`, quantityId: field.quantityId as "H_ant" | "J_charge" | "V_electric", unit: scalar ? "V" : current ? "A/m^2" : "A/m",
+  return { presentationTarget, scalar, geometry: data, glyphColors, vectorColorRange, glyphSelectionKey, glyphStyleKey, key: `${locator.carrier_id}:${field.fieldGenerationId}:${field.sourceRevision}`, quantityId: field.quantityId as "H_ant" | "J_charge" | "V_electric", unit: scalar ? "V" : current ? "A/m^2" : "A/m",
     status: "historical_inspection" as const, surface, locator, fieldRevision: field.sourceRevision ?? "", positions, scalarValues: scalars, vectorSegments, pointSampleIndices, vectorSampleIndices, glyphCount, surfaceOffsetDistance, availableGlyphCount: pointSampleIndices.length,
     surfaceTriangles, surfaceEdges, surfaceVectorValues, surfaceVectorScale, maximumVectorNorm: scalar ? 0 : maximumNorm, minimum: component === "magnitude" && settings.surfaceProjectionMode !== "surface_faces" ? 0 : minimum, maximum, count,
     intent: { component, palette: settings.scalarColorPalette }, settings };
@@ -142,6 +151,30 @@ export function artifactOverlayLocator(metadata: unknown, session: { sessionId: 
   return locator;
 }
 
+/** The accepted run's own global sampling mesh; never the current mutable Universe mesh. */
+export function artifactUniverseInspectionLocator(
+  metadata: unknown,
+  session: { sessionId: string; sessionEpoch: string; requestScopeEpoch: string } | null,
+  selection: ArtifactFieldSelection | null,
+) {
+  if (!selection || selection.quantityId !== "H_ant" || !artifactSelectionMatchesSession(selection, session)) {
+    throw new Error("Universe inspection requires an explicitly selected H result in this session.");
+  }
+  const locator = artifactOverlayLocator(metadata, session, null, "H_ant", selection.sourceObjectId);
+  if (!locator || locator.owner.run_id !== selection.runId
+    || locator.owner.runtime_stage_id !== selection.runtimeStageId
+    || locator.owner.authored_stage_id !== selection.authoredStageId
+    || locator.owner.object_id !== selection.sourceObjectId
+    || (selection.carrierId != null && selection.carrierId !== locator.carrier_id)
+    || (selection.carrierRevision != null && selection.carrierRevision !== locator.carrier_revision)) {
+    throw new Error("Universe inspection metadata differs from the selected immutable owner.");
+  }
+  if (!artifactFieldLocatorHasAcceptedGlobalSampling(locator)) {
+    throw new Error("Universe inspection requires a verified accepted global FEM node sampling carrier.");
+  }
+  return locator;
+}
+
 export { artifactInspectionOwnerPlan } from "@/kernel/visualization/artifactFieldSelection";
 
 /** Historical presentation never aliases an unpinned live-field scale. */
@@ -151,7 +184,7 @@ export function artifactRenderedSurfaceRanges(model: ArtifactFieldOverlayModel |
   const inspectionKey = artifactSurfaceRangeKey({ ...locator.owner, quantityId: model.quantityId }, {
     carrier_id: locator.carrier_id, expected_carrier_revision: locator.carrier_revision,
     scope_kind: locator.carrier_scope_kind, scope_id: locator.carrier_scope_id,
-  }, model.settings.surfaceProjectionMode);
+  }, model.settings.surfaceProjectionMode, model.presentationTarget);
   return [{ component: model.intent.component, quantityId: model.quantityId, inspectionKey,
     scopeKind: locator.carrier_scope_kind, scopeId: locator.carrier_scope_id,
     range: { min: model.minimum, max: model.maximum } }];
@@ -163,14 +196,14 @@ export function artifactInspectionPresentation(model: ArtifactFieldOverlayModel 
   const key = artifactCarrierPresentationKey({ ...locator.owner, quantityId: model.quantityId }, {
     carrier_id: locator.carrier_id, expected_carrier_revision: locator.carrier_revision,
     scope_kind: locator.carrier_scope_kind, scope_id: locator.carrier_scope_id,
-  });
+  }, model.presentationTarget);
   if (!key) return null;
   const expectedGlyphCount = model.settings.visible ? model.glyphCount : 0;
   return { key, fieldBufferId: model.key, vectorBuildKey: `${model.key}:glyphs:${model.glyphStyleKey}`,
     decodedSampleCount: model.count, availableGlyphCount: model.availableGlyphCount, expectedGlyphCount,
     adoptedGlyphCount: expectedGlyphCount === 0 ? 0 : null,
     capacity: { anchorKind: "node", carrierId: locator.carrier_id, generation: locator.carrier_digest,
-      revision: locator.carrier_revision, topologyHash: locator.carrier_digest, targetId: `object:${locator.owner.object_id}`,
+      revision: locator.carrier_revision, topologyHash: locator.carrier_digest, targetId: model.presentationTarget?.kind === "airbox" ? model.presentationTarget.id : `object:${locator.owner.object_id}`,
       fullCount: model.count, surfaceCount: model.geometry.surfaceSampleIndices?.length ?? 0,
       exact: Boolean(model.geometry.surfaceSampleIndices), fullExact: true, surfaceExact: Boolean(model.geometry.surfaceSampleIndices) } };
 }

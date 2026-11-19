@@ -20,6 +20,8 @@ export interface CommandSessionScopeSource {
 
 interface CommandOutcomeDetails {
   backendCommandId?: string;
+  clientIntentId?: string;
+  clientIntentKind?: string;
   message?: string | null;
   observation?: CommandResult["observation"];
   title?: string;
@@ -142,6 +144,8 @@ export class CommandRegistry {
     ) => {
       this.bus?.emit("command:outcome", {
         backendCommandId: details.backendCommandId ?? null,
+        clientIntentId: details.clientIntentId ?? null,
+        clientIntentKind: details.clientIntentKind ?? null,
         commandId: id,
         feedback: context.feedback ?? defaultCommandFeedbackOwner(context.source),
         invocationId,
@@ -230,6 +234,8 @@ export class CommandRegistry {
       });
       emitOutcome(result.status, "run", {
         backendCommandId: result.commandId,
+        clientIntentId: result.clientIntentId,
+        clientIntentKind: result.clientIntentKind,
         message: result.message ?? null,
         observation: result.observation,
         title: cmd.title,

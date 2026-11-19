@@ -1,4 +1,7 @@
+import { resolveArtifactAssessment } from "@/shared/domain/mesh/artifactAssessment";
+
 import { SIMULATION_PREPARATION_PATH } from "../api/apiPaths";
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 import type {
   LivePreparationMaterializationResource,
   SimulationPreparationResource,
@@ -16,8 +19,12 @@ import {
 
 type JsonRecord = Record<string, unknown>;
 
+type PreparationReceipt = NonNullable<SimulationPreparationResource["receipt"]>;
+
 export type LivePreparationMaterializationOutcome =
   | { kind: "materialized"; resource: LivePreparationMaterializationResource }
+  | { kind: "already-prepared"; receipt: PreparationReceipt }
+  | { kind: "server-prepares" }
   | { kind: "rejected"; result: CommandResult };
 
 export interface LivePreparationMaterializationOptions {
@@ -62,13 +69,22 @@ export async function materializeCurrentLivePreparation(
     const requestOptions = context.sessionScopeKey
       ? { sessionScopeKey: context.sessionScopeKey }
       : undefined;
-    const preparation: SimulationPreparationResource =
-      await api.simulation.preparation(requestOptions);
+    // A geometry-only mesh build (ADR 0074) publishes no live preparation;
+    // Compute then prepares its accepted run on the server.
+    const preparation: SimulationPreparationResource | null = await api.simulation
+      .preparation(requestOptions)
+      .catch((error: unknown) => {
+        if (error instanceof ControlRoomApiError && error.status === 404) return null;
+        throw error;
+      });
     const obsoleteAfterPreparation = obsoleteSessionResult(context);
     if (obsoleteAfterPreparation) {
       return rejectedSessionResult(obsoleteAfterPreparation);
     }
-    if (!preparation.preparation_id || preparation.status !== "ready") {
+    if (
+      preparation !== null &&
+      (!preparation.preparation_id || preparation.status !== "ready")
+    ) {
       return reject(
         `Live preparation is not ready (status: ${preparation.status}).`,
       );
@@ -96,11 +112,21 @@ export async function materializeCurrentLivePreparation(
       if (obsoleteAfterManifest) {
         return rejectedSessionResult(obsoleteAfterManifest);
       }
-      if (finiteRevision(manifest?.source_scene_revision) !== sceneRevision) {
+      if (!resolveArtifactAssessment({ manifest, sceneRevision }).runAllowed) {
         return reject(
           "A shared-domain mesh for the current scene revision is required before preparation.",
         );
       }
+    }
+
+    if (preparation === null) return { kind: "server-prepares" };
+
+    // A ready preparation that already carries its receipt was published by
+    // the accepted preparation lane (for FEM, with native mesh evidence).
+    // Materializing it again would re-plan from the scene without that
+    // evidence, so Compute proceeds with the accepted plan.
+    if (preparation.receipt?.preparation_id === preparation.preparation_id) {
+      return { kind: "already-prepared", receipt: preparation.receipt };
     }
 
     const resource = await api.simulation.materializePreparation(

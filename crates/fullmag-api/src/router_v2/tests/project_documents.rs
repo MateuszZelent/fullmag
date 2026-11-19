@@ -784,6 +784,24 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         material_transition: None,
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
     });
+    let authored_reference =
+        fullmag_plan::authored_initial_state_reference(&study.steps[0].step_id, &problem).unwrap();
+    study.steps[0].inputs.push(fullmag_authoring::StudyInputPort {
+        port_id: "initial_state".into(),
+        data_kind: StudyPortDataKind::State,
+        required: true,
+        source: fullmag_authoring::StudyInputSource::AuthoredInitialState {
+            reference: authored_reference,
+        },
+    });
+    let mut foreign_study = study.clone();
+    foreign_study.steps[0].inputs[0].source = fullmag_authoring::StudyInputSource::AuthoredInitialState {
+        reference: fullmag_plan::authored_initial_state_reference("another-step", &problem).unwrap(),
+    };
+    assert!(StudyProblemCatalog::from_entries(
+        &foreign_study,
+        vec![StudyProblemCatalogEntry::from_step(&foreign_study.steps[0], problem.clone())],
+    ).is_err());
     let catalog = StudyProblemCatalog::from_entries(
         &study,
         vec![StudyProblemCatalogEntry::from_step(
@@ -2226,6 +2244,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     .unwrap();
     assert_eq!(queued.task, queued_replay.task);
     assert_eq!(queued.resolved_inputs, queued_replay.resolved_inputs);
+    assert!(queued.resolved_inputs.is_empty(), "authored state has no CAS input");
     assert_eq!(queued.step_id, step.step_id);
     let queued_inputs = queued.resolved_inputs;
     let mut task = queued.task;
@@ -2508,6 +2527,16 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             case_id: "default".into(),
         },
     }];
+    assert_eq!(
+        crate::accepted_study_worker::materialize_resolved_study_inputs(&store, &worker_step).unwrap(),
+        accepted_execution_plan,
+    );
+    let mut authored_with_unexpected_artifact = worker_step.clone();
+    authored_with_unexpected_artifact.resolved_input.inputs = resolved_inputs.clone();
+    assert!(crate::accepted_study_worker::materialize_resolved_study_inputs(
+        &store, &authored_with_unexpected_artifact,
+    ).is_err());
+
     let mut worker_step_with_input = worker_step.clone();
     worker_step_with_input.study_inputs = declared_inputs.to_vec();
     worker_step_with_input.resolved_input.inputs = resolved_inputs;
@@ -3595,10 +3624,108 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         .collect::<Vec<_>>();
     assert_eq!(reserved_entries.len(), 1);
     let accepted_quantity_bundle = reserved_entries[0];
+    let terminal_scalar_entries = output_catalog
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.artifact_type
+                == crate::accepted_field_materialization_worker::TERMINAL_SCALAR_ARTIFACT_TYPE
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(terminal_scalar_entries.len(), 1);
+    let terminal_scalar = terminal_scalar_entries[0];
+    assert_eq!(terminal_scalar.task_id, claim.task_id.as_str());
+    assert_eq!(terminal_scalar.attempt_id, claim.attempt_id.as_str());
+    assert_eq!(
+        terminal_scalar.ownership_epoch,
+        claim.ownership_epoch.value()
+    );
+    assert_eq!(
+        terminal_scalar.status,
+        fullmag_session::FmsArtifactStatus::Published
+    );
+    assert!(terminal_scalar.study_output.is_none());
+    assert!(!solution_artifact_ids.contains(terminal_scalar.artifact_id.as_str()));
+    let terminal_completion_entries = output_catalog
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.artifact_type
+                == crate::accepted_field_materialization_worker::TERMINAL_COMPLETION_ARTIFACT_TYPE
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(terminal_completion_entries.len(), 1);
+    let terminal_completion = terminal_completion_entries[0];
+    assert_eq!(terminal_completion.task_id, claim.task_id.as_str());
+    assert_eq!(terminal_completion.attempt_id, claim.attempt_id.as_str());
+    assert_eq!(
+        terminal_completion.ownership_epoch,
+        claim.ownership_epoch.value()
+    );
+    assert_eq!(
+        terminal_completion.status,
+        fullmag_session::FmsArtifactStatus::Published
+    );
+    assert!(!terminal_completion.required);
+    assert!(terminal_completion.study_output.is_none());
+    // Completion is separately pinned system evidence, not an authored output
+    // or a SolutionSet member. Validate its CAS digest and exact terminal state
+    // before excluding this specific artifact from the membership comparison.
+    let completion_record = crate::accepted_field_materialization_worker::read_terminal_completion(
+        &store,
+        terminal_completion,
+    )
+    .expect("terminal completion evidence is durably stored with a valid CAS digest");
+    assert_eq!(completion_record.run_id, accepted_run_id.as_str());
+    assert_eq!(completion_record.step_id, step.step_id);
+    assert_eq!(completion_record.source, *accepted_state_ref);
+    assert_eq!(
+        completion_record.state_object_ref,
+        output_entry.content_sha256
+    );
+    assert_eq!(
+        completion_record.input_fingerprint,
+        published_task.input_fingerprint
+    );
+    assert_eq!(
+        completion_record.resolved_input_fingerprint,
+        published_task.resolved_input_fingerprint
+    );
+    let fullmag_application::DecodedStudyArtifact::MagnetizationState(final_state) =
+        fullmag_application::decode_study_artifact_bytes(
+            "state",
+            &observation_source.state_codec_id,
+            &observation_source.state_codec_version,
+            &output_bytes,
+        )
+        .unwrap()
+    else {
+        panic!("final state must decode as accepted magnetization");
+    };
+    assert_eq!(completion_record.clock.accepted_step, final_state.step);
+    assert_eq!(
+        completion_record.clock.time_seconds.to_bits(),
+        final_state.time_s.to_bits()
+    );
+    assert_eq!(
+        completion_record.solver_dt_s.to_bits(),
+        final_state.solver_dt_s.to_bits()
+    );
+    assert_eq!(
+        completion_record.clock.dt_seconds,
+        (final_state.solver_dt_s > 0.0).then_some(final_state.solver_dt_s)
+    );
+    assert_eq!(completion_record.completion.status, "completed");
+    assert!(!solution_artifact_ids.contains(terminal_completion.artifact_id.as_str()));
     let expected_solution_artifact_ids = output_catalog
         .entries
         .iter()
-        .filter(|entry| entry.artifact_id != accepted_quantity_bundle.artifact_id)
+        .filter(|entry| {
+            entry.artifact_id != accepted_quantity_bundle.artifact_id
+                && entry.artifact_id != terminal_completion.artifact_id
+                && entry.artifact_type
+                    != crate::accepted_field_materialization_worker::TERMINAL_SCALAR_ARTIFACT_TYPE
+        })
         .map(|entry| entry.artifact_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(solution_artifact_ids, expected_solution_artifact_ids);
@@ -4928,6 +5055,66 @@ async fn from_script_embeds_script_provenance_and_survives_open_and_authoring() 
         })
         .count();
     assert_eq!(leftovers, 0);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn canonical_nonmagnetic_antenna_script_archive_has_lossless_cold_open_projection() {
+    use base64::Engine as _;
+    use fullmag_application::{FileProjectRepository, RawJsonEnvelope};
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/fem_antenna_closed_loop_nonmagnetic.py"));
+    let (app, root) = from_script_test_app();
+    let (status, imported) = post_from_script(&app, serde_json::json!({
+        "source":{"name":"fem_antenna_closed_loop_nonmagnetic.py","text":source},
+        "consent":{"executed_by_user":true}
+    })).await;
+    assert_eq!(status, StatusCode::CREATED, "{imported:?}");
+    assert_eq!(imported["script_import"]["fidelity"]["round_trip"], "verified");
+    let (envelope, documents) = open_archive_documents(imported["archive_base64"].as_str().unwrap());
+    assert_eq!(documents["project/source/script.py"], source.as_bytes());
+    assert!(!documents.contains_key("project/scene_document.json"), "the core scene is never opaque");
+
+    // Exercise the real public Python producer and canonical archive encoder,
+    // not a hand-written minimal scene fixture or a running solver/session.
+    for mutation in 0..8 {
+        let mut draft = envelope.clone();
+        let mut raw = draft.definition.scene.value().clone();
+        match mutation {
+            0 => {}
+            1 => { raw["objects"][0]["future"] = serde_json::Value::Null; }
+            2 => { raw["objects"][0]["geometry"]["future"] = serde_json::json!({}); }
+            3 => { raw["objects"][0]["transform"]["future"] = serde_json::json!([]); }
+            4 => { raw["objects"][0]["future"] = serde_json::json!(""); }
+            5 => { raw["study"]["solver"]["max_relaxation_time_s"] = serde_json::json!("1e-9"); }
+            6 => { raw["study"]["mesh_defaults"]["boundary_layer_thickness"] = serde_json::json!("1e-9"); }
+            _ => { raw["objects"][0]["mesh_override"]["boundary_layer_count"] = serde_json::json!(2); }
+        }
+        draft.replace_scene(RawJsonEnvelope::from_value(raw.clone()).unwrap()).unwrap();
+        let archive = FileProjectRepository::new().encode_archive(&draft).unwrap();
+        let response = app.clone().oneshot(Request::builder().method("POST")
+            .uri("/v2/persistence/projects/open").header("content-type","application/json")
+            .body(Body::from(serde_json::json!({"display_name":"antenna.fms",
+                "archive_base64":base64::engine::general_purpose::STANDARD.encode(archive)}).to_string()))
+            .unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let opened = body_json(response).await;
+        if mutation == 0 {
+            assert_eq!(opened["authoring_scene_document"], raw);
+            let scene = &opened["authoring_scene_document"];
+            assert_eq!(scene["objects"][0]["role"], "antenna");
+            assert_eq!(scene["objects"][0]["visualization_hint"],
+                serde_json::json!({"display":"shaded_frame","role":"antenna"}));
+            assert!(scene["magnetization_assets"].as_array().unwrap().is_empty());
+            assert!(scene["objects"].as_array().unwrap().iter().all(|object|
+                object["magnetization_ref"].is_null() && object["physics_stack"].as_array().unwrap().is_empty()));
+        } else {
+            assert!(opened.get("authoring_scene_document").is_none(), "mutation {mutation}");
+        }
+        let (reopened, reopened_documents) = open_archive_documents(opened["archive_base64"].as_str().unwrap());
+        assert_eq!(reopened.definition.scene.value(), &raw, "raw scene survives mutation {mutation}");
+        assert_eq!(reopened_documents, documents, "opaque bytes survive mutation {mutation}");
+    }
     let _ = fs::remove_dir_all(root);
 }
 

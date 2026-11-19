@@ -18,6 +18,7 @@ import {
   VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE,
   VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE,
   VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE,
+  VIEWPORT_3D_TENSOR_ROW_ATTRIBUTES,
 } from "../viewport3dScalarSurfaceShader";
 
 const VIEWPORT_3D_SCALAR_COLOR_UPLOAD_BATCH_SIZE = 8192;
@@ -135,6 +136,8 @@ export function canReuseViewport3DScalarShaderAttributes(
   previous: ScalarColorBuffer | null | undefined,
   next: ScalarColorBuffer | null | undefined,
 ): boolean {
+  if (previous?.tensorRows && next?.tensorRows && previous.tensorScale === next.tensorScale &&
+    (previous.tensorRows === next.tensorRows || (previous.tensorCarrierKey && previous.tensorCarrierKey === next.tensorCarrierKey))) return true;
   return Boolean(
     previous &&
       next &&
@@ -142,6 +145,7 @@ export function canReuseViewport3DScalarShaderAttributes(
       previous.buildKey === next.buildKey &&
       previous.scalarValues === next.scalarValues &&
       previous.vectorValues === next.vectorValues &&
+      previous.tensorRows === next.tensorRows &&
       previous.complexRealValues === next.complexRealValues &&
       previous.complexImagValues === next.complexImagValues,
   );
@@ -624,6 +628,10 @@ export function createViewport3DScalarShaderColorUploadPlan(
     3,
     vertexCount,
   );
+
+  for (let row = 0; row < 3; row++) {
+    addShaderUploadAttribute(attributes, geometry, VIEWPORT_3D_TENSOR_ROW_ATTRIBUTES[row], colorBuffer.tensorRows?.[row], 3, vertexCount);
+  }
 
   if (attributes.length === 0) return null;
 

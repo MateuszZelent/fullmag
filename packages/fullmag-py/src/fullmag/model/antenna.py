@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Sequence
+from typing import Mapping, Sequence
+from types import MappingProxyType
 
 from fullmag._validation import (
     as_vector3,
@@ -30,7 +31,7 @@ CURRENT_DISTRIBUTIONS = {"uniform"}
 FIELD_TIME_ORIGINS = frozenset({"stage_local", "absolute"})
 SPATIAL_WINDOWS = frozenset({"none", "hann"})
 ANTENNA_OERSTED_REALIZATIONS = frozenset(
-    {"direct_tetra_quadrature", "vector_potential_solver"}
+    {"direct_tetra_quadrature", "vector_potential_solver", "analytic_rt0_surface"}
 )
 ANTENNA_SPECTRUM_TRANSFORMS = frozenset({"spatial_fft", "nonuniform_spatial_fft"})
 ANTENNA_SPECTRUM_WINDOWS = frozenset({"rectangular", "hann", "hamming", "blackman"})
@@ -161,17 +162,18 @@ class AntennaPortMode:
             raise ValueError(
                 "antenna port terminal references must be unique across branches"
             )
-        if abs(sum(branch.signed_weight for branch in resolved)) > 1e-12:
-            raise ValueError("antenna port branch signed weights must sum to zero")
-        positive_weight = sum(
-            branch.signed_weight for branch in resolved if branch.signed_weight > 0.0
-        )
-        if abs(positive_weight - 1.0) > 1e-12 or not any(
-            branch.signed_weight < 0.0 for branch in resolved
-        ):
-            raise ValueError(
-                "antenna port positive branch weights must sum to one and include a return branch"
+        if schema_version == ANTENNA_PORT_MODE_SCHEMA_VERSION:
+            if abs(sum(branch.signed_weight for branch in resolved)) > 1e-12:
+                raise ValueError("antenna port branch signed weights must sum to zero")
+            positive_weight = sum(
+                branch.signed_weight for branch in resolved if branch.signed_weight > 0.0
             )
+            if abs(positive_weight - 1.0) > 1e-12 or not any(
+                branch.signed_weight < 0.0 for branch in resolved
+            ):
+                raise ValueError(
+                    "antenna port positive branch weights must sum to one and include a return branch"
+                )
         if normalization_current_a != 1.0:
             raise ValueError("antenna field basis normalization_current_a must equal exactly 1 A")
         object.__setattr__(self, "branches", resolved)
@@ -372,6 +374,80 @@ class AntennaNamedOutput:
         return {"id": self.id, "quantity": self.quantity}
 
 
+ANTENNA_SURFACE_FIELD_POLICY_VERSION = "caller_supplied_rt0_surface.inspection.v1"
+_SURFACE_INTEGER_LIMITS = (
+    "maximum_raw_integer_bits", "maximum_reduced_fraction_bits",
+    "maximum_lifetime_peak_rss_bytes", "guard_interval_events",
+)
+_SURFACE_TIME_LIMITS = ("maximum_total_seconds", "maximum_target_seconds")
+_SURFACE_TOLERANCE_MAXIMA = {
+    "absolute_field_apm": 1e-9, "relative_field": 1e-5,
+    "cancellation_floor_apm": 1e-6, "scalar_relative_80": 1e-45,
+    "scalar_relative_120": 1e-55, "angle_relative_80": 1e-45,
+    "angle_relative_120": 1e-55, "binary_cancellation_limit": 1e8,
+    "highprecision_cancellation_limit": 1e40,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class AntennaSurfaceFieldPolicy:
+    """Explicit FEM CPU RT0 surface inspection limits; no qualification claim."""
+    policy_version: str
+    limits: Mapping[str, object]
+    tolerances: Mapping[str, float]
+
+    def __post_init__(self) -> None:
+        if self.policy_version != ANTENNA_SURFACE_FIELD_POLICY_VERSION:
+            raise ValueError("unsupported surface field policy_version")
+        if not isinstance(self.limits, Mapping) or set(self.limits) != {
+            "total", "per_target", *_SURFACE_INTEGER_LIMITS, *_SURFACE_TIME_LIMITS
+        }:
+            raise ValueError("surface limits require exactly all registered fields")
+        def uint64(value: object, name: str) -> int:
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 < value < 2**64:
+                raise ValueError(f"{name} must be a positive uint64")
+            return value
+        def positive(value: object, name: str) -> float:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} must be finite and positive")
+            try:
+                resolved = float(value)
+            except OverflowError as error:
+                raise ValueError(f"{name} must be finite and positive") from error
+            if not math.isfinite(resolved) or resolved <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+            return resolved
+        limits: dict[str, object] = {}
+        for name in ("total", "per_target"):
+            values = self.limits[name]
+            if not isinstance(values, (tuple, list)) or len(values) != 14:
+                raise ValueError(f"surface limits.{name} requires exactly 14 uint64 counters")
+            limits[name] = tuple(uint64(value, f"limits.{name}") for value in values)
+        if limits["total"][0] > 4_000_000:
+            raise ValueError("surface source-target pair limit exceeds 4000000")
+        for name in _SURFACE_INTEGER_LIMITS:
+            limits[name] = uint64(self.limits[name], f"limits.{name}")
+        for name in _SURFACE_TIME_LIMITS:
+            limits[name] = positive(self.limits[name], f"limits.{name}")
+        if not isinstance(self.tolerances, Mapping) or set(self.tolerances) != {
+            *_SURFACE_TOLERANCE_MAXIMA, "binary_scalar_epsilon_factor", "binary_roundoff_epsilon_factor"
+        }:
+            raise ValueError("surface tolerances require exactly all 11 registered fields")
+        tolerances = {name: positive(value, f"tolerances.{name}") for name, value in self.tolerances.items()}
+        if any(tolerances[name] > maximum for name, maximum in _SURFACE_TOLERANCE_MAXIMA.items()):
+            raise ValueError("surface tolerance loosens an inspection gate")
+        if tolerances["binary_roundoff_epsilon_factor"] < 64:
+            raise ValueError("binary_roundoff_epsilon_factor must be at least 64")
+        object.__setattr__(self, "limits", MappingProxyType(limits))
+        object.__setattr__(self, "tolerances", MappingProxyType(tolerances))
+
+    def to_ir(self) -> dict[str, object]:
+        return {"policy_version": self.policy_version,
+                "limits": {name: list(value) if isinstance(value, tuple) else value
+                           for name, value in self.limits.items()},
+                "tolerances": dict(self.tolerances)}
+
+
 @dataclass(frozen=True, slots=True)
 class AntennaFieldSolveStage:
     id: str
@@ -382,6 +458,7 @@ class AntennaFieldSolveStage:
     field_sampling_domain: FieldTarget
     target_refs: tuple[FieldTarget, ...]
     outputs: tuple[AntennaNamedOutput, ...]
+    surface_field_policy: AntennaSurfaceFieldPolicy | None = None
     oersted_realization: str = "direct_tetra_quadrature"
     model: str = "quasistatic_conduction_biot_savart3d"
     conductor_mesh_policy: str = "authored_shared_domain"
@@ -399,6 +476,7 @@ class AntennaFieldSolveStage:
         target_refs: Sequence[FieldTarget],
         outputs: Sequence[AntennaNamedOutput],
         oersted_realization: str = "direct_tetra_quadrature",
+        surface_field_policy: AntennaSurfaceFieldPolicy | None = None,
         model: str = "quasistatic_conduction_biot_savart3d",
         conductor_mesh_policy: str = "authored_shared_domain",
         solver_policy: str = "production_default",
@@ -439,6 +517,11 @@ class AntennaFieldSolveStage:
             raise ValueError(
                 f"oersted_realization must be one of {sorted(ANTENNA_OERSTED_REALIZATIONS)}"
             )
+        if (realization == "analytic_rt0_surface") != (surface_field_policy is not None):
+            raise ValueError("surface_field_policy is required only for analytic_rt0_surface")
+        if surface_field_policy is not None and not isinstance(surface_field_policy, AntennaSurfaceFieldPolicy):
+            raise TypeError("surface_field_policy must be an AntennaSurfaceFieldPolicy")
+        object.__setattr__(self, "surface_field_policy", surface_field_policy)
         if model != "quasistatic_conduction_biot_savart3d":
             raise ValueError("unsupported antenna field model")
         object.__setattr__(self, "port_mode_ids", ports)
@@ -464,6 +547,8 @@ class AntennaFieldSolveStage:
         }
         if self.conservative_current_view_ref is not None:
             payload["conservative_current_view_ref"] = self.conservative_current_view_ref
+        if self.surface_field_policy is not None:
+            payload["surface_field_policy"] = self.surface_field_policy.to_ir()
         return payload
 
 

@@ -26,6 +26,7 @@ import sys
 import tarfile
 import tempfile
 import subprocess
+import threading
 import time
 from typing import Any, BinaryIO, Mapping
 import uuid
@@ -44,6 +45,10 @@ MAX_MEMBERS = 300_000
 # bind mount. Keep this as a per-child Git budget; runtime and lease deadlines
 # are independent.
 LIVE_GIT_TIMEOUT_SECONDS = 300
+# Editors and formatters may save while a start captures the checkout.
+LIVE_CAPTURE_ATTEMPTS = 3
+LIVE_CAPTURE_RETRY_SECONDS = 2.0
+LIVE_AUTO_UNTRACKED_MAX_BYTES = 16 * 1024 * 1024
 LIVE_GIT_CHUNK_BYTES = 64 * 1024
 LIVE_GIT_STDERR_BYTES = 64 * 1024
 LIVE_GIT_HEADER_BYTES = 4 * 1024
@@ -55,6 +60,8 @@ LIVE_MANIFEST_SCHEMA = "fullmag.docker-backend-live-source.v1"
 LIVE_SOURCE_MODE = "live-shadow-v1"
 LIVE_MANIFEST_DIRNAME = ".fullmag-live-source"
 LIVE_MANIFEST_FILENAME = "manifest.json"
+LIVE_HASH_CACHE_FILENAME = "hash-cache.json"
+LIVE_HASH_CACHE_SCHEMA = "fullmag.docker-backend-live-hash-cache.v1"
 LIVE_LFS_POINTER_RE = re.compile(
     rb"\A[vV]ersion https://git-lfs\.github\.com/spec/v1\r?\n"
     rb"oid sha256:[0-9a-f]{64}\r?\n"
@@ -124,6 +131,10 @@ LIVE_RUNTIME_STATUS_EXCLUSIONS = (
 
 class BackendSourceError(RuntimeError):
     """The direct backend source archive is not safe or internally coherent."""
+
+
+class LiveSourceChanged(BackendSourceError):
+    """A live checkout file changed while it was being captured; retry is safe."""
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -660,6 +671,11 @@ class _LiveGitProcess:
 
 
 def _live_git_command(source_root: Path, git_dir: Path, *arguments: str) -> tuple[str, ...]:
+    # The index is written by the host Git and cannot be refreshed through the
+    # read-only mount.  Inode, device, owner and sub-second times differ in the
+    # container view, so the default stat check re-reads every tracked file on
+    # each query.  Size and whole-second mtime survive the bind mount; content
+    # identity is still established by the per-file SHA-256 of the capture.
     return (
         "git",
         "--git-dir",
@@ -672,6 +688,10 @@ def _live_git_command(source_root: Path, git_dir: Path, *arguments: str) -> tupl
         "core.autocrlf=true",
         "-c",
         "core.fsmonitor=false",
+        "-c",
+        "core.checkStat=minimal",
+        "-c",
+        "core.trustctime=false",
         *arguments,
     )
 
@@ -1131,6 +1151,8 @@ def _live_read_regular(source_root: Path, relative: str) -> tuple[str, bytes] | 
         return None
     try:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError as error:
+        raise LiveSourceChanged(f"live source file disappeared while being read: {relative}") from error
     except OSError as error:
         raise BackendSourceError(f"cannot open live source file {relative}") from error
     try:
@@ -1148,10 +1170,10 @@ def _live_read_regular(source_root: Path, relative: str) -> tuple[str, bytes] | 
         raise BackendSourceError(f"cannot read live source file {relative}") from error
     finally:
         os.close(descriptor)
-    if len(content) > MAX_FILE_BYTES or before.st_size != len(content):
-        _live_fail(f"live source file exceeds its size bound or changed: {relative}")
-    if _live_metadata_signature(before) != _live_metadata_signature(after):
-        _live_fail(f"live source file changed while being read: {relative}")
+    if len(content) > MAX_FILE_BYTES:
+        _live_fail(f"live source file exceeds its size bound: {relative}")
+    if before.st_size != len(content) or _live_metadata_signature(before) != _live_metadata_signature(after):
+        raise LiveSourceChanged(f"live source file changed while being read: {relative}")
     if LIVE_LFS_POINTER_RE.match(bytes(content)):
         _live_fail(f"Git-LFS pointer is not materialized: {relative}")
     return ("100755" if before.st_mode & stat.S_IXUSR else "100644", bytes(content))
@@ -1166,6 +1188,8 @@ def _live_hash_regular(source_root: Path, relative: str) -> tuple[str, int, str]
         return None
     try:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError as error:
+        raise LiveSourceChanged(f"live source file disappeared while being read: {relative}") from error
     except OSError as error:
         raise BackendSourceError(f"cannot open live source file {relative}") from error
     digest = hashlib.sha256()
@@ -1191,10 +1215,10 @@ def _live_hash_regular(source_root: Path, relative: str) -> tuple[str, int, str]
         raise BackendSourceError(f"cannot read live source file {relative}") from error
     finally:
         os.close(descriptor)
-    if total > MAX_FILE_BYTES or before.st_size != total:
-        _live_fail(f"live source file exceeds its size bound or changed: {relative}")
-    if _live_metadata_signature(before) != _live_metadata_signature(after):
-        _live_fail(f"live source file changed while being read: {relative}")
+    if total > MAX_FILE_BYTES:
+        _live_fail(f"live source file exceeds its size bound: {relative}")
+    if before.st_size != total or _live_metadata_signature(before) != _live_metadata_signature(after):
+        raise LiveSourceChanged(f"live source file changed while being read: {relative}")
     # Normal Git-LFS pointers are well below the bounded probe.  Keep the
     # probe bounded while preserving the existing exact check for such files.
     if LIVE_LFS_POINTER_RE.match(bytes(prefix)):
@@ -1206,10 +1230,117 @@ def _live_hash_regular(source_root: Path, relative: str) -> tuple[str, int, str]
     )
 
 
+class _LiveHashCache:
+    """Reuse a file digest only while size, nanosecond mtime and mode are unchanged.
+
+    Reading every tracked file through the Windows bind mount dominated the
+    capture.  The key is observed before hashing, so a save during the read
+    leaves a stale key that simply misses on the next capture.
+    """
+
+    def __init__(self, entries: Mapping[str, list[object]] | None = None) -> None:
+        self.known = dict(entries or {})
+        self.observed: dict[str, list[object]] = {}
+        self.hits = 0
+        self._lock = threading.Lock()
+
+    def hash(self, source_root: Path, relative: str) -> tuple[str, int, str] | None:
+        path = _live_regular_path(source_root, relative)
+        if path is None:
+            return None
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError as error:
+            raise LiveSourceChanged(f"live source file disappeared while being read: {relative}") from error
+        mode = "100755" if metadata.st_mode & stat.S_IXUSR else "100644"
+        key: list[object] = [metadata.st_size, metadata.st_mtime_ns, mode]
+        cached = self.known.get(relative)
+        hit = cached is not None and cached[:3] == key
+        if hit:
+            result: tuple[str, int, str] | None = (mode, metadata.st_size, str(cached[3]))
+        else:
+            result = _live_hash_regular(source_root, relative)
+            if result is None:
+                return None
+        with self._lock:
+            if hit:
+                self.hits += 1
+            if result[0] == mode and result[1] == metadata.st_size:
+                self.observed[relative] = [*key, result[2]]
+        return result
+
+
+def _live_hash_cache_path(build_root: Path) -> Path:
+    return build_root / LIVE_MANIFEST_DIRNAME / LIVE_HASH_CACHE_FILENAME
+
+
+def _load_live_hash_cache(build_root: Path, source_root: Path) -> _LiveHashCache:
+    """Return the previous capture's digests, or an empty cache when unusable."""
+
+    path = _live_hash_cache_path(build_root)
+    try:
+        document = json.loads(
+            _live_read_bounded_regular(path, "live source hash cache", MAX_MANIFEST_BYTES)
+        )
+    except (BackendSourceError, OSError, ValueError):
+        return _LiveHashCache()
+    entries = document.get("entries") if isinstance(document, dict) else None
+    if (
+        document.get("schema") != LIVE_HASH_CACHE_SCHEMA
+        or document.get("source_root") != str(source_root)
+        or not isinstance(entries, dict)
+    ):
+        return _LiveHashCache()
+    checked: dict[str, list[object]] = {}
+    for relative, value in entries.items():
+        if not (
+            isinstance(relative, str)
+            and isinstance(value, list)
+            and len(value) == 4
+            and type(value[0]) is int
+            and type(value[1]) is int
+            and value[2] in {"100644", "100755"}
+            and isinstance(value[3], str)
+            and re.fullmatch(r"[0-9a-f]{64}", value[3])
+        ):
+            return _LiveHashCache()
+        checked[relative] = value
+    return _LiveHashCache(checked)
+
+
+def _save_live_hash_cache(
+    build_root: Path, source_root: Path, cache: _LiveHashCache, relatives: set[str]
+) -> None:
+    """Persist digests of the published manifest's files; failure only costs speed."""
+
+    path = _live_hash_cache_path(build_root)
+    document = {
+        "schema": LIVE_HASH_CACHE_SCHEMA,
+        "source_root": str(source_root),
+        "entries": {
+            relative: value
+            for relative, value in sorted(cache.observed.items())
+            if relative in relatives
+        },
+    }
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_bytes(_live_canonical(document))
+        os.replace(temporary, path)
+    except OSError:
+        pass
+    finally:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+
+
 def _live_hash_regular_files(
-    source_root: Path, relatives: list[str]
+    source_root: Path, relatives: list[str], cache: _LiveHashCache | None = None
 ) -> dict[str, tuple[str, int, str] | None]:
     """Hash sorted source paths with at most eight in-flight reads."""
+    worker = _live_hash_regular if cache is None else cache.hash
     relatives = sorted(relatives)
     result: dict[str, tuple[str, int, str] | None] = {}
     iterator = iter(relatives)
@@ -1220,7 +1351,7 @@ def _live_hash_regular_files(
                 relative = next(iterator)
             except StopIteration:
                 break
-            pending[executor.submit(_live_hash_regular, source_root, relative)] = relative
+            pending[executor.submit(worker, source_root, relative)] = relative
         while pending:
             done, _ = wait(pending, return_when=FIRST_COMPLETED)
             for future in done:
@@ -1230,7 +1361,7 @@ def _live_hash_regular_files(
                     next_relative = next(iterator)
                 except StopIteration:
                     continue
-                pending[executor.submit(_live_hash_regular, source_root, next_relative)] = next_relative
+                pending[executor.submit(worker, source_root, next_relative)] = next_relative
     return {relative: result[relative] for relative in relatives}
 
 
@@ -1349,6 +1480,31 @@ def _live_untracked_records(raw: bytes) -> tuple[list[str], list[dict[str, objec
     return paths, records
 
 
+def _live_auto_untracked(source_root: Path, relative: str) -> bool:
+    """Select a new, non-ignored runtime source file without an explicit allowlist.
+
+    A new module that is not yet staged must compile like a tracked one.
+    Paths that policy would reject, administrative and non-runtime trees, and
+    large files are left out silently; an explicit allowlist still overrides.
+    """
+
+    if _live_admin_path(relative) or _live_non_runtime(relative):
+        return False
+    if any(_live_windows_device_component(part) for part in relative.split("/")):
+        return False
+    try:
+        _live_reject_policy(relative)
+        path = _live_regular_path(source_root, relative)
+    except BackendSourceError:
+        return False
+    if path is None:
+        return False
+    try:
+        return path.lstat().st_size <= LIVE_AUTO_UNTRACKED_MAX_BYTES
+    except OSError:
+        return False
+
+
 def _live_non_runtime(relative: str) -> bool:
     return (
         relative in LIVE_NON_RUNTIME_EXACT
@@ -1447,6 +1603,7 @@ def _capture_live_source_once(
     source_root: Path,
     git_common_root: Path,
     included_untracked: tuple[str, ...] = (),
+    hash_cache: _LiveHashCache | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, str]]:
     git_dir = _live_git_dir(source_root, git_common_root)
     try:
@@ -1466,7 +1623,7 @@ def _capture_live_source_once(
     files: list[dict[str, Any]] = []
     deleted: list[str] = []
     sparse_objects: dict[str, str] = {}
-    current_files = _live_hash_regular_files(source_root, sorted(records))
+    current_files = _live_hash_regular_files(source_root, sorted(records), hash_cache)
     for relative in sorted(records):
         mode, object_id = records[relative]
         current = current_files[relative]
@@ -1535,14 +1692,21 @@ def _capture_live_source_once(
             + ", ".join(missing_untracked[:20])
         )
     selected_untracked = tuple(
-        relative for relative in included_untracked if relative in available_untracked
+        sorted(
+            {relative for relative in included_untracked if relative in available_untracked}
+            | {
+                relative
+                for relative in untracked_paths
+                if relative not in included_set and _live_auto_untracked(source_root, relative)
+            }
+        )
     )
-    selected_files = _live_hash_regular_files(source_root, list(selected_untracked))
+    included_set |= set(selected_untracked)
+    selected_files = _live_hash_regular_files(source_root, list(selected_untracked), hash_cache)
     for relative in selected_untracked:
         selected = selected_files[relative]
         if selected is None:
-            _live_fail(f"included untracked source is not a regular file: {relative}")
-            continue
+            raise LiveSourceChanged(f"included untracked source disappeared during capture: {relative}")
         mode, size, digest = selected
         files.append(
             {
@@ -1580,7 +1744,9 @@ def _capture_live_source_once(
             or native_entry.get("mode") != manifest_entry["mode"]
             or native_entry.get("sha256") != manifest_entry["sha256"]
         ):
-            _live_fail(
+            # Both reads come from the same capture pass, so a difference means
+            # the file was saved in between.
+            raise LiveSourceChanged(
                 "native source identity does not bind the included file bytes: "
                 + relative
             )
@@ -1624,11 +1790,14 @@ def _capture_live_source_pass(
     git_common_root: Path,
     pass_number: int,
     included_untracked: tuple[str, ...] = (),
+    hash_cache: _LiveHashCache | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, str]]:
     started = time.monotonic()
     print(f"fullmag-live-source capture_pass={pass_number} phase=start", file=sys.stderr, flush=True)
     try:
-        result = _capture_live_source_once(source_root, git_common_root, included_untracked)
+        result = _capture_live_source_once(
+            source_root, git_common_root, included_untracked, hash_cache
+        )
     except Exception as error:
         elapsed_ms = int((time.monotonic() - started) * 1000)
         print(
@@ -1644,6 +1813,7 @@ def _capture_live_source_pass(
         f"fullmag-live-source capture_pass={pass_number} phase=end outcome=success "
         f"files={len(capsule['files'])} deleted={len(capsule['deleted'])} "
         f"status={len(native['git_status_porcelain_v1'])} excluded={len(capsule['excluded'])} "
+        f"hash_cache_hits={hash_cache.hits if hash_cache is not None else 0} "
         f"elapsed_ms={elapsed_ms}",
         file=sys.stderr,
         flush=True,
@@ -1659,17 +1829,28 @@ def capture_live_source_manifest(
     The source and Git mounts are read-only.  Only this helper's manifest is
     written, under the image-owned build root; the existing backend worker then
     performs the normal manifest validation and ext4 shadow reconciliation.
+
+    One pass is enough: the shadow synchronization re-hashes every copied file
+    against this manifest, and a file edited after the capture is detected
+    there and answered with a fresh capture instead of a failed start.
     """
 
     source_root = Path(source_root)
     git_common_root = Path(git_common_root)
     build_root = Path(build_root)
     included_untracked = _live_included_untracked_from_environment()
-    first = _capture_live_source_pass(source_root, git_common_root, 1, included_untracked)
-    second = _capture_live_source_pass(source_root, git_common_root, 2, included_untracked)
-    if second != first:
-        _live_fail("live source changed while creating its closed manifest")
-    capsule, native, git_object_ids = first
+    previous_hashes = _load_live_hash_cache(build_root, source_root)
+    for attempt in range(1, LIVE_CAPTURE_ATTEMPTS + 1):
+        hash_cache = _LiveHashCache(previous_hashes.known)
+        try:
+            capsule, native, git_object_ids = _capture_live_source_pass(
+                source_root, git_common_root, attempt, included_untracked, hash_cache
+            )
+            break
+        except LiveSourceChanged:
+            if attempt == LIVE_CAPTURE_ATTEMPTS:
+                raise
+            time.sleep(LIVE_CAPTURE_RETRY_SECONDS)
     capture_id = uuid.uuid4().hex
     document: dict[str, Any] = {
         "schema": LIVE_MANIFEST_SCHEMA,
@@ -1735,6 +1916,9 @@ def capture_live_source_manifest(
             pass
         except OSError as error:
             raise BackendSourceError("cannot clean live source manifest temporary file") from error
+    _save_live_hash_cache(
+        build_root, source_root, hash_cache, {entry["path"] for entry in capsule["files"]}
+    )
     return manifest_path
 
 

@@ -1266,17 +1266,6 @@
   },
   {
     "file": "backends/fdm/gpu/cuda/runtime/context.cu",
-    "function_anchor": "context_upload_exchange_lut@3955459cfd646d26",
-    "api": "cudaMemcpy",
-    "api_ordinal": 1,
-    "call_hash": "1347175a902e591c",
-    "direction_classifier": "H2D",
-    "reason": "context_upload_exchange_lut:cudaMemcpy#1",
-    "category": "context_boundary",
-    "accounting_hook": "macro:cudaMemcpy"
-  },
-  {
-    "file": "backends/fdm/gpu/cuda/runtime/context.cu",
     "function_anchor": "context_upload_frozen_spins@24cc3fbf6b1f34f4",
     "api": "cudaMemcpy",
     "api_ordinal": 1,

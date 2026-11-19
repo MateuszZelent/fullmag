@@ -5,17 +5,20 @@ import { useMemo, useState, useSyncExternalStore, type Ref } from "react";
 import { homeSubline, resolveContinue } from "../model/continueModel";
 import { startSettings } from "../model/startSettings";
 import type { ComputeProbeState, RecentEntry } from "../model/types";
+import type { ApiWorkspaceItem } from "../model/workspaceApiTypes";
 import { useContinueLive } from "../model/useContinueLive";
 import type { RecentIndexController } from "../model/useRecentIndex";
 import type { WorkspaceResultsView, WorkspaceScriptsView } from "../model/workspaceSource";
 
 import { SectionHeader } from "../ui/SectionHeader";
 
+import { ActiveSessions, type ActiveSession } from "./ActiveSessions";
+import { OtherInstances, type OtherInstance } from "./OtherInstances";
 import { ContinueCard } from "./ContinueCard";
 import { LaunchTiles } from "./LaunchTiles";
 import { RecentProjects } from "./RecentProjects";
 
-const dateFormat = new Intl.DateTimeFormat(undefined, {
+const dateFormat = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
   month: "long",
   weekday: "long",
@@ -48,12 +51,22 @@ export interface HomeSectionProps {
   readonly disabledReasons: Readonly<Record<string, string | null>>;
   readonly initialFocusRef?: Ref<HTMLButtonElement>;
   readonly onOpenRecent: (entry: RecentEntry) => Promise<string | null>;
+  /** Opens a result folder in read-only saved playback. */
+  readonly onOpenResult: (item: ApiWorkspaceItem) => Promise<string | null>;
   /** Restores the checkpoint into the open session; resolves to a failure message. */
   readonly onResumeContinue: (checkpointId: string, entry: RecentEntry) => Promise<string | null>;
   /** Deletes the checkpoint in the open session's runtime; resolves to a failure message. */
   readonly onDiscardContinue: (checkpointId: string, entry: RecentEntry) => Promise<string | null>;
   readonly compute: ComputeProbeState;
   readonly onRunCommand: (commandId: string) => void;
+  /** Sessions open in this instance; omitted or empty draws no section. */
+  readonly activeSessions?: readonly ActiveSession[];
+  /** Leaves Home for the current session's workspace. */
+  readonly onOpenActiveSession?: () => void;
+  /** Other Fullmag instances on this host; omitted or empty draws no section. */
+  readonly otherInstances?: readonly OtherInstance[];
+  /** Opens another instance in its own tab. */
+  readonly onOpenInstance?: (port: number) => void;
 }
 
 export function HomeSection({
@@ -70,9 +83,14 @@ export function HomeSection({
   scriptFlowNotice = null,
   name,
   onOpenRecent,
+  onOpenResult,
   onResumeContinue,
   onDiscardContinue,
   onRunCommand,
+  activeSessions = [],
+  onOpenActiveSession,
+  otherInstances = [],
+  onOpenInstance,
 }: HomeSectionProps) {
   const today = useToday();
   const [continueBusy, setContinueBusy] = useState(false);
@@ -116,6 +134,9 @@ export function HomeSection({
         </div>
         {today ? <div className="fm-start-page-head__meta">{today}</div> : null}
       </div>
+      {onOpenActiveSession ? (
+        <ActiveSessions onOpen={onOpenActiveSession} sessions={activeSessions} />
+      ) : null}
       {session && resolution && continueEntry ? (
         <section aria-labelledby="fm-start-continue-title" className="fm-start-section">
           <SectionHeader id="fm-start-continue-title" title="Continue where you left off" />
@@ -157,7 +178,11 @@ export function HomeSection({
         canOpenScript={canOpenScript}
         scriptFlowNotice={scriptFlowNotice}
         onOpen={onOpenRecent}
+        onOpenResult={onOpenResult}
       />
+      {onOpenInstance ? (
+        <OtherInstances instances={otherInstances} onOpen={onOpenInstance} />
+      ) : null}
     </>
   );
 }

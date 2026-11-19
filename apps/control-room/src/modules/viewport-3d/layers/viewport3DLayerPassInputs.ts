@@ -6,6 +6,7 @@ import {
   resolveViewport3DScalarColorBufferKey,
   type ScalarColorBuffer,
 } from "../viewport3dFieldMapping";
+import type { Viewport3DVisibleColorScale } from "../model/viewport3DVisibleColorScale";
 
 interface Viewport3DTargetSurfaceLayerFieldModel {
   scalarColorsByMode: ReadonlyMap<string, ScalarColorBuffer | null>;
@@ -73,6 +74,8 @@ export function resolveViewport3DTargetVectorLayerInput({
 }): {
   buildReference: Viewport3DVectorBuildReference | null;
   segments: Float32Array | null;
+  glyphColors?: Float32Array | null;
+  colorScale?: Viewport3DVisibleColorScale | null;
 } {
   if (!fieldModel) {
     return {
@@ -86,6 +89,8 @@ export function resolveViewport3DTargetVectorLayerInput({
     return {
       buildReference: targetVectors.buildReference,
       segments: targetVectors.segments,
+      ...(targetVectors.glyphColors ? { glyphColors: targetVectors.glyphColors } : {}),
+      ...(targetVectors.colorScale ? { colorScale: targetVectors.colorScale } : {}),
     };
   }
   if (fieldModel.targetPasses && fieldModel.targetPasses.size > 0) {

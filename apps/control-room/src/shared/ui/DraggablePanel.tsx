@@ -2,6 +2,8 @@
 
 import { GripHorizontal, Maximize2, Minimize2, MoveDiagonal2, X } from "lucide-react";
 import {
+  useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -66,6 +68,29 @@ export function DraggablePanel({
   const restorePositionRef = useRef(defaultPosition);
   const dragRef = useRef<DragState | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const headingId = useId();
+
+  // Non-modal dialog focus contract: move focus into the panel when it opens
+  // and return it to the invoker on close. Regions never steal focus.
+  useEffect(() => {
+    if (!open || role !== "dialog") return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const active = document.activeElement;
+    if (!panel.contains(active)) {
+      returnFocusRef.current = active instanceof HTMLElement ? active : null;
+      panel.focus({ preventScroll: true });
+    }
+    return () => {
+      const target = returnFocusRef.current;
+      returnFocusRef.current = null;
+      const focusLeftPanel = !panel.isConnected
+        || panel.contains(document.activeElement)
+        || document.activeElement === document.body;
+      if (target?.isConnected && focusLeftPanel) target.focus({ preventScroll: true });
+    };
+  }, [open, role]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -182,8 +207,10 @@ export function DraggablePanel({
   return (
     <section
       ref={panelRef}
-      aria-label={ariaLabel || title}
+      aria-label={ariaLabel || undefined}
+      aria-labelledby={ariaLabel ? undefined : headingId}
       hidden={!open}
+      tabIndex={role === "dialog" ? -1 : undefined}
       aria-modal={role === "dialog" ? false : undefined}
       className={cn("fm-draggable-panel", className)}
       role={role}
@@ -219,7 +246,7 @@ export function DraggablePanel({
           <GripHorizontal size={15} aria-hidden="true" />
         </Button>
         <div className="fm-draggable-panel__heading">
-          <h2>{title}</h2>
+          <h2 id={headingId}>{title}</h2>
           {subtitle && <span>{subtitle}</span>}
         </div>
         

@@ -2313,6 +2313,8 @@ counters are numbers, Windows paths never carry the `\\?\` prefix.
 | `POST /v2/workspace/items/{id}/pin` `{pinned}` | returns the item |
 | `POST /v2/workspace/items/{id}/forget` | `{id, forgotten: true}`; the file is untouched |
 | `GET /v2/workspace/items/{id}/history?limit=` | events, newest first (limit 1 to 500, default 100) |
+| `GET /v2/workspace/items/{id}/playback` | read-only regular-grid saved field descriptor; explicit playback.json required; see [contract](saved-results-playback.md) |
+| `GET /v2/workspace/items/{id}/playback/frames/{frame_index}?stage_id=&revision=` | one bounded little-endian f64 xyz frame; rejects stale revision, missing or malformed chunk |
 | `GET /v2/workspace/items/{id}/frames?from=&limit=` | page of a result folder's saved-frame index (`frames.json`): `{indexed, total, from, frames[], truncated}`; limit 1 to 1000, default 200; metadata only |
 | `GET /v2/workspace/settings/{key}` | allow-listed per-user setting: `telemetry.enabled` (bool, default false) or `update.available` (null until an updater stores it); 404 for other keys |
 | `PUT /v2/workspace/settings/{key}` | body `{value}`; only `telemetry.enabled` (boolean) is writable, `update.available` answers 400 |

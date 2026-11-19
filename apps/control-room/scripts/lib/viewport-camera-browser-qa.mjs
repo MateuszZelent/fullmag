@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto";
+import {
+  ensureViewportSettingsSection,
+  getViewportCameraRegion,
+  readViewportInspectorState,
+  restoreViewportInspectorState,
+  selectViewportInspectorContext,
+} from "./viewport-export-browser-qa.mjs";
 
 const VIEWPORT_SELECTOR = ".fm-viewport-3d";
 const CANVAS_SELECTOR = `${VIEWPORT_SELECTOR} canvas`;
-const CAMERA_DIALOG_NAME = "Camera Parameters";
 const COMMAND_PALETTE_NAME = "Command palette";
 const MAX_ACTION_TIMEOUT_MS = 30_000;
 const MAX_RESTORE_TIMEOUT_MS = 4_000;
@@ -28,7 +34,7 @@ const CAMERA_POSES = Object.freeze([
 ]);
 
 /**
- * Exercises the visible 3D camera dialog and command palette, then restores
+ * Exercises the 3D camera Inspector region and command palette, then restores
  * the original camera through the same user-facing controls. PNGs are decoded
  * in Node from Playwright canvas screenshots; nothing is written to disk.
  */
@@ -45,16 +51,15 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
 
   const viewport = page.locator(VIEWPORT_SELECTOR);
   const canvas = page.locator(CANVAS_SELECTOR);
-  const cameraDialog = page.getByRole("dialog", {
-    exact: true,
-    name: CAMERA_DIALOG_NAME,
-  });
+  const cameraRegion = getViewportCameraRegion(page);
+  const cameraDialog = cameraRegion;
   const commandPalette = page.getByRole("dialog", {
     exact: true,
     name: COMMAND_PALETTE_NAME,
   });
 
-  let originalCameraDialogOpen = null;
+  let originalInspectorState = null;
+  let originalCameraControlsOpen = null;
   let originalCommandPaletteOpen = null;
   let originalCamera = null;
   let originalDialogValues = null;
@@ -81,7 +86,9 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
     if (!originalCanvasHandle) {
       throw new Error("Viewport camera QA could not retain the original canvas element");
     }
-    originalCameraDialogOpen = await cameraDialog.isVisible().catch(() => false);
+    originalInspectorState = await readViewportInspectorState(page);
+    originalCameraControlsOpen = originalInspectorState.context === "view" &&
+      originalInspectorState.section === "View";
     originalCommandPaletteOpen = await commandPalette.isVisible().catch(() => false);
     if (originalCommandPaletteOpen) {
       throw new Error("Close the command palette before starting viewport camera QA");
@@ -91,9 +98,9 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
     validateCameraPrecondition(originalCamera);
     await assertCanvas("before viewport camera QA");
 
-    await setCameraDialogOpen(page, cameraDialog, true, timeout);
-    originalDialogValues = await readDialogValues(cameraDialog);
-    validateDialogValues(originalCamera, originalDialogValues);
+    await setCameraDialogOpen(page, cameraDialog, true, timeout, { forceCommand: true });
+    originalDialogValues = await readCameraFormValues(cameraRegion);
+    validateCameraFormValues(originalCamera, originalDialogValues);
 
     captures.push(await captureCanvas(page, {
       assertCanvas,
@@ -106,6 +113,63 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
       snapshots,
       embedPng: true,
     }));
+
+    // The ring example reproduces the original depth regression: the eye is
+    // inside the universe bounds, while the 50 nm ring and 1.6 nm film are ahead.
+    if (options.ringDepthRegression === true) {
+      const originalRibbonTabId = await page.locator('.fm-ribbon__tab[aria-selected="true"]').getAttribute("id");
+      if (!/^fm-ribbon-tab-[a-zA-Z0-9_.:-]+$/.test(originalRibbonTabId ?? "")) {
+        throw new Error("Selected ribbon tab has no stable identity");
+      }
+      await setCameraDialogOpen(page, cameraDialog, false, timeout);
+      const originalSurfacePasses = await readSurfacePasses(page, timeout);
+      try {
+        for (const pose of [
+          { name: "ring-close-oblique", position: [1.6710714031932422e-7, -6.101199092239823e-7, 2.0428454917790962e-7], target: [0, 0, 1.55e-7], projection: "perspective" },
+          { name: "ring-close-front", position: [6e-7, 0, 1.608e-7], target: [0, 0, 1.608e-7], projection: "perspective" },
+          { name: "ring-close-ortho", position: [6e-7, 0, 1.608e-7], target: [0, 0, 1.608e-7], projection: "orthographic" },
+        ]) {
+          await setCameraDialogOpen(page, cameraDialog, true, timeout);
+          await fillVector(cameraDialog, "Position (m)", pose.position);
+          await fillVector(cameraDialog, "Target (m)", pose.target);
+          await getProjectionInput(cameraDialog).selectOption(pose.projection);
+          await getScalarInput(cameraDialog, "FOV").fill("45");
+          await getScalarInput(cameraDialog, "Ortho scale").fill("6e-7");
+          mutationStarted = true;
+          await cameraDialog.getByRole("button", { exact: true, name: "Apply" }).click({ timeout });
+          await waitForCamera(page, viewport, pose, timeout);
+          for (const mode of ["Shaded surface", "Shaded + wireframe", "Wireframe"]) {
+            await setCameraDialogOpen(page, cameraDialog, false, timeout);
+            await setSurfaceRenderMode(page, mode, timeout);
+            const capture = await captureCanvas(page, {
+              assertCanvas, cameraDialog, canvas,
+              name: `${pose.name}-${mode.toLowerCase().replace(/[^a-z]+/g, "-")}`, pngDecoder,
+              preserveDialogOpen: true, timeout, snapshots, embedPng: true,
+            });
+            capture.surface_render_mode = mode;
+            const { near, far } = capture.live_depth_range;
+            const depth = distance(pose.position, pose.target);
+            const resolution = pose.projection === "orthographic"
+              ? (far - near) / (2 ** 24 - 1)
+              : (depth * depth * (far - near)) / (far * near * (2 ** 24 - 1));
+            if (near >= depth / 10 || far <= depth || resolution > 1.6e-9 / 20) {
+              throw new Error(`Ring depth range loses thin-film precision at ${pose.name}: ${JSON.stringify({ near, far, resolution })}`);
+            }
+            capture.estimated_24bit_depth_step_m = resolution;
+            captures.push(capture);
+            // This fixed fixture has a red CoFeB ring. HUD axes alone must not
+            // qualify a blank canvas after a topology resource failure.
+            if (mode !== "Wireframe") assertRingSurfacePixels(capture);
+          }
+        }
+      } finally {
+        await setCameraDialogOpen(page, cameraDialog, false, timeout);
+        await restoreSurfacePasses(page, originalSurfacePasses, timeout);
+        await page.locator(`.fm-ribbon__tab[id="${originalRibbonTabId}"]`).click({ timeout });
+        await setCameraDialogOpen(page, cameraDialog, true, timeout);
+      }
+      await restoreCamera(page, cameraDialog, originalCamera, originalDialogValues, timeout);
+    }
 
     const pointerRadius = distance(originalCamera.position, originalCamera.target);
     const pointerDirection = normalize([1, 0.1, 0.1]);
@@ -228,7 +292,7 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
       captures.push(capture);
       poses.push({
         name: pose.name,
-        source: "visible-camera-dialog",
+        source: "visible-camera-controls",
         requested_direction: direction,
         requested_position: position,
         target,
@@ -293,7 +357,7 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
     });
 
     if (mutationStarted && originalCamera && originalDialogValues) {
-      await restore("restore original camera through visible dialog", async () => {
+      await restore("restore original camera through visible Inspector controls", async () => {
         await setCameraDialogOpen(page, cameraDialog, true, restoreTimeout);
         await restoreCamera(page, cameraDialog, originalCamera, originalDialogValues, restoreTimeout);
       });
@@ -322,12 +386,12 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
       });
     }
 
-    if (originalCameraDialogOpen !== null) {
-      await restore("restore original camera dialog visibility", async () => {
-        await setCameraDialogOpen(page, cameraDialog, originalCameraDialogOpen, restoreTimeout);
-        const actual = await cameraDialog.isVisible().catch(() => false);
-        if (actual !== originalCameraDialogOpen) {
-          throw new Error(`expected camera dialog open=${originalCameraDialogOpen}, got ${actual}`);
+    if (originalInspectorState !== null && originalCommandPaletteOpen !== true) {
+      await restore("restore original Inspector context and section", async () => {
+        await restoreViewportInspectorState(page, originalInspectorState, restoreTimeout);
+        const actual = await readViewportInspectorState(page);
+        if (JSON.stringify(actual) !== JSON.stringify(originalInspectorState)) {
+          throw new Error(`expected Inspector state ${JSON.stringify(originalInspectorState)}, got ${JSON.stringify(actual)}`);
         }
       });
     }
@@ -335,14 +399,15 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
 
   const restorationVerified = restorationErrors.length === 0 && originalCamera !== null;
   const proof = {
-    schema: "fullmag.viewport-camera-browser-qa.v1",
+    schema: "fullmag.viewport-camera-browser-qa.v2",
     state: operationError || restorationErrors.length ? "failed" : "passed",
     precondition: {
       view_source: originalCamera?.viewSource ?? null,
       required_view_source: "current",
       initial_camera: originalCamera,
-      initial_camera_dialog_open: originalCameraDialogOpen,
-      initial_dialog_values: originalDialogValues,
+      inspector_state: originalInspectorState,
+      initial_camera_controls_open: originalCameraControlsOpen,
+      initial_camera_form_values: originalDialogValues,
     },
     projection_transitions: commands.filter(({ title }) => title === "Toggle projection"),
     commands,
@@ -354,14 +419,15 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
     restoration: {
       state: restorationVerified ? "verified" : "failed-or-not-attempted",
       camera_attributes: !originalCamera ? "not-available" : mutationStarted
-        ? "restored-through-visible-dialog-and-verified" : "unchanged-no-camera-mutation",
+        ? "restored-through-visible-camera-controls-and-verified" : "unchanged-no-camera-mutation",
       same_canvas_element_and_context: originalCanvasHandle ? "asserted" : "not-available",
-      camera_dialog_open: originalCameraDialogOpen,
+      inspector_context_and_section: originalInspectorState,
+      camera_controls_open: originalCameraControlsOpen,
       errors: restorationErrors,
     },
     errors: operationError ? [operationError?.message ?? String(operationError)] : [],
     limitations: [
-      "The pointer check covers one ViewCube face and one continuous orbit drag; the remaining axial poses use the visible camera dialog.",
+      "The pointer check covers one ViewCube face and one continuous orbit drag; the remaining axial poses use the visible camera Inspector controls.",
       "Fit is considered observed only when the public camera attributes change after the visible command; no change is reported without being treated as a camera movement.",
       "PNG captures are Playwright screenshots of the canvas element, decoded in memory; no image files are written.",
     ],
@@ -384,6 +450,55 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
   return proof;
 }
 
+const SURFACE_PASS_LABELS = ["Surface on/off", "Wireframe on/off", "Points on/off"];
+
+async function openSurfaceMenu(page, timeout) {
+  await page.getByRole("tab", { name: "View", exact: true }).click({ timeout });
+  await page.locator('[data-action-id="view-surface"]').click({ timeout });
+  await page.getByRole("menuitemradio", { name: "Shaded surface", exact: true }).waitFor({ state: "visible", timeout });
+}
+
+async function readSurfacePasses(page, timeout) {
+  await openSurfaceMenu(page, timeout);
+  try {
+    const mode = (await page.locator('[role="menuitemradio"][aria-checked="true"]').innerText()).trim();
+    const passes = {};
+    for (const name of SURFACE_PASS_LABELS) {
+      passes[name] = await page.getByRole("menuitemcheckbox", { name, exact: true }).getAttribute("aria-checked") === "true";
+    }
+    return { mode, passes };
+  } finally {
+    await page.keyboard.press("Escape");
+  }
+}
+
+async function setSurfaceRenderMode(page, mode, timeout) {
+  await openSurfaceMenu(page, timeout);
+  await page.getByRole("menuitemradio", { name: mode, exact: true }).click({ timeout });
+  await openSurfaceMenu(page, timeout);
+  try {
+    await page.getByRole("menuitemradio", { name: mode, exact: true, checked: true }).waitFor({ state: "visible", timeout });
+  } finally {
+    await page.keyboard.press("Escape");
+  }
+}
+
+async function restoreSurfacePasses(page, original, timeout) {
+  await setSurfaceRenderMode(page, original.mode, timeout);
+  await openSurfaceMenu(page, timeout);
+  try {
+    for (const [name, checked] of Object.entries(original.passes)) {
+      const control = page.getByRole("menuitemcheckbox", { name, exact: true });
+      if ((await control.getAttribute("aria-checked") === "true") !== checked) {
+        await control.click({ timeout });
+      }
+      await page.getByRole("menuitemcheckbox", { name, exact: true, checked }).waitFor({ state: "visible", timeout });
+    }
+  } finally {
+    await page.keyboard.press("Escape");
+  }
+}
+
 async function captureCanvas(page, {
   assertCanvas,
   cameraDialog,
@@ -399,7 +514,7 @@ async function captureCanvas(page, {
   let result = null;
   try {
     await setCameraDialogOpen(page, cameraDialog, false, timeout);
-    await assertCanvas(`before ${name} camera screenshot`);
+    const webgl = await assertCanvas(`before ${name} camera screenshot`);
     await page.waitForTimeout(80);
     const png = Buffer.from(await canvas.screenshot({ type: "png", timeout }));
     if (!png.length) throw new Error(`Canvas screenshot for ${name} was empty`);
@@ -427,6 +542,14 @@ async function captureCanvas(page, {
     }
 
     const camera = await readCamera(page.locator(VIEWPORT_SELECTOR));
+    const liveDepthRange = await page.evaluate(() => {
+      const diagnostics = window.__FULLMAG_READ_VIEWPORT_3D_CAMERA_CONTROLS__?.();
+      return { near: diagnostics?.cameraNear, far: diagnostics?.cameraFar };
+    });
+    if (!Number.isFinite(liveDepthRange.near) || !Number.isFinite(liveDepthRange.far) ||
+        liveDepthRange.near <= 0 || liveDepthRange.far <= liveDepthRange.near) {
+      throw new Error(`Invalid live camera depth range at ${name}: ${JSON.stringify(liveDepthRange)}`);
+    }
     const pngSha256 = sha256(png);
     const pixelSha256 = sha256(data);
     const snapshot = { pngSha256, pixelSha256, width, height,
@@ -441,7 +564,10 @@ async function captureCanvas(page, {
       png_sha256: pngSha256,
       decoded_pixel_sha256: pixelSha256,
       non_empty_rgba_pixels: nonEmptyPixels,
+      red_dominant_pixels: countRedDominantPixels(data, width, height),
       camera,
+      webgl,
+      live_depth_range: liveDepthRange,
       png_base64_state: embedPng
         ? png.length <= MAX_EMBEDDED_PNG_BYTES
           ? "included"
@@ -459,7 +585,7 @@ async function captureCanvas(page, {
     } catch (error) {
       if (!captureError) captureError = error;
       else captureError = new Error(
-        `${captureError?.message ?? String(captureError)}; camera dialog restore failed: ${error?.message ?? String(error)}`,
+        `${captureError?.message ?? String(captureError)}; camera Inspector controls restore failed: ${error?.message ?? String(error)}`,
         { cause: captureError },
       );
     }
@@ -469,23 +595,22 @@ async function captureCanvas(page, {
   return result;
 }
 
-async function setCameraDialogOpen(page, dialog, shouldOpen, timeout) {
-  const isOpen = await dialog.isVisible().catch(() => false);
-  if (isOpen === shouldOpen) return;
+async function setCameraControlsOpen(page, cameraRegion, shouldOpen, timeout, options = {}) {
   if (shouldOpen) {
-    await executeVisibleCommand(page, page.getByRole("dialog", {
-      exact: true,
-      name: COMMAND_PALETTE_NAME,
-    }), "Open 3D Camera Controls", timeout);
-    await dialog.waitFor({ state: "visible", timeout });
+    await ensureViewportSettingsSection(page, "View", timeout, {
+      commandTitle: "Open 3D Camera Controls",
+      ...options,
+    });
+    await cameraRegion.waitFor({ state: "visible", timeout });
     return;
   }
-  await dialog.getByRole("button", {
-    exact: true,
-    name: "Close camera parameters",
-  }).click({ timeout });
-  await dialog.waitFor({ state: "hidden", timeout });
+  const inspectorState = await readViewportInspectorState(page);
+  if (inspectorState.context === "view") {
+    await selectViewportInspectorContext(page, "selection", timeout);
+  }
 }
+
+const setCameraDialogOpen = setCameraControlsOpen;
 
 async function executeVisibleCommand(page, palette, title, timeout) {
   if (!await palette.isVisible().catch(() => false)) {
@@ -582,18 +707,70 @@ async function exercisePointerGestures(page, { viewport, canvas, assertCanvas, t
     throw new Error("Committed pointer orbit changed its projection, up, target, or distance");
   }
   await assertCanvas("after continuous pointer orbit");
+
+  // Exercise translation and dolly independently of rotation: nanometre scenes
+  // can rotate while fixed world-unit change thresholds suppress pan/zoom.
+  const center = { x: rect.x + rect.width * 0.5, y: rect.y + rect.height * 0.6 };
+  await page.mouse.move(center.x, center.y);
+  const beforeZoom = await readCamera(viewport);
+  await page.mouse.wheel(0, 240);
+  const afterZoom = await waitForCommittedGesture(page, viewport, beforeZoom, timeout,
+    (camera) => distance(camera.position, camera.target) >
+      distance(beforeZoom.position, beforeZoom.target) * 1.01, "wheel zoom out");
+  if (!sameVector(afterZoom.target, beforeZoom.target, sceneCoordinateEpsilon(radius))) {
+    throw new Error("Wheel zoom unexpectedly moved the orbit target");
+  }
+  await assertCanvas("after wheel zoom out");
+
+  const beforePan = afterZoom;
+  await page.mouse.down({ button: "right" });
+  try {
+    await page.mouse.move(center.x + 60, center.y + 30, { steps: 12 });
+  } finally {
+    await page.mouse.up({ button: "right" });
+  }
+  const afterPan = await waitForCommittedGesture(page, viewport, beforePan, timeout,
+    (camera) => distance(camera.target, beforePan.target) > radius * 0.001,
+    "right-button pan");
+  const translationError = Math.hypot(...afterPan.position.map((value, index) =>
+    (value - beforePan.position[index]) - (afterPan.target[index] - beforePan.target[index])));
+  if (translationError > scalarRelativeEpsilon(radius) * 100) {
+    throw new Error(`Pan failed to translate the camera and orbit target together: error=${translationError}, limit=${scalarRelativeEpsilon(radius) * 100}, before=${formatCamera(beforePan)}, after=${formatCamera(afterPan)}`);
+  }
+  await assertCanvas("after right-button pan");
   return { state: "passed", view_cube: { state: "passed", face: "+X", hit_css: hit,
     before, after: snapped }, orbit: { state: "passed", input: "Playwright mouse drag",
-    live_samples: samples, committed_camera: after } };
+    live_samples: samples, committed_camera: after },
+    zoom: { state: "passed", input: "Playwright mouse wheel", before: beforeZoom, after: afterZoom },
+    pan: { state: "passed", input: "Playwright right-button drag", before: beforePan, after: afterPan } };
 }
 
-async function readDialogValues(dialog) {
+async function waitForCommittedGesture(page, viewport, before, timeout, changed, label) {
+  const deadline = Date.now() + timeout;
+  let previous = before;
+  let stableSince = null;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(100);
+    const camera = await readCamera(viewport);
+    assertCameraFinite(camera, label);
+    if (changed(camera) && sameCamera(camera, previous)) {
+      stableSince ??= Date.now();
+      if (Date.now() - stableSince >= 500) return camera;
+    } else {
+      stableSince = null;
+    }
+    previous = camera;
+  }
+  throw new Error(`${label} did not produce a stable changed camera pose`);
+}
+
+async function readCameraFormValues(cameraRegion) {
   const [position, target, fov, orthoScale, projection] = await Promise.all([
-    readVector(dialog, "Position (m)"),
-    readVector(dialog, "Target (m)"),
-    getScalarInput(dialog, "FOV").inputValue(),
-    getScalarInput(dialog, "Ortho scale").inputValue(),
-    getProjectionInput(dialog).inputValue(),
+    readVector(cameraRegion, "Position (m)"),
+    readVector(cameraRegion, "Target (m)"),
+    getScalarInput(cameraRegion, "FOV").inputValue(),
+    getScalarInput(cameraRegion, "Ortho scale").inputValue(),
+    getProjectionInput(cameraRegion).inputValue(),
   ]);
   return {
     position,
@@ -604,62 +781,62 @@ async function readDialogValues(dialog) {
   };
 }
 
-async function readVector(dialog, legend) {
-  const fieldset = dialog.locator("fieldset").filter({ hasText: legend });
+async function readVector(cameraRegion, legend) {
+  const fieldset = cameraRegion.locator("fieldset").filter({ hasText: legend });
   const inputs = fieldset.locator('input[type="number"]');
   const [fieldsetCount, inputCount] = await Promise.all([fieldset.count(), inputs.count()]);
   if (fieldsetCount !== 1 || inputCount !== 3) {
-    throw new Error(`Camera dialog does not expose exactly three ${legend} inputs`);
+    throw new Error(`Camera controls do not expose exactly three ${legend} inputs`);
   }
   const values = await Promise.all([0, 1, 2].map((index) => inputs.nth(index).inputValue()));
   const parsed = values.map(Number);
   if (parsed.some((value) => !Number.isFinite(value))) {
-    throw new Error(`Camera dialog ${legend} inputs are not finite numbers`);
+    throw new Error(`Camera ${legend} inputs are not finite numbers`);
   }
   return { text: values, values: parsed };
 }
 
-async function fillVector(dialog, legend, values) {
-  const fieldset = dialog.locator("fieldset").filter({ hasText: legend });
+async function fillVector(cameraRegion, legend, values) {
+  const fieldset = cameraRegion.locator("fieldset").filter({ hasText: legend });
   const inputs = fieldset.locator('input[type="number"]');
   if (await fieldset.count() !== 1 || await inputs.count() !== 3) {
-    throw new Error(`Camera dialog does not expose exactly three ${legend} inputs`);
+    throw new Error(`Camera controls do not expose exactly three ${legend} inputs`);
   }
   for (let index = 0; index < 3; index += 1) {
     await inputs.nth(index).fill(formatInputNumber(values[index]));
   }
 }
 
-function getScalarInput(dialog, label) {
-  return dialog
+function getScalarInput(cameraRegion, label) {
+  return cameraRegion
     .locator(".fm-viewport-camera-dialog__form label")
     .filter({ hasText: new RegExp(`^${escapeRegExp(label)}`) })
     .locator('input[type="number"]');
 }
 
-function getProjectionInput(dialog) {
-  return dialog
+function getProjectionInput(cameraRegion) {
+  return cameraRegion
     .locator(".fm-viewport-camera-dialog__form label")
     .filter({ hasText: /^Projection/ })
     .locator("select");
 }
 
-async function restoreCamera(page, dialog, initialCamera, initialDialogValues, timeout) {
-  await fillVector(dialog, "Position (m)", initialCamera.position);
-  await fillVector(dialog, "Target (m)", initialCamera.target);
-  await getScalarInput(dialog, "FOV").fill(initialDialogValues.fov);
-  await getScalarInput(dialog, "Ortho scale").fill(initialDialogValues.orthoScale);
-  await getProjectionInput(dialog).selectOption(initialCamera.projection);
-  await dialog.getByRole("button", { exact: true, name: "Apply" }).click({ timeout });
+async function restoreCamera(page, cameraRegion, initialCamera, initialDialogValues, timeout) {
+  await fillVector(cameraRegion, "Position (m)", initialCamera.position);
+  await fillVector(cameraRegion, "Target (m)", initialCamera.target);
+  await getScalarInput(cameraRegion, "FOV").fill(initialDialogValues.fov);
+  await getScalarInput(cameraRegion, "Ortho scale").fill(initialDialogValues.orthoScale);
+  await getProjectionInput(cameraRegion).selectOption(initialCamera.projection);
+  await cameraRegion.getByRole("button", { exact: true, name: "Apply" }).click({ timeout });
 
-  const viewport = dialog.page().locator(VIEWPORT_SELECTOR);
+  const viewport = cameraRegion.page().locator(VIEWPORT_SELECTOR);
   await waitForCamera(page, viewport, initialCamera, timeout);
-  const restoredValues = await readDialogValues(dialog);
+  const restoredValues = await readCameraFormValues(cameraRegion);
   if (!sameNumericText(restoredValues.fov, initialDialogValues.fov)) {
-    throw new Error(`FOV did not restore to its initial dialog value (${initialDialogValues.fov})`);
+    throw new Error(`FOV did not restore to its initial camera form value (${initialDialogValues.fov})`);
   }
   if (!sameNumericText(restoredValues.orthoScale, initialDialogValues.orthoScale)) {
-    throw new Error(`Ortho scale did not restore to its initial dialog value (${initialDialogValues.orthoScale})`);
+    throw new Error(`Ortho scale did not restore to its initial camera form value (${initialDialogValues.orthoScale})`);
   }
 }
 
@@ -697,22 +874,22 @@ function validateCameraPrecondition(camera) {
   }
 }
 
-function validateDialogValues(camera, values) {
+function validateCameraFormValues(camera, values) {
   if (values.projection !== camera.projection) {
-    throw new Error(`Camera dialog projection ${values.projection} does not match viewport ${camera.projection}`);
+    throw new Error(`Camera controls projection ${values.projection} does not match viewport ${camera.projection}`);
   }
   const coordinateEpsilon = sceneCoordinateEpsilon(distance(camera.position, camera.target));
   if (!sameVector(values.position.values, camera.position, coordinateEpsilon)) {
-    throw new Error("Camera dialog position does not match the public viewport camera attributes");
+    throw new Error("Camera controls position does not match the public viewport camera attributes");
   }
   if (!sameVector(values.target.values, camera.target, coordinateEpsilon)) {
-    throw new Error("Camera dialog target does not match the public viewport camera attributes");
+    throw new Error("Camera controls target does not match the public viewport camera attributes");
   }
   if (!Number.isFinite(Number(values.fov))) {
-    throw new Error("Camera dialog FOV is not finite");
+    throw new Error("Camera controls FOV is not finite");
   }
   if (values.orthoScale.trim() !== "" && !Number.isFinite(Number(values.orthoScale))) {
-    throw new Error("Camera dialog orthographic scale is not finite");
+    throw new Error("Camera controls orthographic scale is not finite");
   }
 }
 
@@ -837,4 +1014,30 @@ function boundedTimeout(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return 15_000;
   return Math.min(Math.max(numeric, 1_000), MAX_ACTION_TIMEOUT_MS);
+}
+
+// Scoped to the fixed red-ring fixture, never a generic material assumption.
+export function countRedDominantPixels(data, width, height) {
+  if (!Number.isInteger(width) || !Number.isInteger(height) ||
+      width <= 0 || height <= 0 || data?.length !== width * height * 4) {
+    throw new Error("Ring pixel check requires valid decoded RGBA dimensions");
+  }
+  let count = 0;
+  // The fixture targets the ring at the center. Exclude the red orientation
+  // sphere/axes at the bottom left and the ViewCube at the top right.
+  for (let y = Math.ceil(height * 0.15); y < height * 0.8; y += 1) {
+    for (let x = Math.ceil(width * 0.25); x < width * 0.75; x += 1) {
+      const offset = (y * width + x) * 4;
+      if (data[offset + 3] > 0 && data[offset] > 32 &&
+          data[offset] > data[offset + 1] * 1.3 && data[offset] > data[offset + 2] * 1.3) count += 1;
+    }
+  }
+  return count;
+}
+
+export function assertRingSurfacePixels(capture) {
+  if (!Number.isFinite(capture.red_dominant_pixels) ||
+      capture.red_dominant_pixels < Math.max(128, capture.width * capture.height * 0.002)) {
+    throw new Error(`Ring geometry is absent at ${capture.name}: ${capture.red_dominant_pixels} red surface pixels`);
+  }
 }

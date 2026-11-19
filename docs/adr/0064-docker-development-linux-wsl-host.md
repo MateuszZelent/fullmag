@@ -52,6 +52,164 @@ urządzenia zatrzymuje start. Wolumen wskazuje ten sam istniejący filesystem,
 nie tworzy nowego ledgeru. Mechanizm sterownika jest opisany w
 [dokumentacji Docker](https://docs.docker.com/engine/storage/volumes/#how-mounting-block-devices-works).
 
+Frontend Linux/WSL obserwuje źródła natywnie (`watch_mode: native`), gdy mount
+`/opt/fullmag/source` leży na ext4, xfs albo btrfs: zdarzenia inotify docierają
+z bind mountu do kontenera, więc Watchpack nie odpytuje drzewa. Windows
+zachowuje polling, bo bind 9p nie dostarcza zdarzeń. Checkout DEV na ext4 w WSL
+usuwa też koszt 9p z capture i synchronizacji źródeł backendu.
+
+## Jawna readmisja po renumeracji urządzenia i nagłym zatrzymaniu
+
+Rozszerzenie z 27.10.2026: `st_dev` może zmienić się po restarcie WSL.
+Zwykły start nadal wymaga zgodnego certyfikatu; nie ignoruje tej różnicy.
+Legacy certyfikat v1 nie zapisuje UUID filesystemu, więc sama zgodność inode
+nie potwierdza jego historycznej tożsamości. Operator może jawnie ponownie
+przyjąć konkretny istniejący magazyn: przypina źródła i grupę, dawny attempt,
+Compose, kontenery i obraz oraz surowe SHA dokumentów właściciela. Nowy UUID
+jest obserwacją bieżącego filesystemu, a nie dowodem brakującego starego UUID.
+
+Readmisja dopuszcza zmianę wyłącznie `host_device`. Zachowuje root, inode,
+engine, owner token i provenance. Pod blokadami grupy, OWNER i writera store
+ponownie sprawdza zatrzymanie konsumentów i wszystkie piny. Przed publikacją
+zachowuje dokładne bajty certyfikatu, markera, probe i readback w control volume.
+Częściową publikację można kontynuować tylko z przypiętym manifestem i jedną
+z dokładnych par starych/nowych bajtów; trzecia wartość blokuje operację.
+Nieznana aktywna operacja kontrolera nadal wymaga osobnego recovery.
+
+Zmiana certyfikatu unieważnia dawny probe. Readmisja nie produkuje nowego
+probe, nie zmienia zapisanego `restart_verified` ani natywnego OWNER i nie
+zwalnia rezerwacji. Przed admission API musi wykonać się normalny świeży
+storage probe w zarządzanej grupie. Stabilna tożsamość accepted store nadal
+używa engine, owner token i względnej ścieżki; dane sesji nie są migrowane.
+
+Nagły stop kontenera z historycznym `Ready` nie jest dowodem drain. Hostowy
+proof `fullmag.docker-abrupt-stop-proof.v1` zachowuje oryginalne bajty procesu,
+OWNER, LAUNCH i konfiguracji oraz przypina rzeczywiste obserwacje stopped
+namespace. Osobny schemat autoryzacji operatora v2 konsumuje ten proof bez
+wymyślania stop-journalu i bez przepisywania historii na `shutdown_unknown`.
+Brak starej bridge wymaga potwierdzonej nieobecności dokładnej sieci i pełnej
+izolacji pozostałych zasobów; awaria odczytu Dockera nie oznacza nieobecności.
+Natywne recovery nadal sprawdza blokady, store, leases i host reservations.
+Tylko ono może opublikować rzeczywiste przejście właściciela.
+
+Dla niepustego store request v3 przypina pełną listę terminalnych runów oraz
+SHA ich intent, katalogów i opcjonalnego artifact catalog. Wyniki pozostają
+niezmienione. Aktywny lub nieznany wynik obliczenia blokuje recovery; nie jest
+automatycznie ponawiany ani oznaczany jako anulowany. Dotychczasowe requesty
+v1 dla pustego store i v2 dla cancelled runs zachowują własne ścisłe reguły.
+
+Stan wdrożenia: walidator i kontroler readmisji, hostowy abrupt-stop recovery
+oraz bridge v3 zaimplementowane z regresjami Python. Bridge v3 wymaga
+read-only introspekcji faktycznego binarium i zgodności SHA/provenance przed
+natywną mutacją. Nowy helper nie aktualizuje kodu Rust wybranego checkoutu.
+Kwalifikacja operacyjna pozostaje `NOT VERIFIED` do czasu rzeczywistej próby.
+Wycofanie nie usuwa archiwów ani wyników i nie przywraca starych bajtów, jeśli
+istnieją aktywni konsumenci lub zdążyło nastąpić kolejne admission.
+
+### Sonda obcych aliasów dla istniejącego backendu worktree
+
+Pierwsza próba abrupt recovery w zarejestrowanym worktree może kwalifikować
+nieznany alias WSL niezależną sondą fizyczną. Jawne wejście
+`prove_worktree_foreign_alias_disjoint` wiąże tożsamość Git/BuildControl,
+utrwalony Compose, obraz i mounty, certyfikat Linux oraz surowy marker ownera.
+Kontrola control volume i namespace uwzględnia deklarację backendu oraz
+rzeczywisty `HostConfig` z subpath; ledger zachowuje reguły ADR0076.
+
+Sonda używa istniejącego nieuprzywilejowanego helpera z mountami tylko do
+odczytu. Nazwa aliasu ani różne urządzenia nie dowodzą rozłączności. Własne
+kontenery odrzuca według obu etykiet projektu. Stary backend musi nadal istnieć
+i być zatrzymany; jego pełna stabilna obserwacja oraz inkarnacja obcego
+konsumenta są sprawdzane przed pomiarem i po nim. Archiwalny dowód jest
+materiałem audytowym: walidator metadanych nie zastępuje nowej sondy fizycznej
+przy granicy mutacji. Ścieżka master zachowuje swój dotychczasowy schemat.
+
+Kontynuacja abrupt recovery worktree po pełnym usunięciu pary używa
+historycznego manifestu dopiero po uwierzytelnieniu zgodnego `absence.json`.
+Przed całym skanem i po nim kontroler ponawia odczyt łańcucha rekordów,
+Compose, silnika i sieci. Każda sonda sprawdza absencję obu dokładnych ID
+przez `inspect` i `ps -a`. Obce montowania nadal przechodzą świeże sondy
+fizyczne WSL albo native Windows/DrvFs. Referencja wymaga nadal rozwiązywalnych
+przypiętych aliasów starego backendu i zgodnego kanonicznego magazynu. Po
+skanie nowy konsument oraz każda zmiana jego tożsamości, montowań, sieci
+lub stanu procesu wymaga świeżego dowodu. Kontroler powtarza pełny odczyt
+inwentarza po każdej z maksymalnie trzech rund nowych sond. Odmawia startu,
+jeśli któraś sonda odmówi albo inwentarz się nie ustabilizuje.
+
+Archiwum sondy po usunięciu wiąże jej wynik z digestami manifestu, requestu,
+`prepared` i `absence`. Stare obserwacje kontenerów pozostają historyczne.
+Ponowienie używa istniejących rekordów i pomija ponowne usuwanie pary.
+Po ponownym sprawdzeniu bajtów terminala start dziedziczy przypięty prywatny
+układ wolumenu. Kontrakt natywny i dokładna lista plików spoza indeksu
+pochodzą z zachowanego Compose.
+Kwalifikacja tej kontynuacji wymaga rzeczywistego przebiegu na danym hoście.
+
+### Zewnętrzne junctiony w obcym bindzie Windows
+
+Ścisły dowód Windows v2 nadal wymaga zawarcia celów linków w źródle bindu.
+Osobny wariant dla junctionów może kwalifikować najwyżej osiem zewnętrznych
+celów. Nie ma listy zaufanych ścieżek: każdy cel musi mieć pełny dowód
+tożsamości native Windows i mapowania DrvFs oraz rozłączności od wszystkich
+trzech chronionych backingów WSL/Docker. Cel musi być zwykłym katalogiem
+na NTFS/ReFS; kolejne zewnętrzne junctiony, nieznane linki i niepełna
+inwentaryzacja powodują odmowę. Błędów ani braku celu nie uznaje się za dowód.
+
+Nowy schemat wiąże dokładny zbiór junctionów z inwentaryzacją rootu,
+surowym celem DrvFs i identyfikatorami linków. Wszystkie pozostałe linki
+podlegają dotychczasowej kwalifikacji. Pełne obserwacje przed i po muszą
+być równe, łącznie z inkarnacjami kontenerów i chronionymi backingami.
+Walidacja zapisanego dowodu nie zastępuje świeżej obserwacji przed mutacją.
+Obsługa jest wyłącznie odczytowa i nie zmienia obcych worktree, dowiązań
+ani kontenerów. Kwalifikacja runtime wymaga rzeczywistego przejścia całej
+kontroli konsumentów; testy syntetyczne tego nie dowodzą.
+
+## Domknięcie refreshu po udanym odtworzeniu frontendu
+
+Docker Desktop może przedstawiać ten sam bind WSL innym zapisem niż host.
+Po odtworzeniu frontendu nie wolno przepisywać pinów wyłącznie z jego
+nowego inventory. Naprawa wymaga zaufanego, niezmienionego bindu backendu,
+zgodnego host source oraz niezależnej tożsamości plików host/backend/frontend.
+Dla podkatalogów dopuszczalny jest osobny opaque alias demona; zgodność
+basename ani dopisanie suffixu do aliasu nie stanowią dowodu. Globalny
+validator mountów pozostaje ścisły.
+
+Jeżeli guard odrzuci taki zapis już po recreacji, typowana procedura
+`docker_volume_frontend_refresh_reconcile.py` rozdziela prepare i apply.
+Request w control volume przypina unknown receipt, poprzedni Compose,
+obecność lub brak pointerów, potwierdzoną kontynuację backendu, oba
+kontenery, pakiet, źródła, sesję storage oraz helper commit i pliki.
+Przed publikacją powtarza pełne obserwacje pod observer CAS przy zachowanym
+oryginalnym lease. Archiwizuje oryginalne dowody i publikuje terminal na
+końcu. Oryginalny helper sam zwalnia swój lease. Procedura nie odtwarza ani
+nie zatrzymuje usług, nie uruchamia Solve i nie zmienia fizyki.
+
+Helper może pochodzić z odrębnego, czystego checkoutu o przypiętym commicie;
+checkout aplikacji pozostaje zamrożony, a zwykłe sprawdzenie zgodności
+backend source snapshot nadal jest obowiązkowe. Odmowa dowolnego pinu
+zachowuje zasoby. Niepełna publikacja zachowuje journal i blokadę zamiast
+umożliwiać nową konkurencyjną operację. Regresje interpretowane nie zastępują
+kwalifikacji rzeczywistego prepare/apply ani symulacji.
+
+## Zatrzymanie API po nieudanym początkowym recovery
+
+`stop-diagnostic-volume --startup-recovery --preview` kwalifikuje dokładną
+nieudaną próbę DEVELOPMENT, zachowaną autoryzację recovery, historyczne
+OWNER i process-tree oraz bieżące API z blokadą wykonywania. Ścieżka obejmuje
+błąd walidacji ostatniego heartbeat terminalnego runa przed przejęciem
+właściciela. Podgląd wiąże działającą parę usług, cgroup, instancję API,
+oryginalne rekordy i pełny snapshot store oraz ledgeru. Sprawdza też
+konsumentów projektu, prywatnego wolumenu i sieci tej grupy.
+
+Zastosowanie wymaga SHA planu podglądu. Kontroler ponawia obserwację pod
+blokadą operacji i zapisuje intent przed łagodnym zatrzymaniem dokładnego
+backendu. Receipt zachowuje `execution_state=unknown`, oryginalne OWNER,
+process-tree, ledger, dane użytkownika oraz autoryzację. Dalszy start tej
+samej instancji odbywa się przez `resume-volume --restart-backend` i jego
+bramki admission. Dla zachowanego wyniku nieznanego po potwierdzonym stopie
+`--reconcile-startup-stop-attempt` ponawia wyłącznie obserwację. Wiąże
+oryginalny helper, intent i snapshot oraz publikuje terminal przez CAS
+w pierwotnym helperze. Testy źródłowe i kwalifikacja konkretnego stopu mają
+oddzielne dowody.
+
 ## Obowiązki i weryfikacja
 
 Adapter klienta i host paths: `docker_dev_host.py`; build kontrolny:

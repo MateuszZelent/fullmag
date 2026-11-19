@@ -1,5 +1,6 @@
+import type { VisualizationTargetRef } from "./ObjectVisualizationController";
 import type { FieldCatalogResource, FieldMetaResource, QuantityCatalogResource, StageExecutionResource } from "../api/apiTypes";
-import { quantityCatalogEntrySupportsSpatialVisualization } from "../api/quantityIds";
+import { quantityCatalogEntrySupportsAnyAirboxVisualization, quantityCatalogEntrySupportsSpatialVisualization, resolveCanonicalQuantityId } from "../api/quantityIds";
 import type { SessionResourceIdentity } from "../resources/sessionResourceIdentity";
 
 /** Client-owned immutable inspection selection; never a physics activation. */
@@ -18,6 +19,48 @@ export interface ArtifactFieldSelection {
 }
 export function artifactSelectionMatchesSession(selection: ArtifactFieldSelection | null, identity: SessionResourceIdentity | null): boolean {
   return Boolean(selection && identity && selection.identity.sessionId === identity.sessionId && selection.identity.sessionEpoch === identity.sessionEpoch && selection.identity.requestScopeEpoch === identity.requestScopeEpoch);
+}
+
+/** A positive live contract always wins over an authored inspection definition. */
+export function artifactUniverseInspectionRoute(quantityId: string, hasInspectionContext: boolean, explicitLive: boolean,
+  discovery?: { ownerSelected: boolean; liveCatalogReady: boolean }): boolean {
+  if (discovery) return hasInspectionContext && discovery.ownerSelected && discovery.liveCatalogReady && !explicitLive;
+  return quantityId === "H_ant" && hasInspectionContext && !explicitLive;
+}
+
+/** Discovery must preserve a compatible current Universe field, including magnetic fields. */
+export function artifactUniverseCatalogHasExplicitLiveQuantity(catalog: QuantityCatalogResource | null, quantityId: string): boolean {
+  if (!quantityId) return false;
+  const canonicalId = resolveCanonicalQuantityId(quantityId);
+  const entries = Array.isArray(catalog?.quantities)
+    ? catalog.quantities.filter(entry => entry && resolveCanonicalQuantityId(entry.id) === canonicalId) : [];
+  if (entries.length !== 1) return false;
+  const entry = entries[0], capability = entry.resolved_capability;
+  return Boolean(quantityCatalogEntrySupportsAnyAirboxVisualization(entry) && capability &&
+    resolveCanonicalQuantityId(capability.quantity_id) === canonicalId &&
+    ["fdm_cpu", "fdm_gpu", "fem_cpu", "fem_gpu"].includes(capability.lane) &&
+    capability.provider === "available" && capability.request === "field_vector" && capability.render === "renderable" &&
+    capability.publication === "interactive" && Array.isArray(capability.carriers) &&
+    capability.carriers.some(carrier => carrier.payload_state === "current" && carrier.components === entry.n_comp));
+}
+
+/** Provenance for inspection on the accepted result's own global mesh, never the current mesh. */
+export function artifactFieldLocatorHasAcceptedGlobalSampling(value: unknown): boolean {
+  const record = (v: unknown): v is Record<string, unknown> => Boolean(v && typeof v === "object" && !Array.isArray(v));
+  if (!record(value) || !record(value.owner) || !record(value.owner.accepted_artifact) || !record(value.sample_carrier)) return false;
+  const accepted = value.owner.accepted_artifact;
+  const keys = ["project_id", "task_id", "attempt_id", "ownership_epoch", "artifact_id", "object_ref"];
+  if (Object.keys(accepted).length !== keys.length || keys.some(key =>
+    typeof accepted[key] !== "string" || !(accepted[key] as string).trim() ||
+    (accepted[key] as string).length > 4096 || (accepted[key] as string).includes("\0")) ||
+    typeof accepted.ownership_epoch !== "string" || !/^[1-9][0-9]*$/.test(accepted.ownership_epoch) ||
+    BigInt(accepted.ownership_epoch) > BigInt("18446744073709551615") ||
+    typeof accepted.object_ref !== "string" || !/^[0-9a-f]{64}$/.test(accepted.object_ref)) return false;
+  const carrier = value.sample_carrier, domain = carrier.domain;
+  return value.carrier_scope_kind === "full" && value.carrier_scope_id === null && value.indexing === "sample_nodes" &&
+    Object.keys(carrier).length === 4 && record(domain) && Object.keys(domain).length === 1 && domain.kind === "global" &&
+    carrier.carrier_kind === "fem_domain_mesh_asset" && carrier.location === "node" &&
+    typeof carrier.topology_digest === "string" && /^sha256:[0-9a-f]{64}$/.test(carrier.topology_digest);
 }
 
 /** Historical artifact routing never follows a quantity name alone. */
@@ -49,6 +92,7 @@ export interface ArtifactInspectorFieldQuery {
 }
 export interface ArtifactInspectorFieldBinding {
   historical: boolean;
+  presentationTarget?: VisualizationTargetRef | null;
   query: ArtifactInspectorFieldQuery | null;
   identityKey: string | null;
   expectedOwner: {
@@ -59,7 +103,7 @@ export interface ArtifactInspectorFieldBinding {
 }
 
 /** A historical lane never falls back to an unpinned current-field request. */
-export function artifactInspectorFieldBinding({ catalog, catalogReady = true, inspectionOnly = false, quantityId, selection, sessionIdentity, targetScope }: {
+export function artifactInspectorFieldBinding({ catalog, catalogReady = true, inspectionOnly = false, quantityId, selection, sessionIdentity, targetScope, presentationTarget }: {
   catalog: QuantityCatalogResource | null;
   catalogReady?: boolean;
   inspectionOnly?: boolean;
@@ -67,9 +111,11 @@ export function artifactInspectorFieldBinding({ catalog, catalogReady = true, in
   selection: ArtifactFieldSelection | null;
   sessionIdentity: SessionResourceIdentity | null;
   targetScope: { scopeKind: string; scopeId: string | null } | null;
+  presentationTarget?: VisualizationTargetRef | null;
 }): ArtifactInspectorFieldBinding {
   const historical = inspectionOnly || Boolean(catalog?.quantities.some(entry => entry.id === quantityId && entry.resolved_capability?.lane === "artifact_inspection_read_only"));
-  const blocked = { historical, query: null, identityKey: null, expectedOwner: null };
+  const blocked = { historical, presentationTarget, query: null, identityKey: null, expectedOwner: null };
+  if (presentationTarget?.kind === "airbox" && quantityId !== "H_ant") return blocked;
   if (!historical || !catalogReady || !artifactInspectionQuantity(catalog, quantityId) || !selection || !sessionIdentity || !artifactSelectionMatchesSession(selection, sessionIdentity) || selection.quantityId !== quantityId) return blocked;
   const nonempty = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
   if (![sessionIdentity.sessionId, sessionIdentity.sessionEpoch, sessionIdentity.requestScopeEpoch, selection.runId, selection.authoredStageId, selection.runtimeStageId, selection.sourceObjectId, selection.carrierId, selection.carrierRevision].every(nonempty)) return blocked;
@@ -88,7 +134,7 @@ export function artifactInspectorFieldBinding({ catalog, catalogReady = true, in
   const identityKey = JSON.stringify([expectedOwner.session_id, expectedOwner.session_epoch, expectedOwner.request_scope_epoch, quantityId,
     selection.runId, selection.authoredStageId, selection.runtimeStageId, selection.sourceObjectId, query.carrier_id, query.expected_carrier_revision,
     scopeKind, scopeId, targetScope?.scopeKind ?? null, targetScope?.scopeId ?? null]);
-  return { historical, query, identityKey, expectedOwner };
+  return { historical, presentationTarget, query, identityKey, expectedOwner };
 }
 
 /** A successful response still has to belong to the exact pinned inspection. */
@@ -96,6 +142,7 @@ export function artifactInspectorMetadataMatchesBinding(metadata: FieldMetaResou
   const { query, expectedOwner: expected } = binding;
   if (!binding.historical || !query || !expected || !metadata?.artifact_field_locator) return false;
   const locator = metadata.artifact_field_locator;
+  if (binding.presentationTarget?.kind === "airbox" && !artifactFieldLocatorHasAcceptedGlobalSampling(locator)) return false;
   if (typeof locator !== "object" || Array.isArray(locator) || !locator.owner || typeof locator.owner !== "object" || Array.isArray(locator.owner)) return false;
   const owner = locator.owner, capability = metadata.resolved_capability;
   const quantityId = expected.quantityId, components = quantityId === "V_electric" ? 1 : 3;
@@ -116,11 +163,13 @@ export function artifactInspectorMetadataMatchesBinding(metadata: FieldMetaResou
 export function artifactCarrierPresentationKey(
   owner: ArtifactInspectorFieldBinding["expectedOwner"],
   carrier: Pick<ArtifactInspectorFieldQuery, "carrier_id" | "expected_carrier_revision" | "scope_kind" | "scope_id"> | null,
+  presentationTarget?: VisualizationTargetRef | null,
 ): string | null {
   if (!owner || !carrier) return null;
-  return JSON.stringify(["artifact-surface", owner.session_id, owner.session_epoch, owner.request_scope_epoch,
+  const key = JSON.stringify(["artifact-surface", owner.session_id, owner.session_epoch, owner.request_scope_epoch,
     owner.run_id, owner.authored_stage_id, owner.runtime_stage_id, owner.object_id, owner.quantityId,
     carrier.carrier_id, carrier.expected_carrier_revision, carrier.scope_kind, carrier.scope_id]);
+  return presentationTarget?.kind === "airbox" ? JSON.stringify([key, "presentation", presentationTarget.id]) : key;
 }
 
 export function artifactInspectionOwnerPlan(definitions: ReadonlyArray<{ id?: string; source_object_id?: string }>, execution: StageExecutionResource | null, identity: { sessionId: string; sessionEpoch: string; requestScopeEpoch: string } | null, selection: ArtifactFieldSelection | null) {
@@ -146,8 +195,9 @@ export function artifactSurfaceRangeKey(
   owner: ArtifactInspectorFieldBinding["expectedOwner"],
   carrier: Pick<ArtifactInspectorFieldQuery, "carrier_id" | "expected_carrier_revision" | "scope_kind" | "scope_id"> | null,
   projectionMode: string | undefined,
+  presentationTarget?: VisualizationTargetRef | null,
 ): string | null {
-  const key = artifactCarrierPresentationKey(owner, carrier);
+  const key = artifactCarrierPresentationKey(owner, carrier, presentationTarget);
   return key ? JSON.stringify([key, projectionMode ?? "raw_nodal"]) : null;
 }
 

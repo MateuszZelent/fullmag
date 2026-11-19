@@ -43,18 +43,25 @@ extern "C" {
 #define FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED -5
 #define FULLMAG_FDM_ERR_ABI -6
 
-/* Maximum number of distinct exchange regions supported by the LUT. */
-#define FULLMAG_FDM_MAX_EXCHANGE_REGIONS 256
-/* Region id 0 is background; ids 1..MAX_REGION_ID address the LUT safely. */
-#define FULLMAG_FDM_MAX_REGION_ID (FULLMAG_FDM_MAX_EXCHANGE_REGIONS - 1)
+/*
+ * Region ids are unbounded uint32 values. Exchange between regions is carried
+ * by per-connection face coefficients (fullmag_fdm_plan_desc_v2 tail); the
+ * former 256x256 pair table and its region-id limit are retired.
+ */
 
 /* Append-only frozen-spin plan extension. Support is advertised separately. */
 #define FULLMAG_FDM_FROZEN_SPINS_ABI_V1 1u
 #define FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1 (UINT64_C(1) << 0)
+/* Regional field drives accept HOST_MULTIPLIER terms (descriptor v3). */
+#define FULLMAG_FDM_CAPABILITY_HOST_MULTIPLIER_DRIVES_V1 (UINT64_C(1) << 1)
 #define FULLMAG_FDM_PLAN_DESC_ABI_V2 UINT32_C(2)
 #define FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1 UINT32_C(1)
+#define FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_LAYERS_ABI_V1 UINT32_C(1)
 #define FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1 UINT32_C(1)
 #define FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V2 UINT32_C(2)
+#define FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V3 UINT32_C(3)
+/* At most this many HOST_MULTIPLIER drives per backend. */
+#define FULLMAG_FDM_MAX_HOST_MULTIPLIER_DRIVES 8u
 
 /* ── Enums ── */
 
@@ -71,6 +78,8 @@ typedef enum {
 typedef enum {
     FULLMAG_FDM_TRANSFER_IDENTITY = 0,
     FULLMAG_FDM_TRANSFER_PUSH_PULL = 1,
+    /* Exact same-cell embed/crop with a centered XY native-grid offset. */
+    FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED = 2,
 } fullmag_fdm_transfer_kind;
 
 typedef enum {
@@ -135,9 +144,13 @@ typedef enum {
 
 typedef enum {
     /*
-     * Compatibility default for zero-initialized legacy callers.  When a
-     * region_mask is present and no explicit exchange_lut is provided, this
-     * keeps the historical free-surface cross-region behavior.
+     * Retired region-pair table modes, kept for layout stability. Only
+     * UNSPECIFIED (zero-initialized callers) and HARMONIC_MEAN are accepted as
+     * exchange_pair_default. HARMONIC_MEAN means the uniform exchange operator
+     * unless the v2 tail carries FACES. UNSPECIFIED with a region_mask
+     * historically decoupled regions (A_ij = 0); with active exchange and
+     * without FACES it is rejected (fdm_exchange_pair_unspecified_retired)
+     * instead of re-coupling them.
      */
     FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED   = 0,
     FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN = 1,
@@ -502,6 +515,22 @@ typedef struct {
     double                           dmi_D_rotated_interfacial; /* D_21 = D_32 (J/m^2) */
 } fullmag_fdm_rotated_interfacial_dmi_desc_v1;
 
+/* Sparse per-layer overrides; omitted layers retain their current coefficient. */
+typedef struct {
+    uint32_t                         layer_index;
+    int32_t                          has_rotated_interfacial_dmi;
+    uint32_t                         reserved0;
+    double                           dmi_D_rotated_interfacial; /* J/m^2 */
+} fullmag_fdm_rotated_interfacial_dmi_layer_v1;
+
+typedef struct {
+    uint32_t                         abi_version;
+    uint32_t                         struct_size;
+    const fullmag_fdm_rotated_interfacial_dmi_layer_v1 *layers;
+    uint32_t                         entry_count;
+    uint32_t                         reserved0;
+} fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1;
+
 typedef struct {
     fullmag_fdm_grid_desc      grid;
     fullmag_fdm_material_desc  material;
@@ -627,33 +656,26 @@ typedef struct {
     uint64_t                   active_mask_len; /* = cell_count when present */
 
     /*
-     * Optional region/body ids for exchange barriers.
-     * Neighboring active cells with different non-zero region ids are treated
-     * according to the exchange LUT (see below).  When no LUT is provided,
-     * cross-region exchange coupling is resolved from exchange_pair_default.
+     * Optional region ids (unbounded uint32) used for region observables.
+     * Exchange does not read them: per-connection coefficients arrive through
+     * the fullmag_fdm_plan_desc_v2 exchange-operator tail.
      * Length must equal cell_count when present.
      */
     const uint32_t            *region_mask;
     uint64_t                   region_mask_len;
 
     /*
-     * Optional inter-region exchange coupling Look-Up Table (LUT).
-     * Flat row-major array of FULLMAG_FDM_MAX_EXCHANGE_REGIONS^2 doubles:
-     *   exchange_lut[ri * FULLMAG_FDM_MAX_EXCHANGE_REGIONS + rj] = A_ij [J/m]
-     *
-     * When present, the exchange kernel uses A_ij instead of material.exchange_stiffness
-     * for every cell pair whose regions are ri and rj.  This enables:
-     *   - Proper inter-region coupling with a per-pair A_ij (mumax parity)
-     *   - Free surface semantics by setting A_ij = 0
-     *
-     * When NULL and region_mask is present, the backend auto-builds a default
-     * LUT from exchange_pair_default.  Legacy UNSPECIFIED keeps the historical
-     * A_ii = material.exchange_stiffness and A_ij(i!=j) = 0 behavior.  Current
-     * region-owned semantics must set HARMONIC_MEAN so region-region exchange
-     * inside one object remains continuous by default.
+     * Retired region-pair exchange table. Kept for layout stability only:
+     * exchange_lut/exchange_pairs must be NULL/0, and exchange_pair_default
+     * must be UNSPECIFIED or HARMONIC_MEAN. HARMONIC_MEAN means every
+     * connection uses material.exchange_stiffness unless the v2 face tail says
+     * otherwise. UNSPECIFIED with a region_mask and active exchange requires
+     * the FACES tail (fdm_exchange_pair_unspecified_retired), because it
+     * historically decoupled regions. Other values fail with
+     * fdm_exchange_lut_retired.
      */
     const double              *exchange_lut;
-    uint64_t                   exchange_lut_len; /* must be MAX_EXCHANGE_REGIONS^2 when present */
+    uint64_t                   exchange_lut_len;
     fullmag_fdm_exchange_pair_mode exchange_pair_default;
     const fullmag_fdm_exchange_pair_desc *exchange_pairs;
     uint64_t                   exchange_pair_count;
@@ -782,7 +804,28 @@ typedef struct {
     /* Optional append-only extension; absent when struct_size is the legacy 1384 bytes. */
     int has_rotated_interfacial_dmi;
     double dmi_D_rotated_interfacial; /* D_21 = D_32 (J/m^2) */
+    /*
+     * Optional append-only exchange-operator extension; absent (UNIFORM) when
+     * struct_size is 1384 or 1400 bytes. FACES carries the exchange stiffness
+     * [J/m] of every +x/+y/+z connection (0 where no connection exists); the
+     * -x coefficient of cell i is exchange_face_x_plus of its -x neighbour.
+     * UNIFORM runs the scalar-A Laplacian with or without region_mask. In
+     * fp64 it is bit-identical to the pre-v2 uniform path; in fp32 with a
+     * region_mask (formerly the region-pair table kernel) it is held to the
+     * documented tolerance against the fp64 reference, not to bit identity.
+     */
+    uint32_t exchange_operator_mode;   /* fullmag_fdm_exchange_operator_mode */
+    uint32_t reserved_exchange_operator;
+    const double *exchange_face_x_plus;
+    const double *exchange_face_y_plus;
+    const double *exchange_face_z_plus;
+    uint64_t exchange_face_len;        /* cell_count for FACES, 0 for UNIFORM */
 } fullmag_fdm_plan_desc_v2;
+
+typedef enum {
+    FULLMAG_FDM_EXCHANGE_OPERATOR_UNIFORM = 0,
+    FULLMAG_FDM_EXCHANGE_OPERATOR_FACES = 1,
+} fullmag_fdm_exchange_operator_mode;
 
 /* Append-only native CUDA extension for resolved regional field drives. */
 typedef enum {
@@ -791,6 +834,10 @@ typedef enum {
     FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PULSE = 2,
     FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PIECEWISE_LINEAR = 3,
     FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINC_PULSE = 4,
+    /* The host evaluates the descriptor's time program (fullmag_time_expr.v1,
+     * native/include/fullmag_time_expression.h) once per field build and the
+     * kernels read that value; v3 descriptors only. */
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_HOST_MULTIPLIER = 5,
 } fullmag_fdm_regional_field_drive_waveform;
 
 typedef enum {
@@ -827,11 +874,23 @@ typedef struct {
     double waveform_origin_time_s; /* original stage start for STAGE_LOCAL */
 } fullmag_fdm_regional_field_drive_desc_v2;
 
+/* v3 adds the time program of a HOST_MULTIPLIER drive (mask terms, ADR 0081).
+ * The program is evaluated at the local time of the v2 clock rules; other
+ * waveforms carry no program (null, length 0). The backend copies it.
+ */
+typedef struct {
+    fullmag_fdm_regional_field_drive_desc_v2 drive;
+    const double *time_program;    /* fullmag_time_expr.v1 words */
+    uint64_t time_program_len;
+} fullmag_fdm_regional_field_drive_desc_v3;
+
 #if defined(__cplusplus)
 static_assert(sizeof(fullmag_fdm_regional_field_drive_desc_v1) == 120,
               "regional field-drive v1 ABI size changed");
 static_assert(sizeof(fullmag_fdm_regional_field_drive_desc_v2) == 128,
               "regional field-drive v2 ABI size changed");
+static_assert(sizeof(fullmag_fdm_regional_field_drive_desc_v3) == 144,
+              "regional field-drive v3 ABI size changed");
 #endif
 
 /* ── Per-step diagnostics ── */
@@ -1402,6 +1461,16 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
 fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     const fullmag_fdm_multilayer_plan_desc_v2 *plan);
 
+/**
+ * Enable periodic local XY seams for an aligned FP64 multilayer PG-BB plan.
+ * Call immediately after create_v2, before configuring interactions or
+ * evaluating fields. The supplied pair spectra must use the common XY
+ * dimensions and twice the common Z dimension (open Z).
+ * Each native axis wraps only when it spans the corresponding period.
+ */
+int fullmag_fdm_backend_set_multilayer_xy_periodic_v1(
+    fullmag_fdm_backend *handle);
+
 /*
  * Configure rotated interfacial DMI on a v2 multilayer handle.  This must be
  * called after fullmag_fdm_backend_create_v2 and before the first step.  The
@@ -1411,6 +1480,11 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
 int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
     fullmag_fdm_backend *handle,
     const fullmag_fdm_rotated_interfacial_dmi_desc_v1 *descriptor);
+
+/* Apply sparse overrides by upload-order layer index, before the first step. */
+int fullmag_fdm_backend_set_rotated_interfacial_dmi_layers_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1 *descriptor);
 
 int fullmag_fdm_backend_set_stats_policy_v1(
     fullmag_fdm_backend *handle,
@@ -1438,6 +1512,15 @@ int fullmag_fdm_backend_set_regional_field_drives_v2(
     fullmag_fdm_backend *handle,
     const fullmag_fdm_regional_field_drive_desc_v2 *drives,
     uint32_t drive_count);
+/* v3 also accepts HOST_MULTIPLIER drives; check
+ * FULLMAG_FDM_CAPABILITY_HOST_MULTIPLIER_DRIVES_V1 first. */
+int fullmag_fdm_backend_set_regional_field_drives_v3(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_regional_field_drive_desc_v3 *drives,
+    uint32_t drive_count);
+/* The library's interpreter of fullmag_time_expr.v1 (for cross-checks with
+ * the Rust interpreter); NaN for a malformed program. */
+double fullmag_fdm_time_expression_eval_v1(const double *code, uint64_t len, double t_s);
 
 /**
  * Execute one time step of length dt_seconds using the configured integrator.
@@ -1827,6 +1910,16 @@ int fullmag_fdm_backend_upload_layer_magnetization_f32(
     const float           *m_xyz,
     uint64_t               len);
 
+/** FP64 resident multilayer PG-BB scalar/vector operation. 20 doubles/layer.
+ * op: 0 refresh/evaluate, 1 capture accepted, 2 normalized trial, 3 restore.
+ * op 2 returns changed/invalid cell counts in slots 18/19 (others zero);
+ * invalid normalization is a backtrack request and never reaches field evaluation.
+ * No operation advances physical time or publishes an accepted solver step.
+ */
+int fullmag_fdm_backend_multilayer_bb(
+    fullmag_fdm_backend *handle, uint32_t op, double lambda,
+    double *layer_scalars, uint64_t scalar_count);
+
 /**
  * Recompute staged v2 multilayer H_DEMAG without taking a time step.
  *
@@ -1880,6 +1973,11 @@ int fullmag_fdm_backend_execution_receipt_v2(
  * Return the last error message, or NULL if no error.
  * The pointer is valid until the next API call on this handle.
  */
+int fullmag_fdm_backend_set_slonczewski_time_expression_v1(
+    fullmag_fdm_backend *handle,
+    const double *program, uint64_t program_words,
+    double stage_origin_s, const double *events_s, uint64_t event_count);
+
 const char *fullmag_fdm_backend_last_error(
     fullmag_fdm_backend *handle);
 

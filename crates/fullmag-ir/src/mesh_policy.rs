@@ -189,6 +189,12 @@ pub struct FemAirboxMeshPolicyIR {
     pub transition_distance: Option<FemMeshTransitionDistanceIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub element_ratio: Option<f64>,
+    /// Air target `c * R` at curved magnetic surfaces (docs/physics/0107).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curvature_factor: Option<f64>,
+    /// Element-count control across air gaps (docs/physics/0107).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narrow_region_resolution: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -708,6 +714,11 @@ impl FemMeshPolicyIR {
                 false,
             )?;
             validate_optional_positive(airbox.element_ratio, "/airbox/element_ratio")?;
+            validate_optional_positive(airbox.curvature_factor, "/airbox/curvature_factor")?;
+            validate_optional_positive(
+                airbox.narrow_region_resolution,
+                "/airbox/narrow_region_resolution",
+            )?;
             if airbox
                 .near_element_size
                 .is_some_and(|near| near > airbox.far_element_size)
@@ -1442,6 +1453,8 @@ impl FemMeshPolicyIR {
                 ("airbox_hmax", "far_element_size"),
                 ("airbox_growth_rate", "element_ratio"),
                 ("airbox_grading", "grading"),
+                ("airbox_curvature_factor", "curvature_factor"),
+                ("airbox_narrow_region_resolution", "narrow_region_resolution"),
             ] {
                 if let Some(value) = study_universe.get(source) {
                     airbox.insert(destination.to_string(), value.clone());
@@ -1474,6 +1487,9 @@ impl FemMeshPolicyIR {
                 ],
                 &base,
             )?;
+            let curvature_factor = legacy_f64(&airbox, &["curvature_factor"], &base)?;
+            let narrow_region_resolution =
+                legacy_f64(&airbox, &["narrow_region_resolution"], &base)?;
             let law = match legacy_string(&airbox, "grading", &base)?.as_deref() {
                 None | Some("auto") if from_study_universe => FemAirboxGradingLawIR::Geometric,
                 None | Some("uniform") => FemAirboxGradingLawIR::Uniform,
@@ -1513,9 +1529,16 @@ impl FemMeshPolicyIR {
                     far_element_size,
                     transition_distance,
                     element_ratio,
+                    curvature_factor,
+                    narrow_region_resolution,
                 });
                 has_policy = true;
-            } else if near.is_some() || transition_distance.is_some() || ratio.is_some() {
+            } else if near.is_some()
+                || transition_distance.is_some()
+                || ratio.is_some()
+                || curvature_factor.is_some()
+                || narrow_region_resolution.is_some()
+            {
                 return Err(format!(
                     "{base}/maximum_element_size: far-air maximum is required when airbox policy is present"
                 ));
@@ -1646,6 +1669,8 @@ fn preflight_policy_value(value: &Value) -> Result<(), MeshPolicyValidationError
                 "far_element_size",
                 "transition_distance",
                 "element_ratio",
+                "curvature_factor",
+                "narrow_region_resolution",
             ],
             "/airbox",
         )?;
@@ -1654,7 +1679,13 @@ fn preflight_policy_value(value: &Value) -> Result<(), MeshPolicyValidationError
         }
         preflight_numbers(
             airbox,
-            &["near_element_size", "far_element_size", "element_ratio"],
+            &[
+                "near_element_size",
+                "far_element_size",
+                "element_ratio",
+                "curvature_factor",
+                "narrow_region_resolution",
+            ],
             "/airbox",
         )?;
     }

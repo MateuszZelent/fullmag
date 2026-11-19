@@ -555,7 +555,9 @@ def _native_pins(control, previous: Mapping[str, object], backend_id: str, image
     }
 
 
-def _container_state(document: Mapping[str, object]) -> dict[str, object]:
+def _container_state(document: Mapping[str, object], *, expected_exit: int = 2) -> dict[str, object]:
+    if type(expected_exit) is not int or expected_exit not in {1, 2}:
+        _fail("Backend stopped-state validation supports only the exact pre-API exits")
     state = document.get("State")
     if not isinstance(state, Mapping):
         _fail("Backend Docker state is missing")
@@ -568,11 +570,11 @@ def _container_state(document: Mapping[str, object]) -> dict[str, object]:
     if (document.get("Id") is None or document.get("Image") is None
             or state.get("Running") is not False or state.get("Status") != "exited"
             or type(state.get("Pid")) is not int or state.get("Pid") != 0
-            or type(state.get("ExitCode")) is not int or state.get("ExitCode") != 2
+            or type(state.get("ExitCode")) is not int or state.get("ExitCode") != expected_exit
             or state.get("OOMKilled") is not False
             or not isinstance(state.get("StartedAt"), str) or not state.get("StartedAt")
             or not isinstance(state.get("FinishedAt"), str) or not state.get("FinishedAt")):
-        _fail("Backend is not the exact exited capture-failure incarnation")
+        _fail("Backend is not the exact exited pre-API failure incarnation")
     return {
         "id": document["Id"], "image": document["Image"],
         "started_at": state["StartedAt"], "finished_at": state["FinishedAt"],
@@ -734,12 +736,34 @@ def _capture_logs(backend_id: str, state: Mapping[str, object]) -> dict[str, byt
     if result.returncode:
         _fail("Cannot archive exact current backend logs: " + result.stderr.decode("utf-8", "replace")[-1024:])
     streams = {"stdout": bytes(result.stdout), "stderr": bytes(result.stderr)}
+    return validate_capture_log_streams(streams, state)
+
+
+def _capture_native_init_failure_logs(
+    backend_id: str, state: Mapping[str, object]
+) -> dict[str, bytes]:
+    result = docker_capture(
+        "logs", "--timestamps", "--since", state["started_at"], backend_id, timeout=120
+    )
+    if result.returncode:
+        _fail("Cannot archive exact current backend logs: " + result.stderr.decode("utf-8", "replace")[-1024:])
+    streams = {"stdout": bytes(result.stdout), "stderr": bytes(result.stderr)}
+    return validate_native_init_failure_log_streams(streams, state)
+
+
+def validate_timestamped_log_streams(
+    streams: Mapping[str, bytes], state: Mapping[str, object], *, maximum: int = MAX_LOG_BYTES
+) -> dict[str, bytes]:
+    """Validate exact stdout/stderr bytes against one Docker incarnation."""
+    if set(streams) != {"stdout", "stderr"} or any(not isinstance(value, bytes) for value in streams.values()):
+        _fail("Capture-only log archive has an invalid stream set")
     total_bytes = len(streams["stdout"]) + len(streams["stderr"])
-    if not total_bytes or total_bytes > MAX_LOG_BYTES:
+    if not total_bytes or total_bytes > maximum:
         _fail("Current backend logs are empty or exceed the retention bound")
-    text = (streams["stdout"] + streams["stderr"]).decode("utf-8", "replace")
     started_ns = _timestamp_ns(str(state["started_at"]))
     finished_ns = _timestamp_ns(str(state["finished_at"]))
+    if finished_ns < started_ns:
+        _fail("Docker incarnation finish time precedes its start time")
     for stream in streams.values():
         for line in stream.splitlines():
             if not line:
@@ -750,6 +774,13 @@ def _capture_logs(backend_id: str, state: Mapping[str, object]) -> dict[str, byt
             timestamp = _timestamp_ns(match.group(1).decode("ascii"))
             if timestamp < started_ns or timestamp > finished_ns:
                 _fail("Docker log timestamp falls outside the exact stopped incarnation")
+    return dict(streams)
+
+
+def validate_capture_log_streams(streams: Mapping[str, bytes], state: Mapping[str, object]) -> dict[str, bytes]:
+    """Validate the legacy capture-only failure without changing its evidence rules."""
+    streams = validate_timestamped_log_streams(streams, state, maximum=MAX_LOG_BYTES)
+    text = (streams["stdout"] + streams["stderr"]).decode("utf-8", "replace")
     if (text.count("phase=capture state=start") != 1
             or text.count("phase=capture state=failed") != 1
             or "phase=capture state=complete" in text
@@ -766,6 +797,67 @@ def _capture_logs(backend_id: str, state: Mapping[str, object]) -> dict[str, byt
     )
     if any(re.search(pattern, text, re.IGNORECASE) for pattern in forbidden):
         _fail("Current backend logs show work beyond the capture-only failure")
+    return streams
+
+
+def validate_native_init_failure_log_streams(
+    streams: Mapping[str, bytes], state: Mapping[str, object]
+) -> dict[str, bytes]:
+    """Require the one observed host-policy initialization traceback before API handoff."""
+    streams = validate_timestamped_log_streams(streams, state, maximum=MAX_LOG_BYTES)
+    combined = (streams["stdout"] + streams["stderr"]).decode("utf-8", "replace")
+    if "[fullmag-backend] Starting API and runtime service" in combined:
+        _fail("Native host initialization failure was not before API handoff")
+
+    # A Python traceback is written as a single stream. Strip only the
+    # timestamp prefix already validated above, keeping frame ordering exact.
+    traceback_text = None
+    for stream in (streams["stderr"], streams["stdout"]):
+        lines = []
+        for line in stream.splitlines():
+            if not line:
+                continue
+            match = TIMESTAMP.match(line)
+            if match is not None:
+                lines.append(line[match.end():].decode("utf-8", "replace"))
+        traceback_positions = [
+            index for index, line in enumerate(lines)
+            if line.strip() == "Traceback (most recent call last):"
+        ]
+        last_traceback = max(traceback_positions, default=-1)
+        if last_traceback < 0:
+            continue
+        candidates = lines[last_traceback + 1:]
+        patterns = (
+            re.compile(r'File "/opt/fullmag/entrypoint\.py", line [0-9]+, in serve'),
+            re.compile(r'File "/opt/fullmag/runtime_service\.py", line [0-9]+, in ensure_configuration'),
+            re.compile(r'File "/opt/fullmag/runtime_service\.py", line [0-9]+, in initialize_host_configuration'),
+        )
+        cursor = 0
+        ordered = True
+        for pattern in patterns:
+            found = next((index for index in range(cursor, len(candidates))
+                          if pattern.search(candidates[index])), None)
+            if found is None:
+                ordered = False
+                break
+            cursor = found + 1
+        final_error = next(
+            (index for index in range(cursor, len(candidates))
+             if "RuntimeServiceError: native Docker host profile initialization failed"
+             in candidates[index]),
+            None,
+        )
+        final_error_absolute = (last_traceback + 1 + final_error) if final_error is not None else None
+        marker_error = "host resource ledger initialization marker differs from configured policy"
+        if (ordered and final_error_absolute is not None
+                and marker_error in lines[final_error_absolute]):
+            traceback_text = "\n".join(lines)
+            break
+    if (traceback_text is None
+            or "RuntimeServiceError: native Docker host profile initialization failed"
+            not in traceback_text):
+        _fail("Backend logs do not prove the exact native host-policy pre-API initialization failure")
     return streams
 
 

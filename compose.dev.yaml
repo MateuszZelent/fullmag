@@ -136,12 +136,16 @@ services:
       - /build
     environment:
       FULLMAG_DOCKER_ROLE: backend
+      FULLMAG_AUTO_CACHE_MAINTENANCE: "1"
       FULLMAG_COMPOSE_PROJECT: ${FULLMAG_COMPOSE_PROJECT:-fullmag-master}
       FULLMAG_SOURCE_HOST_ROOT: ${FULLMAG_SOURCE_ROOT:?Select the Windows source checkout}
       FULLMAG_SESSION_STORAGE_PROFILE: windows-folder-v1
       FULLMAG_RUNTIME_IMAGE_ID: ${FULLMAG_DEV_IMAGE}
       FULLMAG_TOOLCHAIN_IMAGE_ID: ${FULLMAG_TOOLCHAIN_IMAGE_ID:?Pin the toolchain identity}
       FULLMAG_BACKEND_CARGO_PROFILE: ${FULLMAG_BACKEND_CARGO_PROFILE:-backend-dev}
+      # Match the baseline backend CPU quota; the managed saved budget
+      # updates both this value and the quota when rendering Compose.
+      CARGO_BUILD_JOBS: "4"
       FULLMAG_DOCKER_DEVICE_ACCESS: ${FULLMAG_DOCKER_DEVICE_ACCESS:?Resolved device access is required}
       # Bounded operator-probe controls.  These are the only workload
       # variables admitted from the host environment; do not replace this

@@ -27,6 +27,10 @@ HOST_PID="${FULLMAG_HOST_LEDGER_HOST_PID:-1}"
 RUNTIME_UID="${FULLMAG_HOST_LEDGER_RUNTIME_UID:-65532}"
 RUNTIME_GID="${FULLMAG_HOST_LEDGER_RUNTIME_GID:-65532}"
 LOCK_WAIT="${FULLMAG_HOST_LEDGER_LOCK_WAIT_SECONDS:-120}"
+PUBLISH_CAPACITY="${FULLMAG_HOST_LEDGER_PUBLISH_CAPACITY:-0}"
+DOCKER_HOST_ID="${FULLMAG_DOCKER_HOST_ID:-}"
+DOCKER_CPU_COUNT="${FULLMAG_HOST_LEDGER_DOCKER_CPU_COUNT:-}"
+DOCKER_MEMORY_TOTAL_BYTES="${FULLMAG_HOST_LEDGER_DOCKER_MEMORY_TOTAL_BYTES:-}"
 
 OWNER_MARKER=""
 LEDGER_ROOT=""
@@ -101,6 +105,17 @@ validate_inputs() {
   require_uint FULLMAG_HOST_LEDGER_RUNTIME_GID "${RUNTIME_GID}"
   require_uint FULLMAG_HOST_LEDGER_SIZE_BYTES "${IMAGE_SIZE_VALUE}"
   require_uint FULLMAG_HOST_LEDGER_LOCK_WAIT_SECONDS "${LOCK_WAIT}"
+  [[ "${PUBLISH_CAPACITY}" == "0" || "${PUBLISH_CAPACITY}" == "1" ]] || fail "FULLMAG_HOST_LEDGER_PUBLISH_CAPACITY must be 0 or 1"
+  if [[ "${PUBLISH_CAPACITY}" == "1" ]]; then
+    require_command stat
+    [[ "${HOST_PID}" == "1" ]] || fail "host capacity publication requires HOST_PID=1"
+    require_uint FULLMAG_HOST_LEDGER_DOCKER_CPU_COUNT "${DOCKER_CPU_COUNT}"
+    require_uint FULLMAG_HOST_LEDGER_DOCKER_MEMORY_TOTAL_BYTES "${DOCKER_MEMORY_TOTAL_BYTES}"
+    (( DOCKER_CPU_COUNT > 0 && DOCKER_MEMORY_TOTAL_BYTES > 0 )) || fail "Docker capacity inputs must be positive"
+    [[ "${DOCKER_HOST_ID}" =~ ^[0-9a-f]{64}$ ]] || fail "FULLMAG_DOCKER_HOST_ID must be the verified daemon SHA-256"
+  elif [[ -n "${DOCKER_CPU_COUNT}" || -n "${DOCKER_MEMORY_TOTAL_BYTES}" ]]; then
+    fail "legacy host-ledger maintenance must not receive Docker capacity inputs"
+  fi
   [[ "${IMAGE_SIZE_VALUE}" == "${IMAGE_SIZE_BYTES}" ]] || fail "host ledger image size must be exactly ${IMAGE_SIZE_BYTES} bytes"
   assert_safe_path FULLMAG_HOST_LEDGER_STORAGE_ROOT "${STORAGE_ROOT}"
   [[ "${STORAGE_ROOT}" != "/" ]] || fail "host ledger storage root cannot be filesystem root"
@@ -466,6 +481,248 @@ print(json.dumps({
   ' "${state}" "${created}" "${MOUNT_ACTIVE}" "${LOOP_DEVICE}" "${FILESYSTEM_UUID}" "${PROFILE}" "${PROJECT_ID}" "${BACKING_IMAGE}" "${MOUNT_ROOT}" "${MOUNT_TARGET}" "${IMAGE_SIZE_BYTES}"
 }
 
+publish_capacity() {
+  [[ "${PUBLISH_CAPACITY}" == "1" ]] || return 0
+  local cgroup_fs_type
+  cgroup_fs_type="$(stat -f -c %T "/proc/${HOST_PID}/root/sys/fs/cgroup" 2>/dev/null)" \
+    || fail "cannot inspect host PID 1 cgroup filesystem"
+  [[ "${cgroup_fs_type}" == "cgroup2fs" ]] || fail "host capacity publication requires unified cgroup v2"
+
+  python3 - "${HOST_PID}" "${PROJECT_ID}" "${DOCKER_HOST_ID}" \
+    "${DOCKER_CPU_COUNT}" "${DOCKER_MEMORY_TOTAL_BYTES}" "${MOUNT_ROOT}" <<'PY'
+import hashlib
+import json
+import os
+import re
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+pid, project_id, daemon_sha, docker_cpu, docker_memory, mount_root = sys.argv[1:]
+if pid != "1" or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,79}", project_id):
+    raise SystemExit("[docker_host_ledger] host capacity identity is invalid")
+if not re.fullmatch(r"[0-9a-f]{64}", daemon_sha):
+    raise SystemExit("[docker_host_ledger] Docker daemon identity is invalid")
+
+def positive_decimal(value, label):
+    if not re.fullmatch(r"[0-9]+", value) or not 0 < int(value) <= 2**64 - 1:
+        raise SystemExit(f"[docker_host_ledger] {label} is not a positive integer")
+    return int(value)
+
+docker_cpu_count = positive_decimal(docker_cpu, "Docker CPU count")
+docker_memory_total_bytes = positive_decimal(docker_memory, "Docker memory total")
+proc_root = Path("/proc") / pid / "root"
+try:
+    cgroup_lines = (Path("/proc") / pid / "cgroup").read_text(encoding="ascii").splitlines()
+except OSError as error:
+    raise SystemExit("[docker_host_ledger] cannot read host PID 1 cgroup identity") from error
+if len(cgroup_lines) != 1 or not re.fullmatch(r"0::/[^\r\n]*", cgroup_lines[0]):
+    raise SystemExit("[docker_host_ledger] host PID 1 has no unified cgroup v2 membership")
+
+if os.readlink("/proc/self/ns/cgroup") != os.readlink("/proc/1/ns/cgroup"):
+    raise SystemExit("[docker_host_ledger] capacity helper is outside the host cgroup namespace")
+
+# PID 1 may legitimately be in /init.scope. Prove the mounted hierarchy root
+# rather than confusing the init process's own membership with that root.
+# Docker Desktop on WSL2 runs its init in a nested cgroup namespace: the mount
+# root is then reported relative to that namespace as "/.." segments, and the
+# distribution adds a second cgroup2 mount under /parent-distro.  Select the
+# single /sys/fs/cgroup mount and prove the root by its content instead.
+mount_lines = (Path("/proc") / pid / "mountinfo").read_text(encoding="ascii").splitlines()
+cgroup_mounts = []
+for line in mount_lines:
+    before, separator, after = line.partition(" - ")
+    fields, filesystem = before.split(), after.split()
+    if (separator and filesystem and filesystem[0] == "cgroup2"
+            and len(fields) >= 6 and fields[4] == "/sys/fs/cgroup"):
+        cgroup_mounts.append(fields)
+if (len(cgroup_mounts) != 1
+        or not re.fullmatch(r"/(?:\.\.(?:/\.\.)*)?", cgroup_mounts[0][3])):
+    raise SystemExit("[docker_host_ledger] host cgroup mount does not expose the hierarchy root")
+
+cgroup_root = proc_root / "sys/fs/cgroup"
+# Every non-root cgroup v2 directory has cgroup.type; only the true hierarchy
+# root lacks it.  This holds whatever depth the namespace-relative path hides.
+try:
+    (cgroup_root / "cgroup.controllers").read_text(encoding="ascii")
+except OSError as error:
+    raise SystemExit("[docker_host_ledger] host cgroup root is not readable") from error
+if (cgroup_root / "cgroup.type").exists():
+    raise SystemExit("[docker_host_ledger] host cgroup mount does not expose the hierarchy root")
+# The true cgroup v2 root is exempt from cpu.max and memory.max.
+# Only ENOENT after proving the host root has that meaning; other errors fail.
+def root_limit(name):
+    try:
+        return (cgroup_root / name).read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        return None
+
+try:
+    cpu_max_text = root_limit("cpu.max")
+    cpu_max_fields = cpu_max_text.split() if cpu_max_text is not None else None
+    cpuset_text = (cgroup_root / "cpuset.cpus.effective").read_text(encoding="ascii").strip()
+    memory_max_text = root_limit("memory.max")
+    meminfo = (proc_root / "proc/meminfo").read_text(encoding="ascii").splitlines()
+    boot_id = (proc_root / "proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+except OSError as error:
+    raise SystemExit("[docker_host_ledger] host root capacity probe is incomplete") from error
+
+if cpu_max_fields is None:
+    quota_micros = period_micros = None
+else:
+    if len(cpu_max_fields) != 2 or not re.fullmatch(r"[0-9]+", cpu_max_fields[1]):
+        raise SystemExit("[docker_host_ledger] host cpu.max is malformed")
+    period_micros = positive_decimal(cpu_max_fields[1], "host CPU period")
+    if cpu_max_fields[0] == "max":
+        quota_micros = None
+    else:
+        quota_micros = positive_decimal(cpu_max_fields[0], "host CPU quota")
+
+cpu_ids = set()
+if not cpuset_text:
+    raise SystemExit("[docker_host_ledger] host cpuset.cpus.effective is empty")
+for item in cpuset_text.split(","):
+    match = re.fullmatch(r"([0-9]+)(?:-([0-9]+))?", item)
+    if not match:
+        raise SystemExit("[docker_host_ledger] host cpuset.cpus.effective is malformed")
+    first, last = int(match.group(1)), int(match.group(2) or match.group(1))
+    if last < first or last > 2**32 - 1 or last - first + 1 > docker_cpu_count:
+        raise SystemExit("[docker_host_ledger] host cpuset range exceeds Docker capacity")
+    values = set(range(first, last + 1))
+    if cpu_ids & values:
+        raise SystemExit("[docker_host_ledger] host cpuset contains duplicate CPU IDs")
+    cpu_ids.update(values)
+if not cpu_ids or len(cpu_ids) > docker_cpu_count:
+    raise SystemExit("[docker_host_ledger] host cpuset exceeds Docker CPU capacity")
+
+if memory_max_text is None or memory_max_text == "max":
+    memory_max_bytes = None
+elif re.fullmatch(r"[0-9]+", memory_max_text):
+    memory_max_bytes = positive_decimal(memory_max_text, "host memory maximum")
+else:
+    raise SystemExit("[docker_host_ledger] host memory.max is invalid")
+mem_total_values = []
+for line in meminfo:
+    match = re.fullmatch(r"MemTotal:\s+([0-9]+)\s+kB\s*", line)
+    if match:
+        mem_total_values.append(int(match.group(1)) * 1024)
+if len(mem_total_values) != 1 or not 0 < mem_total_values[0] <= 2**64 - 1:
+    raise SystemExit("[docker_host_ledger] host MemTotal is missing or invalid")
+if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", boot_id):
+    raise SystemExit("[docker_host_ledger] host boot ID is invalid")
+
+descriptor = {
+    "schema": "fullmag.docker-host-capacity.v1",
+    "scope": "docker_vm_root",
+    "project_id": project_id,
+    "daemon_id_sha256": daemon_sha,
+    "boot_id": boot_id,
+    "allowed_cpu_ids": sorted(cpu_ids),
+    "cpu_max": {"quota_micros": quota_micros, "period_micros": period_micros},
+    "memory_max_bytes": memory_max_bytes,
+    "kernel_memory_total_bytes": mem_total_values[0],
+    "docker_cpu_count": docker_cpu_count,
+    "docker_memory_total_bytes": docker_memory_total_bytes,
+}
+payload = (json.dumps(descriptor, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+descriptor_sha = hashlib.sha256(payload).hexdigest()
+requested_mount = Path(mount_root)
+if not requested_mount.is_absolute() or ".." in requested_mount.parts:
+    raise SystemExit("[docker_host_ledger] host-ledger mount root is unsafe")
+# The ledger image is mounted in the host mount namespace (nsenter). This
+# helper's own bind of the mount root predates a first mount and would show
+# the shadowed directory, so publish through the host's view of the path.
+mount = proc_root / requested_mount.relative_to("/")
+if (mount.is_symlink() or not mount.is_dir() or not os.path.ismount(mount)
+        or mount.lstat().st_uid != 0 or mount.lstat().st_mode & 0o022):
+    raise SystemExit("[docker_host_ledger] host-ledger mount root is unsafe or not mounted")
+capacity_dir = mount / "capacity"
+created_dir = False
+try:
+    os.mkdir(capacity_dir, 0o755)
+    created_dir = True
+except FileExistsError:
+    pass
+directory_stat = capacity_dir.lstat()
+if not stat.S_ISDIR(directory_stat.st_mode) or stat.S_ISLNK(directory_stat.st_mode):
+    raise SystemExit("[docker_host_ledger] capacity descriptor path is not a real directory")
+if created_dir:
+    os.chown(capacity_dir, 0, 0)
+    os.chmod(capacity_dir, 0o755)
+    directory_stat = capacity_dir.lstat()
+if (directory_stat.st_uid != 0 or directory_stat.st_gid != 0
+        or stat.S_IMODE(directory_stat.st_mode) != 0o755):
+    raise SystemExit("[docker_host_ledger] capacity directory owner/mode differs from root:root 0755")
+
+descriptor_path = capacity_dir / f"{descriptor_sha}.json"
+# Publish only complete, fsynced bytes. A killed writer can leave an owned
+# temporary file, never a partial immutable CAS descriptor.
+fd, temporary = tempfile.mkstemp(prefix=".capacity-", dir=capacity_dir)
+try:
+    os.fchown(fd, 0, 0)
+    os.fchmod(fd, 0o444)
+    remaining = memoryview(payload)
+    while remaining:
+        written = os.write(fd, remaining)
+        if written <= 0:
+            raise OSError("short write")
+        remaining = remaining[written:]
+    os.fsync(fd)
+finally:
+    os.close(fd)
+try:
+    try:
+        os.link(temporary, descriptor_path, follow_symlinks=False)
+    except FileExistsError:
+        existing_stat = descriptor_path.lstat()
+        if (not stat.S_ISREG(existing_stat.st_mode) or stat.S_ISLNK(existing_stat.st_mode)
+            or existing_stat.st_uid != 0 or existing_stat.st_gid != 0 or existing_stat.st_nlink != 1
+            or stat.S_IMODE(existing_stat.st_mode) != 0o444):
+            raise SystemExit("[docker_host_ledger] existing capacity descriptor metadata differs")
+        read_fd = os.open(descriptor_path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            opened_stat = os.fstat(read_fd)
+            if (opened_stat.st_dev, opened_stat.st_ino) != (existing_stat.st_dev, existing_stat.st_ino):
+                raise SystemExit("[docker_host_ledger] capacity descriptor changed while being opened")
+            chunks, remaining = [], len(payload) + 1
+            while remaining:
+                chunk = os.read(read_fd, min(remaining, 65536))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            if b"".join(chunks) != payload:
+                raise SystemExit("[docker_host_ledger] existing capacity descriptor bytes differ")
+        finally:
+            os.close(read_fd)
+finally:
+    os.unlink(temporary)
+directory_fd = os.open(capacity_dir, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    os.fsync(directory_fd)
+finally:
+    os.close(directory_fd)
+
+if created_dir:
+    mount_fd = os.open(mount, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(mount_fd)
+    finally:
+        os.close(mount_fd)
+
+publication = {
+    "schema": "fullmag.docker-host-capacity-publication.v1",
+    "descriptor_sha256": descriptor_sha,
+    "descriptor_path": f"/host-ledger/capacity/{descriptor_sha}.json",
+    "descriptor": descriptor,
+    "project_id": project_id,
+    "daemon_id_sha256": daemon_sha,
+}
+print(json.dumps(publication, sort_keys=True))
+PY
+}
+
 cleanup() {
   local status=$?
   set +e
@@ -577,6 +834,7 @@ main() {
       fi
       emit_receipt ready "${CREATED_IMAGE}"
       SUCCESS=1
+      publish_capacity
       ;;
   esac
 }

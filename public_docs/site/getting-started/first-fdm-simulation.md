@@ -1,6 +1,6 @@
 ---
 title: First FDM Simulation
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -93,17 +93,27 @@ study.stages.add_relax(
 The relaxation uses an explicit fixed timestep. `fix_dt=5.0e-13` defines the solver-level default,
 while the stage-level `dt=5.0e-13` records the timestep requested for this relaxation stage.
 
-## Run headlessly
+## Run in the Docker DEV group
 
-Save the block above as `first_fdm_simulation.py` and run it through the repository launcher:
+Save the block above inside your checkout (for example as `first_fdm_simulation.py`, or run the
+tracked smoke scenario `examples/fdm_cpu_relax_smoke.py`) and execute it through your Docker
+Compose DEV group:
 
 ```console
-just run-headless first_fdm_simulation.py
+just fullmag-dev-container first_fdm_simulation.py
 ```
 
-This builds the local runtime on first use, executes the stage, and writes per-stage scientific
-artifacts and the autosave table to the auto-derived output directory. For an interactive run with
-the Control Room use `just fullmag build=True fdm cpu first_fdm_simulation.py`.
+If your group is already running with an empty workspace (`just docker-dev "$PWD"`), activate the
+script directly without restarting containers:
+
+```console
+just docker-dev-script first_fdm_simulation.py
+```
+
+This lowers the model to `ProblemIR`, validates the CPU FDM lane, runs the relaxation stage, and
+writes per-stage scientific artifacts and scalar autosave tables to the configured host storage. To
+drive the same workflow line-by-line from a terminal or Jupyter notebook while watching the Control
+Room update live, see {doc}`interactive-python` (`fm.connect()`).
 
 ## Reading the result
 
@@ -112,27 +122,24 @@ averaged magnetization components and the total energy respectively. They are th
 that the relaxation is progressing; per-cell field and magnetization snapshots are separate
 artifacts selected through stage outputs.
 
+```{figure} /_static/images/ui/viewport-3d-interactive.png
+:alt: Interactive 3D Viewport showing normalized magnetization glyphs and surface colormaps
+:class: fm-ui-figure
+:width: 100%
+
+Inspecting relaxed 3D magnetization glyphs ($\mathbf{m}$ colored by $m_z$ / component colormaps) inside the Control Room 3D viewport.
+```
+
 ## Limits of this example
 
 This is an onboarding run, not a scientific qualification benchmark. It uses a small cell grid so it is
 practical to run; exchange and demagnetization validation regimes are documented on the canonical
 {ref}`interaction pages <public-docs-physics-interactions-root>`. The FDM CPU lane shown here has
-scoped published evidence; do not infer executed CUDA parity from this snippet.
-## Control Room crosswalk
+scoped published evidence; do not infer executed CUDA parity from this snippet. Authoring and
+`ProblemIR` validation alone do not establish mesh convergence, solver execution, or GPU parity.
 
-Use the authoring path stated in this guide, normally `Model Explorer -> Objects` followed by the relevant Geometry, Material, Physics, Mesh, or Stage panel. Any parameter shown in Python but not shown in that path is `TODO: frontend support`; do not describe it as configurable in the UI. See {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked {doc}`/python-api/index` page rather than duplicating an unverified signature.
-
-## Physics, limitations, and bibliography
-
-Use the linked physics or numerical-methods page for governing equations and assumptions. This onboarding page does not add a new physical model. Bibliography: see the linked terminal API or physics page; no additional source is claimed here.
 ## Source-code index
 
 - `packages/fullmag-py/src/fullmag/world.py` — `StudyBuilder`, `StudyStagesBuilder`: stage-first authoring and capture.
 - `packages/fullmag-py/src/fullmag/model/problem.py` — `Problem.to_ir`: canonical serialization and validation.
-- `justfile` — `run-headless` (FDM), `fem-managed-headless` (FEM): launcher recipes and execution-mode selection.
-
-Authoring and IR validation do not establish mesh convergence, solver execution, or GPU parity.
+- `justfile` — `docker-dev`, `docker-dev-script`, `fullmag-dev-container`: Docker Compose DEV launch and script execution recipes.

@@ -4,6 +4,7 @@
 const PROJECT_WORKSPACE_COMMAND_IDS = new Set([
   "workspace.new-project",
   "workspace.open-project",
+  "workspace.open-results-folder",
   "workspace.save-project",
   "workspace.close-project",
   "workspace.home",

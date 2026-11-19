@@ -1,0 +1,1553 @@
+{
+  "schema": "fullmag.viewport-ring-depth-diagnostic.v1",
+  "startUtc": "2026-10-22T19:50:20.646Z",
+  "endUtc": "2026-10-22T19:50:21.003Z",
+  "sourceHead": "e19ee0664173b5d0dafe281b402c0b088a11b3d5",
+  "baselineCommit": "3cae01857b630eb2825e4b22782307bf467034b7",
+  "container": "fullmag-master-frontend-1",
+  "threeRevision": "186",
+  "evidenceClass": "EXTRACTED_SOURCE_EXECUTION_WITH_LIVE_HTTP_INPUTS_NO_BROWSER",
+  "note": "Depth bits are hypothetical; no WebGL context or pixel was measured. Baseline is an extracted-function comparison, not a historical application run.",
+  "inputStatus": {
+    "session": {
+      "session_id": "docker-startup-99f850fa04cb97190df101486eddd764ff8be74f388be4056840032d05ac491d",
+      "session_epoch": "docker-startup-99f850fa04cb97190df101486eddd764ff8be74f388be4056840032d05ac491d@1792696284229",
+      "request_scope_epoch": "5d6aed4b-8dd9-4c72-a1be-a693ca112499:1",
+      "name": "permalloy_layer_cofeb_rings_relax_300nm",
+      "created_at": "1792696284229",
+      "workspace_root": "/opt/fullmag/runtime-control/local-live/current",
+      "script": {
+        "origin": "user_file",
+        "path": "/opt/fullmag/source/examples/permalloy_layer_cofeb_rings_relax_300nm.py",
+        "writable": false,
+        "managed_copy_path": "/opt/fullmag/runtime-control/local-live/current/exports/permalloy_layer_cofeb_rings_relax_300nm.canonical.py"
+      }
+    },
+    "runtimeBundleVersion": "0.1.0-dev.20261022.ge19ee0664173.dirty.s132d2d16a80d+9791",
+    "domain": {
+      "generation_id": "8918351260077308297",
+      "discretization": "fem",
+      "cell_count": 1087250
+    },
+    "solver": {
+      "state": "waiting_for_compute",
+      "algorithm": null,
+      "relaxation_algorithm": null,
+      "dt": null,
+      "max_torque_T": null,
+      "max_torque_Apm": null,
+      "max_rhs_norm_per_s": null,
+      "max_torque": null,
+      "converged": null
+    },
+    "resources": {
+      "topology_revision": 2,
+      "field_catalog_revision": 1,
+      "field_revision": 1,
+      "slice_revision": 44,
+      "artifact_revision": 0,
+      "command_completion_revision": 1,
+      "fields_revision": 1,
+      "scalars_revision": 0,
+      "domain_generation_id": "8918351260077308297",
+      "artifacts_revision": 0,
+      "engine_log_revision": 0,
+      "solver_profile_revision": 0,
+      "display_revision": 13,
+      "workspace_revision": 0,
+      "mesh_revision": 2,
+      "mesh_build_revision": 2,
+      "commands_revision": 1,
+      "stages_revision": 1,
+      "simulation_preparation_revision": 4,
+      "scene_revision": 1,
+      "visualization_state_revision": 13,
+      "mode_composition_revision": 1,
+      "region_topology_revision": 0,
+      "region_membership_revision": 0,
+      "region_coefficients_revision": 0,
+      "region_initial_state_revision": 0
+    }
+  },
+  "resources": [
+    {
+      "path": "/v2/sessions/current/status",
+      "status": 200,
+      "sha256": "1155a9bff65a0a6714568c0c63bb928e1d54e1aa18986dbbead89b0132d70ea7"
+    },
+    {
+      "path": "/v2/sessions/current/model/scene",
+      "status": 200,
+      "sha256": "67e460fc14b9bdb6f213b0ec35d0b94e7a310b56fa7adb89ccbdcf18ea817c3a"
+    },
+    {
+      "path": "/v2/sessions/current/model/universe",
+      "status": 200,
+      "sha256": "ebce1a4efd6428cda0718be77456c87f862f627b3cc09d40f52df229367e09d5"
+    },
+    {
+      "path": "/v2/sessions/current/data/domain/meta",
+      "status": 200,
+      "sha256": "b5a286230d1b1dc8312e729f5f91dcfb9010dad3d0a1a10bca4dbad42b03e0cb"
+    },
+    {
+      "path": "/v2/sessions/current/visualization/state",
+      "status": 200,
+      "sha256": "ef6a31d47efe2a9ffb2b72d825ac97649eca3dbbdf055f89168b99b0821fa4d9"
+    }
+  ],
+  "inputs": {
+    "scene": {
+      "version": "scene.v2",
+      "revision": 1,
+      "scene": {
+        "id": "scene",
+        "name": "permalloy_layer_cofeb_rings_relax_300nm",
+        "source_of_truth": "repo_head",
+        "authoring_schema": "mesh-first-fem.v1"
+      },
+      "universe": {
+        "airbox_hmax": 5.000000000000001e-07,
+        "airbox_hmin": 1e-08,
+        "center": [
+          0,
+          0,
+          0
+        ],
+        "mode": "auto",
+        "padding": [
+          0,
+          0,
+          0
+        ],
+        "size": [
+          2.8e-06,
+          2.1e-06,
+          1.2e-06
+        ]
+      },
+      "objects": [
+        {
+          "id": "permalloy_layer",
+          "name": "permalloy_layer",
+          "role": "magnet",
+          "geometry": {
+            "bounds_max": [
+              1.0000000000000002e-06,
+              3.0000000000000004e-07,
+              8.000000000000001e-10
+            ],
+            "bounds_min": [
+              -1.0000000000000002e-06,
+              -3.0000000000000004e-07,
+              -8.000000000000001e-10
+            ],
+            "geometry_kind": "Box",
+            "geometry_params": {
+              "size": [
+                2.0000000000000003e-06,
+                6.000000000000001e-07,
+                1.6000000000000003e-09
+              ]
+            }
+          },
+          "transform": {
+            "pivot": [
+              0,
+              0,
+              0
+            ],
+            "rotation_quat": [
+              0,
+              0,
+              0,
+              1
+            ],
+            "scale": [
+              1,
+              1,
+              1
+            ],
+            "translation": [
+              0,
+              0,
+              0
+            ]
+          },
+          "material_ref": "mat:permalloy_layer",
+          "region_name": "permalloy_layer",
+          "magnetization_ref": "mag:permalloy_layer",
+          "physics_stack": [
+            {
+              "enabled": true,
+              "kind": "exchange"
+            },
+            {
+              "enabled": true,
+              "kind": "demag"
+            },
+            {
+              "enabled": true,
+              "kind": "uniaxial_anisotropy",
+              "params": {
+                "axis": [
+                  0,
+                  0,
+                  1
+                ],
+                "ku1": 100000
+              }
+            }
+          ],
+          "object_mesh": {
+            "build_requested": false,
+            "corner_extent": "",
+            "corner_maximum_element_size": "",
+            "corner_transition_distance": "",
+            "curvature_factor": "",
+            "edge_maximum_element_size": "",
+            "edge_thickness": "",
+            "edge_transition_distance": "",
+            "element_family": "prism",
+            "exact_layer_count": true,
+            "growth_rate": "",
+            "hmax": "2e-08",
+            "hmin": "1.6e-09",
+            "interface_hmax": "",
+            "interface_thickness": "",
+            "maximum_element_growth_rate": "",
+            "maximum_element_size": "2e-08",
+            "mesh_strategy": "swept_prism",
+            "minimum_element_size": "1.6e-09",
+            "mode": "custom",
+            "narrow_region_resolution": "",
+            "order": 1,
+            "resolved_growth_rate": "",
+            "sweep_direction": "auto",
+            "sweep_face_meshing": "triangular",
+            "through_thickness_distribution": "fixed",
+            "through_thickness_elements": 1,
+            "topology": "prismatic",
+            "transition_distance": "",
+            "transition_policy": "pyramid_to_tetrahedra"
+          },
+          "mesh_override": {
+            "build_requested": false,
+            "corner_extent": "",
+            "corner_maximum_element_size": "",
+            "corner_transition_distance": "",
+            "curvature_factor": "",
+            "edge_maximum_element_size": "",
+            "edge_thickness": "",
+            "edge_transition_distance": "",
+            "element_family": "prism",
+            "exact_layer_count": true,
+            "growth_rate": "",
+            "hmax": "2e-08",
+            "hmin": "1.6e-09",
+            "interface_hmax": "",
+            "interface_thickness": "",
+            "maximum_element_growth_rate": "",
+            "maximum_element_size": "2e-08",
+            "mesh_strategy": "swept_prism",
+            "minimum_element_size": "1.6e-09",
+            "mode": "custom",
+            "narrow_region_resolution": "",
+            "order": 1,
+            "resolved_growth_rate": "",
+            "sweep_direction": "auto",
+            "sweep_face_meshing": "triangular",
+            "through_thickness_distribution": "fixed",
+            "through_thickness_elements": 1,
+            "topology": "prismatic",
+            "transition_distance": "",
+            "transition_policy": "pyramid_to_tetrahedra"
+          },
+          "visible": true,
+          "locked": false
+        },
+        {
+          "id": "cofeb_top_ring",
+          "name": "cofeb_top_ring",
+          "role": "magnet",
+          "geometry": {
+            "bounds_max": [
+              2.5000000000000002e-08,
+              1.5000000000000002e-07,
+              3.1080000000000006e-07
+            ],
+            "bounds_min": [
+              -2.5000000000000002e-08,
+              -1.5000000000000002e-07,
+              1.0799999999999991e-08
+            ],
+            "geometry_kind": "Difference",
+            "geometry_params": {
+              "base": {
+                "geometry_kind": "Cylinder",
+                "geometry_params": {
+                  "axis": [
+                    1,
+                    0,
+                    0
+                  ],
+                  "height": 5.0000000000000004e-08,
+                  "radius": 1.5000000000000002e-07
+                }
+              },
+              "tool": {
+                "geometry_kind": "Cylinder",
+                "geometry_params": {
+                  "axis": [
+                    1,
+                    0,
+                    0
+                  ],
+                  "height": 5.0000000000000004e-08,
+                  "radius": 5.0000000000000004e-08
+                }
+              }
+            }
+          },
+          "transform": {
+            "pivot": [
+              0,
+              0,
+              0
+            ],
+            "rotation_quat": [
+              0,
+              0,
+              0,
+              1
+            ],
+            "scale": [
+              1,
+              1,
+              1
+            ],
+            "translation": [
+              0,
+              0,
+              1.608e-07
+            ]
+          },
+          "material_ref": "mat:cofeb_top_ring",
+          "region_name": "cofeb_top_ring",
+          "magnetization_ref": "mag:cofeb_top_ring",
+          "physics_stack": [
+            {
+              "enabled": true,
+              "kind": "exchange"
+            },
+            {
+              "enabled": true,
+              "kind": "demag"
+            },
+            {
+              "enabled": true,
+              "kind": "uniaxial_anisotropy",
+              "params": {
+                "axis": [
+                  1,
+                  0,
+                  0
+                ],
+                "ku1": 1000000
+              }
+            }
+          ],
+          "object_mesh": {
+            "build_requested": false,
+            "corner_extent": "",
+            "corner_maximum_element_size": "",
+            "corner_transition_distance": "",
+            "curvature_factor": "",
+            "edge_maximum_element_size": "",
+            "edge_thickness": "",
+            "edge_transition_distance": "",
+            "growth_rate": "",
+            "hmax": "2.5e-08",
+            "hmin": "2.5e-09",
+            "interface_hmax": "",
+            "interface_thickness": "",
+            "maximum_element_growth_rate": "",
+            "maximum_element_size": "2.5e-08",
+            "minimum_element_size": "2.5e-09",
+            "mode": "custom",
+            "narrow_region_resolution": "",
+            "order": 1,
+            "resolved_growth_rate": "",
+            "transition_distance": ""
+          },
+          "mesh_override": {
+            "build_requested": false,
+            "corner_extent": "",
+            "corner_maximum_element_size": "",
+            "corner_transition_distance": "",
+            "curvature_factor": "",
+            "edge_maximum_element_size": "",
+            "edge_thickness": "",
+            "edge_transition_distance": "",
+            "growth_rate": "",
+            "hmax": "2.5e-08",
+            "hmin": "2.5e-09",
+            "interface_hmax": "",
+            "interface_thickness": "",
+            "maximum_element_growth_rate": "",
+            "maximum_element_size": "2.5e-08",
+            "minimum_element_size": "2.5e-09",
+            "mode": "custom",
+            "narrow_region_resolution": "",
+            "order": 1,
+            "resolved_growth_rate": "",
+            "transition_distance": ""
+          },
+          "visible": true,
+          "locked": false
+        }
+      ],
+      "materials": [
+        {
+          "id": "mat:permalloy_layer",
+          "name": "permalloy_layer material",
+          "properties": {
+            "Aex": 1.5e-11,
+            "Ms": 1600000,
+            "alpha": 0.001
+          }
+        },
+        {
+          "id": "mat:cofeb_top_ring",
+          "name": "cofeb_top_ring material",
+          "properties": {
+            "Aex": 1.5e-11,
+            "Ms": 1510000,
+            "alpha": 0.1
+          }
+        }
+      ],
+      "magnetization_assets": [
+        {
+          "id": "mag:permalloy_layer",
+          "kind": "preset_texture",
+          "mapping": {
+            "clamp_mode": "none",
+            "projection": "object_local",
+            "space": "object"
+          },
+          "name": "permalloy_layer magnetization",
+          "preset_kind": "uniform",
+          "preset_params": {
+            "direction": [
+              -1,
+              0,
+              0
+            ]
+          },
+          "preset_version": 2,
+          "texture_transform": {
+            "pivot": [
+              0,
+              0,
+              0
+            ],
+            "rotation_quat": [
+              0,
+              0,
+              0,
+              1
+            ],
+            "scale": [
+              1,
+              1,
+              1
+            ],
+            "translation": [
+              0,
+              0,
+              0
+            ]
+          },
+          "ui_label": "Uniform"
+        },
+        {
+          "id": "mag:cofeb_top_ring",
+          "kind": "preset_texture",
+          "mapping": {
+            "clamp_mode": "none",
+            "projection": "object_local",
+            "space": "object"
+          },
+          "name": "cofeb_top_ring magnetization",
+          "preset_kind": "uniform",
+          "preset_params": {
+            "direction": [
+              1,
+              0,
+              0
+            ]
+          },
+          "preset_version": 2,
+          "texture_transform": {
+            "pivot": [
+              0,
+              0,
+              0
+            ],
+            "rotation_quat": [
+              0,
+              0,
+              0,
+              1
+            ],
+            "scale": [
+              1,
+              1,
+              1
+            ],
+            "translation": [
+              0,
+              0,
+              0
+            ]
+          },
+          "ui_label": "Uniform"
+        }
+      ],
+      "field_drives": {},
+      "monitors": {},
+      "current_modules": {},
+      "study": {
+        "backend": "fem",
+        "demag_enabled": true,
+        "demag_realization": "poisson_robin",
+        "exchange_enabled": true,
+        "mesh_defaults": {
+          "adaptive_convergence_metric": "energy_delta",
+          "adaptive_enabled": false,
+          "adaptive_error_tolerance": "",
+          "adaptive_h_max": "",
+          "adaptive_h_min": "",
+          "adaptive_indicator": "geometric_only",
+          "adaptive_max_passes": 2,
+          "adaptive_policy": "auto",
+          "adaptive_target_quantity": "auto",
+          "adaptive_theta": 0.3,
+          "algorithm_2d": 6,
+          "algorithm_3d": 10,
+          "calibrate_for": "",
+          "compute_quality": true,
+          "curvature_factor": "",
+          "growth_rate": "",
+          "hmax": "",
+          "hmin": "",
+          "interface_hmax": "",
+          "interface_thickness": "",
+          "maximum_element_growth_rate": "",
+          "maximum_element_size": "",
+          "minimum_element_size": "",
+          "narrow_region_resolution": "",
+          "narrow_regions": 0,
+          "optimize": "Gmsh",
+          "optimize_iterations": 4,
+          "order": 1,
+          "per_element_quality": true,
+          "resolved_growth_rate": "",
+          "size_factor": 1,
+          "size_from_curvature": 0,
+          "size_preset": "",
+          "smoothing_steps": 4,
+          "transition_distance": "",
+          "transition_growth": ""
+        },
+        "parallel_execution": {
+          "max_cpu_percent": 90,
+          "max_memory_percent": 80,
+          "max_workers": null,
+          "memory_reserve_bytes": 1073741824,
+          "mode": "serial",
+          "threads_per_worker": 1
+        },
+        "pbc": null,
+        "requested_backend": "fem",
+        "requested_device": "gpu",
+        "requested_mode": "strict",
+        "requested_precision": "double",
+        "shared_domain_mesh": {
+          "adaptive_convergence_metric": "energy_delta",
+          "adaptive_enabled": false,
+          "adaptive_error_tolerance": "",
+          "adaptive_h_max": "",
+          "adaptive_h_min": "",
+          "adaptive_indicator": "geometric_only",
+          "adaptive_max_passes": 2,
+          "adaptive_policy": "auto",
+          "adaptive_target_quantity": "auto",
+          "adaptive_theta": 0.3,
+          "algorithm_2d": 6,
+          "algorithm_3d": 10,
+          "calibrate_for": "",
+          "compute_quality": true,
+          "curvature_factor": "",
+          "growth_rate": "",
+          "hmax": "",
+          "hmin": "",
+          "interface_hmax": "",
+          "interface_thickness": "",
+          "maximum_element_growth_rate": "",
+          "maximum_element_size": "",
+          "minimum_element_size": "",
+          "narrow_region_resolution": "",
+          "narrow_regions": 0,
+          "optimize": "Gmsh",
+          "optimize_iterations": 4,
+          "order": 1,
+          "per_element_quality": true,
+          "resolved_growth_rate": "",
+          "size_factor": 1,
+          "size_from_curvature": 0,
+          "size_preset": "",
+          "smoothing_steps": 4,
+          "transition_distance": "",
+          "transition_growth": ""
+        },
+        "solver": {
+          "demag_interval_s": "",
+          "dt_initial": "",
+          "dt_max": "",
+          "dt_min": "",
+          "energy_tolerance": "",
+          "fixed_timestep": "",
+          "integrator": "auto",
+          "max_err": "",
+          "max_relax_steps": "10",
+          "relax_algorithm": "projected_gradient_bb",
+          "torque_tolerance": "0.0001"
+        },
+        "stages": [
+          {
+            "algorithm": "projected_gradient_bb",
+            "eigen_damping_policy": "",
+            "eigen_equilibrium_source": "",
+            "eigen_include_demag": false,
+            "eigen_normalization": "",
+            "eigen_spin_wave_bc": "",
+            "eigen_target": "",
+            "entrypoint_kind": "flat_relax",
+            "integrator": "",
+            "kind": "relax",
+            "max_steps": 10,
+            "stage_id": "minimize-1",
+            "torque_tolerance": 0.0001
+          }
+        ],
+        "study_pipeline": {
+          "nodes": [
+            {
+              "enabled": true,
+              "id": "minimize-1",
+              "label": "Relax 1",
+              "node_kind": "primitive",
+              "payload": {
+                "energy_tolerance": "",
+                "entrypoint_kind": "flat_relax",
+                "kind": "relax",
+                "max_steps": "10",
+                "relax_algorithm": "projected_gradient_bb",
+                "stage_id": "minimize-1",
+                "torque_tolerance": "0.0001",
+                "until_seconds": ""
+              },
+              "source": "script_imported",
+              "stage_kind": "relax"
+            }
+          ],
+          "version": "study_pipeline.v1"
+        },
+        "table_autosave": {
+          "every_steps": 1,
+          "kind": "table_autosave",
+          "quantities": [
+            "t",
+            "step",
+            "mx",
+            "my",
+            "mz",
+            "e_total"
+          ],
+          "table_id": "default"
+        },
+        "universe_mesh": {
+          "airbox_hmax": 5.000000000000001e-07,
+          "airbox_hmin": 1e-08,
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "mode": "auto",
+          "padding": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            2.8e-06,
+            2.1e-06,
+            1.2e-06
+          ]
+        }
+      },
+      "outputs": {},
+      "editor": {
+        "air_mesh_opacity": 28,
+        "air_mesh_visible": true,
+        "object_view_mode": "context"
+      }
+    },
+    "universe": {
+      "scene_revision": 1,
+      "universe": {
+        "airbox_hmax": 5.000000000000001e-07,
+        "airbox_hmin": 1e-08,
+        "center": [
+          0,
+          0,
+          0
+        ],
+        "mode": "auto",
+        "padding": [
+          0,
+          0,
+          0
+        ],
+        "size": [
+          2.8e-06,
+          2.1e-06,
+          1.2e-06
+        ]
+      },
+      "study_universe_mesh": {
+        "airbox_hmax": 5.000000000000001e-07,
+        "airbox_hmin": 1e-08,
+        "center": [
+          0,
+          0,
+          0
+        ],
+        "mode": "auto",
+        "padding": [
+          0,
+          0,
+          0
+        ],
+        "size": [
+          2.8e-06,
+          2.1e-06,
+          1.2e-06
+        ]
+      },
+      "object_bounds_min": [
+        -1.0000000000000002e-06,
+        -3.0000000000000004e-07,
+        -8.000000000000001e-10
+      ],
+      "object_bounds_max": [
+        1.0000000000000002e-06,
+        3.0000000000000004e-07,
+        1.858e-07
+      ],
+      "mesh_dirty": false
+    },
+    "domain": {
+      "domain_id": "current",
+      "discretization": "fem",
+      "generation_id": "8918351260077308297",
+      "dimension": 3,
+      "coordinate_system": "cartesian",
+      "units": {
+        "length": "m"
+      },
+      "bounds": {
+        "min": [
+          -1.4e-06,
+          -1.05e-06,
+          -6e-07
+        ],
+        "max": [
+          1.4e-06,
+          1.05e-06,
+          6e-07
+        ]
+      },
+      "counts": {
+        "cells": null,
+        "nodes": 183766,
+        "elements": 1087250,
+        "boundary_faces": 52454
+      },
+      "element_type": "mixed"
+    },
+    "visualization": {
+      "revision": 13,
+      "schema_version": 10,
+      "quantity": {
+        "active_quantity_id": "m",
+        "field_component": "magnitude",
+        "colormap": "viridis",
+        "auto_contrast": true,
+        "contrast_min": null,
+        "contrast_max": null
+      },
+      "layers": {
+        "bounds": {
+          "visible": false,
+          "opacity": 1
+        },
+        "surface": {
+          "visible": true,
+          "opacity": 1
+        },
+        "quantity_overlay": {
+          "visible": false,
+          "opacity": 1
+        },
+        "wireframe": {
+          "visible": false,
+          "opacity": 1
+        },
+        "volume_mesh": {
+          "visible": false,
+          "opacity": 1
+        },
+        "points": {
+          "visible": false,
+          "opacity": 1
+        },
+        "vectors": {
+          "visible": false,
+          "density": 50,
+          "domain": "auto"
+        },
+        "primitives": {
+          "visible": false,
+          "opacity": 1
+        },
+        "airbox": {
+          "visible": true,
+          "bounds": {
+            "visible": false,
+            "opacity": 1
+          },
+          "surface": {
+            "visible": false,
+            "opacity": 0.18
+          },
+          "wireframe": {
+            "visible": false,
+            "opacity": 1
+          },
+          "points": {
+            "visible": false,
+            "opacity": 1
+          },
+          "vectors": {
+            "visible": false,
+            "density": 1200,
+            "domain": "airbox_only"
+          },
+          "opacity": 0.18
+        }
+      },
+      "domains": {
+        "active_scope": "full",
+        "object_id": null,
+        "part_id": null
+      },
+      "sampling": {
+        "profile": "balanced",
+        "max_points": 16384,
+        "max_glyphs": 16384,
+        "max_bytes": null,
+        "progressive": true
+      },
+      "fdm": {
+        "x_chosen_size": 0,
+        "y_chosen_size": 0
+      },
+      "fem": {
+        "topology_mode": "auto",
+        "volume_edges_budget": 100000
+      },
+      "slice": {
+        "quantity_id": "m",
+        "component": "magnitude",
+        "axis": "z",
+        "mode": "single",
+        "layer_index": 0,
+        "position_percent": 50,
+        "thickness_percent": null,
+        "colormap": "viridis",
+        "auto_contrast": true,
+        "show_primitives": false,
+        "show_mesh": false,
+        "show_magnetic_texture": true,
+        "show_airbox": false,
+        "airbox_render_mode": "wireframe",
+        "show_airbox_vectors": false,
+        "show_quantity": false,
+        "show_vectors": false,
+        "render_mode": "heatmap",
+        "projection_reduction": "mean_occupied",
+        "projection_include_air_as_zero": false,
+        "projection_samples": 32,
+        "projection_resolution": 128,
+        "mesh_quality_metric": "skewness",
+        "mesh_color_scale": "jet",
+        "mesh_filter_expression": "",
+        "mesh_shrink_factor": 1
+      },
+      "planar": {
+        "visible": true,
+        "source": {
+          "kind": "default"
+        },
+        "default_slice": {
+          "plane": "xy",
+          "position_fraction": 0.5,
+          "operator": {
+            "kind": "plane_sample"
+          }
+        },
+        "view_scope": {
+          "kind": "monitor_target"
+        },
+        "quantity_id": "m",
+        "component": "magnitude",
+        "colormap": "viridis",
+        "range": {
+          "mode": "auto",
+          "min": null,
+          "max": null
+        },
+        "raster_opacity": 1,
+        "viewport_colorbar_visible": true,
+        "display_unit": null,
+        "resolution": {
+          "width": 512,
+          "height": 512,
+          "vector_budget": 2000
+        },
+        "quality": "interactive",
+        "layers": {
+          "bounds": false,
+          "raster": true,
+          "contours": false,
+          "mesh": false,
+          "boundaries": false,
+          "points": false,
+          "vectors": false,
+          "probes": true
+        },
+        "wireframe_style": {
+          "color": "var(--fm-border-strong)",
+          "opacity": 1
+        },
+        "target_overrides": [],
+        "point_style": {
+          "color": "var(--fm-accent)",
+          "opacity": 1,
+          "size": 3
+        },
+        "vector_style": {
+          "length_mode": "uniform",
+          "color_mode": "orientation",
+          "scale": 1,
+          "opacity": 1,
+          "thickness": 1,
+          "monochrome_color": "var(--fm-text-primary)"
+        },
+        "interaction": {
+          "zoom": 1,
+          "pan_u_m": 0,
+          "pan_v_m": 0
+        }
+      },
+      "trim": {
+        "enabled": false,
+        "axes": {
+          "x": {
+            "enabled": false,
+            "min_percent": 0,
+            "max_percent": 100
+          },
+          "y": {
+            "enabled": false,
+            "min_percent": 0,
+            "max_percent": 100
+          },
+          "z": {
+            "enabled": false,
+            "min_percent": 0,
+            "max_percent": 100
+          }
+        }
+      },
+      "camera": {
+        "projection": "perspective",
+        "position": [
+          -1.7674540256058763e-06,
+          -1.4807874539803555e-06,
+          8.485053543097567e-07
+        ],
+        "target": [
+          0,
+          0,
+          1.5500000000000002e-07
+        ],
+        "up": [
+          0,
+          0,
+          1
+        ],
+        "fov_degrees": 45,
+        "orthographic_scale": null
+      },
+      "clip": {
+        "enabled": false,
+        "axis": "z",
+        "position_percent": 50,
+        "flipped": false
+      },
+      "vector_style": {
+        "color_mode": "orientation",
+        "mono_color": "#00c2ff",
+        "alpha": 1,
+        "length_scale": 1,
+        "thickness": 1,
+        "ferromagnet_visibility": "hide"
+      },
+      "overrides": [
+        {
+          "scope": "object",
+          "scope_id": "cofeb_top_ring",
+          "display": {
+            "surface": {
+              "visible": false
+            },
+            "wireframe": {
+              "visible": true
+            },
+            "points": {
+              "visible": false
+            }
+          },
+          "style": {}
+        }
+      ],
+      "targets": {
+        "airbox": {
+          "scope": "airbox",
+          "scope_id": "airbox",
+          "label": "Airbox",
+          "source": "airbox",
+          "settings": {
+            "active_quantity_id": "H_demag",
+            "visible": true,
+            "bounds_visible": false,
+            "bounds_opacity": 1,
+            "geometry_scope": "full",
+            "opacity": 0.18,
+            "point_color": "var(--fm-info)",
+            "point_opacity": 1,
+            "points_visible": false,
+            "render_mode": "off",
+            "scalar_color_palette": "viridis",
+            "surface_color_source": "solid",
+            "surface_mono_color": "var(--fm-airbox-fill)",
+            "surface_opacity": 0.18,
+            "surface_projection_mode": "raw_nodal",
+            "surface_visible": false,
+            "viewport_colorbar_visible": false,
+            "vector_alpha": 1,
+            "vector_budget": 1200,
+            "vector_color_mode": "orientation",
+            "vector_length_scale": 1,
+            "vector_mono_color": "var(--fm-accent)",
+            "vector_thickness": 1,
+            "vectors_visible": false,
+            "wireframe_color": "var(--fm-airbox-wire)",
+            "wireframe_opacity": 1,
+            "wireframe_visible": false
+          }
+        },
+        "objects": [
+          {
+            "scope": "object",
+            "scope_id": "permalloy_layer",
+            "label": "permalloy_layer",
+            "source": "scene_object",
+            "settings": {
+              "active_quantity_id": "m",
+              "visible": true,
+              "bounds_visible": false,
+              "bounds_opacity": 1,
+              "geometry_scope": "full",
+              "opacity": 1,
+              "point_color": "var(--fm-border-strong)",
+              "point_opacity": 1,
+              "points_visible": false,
+              "render_mode": "surface",
+              "scalar_color_palette": "viridis",
+              "surface_color_source": "orientation",
+              "surface_mono_color": "#00c2ff",
+              "surface_opacity": 1,
+              "surface_projection_mode": "raw_nodal",
+              "surface_visible": true,
+              "viewport_colorbar_visible": false,
+              "vector_alpha": 1,
+              "vector_budget": 50,
+              "vector_color_mode": "orientation",
+              "vector_length_scale": 1,
+              "vector_mono_color": "#00c2ff",
+              "vector_thickness": 1,
+              "vectors_visible": false,
+              "wireframe_color": "var(--fm-border-strong)",
+              "wireframe_opacity": 1,
+              "wireframe_visible": false
+            }
+          },
+          {
+            "scope": "object",
+            "scope_id": "cofeb_top_ring",
+            "label": "cofeb_top_ring",
+            "source": "scene_object",
+            "settings": {
+              "active_quantity_id": "m",
+              "visible": true,
+              "bounds_visible": false,
+              "bounds_opacity": 1,
+              "geometry_scope": "full",
+              "opacity": 1,
+              "point_color": "var(--fm-border-strong)",
+              "point_opacity": 1,
+              "points_visible": false,
+              "render_mode": "off",
+              "scalar_color_palette": "viridis",
+              "surface_color_source": "orientation",
+              "surface_mono_color": "#00c2ff",
+              "surface_opacity": 1,
+              "surface_projection_mode": "raw_nodal",
+              "surface_visible": false,
+              "viewport_colorbar_visible": false,
+              "vector_alpha": 1,
+              "vector_budget": 50,
+              "vector_color_mode": "orientation",
+              "vector_length_scale": 1,
+              "vector_mono_color": "#00c2ff",
+              "vector_thickness": 1,
+              "vectors_visible": false,
+              "wireframe_color": "var(--fm-border-strong)",
+              "wireframe_opacity": 1,
+              "wireframe_visible": true
+            },
+            "override": {
+              "scope": "object",
+              "scope_id": "cofeb_top_ring",
+              "display": {
+                "surface": {
+                  "visible": false
+                },
+                "wireframe": {
+                  "visible": true
+                },
+                "points": {
+                  "visible": false
+                }
+              },
+              "style": {}
+            }
+          }
+        ],
+        "parts": []
+      },
+      "diagnostics": {
+        "warnings": [],
+        "degraded_reasons": []
+      },
+      "active_quantity_id": "m",
+      "view_mode": "3d",
+      "field_component": "magnitude",
+      "colormap": "viridis",
+      "auto_contrast": true,
+      "contrast_min": null,
+      "contrast_max": null,
+      "vector_glyphs": false,
+      "vector_density": 50,
+      "slice_mode": "single",
+      "slice_layer": 0,
+      "max_points": 16384,
+      "x_chosen_size": 0,
+      "y_chosen_size": 0
+    }
+  },
+  "bounds": {
+    "objectBounds": [
+      {
+        "id": "permalloy_layer",
+        "bounds": {
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "radius": 1.0440309573954213e-06,
+          "size": [
+            2.0000000000000003e-06,
+            6.000000000000001e-07,
+            1.6000000000000003e-09
+          ]
+        }
+      },
+      {
+        "id": "cofeb_top_ring",
+        "bounds": {
+          "center": [
+            0,
+            0,
+            1.6080000000000004e-07
+          ],
+          "radius": 2.1360009363293833e-07,
+          "size": [
+            5.0000000000000004e-08,
+            3.0000000000000004e-07,
+            3.000000000000001e-07
+          ]
+        }
+      }
+    ],
+    "primitiveBounds": {
+      "center": [
+        0,
+        0,
+        1.5500000000000002e-07
+      ],
+      "radius": 1.0555916066358242e-06,
+      "size": [
+        2.0000000000000003e-06,
+        6.000000000000001e-07,
+        3.1160000000000006e-07
+      ]
+    },
+    "universeBounds": {
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": 1.8499999999999999e-06,
+      "size": [
+        2.8e-06,
+        2.1e-06,
+        1.2e-06
+      ]
+    },
+    "domainBounds": {
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": 1.8499999999999999e-06,
+      "size": [
+        2.8e-06,
+        2.1e-06,
+        1.2e-06
+      ]
+    },
+    "liveBounds": {
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": 1.8499999999999999e-06,
+      "size": [
+        2.8e-06,
+        2.1e-06,
+        1.2e-06
+      ]
+    }
+  },
+  "camera": {
+    "projection": "perspective",
+    "position": [
+      1.6710714031932422e-07,
+      -6.101199092239823e-07,
+      2.0428454917790962e-07
+    ],
+    "target": [
+      0,
+      0,
+      1.5500000000000002e-07
+    ],
+    "up": [
+      0,
+      0,
+      1
+    ],
+    "fov_degrees": 45,
+    "orthographic_scale": null
+  },
+  "cameraInputSource": "GET visualization/state from fullmag-master during this audit, revision 11, before the live camera changed; preserved from the tool response. This is a replay of observed values, not an assertion of screenshot pose.",
+  "liveCameraAtProbeTime": {
+    "projection": "perspective",
+    "position": [
+      -1.7674540256058763e-06,
+      -1.4807874539803555e-06,
+      8.485053543097567e-07
+    ],
+    "target": [
+      0,
+      0,
+      1.5500000000000002e-07
+    ],
+    "up": [
+      0,
+      0,
+      1
+    ],
+    "fov_degrees": 45,
+    "orthographic_scale": null
+  },
+  "centerDepthM": 6.465471557774229e-07,
+  "nearestSphereDepthM": -1.203452844222577e-06,
+  "ringCenterDepthM": 6.340572284512196e-07,
+  "assumedDepthBits": [
+    16,
+    24
+  ],
+  "comparison": [
+    {
+      "aspect": 1,
+      "current": {
+        "near": 1e-12,
+        "far": 0.001
+      },
+      "baseline": {
+        "near": 5.1799999999999994e-08,
+        "far": 0.001
+      },
+      "nearDecreaseFactor": 51799.99999999999,
+      "centerQuantumM": {
+        "16": {
+          "current": 6.134562730589967e-06,
+          "baseline": 1.1842171749758237e-10
+        },
+        "24": {
+          "current": 2.3962771446227128e-08,
+          "baseline": 4.625778030623117e-13
+        }
+      },
+      "axialThicknessProjectedM": 1.3168250826277165e-08,
+      "illustrativeDepthPairs": [
+        {
+          "separationM": 5e-09,
+          "currentLevels24": [
+            16777189,
+            16777189
+          ],
+          "baselineLevels24": [
+            15407380,
+            15418105
+          ]
+        },
+        {
+          "separationM": 1.5e-08,
+          "currentLevels24": [
+            16777189,
+            16777189
+          ],
+          "baselineLevels24": [
+            15407380,
+            15439058
+          ]
+        },
+        {
+          "separationM": 5e-08,
+          "currentLevels24": [
+            16777189,
+            16777190
+          ],
+          "baselineLevels24": [
+            15407380,
+            15507569
+          ]
+        }
+      ]
+    },
+    {
+      "aspect": 1.6,
+      "current": {
+        "near": 1e-12,
+        "far": 0.001
+      },
+      "baseline": {
+        "near": 5.1799999999999994e-08,
+        "far": 0.001
+      },
+      "nearDecreaseFactor": 51799.99999999999,
+      "centerQuantumM": {
+        "16": {
+          "current": 6.134562730589967e-06,
+          "baseline": 1.1842171749758237e-10
+        },
+        "24": {
+          "current": 2.3962771446227128e-08,
+          "baseline": 4.625778030623117e-13
+        }
+      },
+      "axialThicknessProjectedM": 1.3168250826277165e-08,
+      "illustrativeDepthPairs": [
+        {
+          "separationM": 5e-09,
+          "currentLevels24": [
+            16777189,
+            16777189
+          ],
+          "baselineLevels24": [
+            15407380,
+            15418105
+          ]
+        },
+        {
+          "separationM": 1.5e-08,
+          "currentLevels24": [
+            16777189,
+            16777189
+          ],
+          "baselineLevels24": [
+            15407380,
+            15439058
+          ]
+        },
+        {
+          "separationM": 5e-08,
+          "currentLevels24": [
+            16777189,
+            16777190
+          ],
+          "baselineLevels24": [
+            15407380,
+            15507569
+          ]
+        }
+      ]
+    },
+    {
+      "aspect": 2.2,
+      "current": {
+        "near": 1e-12,
+        "far": 0.001
+      },
+      "baseline": {
+        "near": 5.1799999999999994e-08,
+        "far": 0.001
+      },
+      "nearDecreaseFactor": 51799.99999999999,
+      "centerQuantumM": {
+        "16": {
+          "current": 6.134562730589967e-06,
+          "baseline": 1.1842171749758237e-10
+        },
+        "24": {
+          "current": 2.3962771446227128e-08,
+          "baseline": 4.625778030623117e-13
+        }
+      },
+      "axialThicknessProjectedM": 1.3168250826277165e-08,
+      "illustrativeDepthPairs": [
+        {
+          "separationM": 5e-09,
+          "currentLevels24": [
+            16777189,
+            16777189
+          ],
+          "baselineLevels24": [
+            15407380,
+            15418105
+          ]
+        },
+        {
+          "separationM": 1.5e-08,
+          "currentLevels24": [
+            16777189,
+            16777189
+          ],
+          "baselineLevels24": [
+            15407380,
+            15439058
+          ]
+        },
+        {
+          "separationM": 5e-08,
+          "currentLevels24": [
+            16777189,
+            16777190
+          ],
+          "baselineLevels24": [
+            15407380,
+            15507569
+          ]
+        }
+      ]
+    }
+  ],
+  "sourceHashes": {
+    "apps/control-room/src/modules/viewport-3d/layers/CameraControls.tsx": {
+      "before": "a4776e2315ff3588206ee6bf700441e7636a322a863fb55b07e4d16f689ea313",
+      "after": "a4776e2315ff3588206ee6bf700441e7636a322a863fb55b07e4d16f689ea313",
+      "unchanged": true
+    },
+    "apps/control-room/src/modules/viewport-3d/layers/Viewport3DScene.tsx": {
+      "before": "90340f9c1d5c7095bd5dead9a6ab1c8e49daa5920e440460efa644376a793530",
+      "after": "90340f9c1d5c7095bd5dead9a6ab1c8e49daa5920e440460efa644376a793530",
+      "unchanged": true
+    },
+    "apps/control-room/src/modules/viewport-3d/viewport3dCameraFov.ts": {
+      "before": "192d5197588344f1022df4c64efb196dcc136b8d720f617a7c11ff6fb95bdb6c",
+      "after": "192d5197588344f1022df4c64efb196dcc136b8d720f617a7c11ff6fb95bdb6c",
+      "unchanged": true
+    },
+    "apps/control-room/src/modules/viewport-3d/viewport3dRenderModel.ts": {
+      "before": "bc190ebc1dc5ea427572c8c808fe9d8c984a8f30e13fccfc171997c42ab0247c",
+      "after": "bc190ebc1dc5ea427572c8c808fe9d8c984a8f30e13fccfc171997c42ab0247c",
+      "unchanged": true
+    }
+  },
+  "extractedFunctions": {
+    "current": "const DEFAULT_VIEWPORT_3D_CAMERA_FOV_DEGREES = 42;\nfunction isViewport3DCameraFovDegreesValid(\n  value: unknown,\n): value is number {\n  return (\n    typeof value === \"number\" &&\n    Number.isFinite(value) &&\n    value > 0 &&\n    value < 180\n  );\n}\nfunction resolveViewport3DCameraFovDegrees(value: unknown): number {\n  return isViewport3DCameraFovDegreesValid(value)\n    ? value\n    : DEFAULT_VIEWPORT_3D_CAMERA_FOV_DEGREES;\n}\nconst FALLBACK_CAMERA_BOUNDS: Viewport3DBounds = {\n  center: [0, 0, 0],\n  radius: 1e-6,\n  size: [1e-6, 1e-6, 1e-6],\n};\nconst CAMERA_FIT_OFFSET_LENGTH = Math.hypot(1, 0.72, 1);\nconst CAMERA_FIT_MARGIN =\n  2.8 * CAMERA_FIT_OFFSET_LENGTH * Math.sin(\n    MathUtils.degToRad(DEFAULT_VIEWPORT_3D_CAMERA_FOV_DEGREES / 2),\n  );\nfunction resolveViewport3DCameraFit(\n  bounds: Viewport3DBounds | null,\n  {\n    aspect = 1,\n    fovDegrees = DEFAULT_VIEWPORT_3D_CAMERA_FOV_DEGREES,\n  }: { aspect?: number; fovDegrees?: number } = {},\n): Viewport3DCameraFit {\n  const activeBounds = bounds ?? FALLBACK_CAMERA_BOUNDS;\n  const [x, y, z] = activeBounds.center;\n  const radius = Math.max(activeBounds.radius, 1e-12);\n  const resolvedFov = resolveViewport3DCameraFovDegrees(fovDegrees);\n  const safeAspect =\n    Number.isFinite(aspect) && aspect > 0\n      ? MathUtils.clamp(aspect, 1e-3, 1e3)\n      : 1;\n  const verticalHalfFov = MathUtils.degToRad(resolvedFov / 2);\n  const horizontalHalfFov = Math.atan(\n    Math.tan(verticalHalfFov) * safeAspect,\n  );\n  const limitingHalfFov = Math.min(verticalHalfFov, horizontalHalfFov);\n  const cameraDistance =\n    (radius * CAMERA_FIT_MARGIN) / Math.sin(limitingHalfFov);\n  const distance = cameraDistance / CAMERA_FIT_OFFSET_LENGTH;\n  const near = Math.max(distance / 100, 1e-12);\n  const far = Math.max(distance * 100, near * 100, 1e-3);\n\n  return {\n    far,\n    near,\n    position: [\n      x + distance,\n      y + distance * 0.72,\n      z + distance,\n    ],\n    target: [\n      activeBounds.center[0],\n      activeBounds.center[1],\n      activeBounds.center[2],\n    ],\n  };\n}\nconst FALLBACK_GRID_SIZE = 1e-6;\nfunction resolveViewport3DProjectionCameraClip(\n  bounds: Viewport3DBounds | null,\n  cameraState?: Viewport3DCameraState,\n  {\n    aspect = 1,\n    fovDegrees = DEFAULT_VIEWPORT_3D_CAMERA_FOV_DEGREES,\n  }: { aspect?: number; fovDegrees?: number } = {},\n): Viewport3DCameraClip {\n  const fit = resolveViewport3DCameraFit(bounds, { aspect, fovDegrees });\n  if (!cameraState) return { near: fit.near, far: fit.far };\n\n  const position = new Vector3(...cameraState.position);\n  const forward = new Vector3(...cameraState.target).sub(position);\n  const distance = forward.length();\n  const radius = Math.max(bounds?.radius ?? FALLBACK_GRID_SIZE / 2, 1e-12);\n  // FOV changes projection without moving the camera. A hypothetical fit must\n  // never push the near plane through geometry visible from the actual pose.\n  const minimumNear = 1e-12;\n  const centerDepth = bounds && Number.isFinite(distance) && distance > 0\n    ? new Vector3(...bounds.center).sub(position).dot(forward.divideScalar(distance))\n    : null;\n  const nearestDepth = centerDepth === null ? null : centerDepth - radius;\n  const poseNearLimit = nearestDepth !== null\n    ? nearestDepth > minimumNear ? nearestDepth * 0.5 : minimumNear\n    : Number.isFinite(distance) && distance > 0 ? distance / 100 : minimumNear;\n  const near = Math.max(minimumNear, Math.min(fit.near, poseNearLimit));\n  const orbitFar =\n    Number.isFinite(distance) && distance > 0\n      ? distance + radius * 4\n      : fit.far;\n\n  return {\n    near,\n    far: Math.max(fit.far, orbitFar, (centerDepth ?? 0) + radius * 4, near * 100, 1e-3),\n  };\n}\nfunction asRecord(value: unknown): Record<string, unknown> | null {\n  return Boolean(value) && typeof value === \"object\" && !Array.isArray(value)\n    ? (value as Record<string, unknown>)\n    : null;\n}\nfunction asVec3(value: unknown): [number, number, number] | null {\n  if (\n    Array.isArray(value) &&\n    value.length >= 3 &&\n    value.slice(0, 3).every((entry) =>\n      typeof entry === \"number\" && Number.isFinite(entry),\n    )\n  ) {\n    return [value[0], value[1], value[2]];\n  }\n  return null;\n}\nfunction boundsFromMinMax(\n  min: [number, number, number],\n  max: [number, number, number],\n): Viewport3DBounds {\n  const size: [number, number, number] = [\n    Math.max(max[0] - min[0], 0),\n    Math.max(max[1] - min[1], 0),\n    Math.max(max[2] - min[2], 0),\n  ];\n  const radius = Math.max(Math.hypot(size[0], size[1], size[2]) / 2, 1e-12);\n\n  return {\n    center: [\n      min[0] + size[0] / 2,\n      min[1] + size[1] / 2,\n      min[2] + size[2] / 2,\n    ],\n    radius,\n    size,\n  };\n}\nfunction boundsFromOptionalMinMax(\n  min: readonly number[] | null | undefined,\n  max: readonly number[] | null | undefined,\n): Viewport3DBounds | null {\n  if (!min || !max || min.length < 3 || max.length < 3) {\n    return null;\n  }\n\n  return boundsFromMinMax(\n    [min[0] ?? 0, min[1] ?? 0, min[2] ?? 0],\n    [max[0] ?? 0, max[1] ?? 0, max[2] ?? 0],\n  );\n}\nfunction boundsFromUniverseConfig(value: unknown): Viewport3DBounds | null {\n  const record = asRecord(value);\n  if (!record) return null;\n\n  const explicitBounds = boundsFromOptionalMinMax(\n    asVec3(record.bounds_min) ?? asVec3(record.min),\n    asVec3(record.bounds_max) ?? asVec3(record.max),\n  );\n  if (explicitBounds) return explicitBounds;\n\n  const size = asVec3(record.size);\n  if (!size) return null;\n\n  const center = asVec3(record.center) ?? [0, 0, 0];\n  const half: [number, number, number] = [\n    size[0] / 2,\n    size[1] / 2,\n    size[2] / 2,\n  ];\n\n  return boundsFromMinMax(\n    [\n      center[0] - half[0],\n      center[1] - half[1],\n      center[2] - half[2],\n    ],\n    [\n      center[0] + half[0],\n      center[1] + half[1],\n      center[2] + half[2],\n    ],\n  );\n}\nfunction resolveUniverseBounds(\n  universe: UniverseResource | null | undefined,\n): Viewport3DBounds | null {\n  if (!universe) return null;\n\n  return (\n    boundsFromUniverseConfig(universe.universe) ??\n    boundsFromUniverseConfig(universe.study_universe_mesh) ??\n    boundsFromOptionalMinMax(\n      universe.object_bounds_min,\n      universe.object_bounds_max,\n    )\n  );\n}\nfunction resolveDomainBounds(\n  meta: DomainMetaResource | null | undefined,\n): Viewport3DBounds | null {\n  const min = meta?.bounds.min;\n  const max = meta?.bounds.max;\n  if (!min || !max || min.length < 3 || max.length < 3) {\n    return null;\n  }\n\n  return boundsFromMinMax(\n    [min[0] ?? 0, min[1] ?? 0, min[2] ?? 0],\n    [max[0] ?? 0, max[1] ?? 0, max[2] ?? 0],\n  );\n}\nfunction combineViewport3DBounds(\n  boundsList: Array<Viewport3DBounds | null | undefined>,\n): Viewport3DBounds | null {\n  const validBounds = boundsList.filter(\n    (entry): entry is Viewport3DBounds => Boolean(entry),\n  );\n  if (!validBounds.length) return null;\n\n  const min = validBounds.reduce<[number, number, number]>(\n    (current, bounds) => [\n      Math.min(current[0], bounds.center[0] - bounds.size[0] / 2),\n      Math.min(current[1], bounds.center[1] - bounds.size[1] / 2),\n      Math.min(current[2], bounds.center[2] - bounds.size[2] / 2),\n    ],\n    [Infinity, Infinity, Infinity],\n  );\n  const max = validBounds.reduce<[number, number, number]>(\n    (current, bounds) => [\n      Math.max(current[0], bounds.center[0] + bounds.size[0] / 2),\n      Math.max(current[1], bounds.center[1] + bounds.size[1] / 2),\n      Math.max(current[2], bounds.center[2] + bounds.size[2] / 2),\n    ],\n    [-Infinity, -Infinity, -Infinity],\n  );\n\n  return boundsFromMinMax(min, max);\n}",
+    "baseline": "const DEFAULT_VIEWPORT_3D_CAMERA_FOV_DEGREES = 42;\nfunction isViewport3DCameraFovDegreesValid(\n  value: unknown,\n): value is number {\n  return (\n    typeof value === \"number\" &&\n    Number.isFinite(value) &&\n    value > 0 &&\n    value < 180\n  );\n}\nfunction resolveViewport3DCameraFovDegrees(value: unknown): number {\n  return isViewport3DCameraFovDegreesValid(value)\n    ? value\n    : DEFAULT_VIEWPORT_3D_CAMERA_FOV_DEGREES;\n}\nconst FALLBACK_CAMERA_BOUNDS: Viewport3DBounds = {\n  center: [0, 0, 0],\n  radius: 1e-6,\n  size: [1e-6, 1e-6, 1e-6],\n};\nfunction resolveViewport3DCameraFit(\n  bounds: Viewport3DBounds | null,\n): Viewport3DCameraFit {\n  const activeBounds = bounds ?? FALLBACK_CAMERA_BOUNDS;\n  const [x, y, z] = activeBounds.center;\n  const radius = Math.max(activeBounds.radius, 1e-12);\n  const distance = radius * 2.8;\n  const near = Math.max(distance / 100, 1e-12);\n  const far = Math.max(distance * 100, near * 100, 1e-3);\n\n  return {\n    far,\n    near,\n    position: [\n      x + distance,\n      y + distance * 0.72,\n      z + distance,\n    ],\n    target: [\n      activeBounds.center[0],\n      activeBounds.center[1],\n      activeBounds.center[2],\n    ],\n  };\n}\nconst FALLBACK_GRID_SIZE = 1e-6;\nfunction resolveViewport3DProjectionCameraClip(\n  bounds: Viewport3DBounds | null,\n  cameraState?: Viewport3DCameraState,\n): Viewport3DCameraClip {\n  const fit = resolveViewport3DCameraFit(bounds);\n  if (!cameraState) return { near: fit.near, far: fit.far };\n\n  const distance = new Vector3(...cameraState.position).distanceTo(\n    new Vector3(...cameraState.target),\n  );\n  const radius = Math.max(bounds?.radius ?? FALLBACK_GRID_SIZE / 2, 1e-12);\n  const orbitFar =\n    Number.isFinite(distance) && distance > 0\n      ? distance + radius * 4\n      : fit.far;\n\n  return {\n    near: fit.near,\n    far: Math.max(fit.far, orbitFar, fit.near * 100, 1e-3),\n  };\n}\nfunction asRecord(value: unknown): Record<string, unknown> | null {\n  return Boolean(value) && typeof value === \"object\" && !Array.isArray(value)\n    ? (value as Record<string, unknown>)\n    : null;\n}\nfunction asVec3(value: unknown): [number, number, number] | null {\n  if (\n    Array.isArray(value) &&\n    value.length >= 3 &&\n    value.slice(0, 3).every((entry) =>\n      typeof entry === \"number\" && Number.isFinite(entry),\n    )\n  ) {\n    return [value[0], value[1], value[2]];\n  }\n  return null;\n}\nfunction boundsFromMinMax(\n  min: [number, number, number],\n  max: [number, number, number],\n): Viewport3DBounds {\n  const size: [number, number, number] = [\n    Math.max(max[0] - min[0], 0),\n    Math.max(max[1] - min[1], 0),\n    Math.max(max[2] - min[2], 0),\n  ];\n  const radius = Math.max(Math.hypot(size[0], size[1], size[2]) / 2, 1e-12);\n\n  return {\n    center: [\n      min[0] + size[0] / 2,\n      min[1] + size[1] / 2,\n      min[2] + size[2] / 2,\n    ],\n    radius,\n    size,\n  };\n}\nfunction boundsFromOptionalMinMax(\n  min: readonly number[] | null | undefined,\n  max: readonly number[] | null | undefined,\n): Viewport3DBounds | null {\n  if (!min || !max || min.length < 3 || max.length < 3) {\n    return null;\n  }\n\n  return boundsFromMinMax(\n    [min[0] ?? 0, min[1] ?? 0, min[2] ?? 0],\n    [max[0] ?? 0, max[1] ?? 0, max[2] ?? 0],\n  );\n}\nfunction boundsFromUniverseConfig(value: unknown): Viewport3DBounds | null {\n  const record = asRecord(value);\n  if (!record) return null;\n\n  const explicitBounds = boundsFromOptionalMinMax(\n    asVec3(record.bounds_min) ?? asVec3(record.min),\n    asVec3(record.bounds_max) ?? asVec3(record.max),\n  );\n  if (explicitBounds) return explicitBounds;\n\n  const size = asVec3(record.size);\n  if (!size) return null;\n\n  const center = asVec3(record.center) ?? [0, 0, 0];\n  const half: [number, number, number] = [\n    size[0] / 2,\n    size[1] / 2,\n    size[2] / 2,\n  ];\n\n  return boundsFromMinMax(\n    [\n      center[0] - half[0],\n      center[1] - half[1],\n      center[2] - half[2],\n    ],\n    [\n      center[0] + half[0],\n      center[1] + half[1],\n      center[2] + half[2],\n    ],\n  );\n}\nfunction resolveUniverseBounds(\n  universe: UniverseResource | null | undefined,\n): Viewport3DBounds | null {\n  if (!universe) return null;\n\n  return (\n    boundsFromUniverseConfig(universe.universe) ??\n    boundsFromUniverseConfig(universe.study_universe_mesh) ??\n    boundsFromOptionalMinMax(\n      universe.object_bounds_min,\n      universe.object_bounds_max,\n    )\n  );\n}\nfunction resolveDomainBounds(\n  meta: DomainMetaResource | null | undefined,\n): Viewport3DBounds | null {\n  const min = meta?.bounds.min;\n  const max = meta?.bounds.max;\n  if (!min || !max || min.length < 3 || max.length < 3) {\n    return null;\n  }\n\n  return boundsFromMinMax(\n    [min[0] ?? 0, min[1] ?? 0, min[2] ?? 0],\n    [max[0] ?? 0, max[1] ?? 0, max[2] ?? 0],\n  );\n}\nfunction combineViewport3DBounds(\n  boundsList: Array<Viewport3DBounds | null | undefined>,\n): Viewport3DBounds | null {\n  const validBounds = boundsList.filter(\n    (entry): entry is Viewport3DBounds => Boolean(entry),\n  );\n  if (!validBounds.length) return null;\n\n  const min = validBounds.reduce<[number, number, number]>(\n    (current, bounds) => [\n      Math.min(current[0], bounds.center[0] - bounds.size[0] / 2),\n      Math.min(current[1], bounds.center[1] - bounds.size[1] / 2),\n      Math.min(current[2], bounds.center[2] - bounds.size[2] / 2),\n    ],\n    [Infinity, Infinity, Infinity],\n  );\n  const max = validBounds.reduce<[number, number, number]>(\n    (current, bounds) => [\n      Math.max(current[0], bounds.center[0] + bounds.size[0] / 2),\n      Math.max(current[1], bounds.center[1] + bounds.size[1] / 2),\n      Math.max(current[2], bounds.center[2] + bounds.size[2] / 2),\n    ],\n    [-Infinity, -Infinity, -Infinity],\n  );\n\n  return boundsFromMinMax(min, max);\n}"
+  },
+  "boundsSensitivity": {
+    "fullScene": {
+      "near": 1e-12,
+      "far": 0.001
+    },
+    "primitivesOnly": {
+      "near": 1e-12,
+      "far": 0.001
+    },
+    "ringOnly": {
+      "near": 5.980802621722275e-09,
+      "far": 0.001
+    },
+    "note": "Hypothetical inputs to the same function; changing bounds is not proposed as a complete fix."
+  },
+  "inputStability": {
+    "sameSession": true,
+    "sameSceneRevision": true,
+    "sameVisualization": true
+  }
+}

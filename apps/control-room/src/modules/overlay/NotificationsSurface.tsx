@@ -51,6 +51,12 @@ export function NotificationsView({
             ) : null}
           </div>
           <span>{notification.detail}</span>
+          {notification.technical ? (
+            <details className="fm-notifications__technical">
+              <summary>Technical details</summary>
+              <code>{notification.technical}</code>
+            </details>
+          ) : null}
         </output>
       ))}
     </aside>

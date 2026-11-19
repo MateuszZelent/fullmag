@@ -139,7 +139,15 @@ export function buildStatusBarMeshModel(
     };
   }
 
-  if (!meshRevision || meshRevision === "0") {
+  if (meshRevision === null) {
+    return {
+      label: "Mesh revision unavailable",
+      state: "unknown",
+      title,
+    };
+  }
+
+  if (meshRevision === "0") {
     return { label: "Mesh not built", state: "not-built", title };
   }
 

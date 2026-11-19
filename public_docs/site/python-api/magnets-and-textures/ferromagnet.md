@@ -105,8 +105,7 @@ default state, object identity, constraint accumulation, and magnet-record lower
 (python-api-magnets-and-textures-ferromagnet-validation)=
 ## Validation
 
-Tests compare this complete parameter inventory with `inspect.signature(Ferromagnet)` and validate
-the adjacent source map.
+Tests compare this complete parameter inventory with `inspect.signature(Ferromagnet)`.
 
 (python-api-magnets-and-textures-ferromagnet-limitations)=
 ## Limitations
@@ -119,24 +118,28 @@ user API. Use typed constraint helpers and stage/problem authoring rather than m
 
 No new physical model is introduced; references belong to the interactions consuming the magnet.
 
-(python-api-magnets-and-textures-ferromagnet-source-code-index)=
+## Control Room support
 
-## Control Room crosswalk
-
-Status: The exposed texture families are partial; unlisted presets remain Python-only.
+Status: Scalar object material fields (`ObjectMaterialPanel`), region overrides (`ObjectRegionsPanel` / `ObjectRegionMagneticParametersPanel`), and the `16` built-in `MAGNETIZATION_TEXTURE_PRESETS` in `ObjectMagneticTexturePanel` are `partial`; unlisted presets and spatial callbacks remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft; authored object state is revised |
-| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `not implemented` | Python-only until implemented |
+| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft (`commitMagneticTextureApply`); authored object state is revised |
+| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `Python-only` | Authored in Python |
 
-frontend support is not implemented for texture presets and arguments not exposed by ObjectMagneticTexturePanel.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx (ObjectMagneticTexturePanel)`.
+Texture presets, spatial expressions, and arguments outside `ObjectMagneticTexturePanel` remain Python-only.
+See {doc}`/frontend/inspectors/objects-and-materials` and [Control Room capability register](/frontend/capability-register) for the UI support matrix.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx` (`ObjectMagneticTexturePanel`).
 
+```{image} /_static/images/ui/inspector-magnetic-texture.png
+:alt: Semantic Inspector Magnetic Texture panel configuring a ferromagnet initial magnetization
+:width: 92%
+```
+
+(python-api-magnets-and-textures-ferromagnet-source-code-index)=
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| constructor and lowering | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L745) | [`class Ferromagnet`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L745) | canonical object API | signature/source-map tests |
+| constructor and lowering | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L745) | [`class Ferromagnet`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L745) | canonical object API | signature and API contract tests |
 | stage-first facade | `packages/fullmag-py/src/fullmag/world.py` | `study.geometry` / magnetic handle | fluent object authoring | builder tests |

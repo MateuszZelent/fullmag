@@ -689,6 +689,18 @@ Kanoniczny kontrakt fizyczny dla anten microstrip/CPW z profilem zmiennym
 wzdłuż przepływu prądu definiuje
 `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md`.
 
+Addytywny wariant inspekcyjny `analytic_rt0_surface` ma rdzeń w
+`backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp` oraz adapter tego
+samego zaakceptowanego prądu w `workflows/antenna_field_solve/accepted_surface_rt0.cpp`.
+Runner orkiestruje C ABI, podpisany dowód i artefakt; nie rozwiązuje ponownie
+transportu ani nie definiuje odmiennej fizyki. Nowy wariant jest wyłącznie
+prepared closed-loop FEM CPU/double/strict, z kompletną jawną polityką bez
+liczbowych defaults, osobnym codec i inspection_only. Build/start potwierdzono
+w pakiecie4b64b46b6025e2ddb0534135c904f58541a3ee9251b1af2cd93ec22c1b4b9453;
+wykonanie pola, publiczny odczyt surface i kwalifikacja pozostają NOT VERIFIED.
+Brak realizacji GPU/FDM, FFT/LLG oraz require_qualified dla tej rodziny.
+Szczegółowe granice i parametry definiuje nota0950.
+
 Pierwszy produkcyjny `AntennaFieldSolve` jest workflow natywnego FEM CPU:
 
 ```text

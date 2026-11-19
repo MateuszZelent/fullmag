@@ -8,6 +8,7 @@ pub mod compute_preview;
 pub mod compute_nodes;
 pub mod compute_queue;
 pub mod compute_allocations;
+pub mod instances;
 pub mod output_storage;
 pub mod realtime;
 pub mod runtime_service;

@@ -1,3 +1,29 @@
+fn cargo_makeflags_for_unix_makefiles(
+    build_dir: &std::path::Path,
+    cargo_makeflags: Option<String>,
+) -> Result<String, &'static str> {
+    let cache = std::fs::read_to_string(build_dir.join("CMakeCache.txt"))
+        .map_err(|_| "CMakeCache.txt is unavailable")?;
+    let generator = cache
+        .lines()
+        .find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            (key.split(':').next() == Some("CMAKE_GENERATOR")).then_some(value.trim())
+        })
+        .ok_or("CMAKE_GENERATOR is missing from CMakeCache.txt")?;
+    if generator != "Unix Makefiles" {
+        return Err("CMake generator is not Unix Makefiles");
+    }
+
+    let makeflags = cargo_makeflags.ok_or("CARGO_MAKEFLAGS is unavailable")?;
+    if !makeflags.split_whitespace().any(|flag| {
+        flag.starts_with("--jobserver-auth=") || flag.starts_with("--jobserver-fds=")
+    }) {
+        return Err("CARGO_MAKEFLAGS does not contain Cargo jobserver flags");
+    }
+    Ok(makeflags)
+}
+
 fn main() {
     generate_plan_desc_layout_assertions();
     generate_execution_receipt_layout_assertions();
@@ -25,6 +51,8 @@ fn main() {
     println!("cargo:rerun-if-changed=../../backends/fdm/include");
     println!("cargo:rerun-if-env-changed=FULLMAG_FDM_LIB_DIR");
     println!("cargo:rerun-if-env-changed=FULLMAG_FDM_NATIVE_BUILD_ROOT");
+    println!("cargo:rerun-if-env-changed=FULLMAG_DIRECT_COMPOSE");
+    println!("cargo:rerun-if-env-changed=FULLMAG_FDM_CUDA_ARCHITECTURES");
 
     let build_native_cuda = std::env::var_os("CARGO_FEATURE_BUILD_NATIVE").is_some();
     let build_native_cpu = std::env::var_os("CARGO_FEATURE_BUILD_NATIVE_CPU").is_some();
@@ -73,6 +101,14 @@ fn main() {
     if let Some(cuda_compiler) = cuda_compiler {
         configure.arg(format!("-DCMAKE_CUDA_COMPILER={cuda_compiler}"));
     }
+    // Always pass the list so a cached DEV narrowing never outlives its
+    // variable; an empty value selects the portable default in CMake.
+    let fdm_cuda_architectures =
+        std::env::var("FULLMAG_FDM_CUDA_ARCHITECTURES").unwrap_or_default();
+    configure.arg(format!(
+        "-DFULLMAG_FDM_CUDA_ARCHITECTURES={}",
+        fdm_cuda_architectures.trim()
+    ));
     let configure_status = configure
         .status()
         .expect("cmake not found; install cmake, set FULLMAG_CMAKE, or set FULLMAG_FDM_LIB_DIR to a prebuilt native backend");
@@ -85,13 +121,36 @@ fn main() {
     } else {
         "Release"
     };
-    let build_status = std::process::Command::new(&cmake)
+    let direct_compose = std::env::var("FULLMAG_DIRECT_COMPOSE").as_deref() == Ok("1");
+    let mut build = std::process::Command::new(&cmake);
+    build
         .arg("--build")
         .arg(&build_dir)
         .arg("--config")
         .arg(cmake_config)
         .arg("--target")
-        .arg("fullmag_fdm")
+        .arg("fullmag_fdm");
+    if direct_compose && cfg!(unix) {
+        build.env_remove("CMAKE_BUILD_PARALLEL_LEVEL");
+        match cargo_makeflags_for_unix_makefiles(
+            &build_dir,
+            std::env::var("CARGO_MAKEFLAGS").ok(),
+        ) {
+            Ok(makeflags) => {
+                build.env("MAKEFLAGS", makeflags);
+            }
+            Err(reason) => {
+                build
+                    .env_remove("MAKEFLAGS")
+                    .arg("--parallel")
+                    .arg("1");
+                println!(
+                    "cargo:warning=direct Compose FDM native build uses --parallel 1: {reason}"
+                );
+            }
+        }
+    }
+    let build_status = build
         .status()
         .expect("cmake build invocation failed; verify the native toolchain and CUDA setup");
     if !build_status.success() {
@@ -360,7 +419,7 @@ fn generate_plan_desc_layout_assertions() {
     assert_eq!(grid_fields, 6, "grid descriptor field count drift");
     assert_eq!(material_fields, 4, "material descriptor field count drift");
     assert_eq!(time_fields, 13, "time policy descriptor field count drift");
-    assert_eq!(extension_fields, 2, "v2 extension field count drift");
+    assert_eq!(extension_fields, 8, "v2 extension field count drift");
 
     let generated = format!("{{\n{assertions}}}\n");
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());

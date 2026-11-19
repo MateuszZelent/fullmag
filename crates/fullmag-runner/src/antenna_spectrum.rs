@@ -2629,7 +2629,7 @@ mod tests {
             request.sampling_plane.extent_u_m = 0.5 * scale_m;
             request.sampling_plane.extent_v_m = 0.5 * scale_m;
             let samples = AntennaFieldSolutionSamples {
-                sample_carrier: None,
+            sample_carrier: None,
                 solution_id: "solution".into(),
                 source_object_id: "antenna".into(),
                 port_mode_id: "port".into(),

@@ -195,6 +195,13 @@ required_potential_order=2, required_topology=all_tet i odrzuca każdą
 piramidę oraz PBC. Jest to osobny profil dokładności, nie automatyczna zmiana
 ścieżki zwykłego mieszanego P1.
 
+Deklaracja `fem_demag_accuracy_contract` musi przetrwać eksport Python → builder
+→ Scene → kanoniczny skrypt → ProblemIR. Scene przechowuje ją jako osobne,
+opcjonalne i walidowane pole study; renderer odtwarza dokładną wartość przez
+`study.runtime_metadata(...)`. Brak deklaracji nie nadaje profilowi statusu
+zweryfikowanego. Walidacja rozwiązanego demag, topologii i rzędu pozostaje
+obowiązkiem plannera; samo zachowanie metadanych nie dowodzi wykonania solvera.
+
 (round-trip-and-failure-semantics)=
 ## 7. Round-trip i semantyka błędów
 

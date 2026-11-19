@@ -11,9 +11,11 @@ import json
 import sys
 import hashlib
 import os
+import inspect
 import unittest
 from unittest.mock import patch, Mock
 from contextlib import ExitStack
+from types import SimpleNamespace
 import tempfile
 import subprocess
 import shutil
@@ -119,6 +121,76 @@ class RetirementTransportTests(unittest.TestCase):
         self.addCleanup(self.stack.close)
         self.monkeypatch = _Patches(self.stack)
         self.stack.enter_context(patch.object(helper, "_retirement_operator_token", return_value="0123456789abcdef0123456789abcdef"))
+
+    def test_imported_observation_keeps_historical_outcome_separate(self):
+        for historical in ("completed", "failed", "cancelled", "interrupted"):
+            with self.subTest(historical=historical):
+                response = _retirement()
+                response.update(schema="fullmag.live-workspace-retirement-response.v2", terminal_outcome="observation_closed")
+                evidence = {"import_id": "import-1", "session_id": response["session_id"], "run_id": response["run_id"],
+                            "snapshot_sha256": "1" * 64, "closure_sha256": "sha256:" + "2" * 64,
+                            "historical_terminal_outcome": historical, "historical_catalog_revision": 673}
+                response["imported_observation"] = evidence
+                response["terminal_evidence_sha256"] = hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                opener = _patch_opener(self.monkeypatch, [_Response(200, _status()), _Response(200, response)])
+                result = helper._retire_current_workspace_transport("docker-volume-op-1")
+                self.assertEqual(result["terminal_outcome"], "observation_closed")
+                self.assertEqual(result["imported_observation"]["historical_terminal_outcome"], historical)
+                self.assertEqual(len(opener.requests), 2)
+
+    def test_observation_cannot_be_disguised_as_native_completion(self):
+        response = _retirement()
+        evidence = {"import_id": "import-1", "session_id": response["session_id"], "run_id": response["run_id"],
+                    "snapshot_sha256": "1" * 64, "closure_sha256": "sha256:" + "2" * 64,
+                    "historical_terminal_outcome": "failed", "historical_catalog_revision": 673}
+        response.update(schema="fullmag.live-workspace-retirement-response.v2", terminal_outcome="observation_closed", imported_observation=evidence)
+        response["terminal_evidence_sha256"] = hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        for field, bad in [("schema", helper.RETIREMENT_RESPONSE_SCHEMA), ("terminal_outcome", "completed"),
+                           ("terminal_evidence_sha256", "f" * 64)]:
+            with self.subTest(field=field):
+                corrupt = dict(response, **{field: bad})
+                with self.assertRaises(helper.StartupScriptError):
+                    helper._validate_retirement_response(corrupt, operation_id=response["operation_id"],
+                        session_id=response["session_id"], run_id=response["run_id"],
+                        request_scope_epoch="api:7", api_request_scope_epoch="api:7")
+        for field, bad in [("run_id", "other-run"), ("session_id", "other-session"), ("import_id", "../escape"),
+                           ("snapshot_sha256", "z" * 64), ("closure_sha256", "2" * 64),
+                           ("historical_terminal_outcome", "running"), ("historical_terminal_outcome", []),
+                           ("historical_terminal_outcome", {}), ("historical_catalog_revision", True)]:
+            with self.subTest(field=field):
+                corrupt = dict(response, imported_observation=dict(evidence, **{field: bad}))
+                with self.assertRaises(helper.StartupScriptError):
+                    helper._validate_retirement_response(corrupt, operation_id=response["operation_id"],
+                        session_id=response["session_id"], run_id=response["run_id"],
+                        request_scope_epoch="api:7", api_request_scope_epoch="api:7")
+
+    def test_observation_archive_predecessor_rejects_malformed_history(self):
+        evidence = {"import_id": "import-1", "session_id": "session-1", "run_id": "run-1",
+                    "snapshot_sha256": "1" * 64, "closure_sha256": "sha256:" + "2" * 64,
+                    "historical_terminal_outcome": "failed", "historical_catalog_revision": 673}
+        proof = {"schema": "fullmag.live-workspace-retirement-proof.v3", "state": "retired",
+                 "operation_id": "docker-volume-op-1", "session_id": "session-1", "run_id": "run-1",
+                 "request_scope_epoch": "old-api:7", "terminal_outcome": "observation_closed",
+                 "terminal_catalog_revision": 673, "accepted_proof_sha256": None, "host_released_reservations": [],
+                 "imported_observation": evidence}
+        with tempfile.TemporaryDirectory() as directory:
+            runs_root = Path(directory) / "runs"
+            manifest = runs_root / "session-store/retirements/docker-volume-op-1/project/retirement-manifest.json"
+            manifest.parent.mkdir(parents=True)
+            self.monkeypatch.setenv("FULLMAG_RUNS_ROOT", str(runs_root))
+            for outcome in ("failed", "completed", [], {}):
+                with self.subTest(outcome=outcome):
+                    evidence["historical_terminal_outcome"] = outcome
+                    proof["terminal_evidence_sha256"] = hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                    raw = json.dumps(proof).encode()
+                    manifest.write_bytes(raw)
+                    call = lambda: helper._retirement_archive_receipt("docker-volume-op-1",
+                        session_id="session-1", run_id="run-1", api_request_scope_epoch="new-api:8")
+                    if isinstance(outcome, str):
+                        self.assertEqual(call()["archive_sha256"], hashlib.sha256(raw).hexdigest())
+                    else:
+                        with self.assertRaises(helper.StartupScriptError):
+                            call()
 
     def test_5xx_with_refusal_code_is_still_unknown(self):
         for status in (500, 503):
@@ -579,44 +651,254 @@ class DurableRetirementTests(unittest.TestCase):
         self.assertFalse(list(self.root.iterdir()))
 
 
+@unittest.skipUnless(fcntl is not None and all(shutil.which(tool) for tool in ("bash", "flock", "sync", "sha256sum")), "requires Linux shell CAS tools")
 class RetirementFinalizeTests(unittest.TestCase):
     operation = "b" * 32
+    previous_operation = "a" * 32
+    helper_id = "f" * 64
 
-    def finalize(self, control):
-        activate._finalize_retained_retirement(
-            control, operation_id=self.operation, receipt_raw=b"original",
-            result={"state": "retired"}, terminal={"state": "succeeded"})
+    class _Control:
+        def __init__(self, root, receipt):
+            self.root = Path(root)
+            self.receipt = receipt
+            self.project = "fullmag-retirement-test"
+            self.volume = "fullmag-retirement-test-control"
+            self.namespace = ""
+            self.namespace_registry_sha256 = None
+            self.inspect_calls = []
 
-    def test_live_logger_gets_terminal_only_after_result_and_current(self):
-        control = Mock(namespace="", namespace_registry_sha256=None)
+        def _inspect_operation_helper(self, operation, *, expected_id=None):
+            self.inspect_calls.append((operation, expected_id))
+            if operation != {"receipt": self.receipt}:
+                raise activate.ControlOutcomeUnknown("helper receipt differs")
+            if expected_id not in (None, RetirementFinalizeTests.helper_id):
+                raise activate.ControlOutcomeUnknown("helper identity pin differs")
+            return RetirementFinalizeTests.helper_id
+
+        def _namespace_guard(self, script):
+            return script
+
+        def helper_args(self, script, **_kwargs):
+            return ["bash", "-c", script.replace("/control", str(self.root))]
+
+        def write_bytes(self, relative, payload):
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / "control"
+        self.attempt = self.root / "activation/attempts" / self.operation
+        self.attempt.mkdir(parents=True)
+        self.project = "fullmag-retirement-test"
+        self.volume = "fullmag-retirement-test-control"
+        self.receipt = {
+            "schema": activate.OPERATION_SCHEMA,
+            "phase": "activation",
+            "state": "outcome-unknown-resources-retained",
+            "attempt": self.operation,
+            "compose_project": self.project,
+            "control_volume": self.volume,
+            "helper_container": "fullmag-control-" + self.operation,
+        }
+        self.receipt_raw = activate.canonical(self.receipt) + b"\n"
+        self.result = {"state": "retirement-only", "retirement": {"state": "retired"}}
+        self.terminal = dict(
+            self.receipt,
+            state="failed-confirmed",
+            activation_state="retirement-replayed",
+            retirement_resume_state="succeeded",
+        )
+        self.result_raw = activate.canonical(self.result) + b"\n"
+        self.terminal_raw = activate.canonical(self.terminal) + b"\n"
+        self.previous_terminal = {
+            "schema": activate.OPERATION_SCHEMA,
+            "phase": "activation",
+            "state": "succeeded",
+            "attempt": self.previous_operation,
+            "compose_project": self.project,
+            "control_volume": self.volume,
+        }
+        self.previous_raw = activate.canonical(self.previous_terminal) + b"\n"
+        (self.root / "active").write_bytes(self.operation.encode("ascii") + b"\n")
+        (self.root / "operation.lock").touch()
+        (self.attempt / "receipt.json").write_bytes(self.receipt_raw)
+        old_attempt = self.root / "activation/attempts" / self.previous_operation
+        old_attempt.mkdir()
+        (old_attempt / "terminal.json").write_bytes(self.previous_raw)
+        (self.root / "activation/current.json").write_bytes(self.previous_raw)
+        self.control = self._Control(self.root, self.receipt)
+
+    def _read_control(self, control, relative, *, optional=False, maximum=8 * 1024 * 1024):
+        path = control.root / relative
+        if not path.exists():
+            if optional:
+                return None
+            raise activate.BuildControlError("fixture control record is missing: " + relative)
+        raw = path.read_bytes()
+        if len(raw) > maximum:
+            raise activate.BuildControlError("fixture control record exceeds its byte bound")
+        return raw
+
+    def _finalize(self):
+        kwargs = {
+            "operation_id": self.operation,
+            "receipt_raw": self.receipt_raw,
+            "result": self.result,
+            "terminal": self.terminal,
+        }
+        if "retained_receipt" in inspect.signature(
+            activate._finalize_retained_retirement
+        ).parameters:
+            kwargs["retained_receipt"] = self.receipt
+        activate._finalize_retained_retirement(self.control, **kwargs)
+
+    def test_live_logger_cas_publishes_over_terminal_previous_current_and_keeps_lease(self):
+        commands = []
+        lock = (self.root / "operation.lock").open("rb")
+        self.addCleanup(lock.close)
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+
+        def exec_live_helper(command, *, data=b"", timeout=90, **_kwargs):
+            commands.append(command)
+            self.assertIn(self.helper_id, command)
+            script = command[-1].replace("/control", str(self.root))
+            completed = subprocess.run(
+                ["bash", "-c", script], input=data, capture_output=True, timeout=timeout
+            )
+            return SimpleNamespace(
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+            )
+
         with patch("docker_volume_activation_reconcile._probe_helper_absence", return_value=None), \
-             patch.object(activate, "_ensure_control_record") as publish, \
-             patch.object(activate, "_wait_retirement_lease_release", return_value=True), \
-             patch.object(activate, "bounded_capture") as shell:
-            self.finalize(control)
-        self.assertEqual([call.args[1] for call in publish.call_args_list], [
-            f"activation/attempts/{self.operation}/result.json", "activation/current.json",
-            f"activation/attempts/{self.operation}/terminal.json"])
-        shell.assert_not_called()
+             patch.object(activate, "_read_control_bytes", side_effect=self._read_control), \
+             patch("docker_dev_host.docker_argv", return_value=["docker"]), \
+             patch.object(activate, "bounded_capture", side_effect=exec_live_helper), \
+             patch.object(activate, "_wait_retirement_lease_release", return_value=True):
+            self._finalize()
 
-    def test_current_publication_failure_never_exposes_terminal(self):
-        control = Mock(namespace="", namespace_registry_sha256=None)
-        with patch("docker_volume_activation_reconcile._probe_helper_absence", return_value=None), \
-             patch.object(activate, "_ensure_control_record", side_effect=[None, activate.ControlOutcomeUnknown("injected")]) as publish, \
-             patch.object(activate, "_wait_retirement_lease_release") as wait:
-            with self.assertRaises(activate.ControlOutcomeUnknown):
-                self.finalize(control)
-        self.assertEqual(publish.call_count, 2)
-        wait.assert_not_called()
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(len(self.control.inspect_calls), 2)
+        self.assertEqual(
+            [
+                (self.attempt / "result.json").read_bytes(),
+                (self.root / "activation/current.json").read_bytes(),
+                (self.attempt / "terminal.json").read_bytes(),
+            ],
+            [self.result_raw, self.terminal_raw, self.terminal_raw],
+        )
+        self.assertEqual((self.root / "active").read_bytes(), self.operation.encode("ascii") + b"\n")
+        self.assertNotIn("flock", commands[0][-1])
 
-    def test_missing_logger_with_changed_receipt_never_executes_cas(self):
-        control = Mock(namespace="", namespace_registry_sha256=None)
+    def test_absent_logger_cas_accepts_producer_lf_and_releases_lease(self):
         with patch("docker_volume_activation_reconcile._probe_helper_absence", return_value={"state": "absent"}), \
-             patch.object(activate, "_read_control_bytes", side_effect=[self.operation.encode(), b"changed"]), \
+             patch.object(activate, "_read_control_bytes", side_effect=self._read_control):
+            self._finalize()
+
+        self.assertEqual((self.attempt / "result.json").read_bytes(), self.result_raw)
+        self.assertEqual((self.root / "activation/current.json").read_bytes(), self.terminal_raw)
+        self.assertEqual((self.attempt / "terminal.json").read_bytes(), self.terminal_raw)
+        self.assertFalse((self.root / "active").exists())
+
+    def test_refused_retirement_finalizes_with_lf_and_previous_terminal(self):
+        self.result["retirement"]["state"] = "rejected"
+        self.terminal["activation_state"] = "retirement-refused-recovered"
+        self.terminal["retirement_resume_state"] = "refused"
+        with patch("docker_volume_activation_reconcile._probe_helper_absence", return_value={"state": "absent"}), \
+             patch.object(activate, "_read_control_bytes", side_effect=self._read_control):
+            self._finalize()
+        self.assertFalse((self.root / "active").exists())
+        self.assertEqual((self.attempt / "terminal.json").read_bytes(),
+                         activate.canonical(self.terminal) + b"\n")
+
+    def test_partial_current_publish_is_idempotent_when_target_pointer_is_already_current(self):
+        (self.attempt / "result.json").write_bytes(self.result_raw)
+        (self.root / "activation/current.json").write_bytes(self.terminal_raw)
+        with patch("docker_volume_activation_reconcile._probe_helper_absence", return_value={"state": "absent"}), \
+             patch.object(activate, "_read_control_bytes", side_effect=self._read_control):
+            self._finalize()
+
+        self.assertEqual((self.root / "activation/current.json").read_bytes(), self.terminal_raw)
+        self.assertEqual((self.attempt / "terminal.json").read_bytes(), self.terminal_raw)
+        self.assertFalse((self.root / "active").exists())
+
+    def test_previous_current_must_be_a_terminal_of_this_control_group(self):
+        cases = (
+            ("schema", {"schema": "foreign", "phase": "activation", "state": "succeeded"}),
+            ("phase", {"schema": activate.OPERATION_SCHEMA, "phase": "startup", "state": "succeeded"}),
+            ("state", {"schema": activate.OPERATION_SCHEMA, "phase": "activation", "state": "building"}),
+            ("project", dict(self.previous_terminal, compose_project="foreign")),
+            ("volume", dict(self.previous_terminal, control_volume="foreign")),
+            ("attempt", dict(self.previous_terminal, attempt="not-a-token")),
+        )
+        for label, record in cases:
+            with self.subTest(label=label):
+                raw = activate.canonical(record) + b"\n"
+                (self.root / "activation/current.json").write_bytes(raw)
+                (self.root / "activation/attempts" / self.previous_operation / "terminal.json").write_bytes(raw)
+                with patch("docker_volume_activation_reconcile._probe_helper_absence", return_value={"state": "absent"}), \
+                     patch.object(activate, "_read_control_bytes", side_effect=self._read_control), \
+                     patch.object(activate, "bounded_capture") as shell:
+                    with self.assertRaises(activate.ControlOutcomeUnknown):
+                        self._finalize()
+                shell.assert_not_called()
+                (self.root / "activation/current.json").write_bytes(self.previous_raw)
+                (self.root / "activation/attempts" / self.previous_operation / "terminal.json").write_bytes(self.previous_raw)
+
+    def test_previous_current_must_match_its_per_attempt_terminal_bytes(self):
+        (self.root / "activation/attempts" / self.previous_operation / "terminal.json").write_bytes(b"changed\n")
+        with patch("docker_volume_activation_reconcile._probe_helper_absence", return_value={"state": "absent"}), \
+             patch.object(activate, "_read_control_bytes", side_effect=self._read_control), \
              patch.object(activate, "bounded_capture") as shell:
-            with self.assertRaisesRegex(activate.ControlOutcomeUnknown, "receipt changed"):
-                self.finalize(control)
+            with self.assertRaises(activate.ControlOutcomeUnknown):
+                self._finalize()
         shell.assert_not_called()
+
+    def test_active_receipt_and_current_drift_prevent_finalizer_cas(self):
+        paths = (
+            self.root / "active",
+            self.attempt / "receipt.json",
+            self.root / "activation/current.json",
+        )
+        for path in paths:
+            with self.subTest(path=path.name):
+                original = path.read_bytes()
+                path.write_bytes(b"foreign\n")
+                with patch("docker_volume_activation_reconcile._probe_helper_absence", return_value={"state": "absent"}), \
+                     patch.object(activate, "_read_control_bytes", side_effect=self._read_control), \
+                     patch.object(activate, "bounded_capture") as shell:
+                    with self.assertRaises(activate.ControlOutcomeUnknown):
+                        self._finalize()
+                shell.assert_not_called()
+                path.write_bytes(original)
+
+    def test_cas_rechecks_current_after_observation_before_any_publication(self):
+        script = activate._retirement_cas_script(
+            operation_id=self.operation, active_raw=self.operation.encode() + b"\n",
+            receipt_raw=self.receipt_raw, result_raw=self.result_raw,
+            terminal_raw=self.terminal_raw, current_raw=self.terminal_raw,
+            expected_current_raw=self.previous_raw)
+        (self.root / "activation/current.json").write_bytes(b"changed after observation")
+        completed = subprocess.run(["bash", "-c", script.replace("/control", str(self.root))],
+                                   capture_output=True, timeout=5)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertFalse((self.attempt / "result.json").exists())
+        self.assertFalse((self.attempt / "terminal.json").exists())
+        self.assertTrue((self.root / "active").exists())
+
+    def test_wait_release_accepts_only_single_lf_while_logger_exits(self):
+        reads = [self.operation.encode("ascii") + b"\n", None]
+        with patch.object(activate, "_read_control_bytes", side_effect=reads), \
+             patch.object(activate.time, "sleep"):
+            self.assertTrue(
+                activate._wait_retirement_lease_release(
+                    self.control, operation_id=self.operation, timeout=1
+                )
+            )
 
 
 @unittest.skipUnless(fcntl is not None and all(shutil.which(tool) for tool in ("bash", "flock", "sync", "sha256sum")), "requires Linux shell CAS tools")

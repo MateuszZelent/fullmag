@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   FDM_DISPLAY_CELL_BUDGET,
+  FDM_NATIVE_LAYER_DISPLAY_CELL_BUDGET,
   formatFdmDisplaySamplingSummary,
   resolveFdmDisplaySampling,
   sampleFdmDisplayCellIndices,
@@ -9,6 +10,11 @@ import {
 } from "./fdmDisplaySampling";
 
 describe("FDM display sampling", () => {
+  it("keeps native-layer display sampling bounded separately from the shared grid", () => {
+    expect(FDM_DISPLAY_CELL_BUDGET).toBe(150_000);
+    expect(FDM_NATIVE_LAYER_DISPLAY_CELL_BUDGET).toBe(250_000);
+  });
+
   it("preserves the default display budget while exposing total, samples, and stride", () => {
     expect(FDM_DISPLAY_CELL_BUDGET).toBe(150_000);
     expect(resolveFdmDisplaySampling(300_000)).toEqual({

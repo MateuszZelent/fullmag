@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import json
 import os
 import stat
 import sys
+import traceback
 from pathlib import Path
 from typing import Sequence
 
@@ -13,6 +13,7 @@ from fullmag._progress import emit_progress
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
 from fullmag.model.canonical import canonical_json_sha256
 from fullmag.model._incomplete import IncompletePhysicsError
+from fullmag.runtime.accepted_source_capture import read_material_catalog_stdin
 from fullmag.runtime.loader import load_problem_from_script
 from fullmag.runtime.scene_document import (
     build_builder_from_scene_document,
@@ -33,6 +34,7 @@ from fullmag.runtime.run_config_export import (
     export_run_config as export_run_config,
 )
 from fullmag.runtime.script_builder import (
+    PinnedFemMeshSourceOutsideRoot,
     export_builder_draft,
     render_scene_document_as_script,
     rewrite_loaded_problem_script,
@@ -40,6 +42,33 @@ from fullmag.runtime.script_builder import (
 
 
 MAX_SOURCE_SNAPSHOT_BYTES = 1024 * 1024
+SCRIPT_LOAD_REJECTION_SCHEMA = "fullmag.script-load-rejection.v1"
+MAX_SCRIPT_LOAD_REJECTION_MESSAGE_CHARS = 1024
+
+
+class ScriptLoadRejected(Exception):
+    """The selected script or its pinned mesh is invalid before admission."""
+
+    def __init__(self, cause: Exception, script_path: Path) -> None:
+        self.cause = cause
+        self.script_path = script_path.resolve()
+        super().__init__(f"{type(cause).__name__}: {cause}")
+
+    def envelope(self) -> dict[str, object]:
+        script_line = None
+        for frame in traceback.extract_tb(self.cause.__traceback__):
+            if Path(frame.filename).resolve() == self.script_path:
+                script_line = frame.lineno
+        message = str(self.cause).strip() or type(self.cause).__name__
+        if len(message) > MAX_SCRIPT_LOAD_REJECTION_MESSAGE_CHARS:
+            message = message[: MAX_SCRIPT_LOAD_REJECTION_MESSAGE_CHARS - 3] + "..."
+        return {
+            "schema": SCRIPT_LOAD_REJECTION_SCHEMA,
+            "code": "script_load_failed",
+            "error_type": type(self.cause).__name__,
+            "message": message,
+            "script_line": script_line,
+        }
 
 
 def _write_executed_problem_ir_identity(problem_ir: dict[str, object]) -> None:
@@ -62,17 +91,24 @@ def _benchmark_problem_ir_identity(problem_ir: dict[str, object]) -> dict[str, o
     used to compare those runs.
     """
 
-    normalized = copy.deepcopy(problem_ir)
+    # Copy only the dictionaries on the edited path: the result is hashed,
+    # never mutated, and a deep copy of a production mesh IR costs tens of
+    # seconds on every export.
+    normalized = dict(problem_ir)
     problem_meta = normalized.get("problem_meta")
     if isinstance(problem_meta, dict):
         runtime_metadata = problem_meta.get("runtime_metadata")
         if isinstance(runtime_metadata, dict):
+            runtime_metadata = dict(runtime_metadata)
             runtime_metadata.pop("runtime_device_override", None)
+            normalized["problem_meta"] = {**problem_meta, "runtime_metadata": runtime_metadata}
     return normalized
 
 
 def _write_json(value: object) -> None:
-    json.dump(value, sys.stdout)
+    # ``json.dumps`` uses the C encoder; streaming ``json.dump`` falls back to
+    # the pure-Python encoder.  Both produce the same text.
+    sys.stdout.write(json.dumps(value))
     sys.stdout.write("\n")
 
 
@@ -106,6 +142,8 @@ def _load_script(args: argparse.Namespace, *, lightweight_assets: bool):
         Path(args.script),
         lightweight_assets=lightweight_assets,
         source_bytes=_read_source_snapshot(getattr(args, "source_snapshot", None)),
+        material_catalog=getattr(args, "material_catalog", None),
+        material_catalog_unavailable=getattr(args, "material_catalog_unavailable", False),
     )
 
 
@@ -178,6 +216,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-geometry-assets",
         action="store_true",
         help="Export a lightweight IR without materializing geometry assets.",
+    )
+    export_run_config.add_argument(
+        "--runtime-flags-only",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
 
     rewrite_script = subparsers.add_parser(
@@ -262,6 +305,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Execution-only: realize canonical geometry and antenna lead inputs without running a solver. Default export stays geometry-light.",
     )
 
+    export_scene_config.add_argument(
+        "--accepted-preparation-json",
+        help=argparse.SUPPRESS,
+    )
+
     read_state = subparsers.add_parser(
         "read-magnetization-state",
         help="Load a magnetization state file and print canonical JSON values.",
@@ -282,12 +330,30 @@ def build_parser() -> argparse.ArgumentParser:
     convert_state.add_argument("--input-dataset", help="Optional dataset path for zarr/h5 inputs.")
     convert_state.add_argument("--output-dataset", default="values", help="Dataset path for zarr/h5 outputs.")
     convert_state.add_argument("--sample", type=int, default=-1, help="Sample index for [T,N,3] inputs.")
+    for authored in (export_ir, export_run_config, rewrite_script, export_builder, export_scene, rewrite_scene):
+        authored.add_argument("--material-catalog-stdin", action="store_true", help=argparse.SUPPRESS)
+
+    subparsers.add_parser(
+        "ready-antennas",
+        help="Print the ready antennas of fullmag.antennas (function, summary, arguments) as JSON.",
+    )
+    rebuild_antenna = subparsers.add_parser(
+        "rebuild-ready-antenna",
+        help="Call a ready antenna and print the mask terms it returns as JSON.",
+    )
+    rebuild_antenna.add_argument(
+        "--function", required=True, help="Qualified name, for example fullmag.antennas.gaussian_k_source."
+    )
+    rebuild_antenna.add_argument("--arguments-json", required=True, help="JSON object of numeric arguments.")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if getattr(args, "material_catalog_stdin", False):
+        args.material_catalog = read_material_catalog_stdin()
+        args.material_catalog_unavailable = args.material_catalog is None
 
     if args.command == "check-syntax":
         script_path = Path(args.script)
@@ -302,10 +368,38 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write_json(_inspect_script(args.script))
         return 0
 
+    if args.command == "ready-antennas":
+        from fullmag.antennas import registry_ir
+
+        _write_json(registry_ir())
+        return 0
+
+    if args.command == "rebuild-ready-antenna":
+        from fullmag.antennas import rebuild_terms_ir
+
+        try:
+            arguments = json.loads(args.arguments_json)
+            if not isinstance(arguments, dict):
+                raise ValueError("arguments must be a JSON object of numbers")
+            terms = rebuild_terms_ir(args.function, arguments)
+        except (TypeError, ValueError) as error:
+            # A rejected call (unknown antenna or argument, bad value): exit 3 with the reason.
+            _write_json({"schema": "fullmag.ready-antenna-rejection.v1", "message": str(error)})
+            return 3
+        _write_json({"terms": terms})
+        return 0
+
     if args.command in {"export-scene-ir", "export-scene-config"}:
         emit_progress("Lowering SceneDocument through the canonical Python DSL")
         scene_document = json.loads(Path(args.scene_json).read_text(encoding="utf-8"))
         if args.command == "export-scene-config":
+            accepted_preparation = None
+            if args.accepted_preparation_json:
+                with Path(args.accepted_preparation_json).open("rb") as handoff:
+                    payload = handoff.read(8 * 1024 * 1024 + 1)
+                if len(payload) > 8 * 1024 * 1024:
+                    raise ValueError("bound preparation handoff exceeds 8 MiB")
+                accepted_preparation = json.loads(payload)
             execution_config = scene_document_to_execution_config(
                 scene_document,
                 requested_backend=args.backend,
@@ -314,6 +408,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 requested_mode=args.mode,
                 source_root=args.asset_root,
                 materialize_geometry_assets=args.materialize_geometry_assets,
+                _accepted_preparation=accepted_preparation,
             )
             _write_json(execution_config)
             emit_progress("SceneDocument execution config export completed")
@@ -362,6 +457,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "export-ir":
             _write_json(ir)
             return 0
+        if args.runtime_flags_only:
+            problem_meta = ir.get("problem_meta")
+            runtime_metadata = (
+                problem_meta.get("runtime_metadata")
+                if isinstance(problem_meta, dict)
+                else None
+            )
+            runtime_flags: object = runtime_metadata
+            if isinstance(runtime_metadata, dict):
+                runtime_flags = {
+                    key: runtime_metadata[key]
+                    for key in ("interactive_session_requested", "wait_for_solve")
+                    if key in runtime_metadata
+                }
+            _write_json(
+                {"ir": {"problem_meta": {"runtime_metadata": runtime_flags}}}
+            )
+            emit_progress("Runtime flags exported")
+            return 0
         _write_json(
             export_run_config(
                 loaded,
@@ -402,21 +516,38 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "export-builder-draft":
         emit_progress(f"Loading Python script {Path(args.script).name}")
-        loaded = load_problem_from_script(Path(args.script), lightweight_assets=True)
+        loaded = _load_script(args, lightweight_assets=True)
         print(json.dumps(export_builder_draft(loaded)))
         emit_progress("Builder draft exported")
         return 0
 
     if args.command == "export-scene-document":
         emit_progress(f"Loading Python script {Path(args.script).name}")
-        loaded = _load_script(args, lightweight_assets=True)
-        print(json.dumps(build_scene_document_from_builder(export_builder_draft(loaded))))
+        source_bytes = _read_source_snapshot(getattr(args, "source_snapshot", None))
+        try:
+            loaded = load_problem_from_script(
+                Path(args.script),
+                lightweight_assets=True,
+                source_bytes=source_bytes,
+                material_catalog=getattr(args, "material_catalog", None),
+                material_catalog_unavailable=getattr(args, "material_catalog_unavailable", False),
+            )
+        except Exception as error:
+            # The script itself failed for these exact bytes; the caller has
+            # changed nothing yet.  The snapshot read above and the export
+            # below retain their own error classification.
+            raise ScriptLoadRejected(error, Path(args.script)) from error
+        try:
+            draft = export_builder_draft(loaded)
+        except PinnedFemMeshSourceOutsideRoot as error:
+            raise ScriptLoadRejected(error, Path(args.script)) from error
+        print(json.dumps(build_scene_document_from_builder(draft)))
         emit_progress("Scene document exported")
         return 0
 
     if args.command == "rewrite-scene-document":
         emit_progress(f"Loading Python script {Path(args.script).name}")
-        loaded = load_problem_from_script(Path(args.script), lightweight_assets=True)
+        loaded = _load_script(args, lightweight_assets=True)
         scene_document = json.loads(Path(args.scene_json).read_text(encoding="utf-8"))
         _ = build_builder_from_scene_document(scene_document)
         emit_progress("Rendering canonical Python from SceneDocument")
@@ -536,6 +667,14 @@ def _run_cli(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
         return main(arguments)
+    except ScriptLoadRejected as rejection:
+        traceback.print_exception(
+            type(rejection.cause), rejection.cause, rejection.cause.__traceback__
+        )
+        # The envelope is the last stdout line, after anything the script printed.
+        print()
+        print(json.dumps(rejection.envelope()))
+        return 2
     except IncompletePhysicsError:
         if arguments[:1] != ["render-scene-document"]:
             raise

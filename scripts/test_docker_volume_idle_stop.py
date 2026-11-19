@@ -71,8 +71,8 @@ class IdleStopFixture:
         self.document = {
             "name": PROJECT,
             "services": {
-                "backend": {"environment": self.environment},
-                "frontend": {},
+                "backend": {"image": IMAGE, "environment": self.environment},
+                "frontend": {"image": IMAGE},
             },
         }
         self.previous = {
@@ -85,8 +85,12 @@ class IdleStopFixture:
             "backend_container": BACKEND_ID,
             "frontend_container": FRONTEND_ID,
         }
-        self.control = Mock(project=PROJECT, volume="fullmag-control-master", identity=self.identity)
+        # A group that never quarantined its control namespace records "".
+        self.control = Mock(
+            project=PROJECT, volume="fullmag-control-master", identity=self.identity, namespace="",
+        )
         self.control.read.side_effect = self.read
+        self.control.read_bytes.side_effect = self.read_bytes
         self.control.write.side_effect = self.write
         self.control.operation.side_effect = lambda *args, **kwargs: _Operation(self.events)
 
@@ -104,6 +108,11 @@ class IdleStopFixture:
         if optional:
             return None
         raise AssertionError(f"unexpected control read: {relative}")
+
+    def read_bytes(self, relative, *, optional=False):
+        self.events.append(("read_bytes", relative, optional))
+        value = self.read(relative, optional=optional)
+        return None if value is None else json.dumps(value, sort_keys=True).encode()
 
     def write(self, relative, value):
         self.events.append(("write", relative))
@@ -129,7 +138,19 @@ class IdleStopFixture:
                 },
             },
             "State": state,
-            "HostConfig": {},
+            "Mounts": [{
+                "Destination": "/opt/fullmag/runtime-control",
+                "Type": "volume",
+                "Name": "fullmag-control-master",
+                "RW": True,
+            }],
+            "HostConfig": {"Mounts": [{
+                "Target": "/opt/fullmag/runtime-control",
+                "Type": "volume",
+                "Source": "fullmag-control-master",
+                "ReadOnly": False,
+                "VolumeOptions": {"Subpath": "runtime-control"},
+            }]},
         }
 
     def stopped_backend(self):
@@ -143,13 +164,16 @@ class IdleStopFixture:
 
     def text(self, *args, **kwargs):
         if args[:2] == ("image", "inspect"):
-            return json.dumps([{"Config": {}}])
+            return json.dumps([{"Id": IMAGE, "Config": {}}])
         if args[:1] == ("inspect",):
-            identifier = args[1]
-            if identifier == BACKEND_ID and self.backend_stopped:
-                return json.dumps([self.stopped_backend()])
-            service = "backend" if identifier == BACKEND_ID else "frontend"
-            return json.dumps([self.actual(service)])
+            records = []
+            for identifier in args[1:]:
+                if identifier == BACKEND_ID and self.backend_stopped:
+                    records.append(self.stopped_backend())
+                else:
+                    service = "backend" if identifier == BACKEND_ID else "frontend"
+                    records.append(self.actual(service))
+            return json.dumps(records)
         if args[:1] == ("exec",):
             return json.dumps({"status": "ok", "active_session": False})
         raise AssertionError(f"unexpected docker text: {args}")
@@ -167,14 +191,30 @@ class IdleStopFixture:
             raise AssertionError("idle stop must never start a service")
         raise AssertionError(f"unexpected docker capture: {args}")
 
+    def stop_capture(self, *args, **kwargs):
+        if args[:2] == ("volume", "inspect") and args[2] == "fullmag-control-master":
+            self.events.append(("volume-inspect", args[2]))
+            return SimpleNamespace(stdout=json.dumps([{
+                "Name": "fullmag-control-master",
+                "Driver": "local",
+                "Options": {},
+                "Labels": {"com.fullmag.compose.project": PROJECT},
+            }]).encode())
+        raise AssertionError(f"unexpected terminal-receipt preflight capture: {args}")
+
 
 class DockerVolumeIdleStopTests(unittest.TestCase):
     def _patches(self, fixture, drain):
         import docker_volume_stop_unadmitted as stop
+        import docker_volume_cancelled_activation_guard as cancelled_guard
 
         fixture.control.read.side_effect = fixture.read
         finish = patch.object(dev, "_finish")
         patchers = (
+            # This test covers the idle-stop boundary with no cancelled
+            # activation recovery record. The control-volume helper read is
+            # represented as an authenticated optional absence.
+            patch.object(cancelled_guard, "_read_control_bytes", return_value=None),
             patch.object(dev, "require_host"),
             patch.object(docker_dev, "_select_source", return_value=(SOURCE, {"runtime_root": Path("/state")})),
             patch.object(docker_dev, "_compose_identity", return_value=fixture.identity),
@@ -196,6 +236,7 @@ class DockerVolumeIdleStopTests(unittest.TestCase):
             patch.object(dev, "_read_cancelled_activation_bytes", return_value=None),
             patch.object(docker_backend_volume_cache, "validate_container"),
             patch.object(dev, "_assert_private_restart_network"),
+            patch.object(stop, "docker_capture", side_effect=fixture.stop_capture),
             patch.object(
                 stop,
                 "_read_terminal_process_receipt",
@@ -219,6 +260,7 @@ class DockerVolumeIdleStopTests(unittest.TestCase):
         finish = entered[-1]
         recreate = entered[-2]
         self.assertIsNone(result)
+        self.assertIn(("read_bytes", "prepared-unclaimed/current.json", True), fixture.events)
         self.assertTrue(fixture.control.operation.called)
         drain_index = fixture.events.index(("write", "development/attempts/" + ATTEMPT + "/iteration/backend-drain.json"))
         exit_index = next(index for index, event in enumerate(fixture.events) if event[0] == "exit")
@@ -229,6 +271,24 @@ class DockerVolumeIdleStopTests(unittest.TestCase):
         self.assertFalse(any(event[0] == "start" for event in fixture.events))
         recreate.assert_not_called()
         finish.assert_not_called()
+
+    def test_headless_idle_stop_drains_backend_without_starting_frontend(self):
+        fixture = IdleStopFixture()
+        fixture.frontend_stopped = True
+        fixture.args.headless = True
+        fixture.args.config_sha256 = hashlib.sha256(dev.canonical(fixture.document)).hexdigest()
+        with ExitStack() as stack:
+            for patcher in self._patches(fixture, (b'{"state":"stopped"}\n', {"state": "stopped"})):
+                stack.enter_context(patcher)
+            dev.stop_idle(fixture.args)
+        self.assertTrue(fixture.backend_stopped)
+        self.assertTrue(fixture.frontend_stopped)
+        stops = [event for event in fixture.events if event[0] == "stop"]
+        self.assertEqual(len(stops), 1)
+        self.assertIn(BACKEND_ID, stops[0][1])
+        receipt = next(event[1] for event in fixture.events if event[0] == "exit")
+        self.assertEqual(receipt['ui_mode'], 'headless')
+        self.assertTrue(receipt['idle_backend_stopped'])
 
     def test_unknown_drain_fails_closed_without_start_or_finish(self):
         fixture = IdleStopFixture()
@@ -246,6 +306,35 @@ class DockerVolumeIdleStopTests(unittest.TestCase):
         self.assertFalse(any(event[0] == "start" for event in fixture.events))
         recreate.assert_not_called()
         finish.assert_not_called()
+
+    def test_terminal_receipt_preflight_runs_before_lease_and_any_stop(self):
+        fixture = IdleStopFixture()
+        fixture.args.config_sha256 = hashlib.sha256(dev.canonical(fixture.document)).hexdigest()
+        patches = self._patches(fixture, (b'{"state":"stopped"}\n', {"state": "stopped"}))
+        with ExitStack() as stack:
+            for patcher in patches:
+                stack.enter_context(patcher)
+            dev.stop_idle(fixture.args)
+        inspect_index = fixture.events.index(("volume-inspect", "fullmag-control-master"))
+        enter_index = fixture.events.index(("enter", None))
+        first_stop = next(index for index, event in enumerate(fixture.events) if event[0] == "stop")
+        self.assertLess(inspect_index, enter_index)
+        self.assertLess(enter_index, first_stop)
+
+    def test_invalid_runtime_control_namespace_fails_before_lease_or_stop(self):
+        fixture = IdleStopFixture()
+        fixture.args.config_sha256 = hashlib.sha256(dev.canonical(fixture.document)).hexdigest()
+        fixture.control.namespace = "namespaces/not-a-token"
+        patches = self._patches(fixture, (b'{"state":"stopped"}\n', {"state": "stopped"}))
+        import docker_volume_stop_unadmitted as stop
+        with self.assertRaisesRegex(stop.StopUnadmittedError, "namespace is invalid"):
+            with ExitStack() as stack:
+                for patcher in patches:
+                    stack.enter_context(patcher)
+                dev.stop_idle(fixture.args)
+        self.assertFalse(fixture.control.operation.called)
+        self.assertFalse(any(event[0] in {"stop", "start", "enter"} for event in fixture.events))
+        self.assertFalse(fixture.frontend_stopped or fixture.backend_stopped)
 
 
 if __name__ == "__main__":

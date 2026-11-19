@@ -51,7 +51,9 @@ impl NvmlProbeInconclusive {
         }
     }
 
-    const fn is_retryable(self) -> bool {
+    /// Whether this outcome is an absent observation rather than evidence
+    /// about the device; such an outcome never proves a partition change.
+    pub(crate) const fn is_retryable(self) -> bool {
         matches!(
             self,
             Self::DeadlineExpired

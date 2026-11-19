@@ -1,3 +1,4 @@
+import { CONTROL_ROOM_JSON_BODY_LIMIT_BYTES } from "./src/kernel/api/transportLimits";
 import type { NextConfig } from "next";
 import { realpathSync } from "node:fs";
 import path from "node:path";
@@ -7,6 +8,14 @@ function controlRoomApiProxyTarget(): string {
     process.env.FULLMAG_API_PROXY_TARGET ??
     process.env.FULLMAG_API_URL ??
     "http://localhost:8081"
+  ).replace(/\/+$/, "");
+}
+
+export function controlRoomDocsProxyTarget(): string {
+  return (
+    process.env.FULLMAG_DOCS_PROXY_TARGET ??
+    process.env.FULLMAG_DOCS_URL ??
+    "https://fullmag.mzelent.pl"
   ).replace(/\/+$/, "");
 }
 
@@ -135,17 +144,27 @@ export function resolveDockerDevWatchPollingMs(
   return pollingMs;
 }
 
+// The frontend launcher selects `native` when the source bind is a local Linux
+// filesystem that delivers inotify events (for example a WSL ext4 checkout);
+// then nothing polls the tree.
 export function resolveDockerDevWatchOptions(
   existingIgnored: unknown,
   rawPollingMs?: string,
+  watchMode = "polling",
 ): {
-  poll: number;
+  poll?: number;
   ignored: DockerDevWatchIgnored;
 } {
-  return {
-    poll: resolveDockerDevWatchPollingMs(rawPollingMs),
-    ignored: composeDockerDevIgnored(existingIgnored),
-  };
+  const ignored = composeDockerDevIgnored(existingIgnored);
+  if (watchMode === "native") {
+    return { ignored };
+  }
+  if (watchMode !== "polling") {
+    throw new Error(
+      `FULLMAG_WATCHPACK_MODE must be "polling" or "native"; got ${watchMode}`,
+    );
+  }
+  return { poll: resolveDockerDevWatchPollingMs(rawPollingMs), ignored };
 }
 
 function pathEquals(left: string, right: string): boolean {
@@ -292,10 +311,70 @@ const allowedDevOrigins = [
  * rejects `headers()` when `output: "export"` is set, and the desktop shell
  * is not a browser-hosted document anyway.
  */
+/** Same window and variable as the API's instance discovery (ADR 0069). */
+const INSTANCE_DISCOVERY_PORTS_ENV = "FULLMAG_INSTANCE_DISCOVERY_PORTS";
+const DEFAULT_INSTANCE_DISCOVERY_PORTS = { first: 3197, last: 3260 };
+const MAX_INSTANCE_DISCOVERY_PORTS = 256;
+
+export function resolveInstanceDiscoveryPorts(
+  value: string | undefined,
+): { first: number; last: number } {
+  if (value === undefined || value.trim() === "") return DEFAULT_INSTANCE_DISCOVERY_PORTS;
+  const match = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(value);
+  const first = match ? Number(match[1]) : Number.NaN;
+  const last = match ? Number(match[2]) : Number.NaN;
+  if (
+    !Number.isInteger(first) ||
+    !Number.isInteger(last) ||
+    first < 1 ||
+    last > 65_535 ||
+    last < first ||
+    last - first + 1 > MAX_INSTANCE_DISCOVERY_PORTS
+  ) {
+    throw new Error(`${INSTANCE_DISCOVERY_PORTS_ENV} must be an ascending window of at most 256 ports`);
+  }
+  return { first, last };
+}
+
+/**
+ * Exactly the loopback origins of the discovery window: they may embed this
+ * Control Room as an instance tab, and this Control Room may frame them
+ * (ADR 0069). Other local servers and remote pages cannot frame it.
+ */
+export function instanceTabFrameSources(value: string | undefined): string[] {
+  const { first, last } = resolveInstanceDiscoveryPorts(value);
+  const origins: string[] = ["'self'"];
+  for (let port = first; port <= last; port += 1) {
+    origins.push(`http://127.0.0.1:${port}`, `http://localhost:${port}`);
+  }
+  return origins;
+}
+
+export const INSTANCE_TAB_FRAME_ANCESTORS = instanceTabFrameSources(
+  process.env[INSTANCE_DISCOVERY_PORTS_ENV],
+);
+
+/**
+ * The same window for the client: an embedded Control Room accepts tab
+ * visibility messages only from these loopback origins (ADR 0069).
+ */
+export function instanceTabPortsClientValue(value: string | undefined): string {
+  const { first, last } = resolveInstanceDiscoveryPorts(value);
+  return `${first}-${last}`;
+}
+
+/**
+ * Addresses of Control Room tabs, served by the workspace page. A static
+ * export has no rewrites; its server answers unknown paths with the root
+ * page, which renders the same workspace.
+ */
+export const TAB_ROUTE_SOURCES = ["/home", "/session/:slug", "/instance/:port"] as const;
+
 function securityHeaders() {
   return [
     { key: "X-Content-Type-Options", value: "nosniff" },
-    { key: "X-Frame-Options", value: "SAMEORIGIN" },
+    // No X-Frame-Options: it cannot list origins, and `frame-ancestors` below
+    // supersedes it in every current browser (ADR 0069).
     { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
     {
       key: "Permissions-Policy",
@@ -305,13 +384,19 @@ function securityHeaders() {
       key: "Content-Security-Policy",
       value: [
         "default-src 'self'",
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:",
-        "style-src 'self' 'unsafe-inline'",
-        "img-src 'self' data: blob:",
-        "font-src 'self' data:",
+        // Bundled Sphinx documentation pages load MathJax from jsDelivr,
+        // Google Fonts stylesheets/glyphs, and the README logo asset.
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://cdn.jsdelivr.net",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "img-src 'self' data: blob: https://raw.githubusercontent.com",
+        "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
         "connect-src 'self' http: https: ws: wss:",
         "worker-src 'self' blob:",
-        "frame-ancestors 'self'",
+        // Session tabs show other local instances in frames (ADR 0069).
+        `frame-src ${INSTANCE_TAB_FRAME_ANCESTORS.join(" ")}`,
+        // Another local instance may show this one in a session tab (ADR 0069);
+        // remote pages still cannot frame the Control Room.
+        `frame-ancestors ${INSTANCE_TAB_FRAME_ANCESTORS.join(" ")}`,
         "base-uri 'self'",
         "object-src 'none'",
       ].join("; "),
@@ -319,9 +404,23 @@ function securityHeaders() {
   ];
 }
 
+// Bounded transport wait for the existing synchronous closed-loop Mesh command:
+// render 30s + source capture 90s + accepted frontier 1800s + one 250ms poll.
+// These are owner phase budgets, not a hard maximum for locks/CPU/filesystem work.
+export const CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS = (30 + 90 + 1800) * 1000 + 250;
+
 const nextConfig: NextConfig = {
+  experimental: {
+    proxyTimeout: CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS,
+    proxyClientMaxBodySize: CONTROL_ROOM_JSON_BODY_LIMIT_BYTES,
+  },
   allowedDevOrigins,
   distDir,
+  env: {
+    FULLMAG_INSTANCE_TAB_PORTS: instanceTabPortsClientValue(
+      process.env[INSTANCE_DISCOVERY_PORTS_ENV],
+    ),
+  },
   // R3F v9 force-loses WebGL during React development strict remounts.
   reactStrictMode: false,
   ...(staticExport
@@ -346,11 +445,19 @@ const nextConfig: NextConfig = {
         },
         async rewrites() {
           const apiTarget = controlRoomApiProxyTarget();
+          const docsTarget = controlRoomDocsProxyTarget();
           return [
             {
               source: "/v2/:path*",
               destination: `${apiTarget}/v2/:path*`,
             },
+            {
+              source: "/docs/:path*",
+              destination: `${docsTarget}/:path*`,
+            },
+            // Tab addresses (src/kernel/layout/tabRoutes.ts) all serve the
+            // workspace page; the page selects the tab from its address.
+            ...TAB_ROUTE_SOURCES.map((source) => ({ source, destination: "/workspace" })),
           ];
         },
       }),
@@ -358,7 +465,11 @@ const nextConfig: NextConfig = {
     if (dev && process.env.FULLMAG_DOCKER_FRONTEND === "dev") {
       config.watchOptions = {
         ...config.watchOptions,
-        ...resolveDockerDevWatchOptions(config.watchOptions?.ignored),
+        ...resolveDockerDevWatchOptions(
+          config.watchOptions?.ignored,
+          undefined,
+          process.env.FULLMAG_WATCHPACK_MODE ?? "polling",
+        ),
       };
     }
     return config;

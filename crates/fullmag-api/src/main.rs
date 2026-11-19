@@ -1,7 +1,7 @@
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{DefaultBodyLimit, Query, State};
-use axum::http::header::CONTENT_TYPE;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::header::{CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, TRANSFER_ENCODING};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Version};
 #[cfg(not(feature = "swagger-ui"))]
 use axum::response::Html;
 use axum::response::{IntoResponse, Response};
@@ -38,11 +38,17 @@ mod accepted_fem_state;
 mod accepted_fem_gpu_state;
 #[path = "accepted_fem_study_worker.rs"]
 mod accepted_fem_study_worker;
+mod accepted_fem_frequency_response_worker;
 mod accepted_antenna_inspection_worker;
+use accepted_study_worker::accepted_solver_profile;
 mod accepted_study_worker;
+mod accepted_live_demand;
+mod accepted_run_performance;
 mod accepted_observation_spool;
+mod live_field_demand;
 mod accepted_field_binary;
 mod accepted_project_storage;
+mod study_execution_contract;
 mod analysis;
 mod artifacts;
 mod assets;
@@ -50,10 +56,12 @@ mod build_info;
 mod coordinator_persistence;
 pub(crate) mod compute_operator_env;
 mod development_accepted_restore;
+mod isolated_snapshot_restore;
 mod development_handoff_validation;
 mod development_owner_control;
 mod development_consumer_readiness;
 mod error;
+mod material_library;
 mod fdm_planar_grid_overlay;
 mod feature_flags;
 mod fem_cross_section;
@@ -65,14 +73,24 @@ mod field_projection;
 mod field_render_png;
 mod field_slice;
 mod field_store;
+mod instance_discovery;
+mod imported_observation_retirement;
 mod live_command_journal;
+mod live_compute_request;
 mod live_execution_binding;
+mod live_geometry_mesh_build;
 mod accepted_field_materialization;
 mod accepted_field_materialization_worker;
+mod live_accepted_continuation;
+mod live_stage_initial_state;
 mod live_accepted_execution;
 mod live_retirement;
 mod live_accepted_projection;
 mod live_scene_preparation;
+mod live_authored_initial_state;
+mod live_authored_damping;
+mod prepared_observation_adoption;
+mod prepared_observation_bundle;
 mod docker_startup;
 mod openapi_v2;
 mod orientation_color;
@@ -89,6 +107,8 @@ mod script;
 mod script_check;
 mod session;
 mod session_persistence;
+mod shared_json;
+mod shared_mesh;
 mod types;
 
 use artifacts::*;
@@ -711,7 +731,7 @@ fn current_live_realtime_change_revision_changed(
         RealtimeResourceName::Artifacts => previous.artifacts_revision != change.revision,
         RealtimeResourceName::Logs => previous.engine_log_revision != change.revision,
         RealtimeResourceName::Diagnostics => match change.resource_id.as_deref() {
-            Some("cpu" | "gpu") => true,
+            Some("cpu" | "gpu" | "performance") => true,
             _ => previous.solver_profile_revision != change.revision,
         },
         RealtimeResourceName::Mesh => {
@@ -2053,7 +2073,7 @@ pub(crate) async fn publish_current_live_realtime_batch_changed(
     .await
 }
 
-async fn publish_current_live_realtime_batch_changed_since(
+pub(crate) async fn publish_current_live_realtime_batch_changed_since(
     state: &AppState,
     realtime_state: &CurrentLiveRealtimeState,
     previous_revisions: Option<&RealtimeResourceRevisionMap>,
@@ -2299,7 +2319,7 @@ async fn publish_current_live_realtime_scalar_sample_now(
     .await
 }
 
-async fn queue_current_live_realtime_scalar_sample(
+pub(crate) async fn queue_current_live_realtime_scalar_sample(
     state: &AppState,
     sample: PendingRealtimeScalarSample,
 ) -> Result<(), ApiError> {
@@ -2433,7 +2453,7 @@ fn realtime_qos_lane(change: &RealtimeResourceChange) -> RealtimeQosLane {
     }
 
     if matches!(change.resource, RealtimeResourceName::Diagnostics)
-        && matches!(change.resource_id.as_deref(), Some("cpu" | "gpu"))
+        && matches!(change.resource_id.as_deref(), Some("cpu" | "gpu" | "performance"))
     {
         return RealtimeQosLane::DiagnosticsSummary;
     }
@@ -2619,6 +2639,7 @@ async fn main() {
         bootstrap_started.elapsed().as_millis()
     );
     let state = Arc::new(AppState {
+        api_started_at: bootstrap_started,
         development_admission: Default::default(),
         development_restored_authoring: Default::default(),
         development_backend: router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::from_environment(),
@@ -2660,6 +2681,8 @@ async fn main() {
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
         current_visualization_client_acks: Arc::new(RwLock::new(BTreeMap::new())),
+        current_session_clients: Arc::new(RwLock::new(BTreeMap::new())),
+        current_session_clients_revision: Arc::new(AtomicU64::new(0)),
         current_visualization_client_ack_revision: Arc::new(AtomicU64::new(0)),
         current_workspace_selection: Arc::new(RwLock::new(CurrentWorkspaceSelection::default())),
         current_workspace_ribbon: Arc::new(RwLock::new(CurrentWorkspaceRibbon::default())),
@@ -2675,23 +2698,121 @@ async fn main() {
         frozen_spins_previews: Arc::new(RwLock::new(Default::default())),
     });
 
+    // Observe the supervisor-owned fence before any startup path can restore or
+    // project accepted work. A present or unreadable fence selects a cold API
+    // that serves only process and runtime diagnostics.
+    let mut runtime_diagnostic_only = state.development_admission.observe_runtime_failure_fence();
+    let mut diagnostic_reason = runtime_diagnostic_only.then_some("runtime-failure-fence");
     eprintln!(
         "[fullmag-api] bootstrap phase=app_state state=complete elapsed_ms={}",
         bootstrap_started.elapsed().as_millis()
     );
-    development_accepted_restore::restore_before_listen(&state)
-        .await
-        .expect("private accepted-run reattach must succeed before API startup");
-
-    router_v2::handlers::platform::development_restore_input::restore_before_listen(state.as_ref())
-        .await
-        .expect("private development authoring restore must succeed before API startup");
-
-    live_accepted_projection::spawn(state.clone());
+    if !runtime_diagnostic_only {
+        if let Err(error) = isolated_snapshot_restore::restore_before_listen(&state).await {
+            eprintln!("[fullmag-api] startup failure phase=isolated-snapshot-restore error={error:#}");
+            state.development_admission.latch_runtime_failure(
+                "Isolated snapshot initialization failed. API remains available; inspect the backend log for the cause. No task was replayed.",
+            );
+            runtime_diagnostic_only = true;
+            diagnostic_reason = Some("isolated-snapshot-restore-failed");
+        }
+    }
+    if !runtime_diagnostic_only {
+        if let Err(error) = development_accepted_restore::restore_before_listen(&state).await {
+            eprintln!("[fullmag-api] startup failure phase=accepted-run-restore error={error:#}");
+            state.development_admission.latch_runtime_failure(
+                "Accepted run initialization failed. API remains available; inspect the backend log for the cause. No task was replayed.",
+            );
+            runtime_diagnostic_only = true;
+            diagnostic_reason = Some("accepted-run-restore-failed");
+        }
+    }
+    if !runtime_diagnostic_only {
+        if let Err(error) =
+            router_v2::handlers::platform::development_restore_input::restore_before_listen(
+                state.as_ref(),
+            )
+            .await
+        {
+            eprintln!(
+                "[fullmag-api] startup failure phase=development-authoring-restore error={error:#}"
+            );
+            state.development_admission.latch_runtime_failure(
+                "Workspace initialization failed. API remains available; inspect the backend log for the cause. No task was replayed.",
+            );
+            runtime_diagnostic_only = true;
+            diagnostic_reason = Some("development-authoring-restore-failed");
+        }
+    }
 
     let (owner_shutdown_tx, owner_shutdown_rx) = tokio::sync::oneshot::channel();
-    let owner_control = development_owner_control::prepare(state.clone(), owner_shutdown_tx)
-        .expect("private development owner configuration must be valid before API startup");
+    let owner_control = if runtime_diagnostic_only {
+        drop(owner_shutdown_tx);
+        None
+    } else {
+        match development_owner_control::prepare(state.clone(), owner_shutdown_tx) {
+            Ok(control) => control,
+            Err(error) => {
+                eprintln!(
+                    "[fullmag-api] startup failure phase=development-owner-prepare error={error:#}"
+                );
+                state.development_admission.latch_runtime_failure(
+                    "Runtime control initialization failed. API remains available; inspect the backend log for the cause. No task was replayed.",
+                );
+                runtime_diagnostic_only = true;
+                diagnostic_reason = Some("development-owner-prepare-failed");
+                None
+            }
+        }
+    };
+
+    let port: u16 = std::env::var("FULLMAG_API_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8081);
+    let bind_ip = match std::env::var("FULLMAG_API_BIND_IP") {
+        Ok(value) => value
+            .parse::<IpAddr>()
+            .expect("FULLMAG_API_BIND_IP must be a valid IP address"),
+        Err(std::env::VarError::NotPresent) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        Err(error) => panic!("reading FULLMAG_API_BIND_IP failed: {error}"),
+    };
+    let addr = SocketAddr::new(bind_ip, port);
+    info!(%addr, "starting fullmag-api");
+
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .expect("binding API listener should succeed");
+    let owner_control_task = if runtime_diagnostic_only {
+        None
+    } else if let Some(control) = owner_control {
+        match control.start(listener.local_addr().expect("API listener address").port()) {
+            Ok(task) => Some(task),
+            Err(error) => {
+                eprintln!(
+                    "[fullmag-api] startup failure phase=development-owner-publish error={error:#}"
+                );
+                state.development_admission.latch_runtime_failure(
+                    "Runtime control publication failed. API remains available; inspect the backend log for the cause. No task was replayed.",
+                );
+                runtime_diagnostic_only = true;
+                diagnostic_reason = Some("development-owner-publish-failed");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if runtime_diagnostic_only {
+        eprintln!(
+            "[fullmag-api] startup mode=runtime-diagnostic-only reason={}",
+            diagnostic_reason.unwrap_or("runtime-failure-fence")
+        );
+    } else {
+        // Start the background projector only after restores, owner
+        // preparation, and owner publication have succeeded.
+        live_accepted_projection::spawn(state.clone());
+    };
 
     let cors = router_v2::middleware::cors::cors_layer();
 
@@ -2757,44 +2878,27 @@ async fn main() {
         .merge(router_v2::build_v2_router());
 
     let app = merge_live_retirement_routes(maybe_merge_swagger_ui(app), state.clone())
-        .layer(DefaultBodyLimit::max(LOCAL_BRIDGE_BODY_LIMIT_BYTES))
+        .layer(DefaultBodyLimit::max(LOCAL_BRIDGE_BODY_LIMIT_BYTES));
+
+    let app = if runtime_diagnostic_only {
+        let app = attach_static_web_fallback(app.with_state(state.clone()), static_web_root.as_deref());
+        app.layer(axum::middleware::from_fn(
+            cold_runtime_diagnostic_only_middleware,
+        ))
+        // Keep the normal request/contract pin behavior for both allowed
+        // diagnostic responses and cold-mode rejections. These outer layers
+        // also cover /healthz and the fallback service.
+        .layer(axum::middleware::from_fn(
+            router_v2::middleware::version::contract_version_middleware,
+        ))
+        .layer(axum::middleware::from_fn(
+            router_v2::middleware::request_id::request_id_middleware,
+        ))
         .layer(cors)
-        .with_state(state);
-
-    let app = if let Some(static_root) = static_web_root {
-        info!(path = %static_root.display(), "serving built control room");
-        app.fallback_service(
-            ServeDir::new(&static_root)
-                .append_index_html_on_directories(true)
-                .fallback(ServeFile::new(static_root.join("index.html"))),
-        )
     } else {
-        app
+        let app = app.layer(cors).with_state(state);
+        attach_static_web_fallback(app, static_web_root.as_deref())
     };
-
-    let port: u16 = std::env::var("FULLMAG_API_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(8081);
-    let bind_ip = match std::env::var("FULLMAG_API_BIND_IP") {
-        Ok(value) => value
-            .parse::<IpAddr>()
-            .expect("FULLMAG_API_BIND_IP must be a valid IP address"),
-        Err(std::env::VarError::NotPresent) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-        Err(error) => panic!("reading FULLMAG_API_BIND_IP failed: {error}"),
-    };
-    let addr = SocketAddr::new(bind_ip, port);
-    info!(%addr, "starting fullmag-api");
-
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("binding API listener should succeed");
-
-    let owner_control_task = owner_control.map(|control| {
-        control
-            .start(listener.local_addr().expect("API listener address").port())
-            .expect("publishing private development owner must succeed")
-    });
 
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(async move {
@@ -2836,6 +2940,57 @@ fn merge_live_retirement_routes(
         router_v2::middleware::development_admission::mutation_admission_middleware,
     ))
     .merge(retirement_routes)
+}
+
+fn attach_static_web_fallback(app: Router, static_root: Option<&Path>) -> Router {
+    let Some(static_root) = static_root else {
+        return app;
+    };
+    info!(path = %static_root.display(), "serving built control room");
+    app.fallback_service(
+        ServeDir::new(static_root)
+            .append_index_html_on_directories(true)
+            .fallback(ServeFile::new(static_root.join("index.html"))),
+    )
+}
+
+/// Restrict a cold API to the same health/runtime observations used by its
+/// supervisor. All other methods and paths are rejected before route handlers,
+/// including the private live-retirement routes merged outside admission.
+async fn cold_runtime_diagnostic_only_middleware(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let diagnostic_read = matches!(*request.method(), Method::GET | Method::HEAD)
+        && matches!(
+            request.uri().path(),
+            "/healthz"
+                | "/v2/platform/health"
+                | "/v2/platform/runtime-service"
+                | "/v2/platform/openapi.json"
+        );
+    if diagnostic_read {
+        return next.run(request).await;
+    }
+
+    let has_body = request
+        .headers()
+        .get(CONTENT_LENGTH)
+        .is_some_and(|value| value.as_bytes() != b"0")
+        || request.headers().contains_key(TRANSFER_ENCODING);
+    let http1 = matches!(request.version(), Version::HTTP_10 | Version::HTTP_11);
+    let mut response = ApiError::with_status_and_code(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "runtime_unavailable",
+        "Runtime startup failed; API diagnostics remain available and execution is disabled.",
+    )
+    .into_response();
+    if has_body && http1 {
+        response
+            .headers_mut()
+            .insert(CONNECTION, HeaderValue::from_static("close"));
+    }
+    response
 }
 
 #[cfg(feature = "swagger-ui")]
@@ -3644,7 +3799,7 @@ async fn sync_current_live_session_frame(
         None,
         false,
         false,
-        move |next| apply_current_live_session_frame(next, frame),
+        move |next| apply_current_live_session_frame(next, frame).map(|()| true),
     )
     .await
 }
@@ -3667,7 +3822,7 @@ async fn sync_current_live_runtime_frame(
         false,
         false,
         move |next| {
-            apply_current_live_runtime_frame_with_options(next, frame, drop_live_magnetization)
+            apply_current_live_runtime_frame_with_options(next, frame, drop_live_magnetization).map(|()| true)
         },
     )
     .await
@@ -3689,7 +3844,7 @@ async fn sync_current_live_scalar_frame(
         None,
         false,
         false,
-        move |next| apply_current_live_scalar_frame(next, frame),
+        move |next| apply_current_live_scalar_frame(next, frame).map(|()| true),
     )
     .await
 }
@@ -3713,7 +3868,7 @@ async fn sync_current_live_field_frame(
         preview_fields,
         clear_preview_cache,
         false,
-        move |next| apply_current_live_field_frame(next, frame),
+        move |next| apply_current_live_field_frame(next, frame).map(|()| true),
     )
     .await
 }
@@ -3744,10 +3899,13 @@ impl CurrentLiveSyncKind {
 // not a resident solver publisher and must not start its heartbeat watchdog.
 // Keep all runtime-bearing snapshots and all typed frames on the existing path.
 fn is_authoring_grid_snapshot(req: &CurrentLiveSnapshotRequest) -> bool {
+    let prepared_grid = req.metadata.as_ref().is_some_and(|metadata| {
+        metadata["prepared_grid_scene_revision"].is_u64()
+    });
     req.mesh_workspace.is_some()
         && req.session.is_none()
         && req.session_status.is_none()
-        && req.metadata.is_none()
+        && (req.metadata.is_none() || prepared_grid)
         && req.stage_execution.is_none()
         && req.simulation_preparation.is_none()
         && req.run.is_none()
@@ -3759,7 +3917,7 @@ fn is_authoring_grid_snapshot(req: &CurrentLiveSnapshotRequest) -> bool {
         && !req.replace_latest_fields
         && req.field_generation.is_none()
         && req.preview_fields.is_none()
-        && !req.clear_preview_cache
+        && (!req.clear_preview_cache || prepared_grid)
         && req.solver_profile.is_none()
         && req.fem_mesh.is_none()
 }
@@ -3781,6 +3939,9 @@ mod authoring_grid_heartbeat_tests {
     fn grid_metadata_does_not_claim_resident_runner_liveness() {
         let mut req = grid();
         assert!(is_authoring_grid_snapshot(&req));
+        req.metadata = Some(json!({"prepared_grid_scene_revision": 7}));
+        req.clear_preview_cache = true;
+        assert!(is_authoring_grid_snapshot(&req));
         req.mesh_workspace = None;
         assert!(!is_authoring_grid_snapshot(&req));
     }
@@ -3791,7 +3952,7 @@ mod authoring_grid_heartbeat_tests {
         req.session_status = Some("running".into());
         assert!(!is_authoring_grid_snapshot(&req));
         let mut req = grid();
-        req.metadata = Some(json!({"publisher": "runtime"}));
+        req.metadata = Some(json!({"publisher": "runtime"}).into());
         assert!(!is_authoring_grid_snapshot(&req));
         let mut req = grid();
         req.coupled_checkpoint = Some(json!({}));
@@ -3819,6 +3980,7 @@ pub(crate) async fn reset_current_live_session_resources(state: &AppState) {
     state
         .current_visualization_client_ack_revision
         .store(0, Ordering::Relaxed);
+    state.current_session_clients.write().await.clear();
     *state.current_workspace_selection.write().await = CurrentWorkspaceSelection::default();
     *state.current_workspace_ribbon.write().await = CurrentWorkspaceRibbon::default();
     *state.current_workspace_layout.write().await = CurrentWorkspaceLayout::default();
@@ -4361,7 +4523,7 @@ mod live_publisher_epoch_tests {
                 if reject {
                     Err(ApiError::conflict("fixture_rejected_frame"))
                 } else {
-                    Ok(())
+                    Ok(true)
                 }
             },
         )
@@ -4429,7 +4591,7 @@ async fn sync_current_live_frame_update<F>(
     apply: F,
 ) -> Result<Json<serde_json::Value>, ApiError>
 where
-    F: FnOnce(&mut SessionStateResponse) -> Result<(), ApiError>,
+    F: FnOnce(&mut SessionStateResponse) -> Result<bool, ApiError>,
 {
     let _session_transition = state.current_live_session_transition.lock().await;
     let sync_start = std::time::Instant::now();
@@ -4498,6 +4660,8 @@ where
         None
     };
     let previous_preview = next.preview.clone();
+    let previous_preview_domain = previous_preview.as_ref()
+        .map(|_| crate::session::current_live_field_domain_identity(&next));
     let previous_revisions = match previous_snapshot.as_ref() {
         Some(snapshot) => Some(
             current_live_realtime_state_from_snapshot(&state, snapshot, display_selection.revision)
@@ -4507,7 +4671,12 @@ where
         None => None,
     };
     let apply_start = std::time::Instant::now();
-    if let Err(error) = apply(&mut next) {
+    let applied = apply(&mut next);
+    if matches!(applied, Ok(false)) {
+        let scope = current_live_publisher_scope(state, &next);
+        return Ok(Json(json!({"status": "ok", "session_scope": scope, "revision": next.state_version})));
+    }
+    if let Err(error) = applied {
         // Rejected stale ownership is an admission failure, not a failure of
         // the current publisher. An old sender must not degrade a new owner.
         if !matches!(error.code.as_deref(),
@@ -4535,6 +4704,9 @@ where
                 next.display_selection.selection.kind,
                 fullmag_runner::DisplayKind::GlobalScalar
             ) && (has_live_state_update || has_scalar_row_update)));
+    let previous_preview = previous_preview.filter(|_| {
+        previous_preview_domain.is_some_and(|domain| domain == crate::session::current_live_field_domain_identity(&next))
+    });
     let preview_start = std::time::Instant::now();
     next.preview = if should_rebuild_preview {
         let rebuilt = build_preview_state(&next, &next.display_selection, &preview_config);
@@ -5194,6 +5366,9 @@ fn import_asset_into_dir(
         .decode(&req.content_base64)
         .map_err(|error| ApiError::bad_request(format!("invalid base64 payload: {}", error)))?;
 
+    // Parse before publishing either the file or its manifest. A malformed
+    // upload must not leave an orphaned, unvalidated source in the workspace.
+    let summary = summarize_uploaded_asset(&safe_file_name, &bytes)?;
     std::fs::create_dir_all(&imports_dir)?;
 
     let asset_id = format!("asset-{}", uuid_v4_hex());
@@ -5201,9 +5376,8 @@ fn import_asset_into_dir(
     let stored_path = imports_dir.join(&stored_name);
     let artifact_ref = format!("imports/{stored_name}");
     std::fs::write(&stored_path, &bytes)?;
-
-    let summary = summarize_uploaded_asset(&safe_file_name, &bytes)?;
     let response = SessionAssetImportResponse {
+        content_sha256: Some(format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes))),
         asset_id: asset_id.clone(),
         session_id: session_id.to_string(),
         artifact_ref,
@@ -5249,9 +5423,19 @@ pub(crate) async fn capture_current_live_request_context(
     state: &Arc<AppState>,
 ) -> Result<CurrentLiveRequestContext, ApiError> {
     let _transition = state.current_live_session_transition.lock().await;
+    capture_current_live_read_context(state).await
+}
+
+/// Capture a committed snapshot identity for read-only resources without
+/// waiting behind long mutation commits. Consumers must validate this context
+/// against the snapshot they actually read; mutation callers retain the
+/// transition-fenced capture above.
+pub(crate) async fn capture_current_live_read_context(
+    state: &Arc<AppState>,
+) -> Result<CurrentLiveRequestContext, ApiError> {
+    let current = state.current_live_state.read().await;
     let session_epoch = state.current_live_session_epoch.load(Ordering::Acquire);
     let request_scope_epoch = format!("{}:{session_epoch}", state.request_scope_instance_id);
-    let current = state.current_live_state.read().await;
     let snapshot = current
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
@@ -5363,6 +5547,15 @@ async fn get_or_load_current_live_scene_document_with_context(
         if let Some(scene_document) = snapshot.scene_document.clone() {
             return Ok(scene_document);
         }
+        // Diagnostic reads may expose the retained model after a runtime
+        // failure, but must never re-execute Python to reconstruct a scene.
+        if state.development_admission.observe_runtime_failure_fence() {
+            return Err(ApiError::with_status_and_code(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "retained_scene_unavailable",
+                "No retained scene is available. Script loading is disabled after a runtime failure; inspect diagnostics before a managed restart.",
+            ));
+        }
         let script_path = snapshot.session.script_path.trim();
         if script_path.is_empty() {
             return Err(ApiError::not_found(
@@ -5395,6 +5588,13 @@ async fn get_or_load_current_live_scene_document_with_context(
         )?;
     }
     if snapshot.scene_document.is_none() {
+        if state.development_admission.observe_runtime_failure_fence() {
+            return Err(ApiError::with_status_and_code(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "retained_scene_unavailable",
+                "Runtime failed while the scene was loading; the retained workspace was not changed. Inspect diagnostics before a managed restart.",
+            ));
+        }
         snapshot.builder_adapter = builder_adapter;
         snapshot.scene_document = Some(current_scene);
     }
@@ -5408,7 +5608,8 @@ pub(crate) async fn commit_current_live_scene_document(
     state: &Arc<AppState>,
     scene_document: SceneDocument,
 ) -> Result<SceneDocument, ApiError> {
-    commit_current_live_scene_document_with_context(state, None, scene_document).await
+    commit_current_live_scene_document_with_context(state, None, scene_document, None)
+        .await.map(|(scene, _)| scene)
 }
 
 pub(crate) async fn commit_current_live_scene_document_for_context(
@@ -5416,14 +5617,29 @@ pub(crate) async fn commit_current_live_scene_document_for_context(
     context: &CurrentLiveRequestContext,
     scene_document: SceneDocument,
 ) -> Result<SceneDocument, ApiError> {
-    commit_current_live_scene_document_with_context(state, Some(context), scene_document).await
+    commit_current_live_scene_document_with_context(state, Some(context), scene_document, None)
+        .await.map(|(scene, _)| scene)
+}
+
+pub(crate) async fn commit_current_live_magnetization_apply(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    scene_document: SceneDocument,
+    apply: &crate::live_authored_initial_state::MagnetizationApply,
+) -> Result<(SceneDocument, crate::schemas::authoring::MagnetizationApplyReceiptResource), ApiError> {
+    let (scene, receipt) = commit_current_live_scene_document_with_context(
+        state, Some(context), scene_document, Some(apply),
+    ).await?;
+    let receipt = receipt.ok_or_else(|| ApiError::internal("magnetization apply has no receipt"))?;
+    Ok((scene, receipt))
 }
 
 async fn commit_current_live_scene_document_with_context(
     state: &Arc<AppState>,
     context: Option<&CurrentLiveRequestContext>,
     mut scene_document: SceneDocument,
-) -> Result<SceneDocument, ApiError> {
+    magnetization_apply: Option<&crate::live_authored_initial_state::MagnetizationApply>,
+) -> Result<(SceneDocument, Option<crate::schemas::authoring::MagnetizationApplyReceiptResource>), ApiError> {
     if let Some(context) = context {
         validate_current_live_request_context(state, context).await?;
     }
@@ -5431,6 +5647,33 @@ async fn commit_current_live_scene_document_with_context(
     normalize_scene_document_study_pipeline_labels(&mut scene_document);
     validate_scene_document_for_authoring(&scene_document)
         .map_err(|error| ApiError::bad_request(error.message))?;
+    let prepared_apply = if let Some((apply, context)) = magnetization_apply.zip(context) {
+        let snapshot = {
+            let current = state.current_live_state.read().await;
+            let snapshot = current.as_ref()
+                .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+            ensure_current_live_request_context(
+                snapshot, context, state.current_live_session_epoch.load(Ordering::Acquire),
+            )?;
+            if let Some((scene, receipt)) = snapshot.magnetization_applies.replay(
+                apply, context, snapshot.scene_document.as_ref(),
+            )? {
+                return Ok((scene, Some(receipt)));
+            }
+            let current_scene = snapshot.scene_document.as_ref()
+                .ok_or_else(|| ApiError::conflict("magnetization apply requires a committed scene"))?;
+            if scene_document.revision != current_scene.revision {
+                return Err(ApiError::conflict("scene_stale_revision"));
+            }
+            apply.validate_scopes(&scene_document)?;
+            snapshot.clone()
+        };
+        Some(crate::live_authored_initial_state::apply_preparation::prepare(
+            state, context.clone(), snapshot, scene_document.clone(), apply.clone(),
+        ).await?)
+    } else {
+        None
+    };
     let preset_texture_count = scene_document
         .magnetization_assets
         .iter()
@@ -5489,12 +5732,14 @@ async fn commit_current_live_scene_document_with_context(
             }
         }
     }
+    let prepared_damping = crate::live_authored_damping::prepare(state, context, &scene_document).await?;
     let (
         scene_document,
         realtime_snapshot,
         display_revision,
         preset_texture_change_logs,
         live_rebuild_stats,
+        apply_receipt,
     ) = {
         let _transition = state.current_live_session_transition.lock().await;
         let mut current = state.current_live_state.write().await;
@@ -5508,6 +5753,21 @@ async fn commit_current_live_scene_document_with_context(
                 state.current_live_session_epoch.load(Ordering::Acquire),
             )?;
         }
+        if let Some((apply, context)) = magnetization_apply.zip(context) {
+            if let Some((scene, receipt)) = snapshot.magnetization_applies.replay(
+                apply, context, snapshot.scene_document.as_ref(),
+            )? {
+                return Ok((scene, Some(receipt)));
+            }
+            if !crate::live_accepted_execution::docker_api_only_runtime()
+                && (snapshot.runtime_status.is_busy || snapshot.runtime_status.code == "paused")
+            {
+                return Err(ApiError::conflict_with_code(
+                    "accepted_execution_input_locked",
+                    "finish or stop the active run before applying magnetization",
+                ));
+            }
+        }
         if let Some(current_scene) = snapshot.scene_document.as_ref() {
             if scene_document.revision != current_scene.revision {
                 return Err(ApiError::conflict(format!(
@@ -5519,15 +5779,13 @@ async fn commit_current_live_scene_document_with_context(
         // Classify the actual version that will be committed. A v1 -> v2
         // migration is not silently treated as metadata-only for an active run.
         scene_document.version = "scene.v2".to_string();
-        crate::live_execution_binding::validate_active_scene_mutation(state, snapshot, &scene_document)
-            .await?;
         let previous_scene = snapshot.scene_document.clone();
-        let metadata_only = previous_scene.as_ref().is_some_and(|before| {
+        let metadata_only = magnetization_apply.is_none() && previous_scene.as_ref().is_some_and(|before| {
             fullmag_authoring::scene_execution_input_identity(before).ok()
                 .zip(fullmag_authoring::scene_execution_input_identity(&scene_document).ok())
                 .is_some_and(|(before, after)| before == after)
         });
-        let region_impact = previous_scene
+        let mut region_impact = previous_scene
             .as_ref()
             .map(|before| {
                 if metadata_only {
@@ -5542,6 +5800,7 @@ async fn commit_current_live_scene_document_with_context(
                 coefficients: true,
                 initial_state: true,
             });
+        region_impact.initial_state |= magnetization_apply.is_some();
         let previous_mesh_signature = previous_scene.as_ref().map(scene_mesh_signature);
         let next_revision = snapshot
             .scene_document
@@ -5574,12 +5833,61 @@ async fn commit_current_live_scene_document_with_context(
                 return Err(err);
             }
         };
-        snapshot.builder_adapter = builder_state;
-        let next_mesh_signature = scene_mesh_signature(&scene_document);
-        snapshot.scene_document = Some(scene_document.clone());
-        snapshot.region_realization_revisions =
-            snapshot.region_realization_revisions.advance(region_impact);
-        let allow_live_magnetization_rebuild = !metadata_only && snapshot
+        let next_region_revisions = snapshot.region_realization_revisions.advance(region_impact);
+        // Validate the publication on a disposable snapshot before any
+        // supersession of an existing accepted run or current-scene mutation.
+        let (mut candidate, apply_receipt) = if let Some(((prepared, apply), context)) =
+            prepared_apply.zip(magnetization_apply).zip(context)
+        {
+            prepared.validate(snapshot)?;
+            let mut next = snapshot.clone();
+            next.scene_document = Some(scene_document.clone());
+            next.region_realization_revisions = next_region_revisions;
+            let (status, reason) = prepared.publish(&mut next, apply, next_revision)?;
+            let receipt = crate::schemas::authoring::MagnetizationApplyReceiptResource {
+                operation_id: apply.request.operation_id.clone(),
+                scene_revision: next_revision,
+                scopes: apply.request.scopes.clone(),
+                status,
+                reason: reason.map(str::to_owned),
+                prepared_initial_state: crate::live_authored_initial_state::describe_preview(&next),
+            };
+            let owner_run_id = next.session.run_id.clone();
+            let retired_run_id = next.run.as_ref().map(|run| run.run_id.clone())
+                .unwrap_or_else(|| owner_run_id.clone());
+            next.magnetization_applies.record(
+                apply, context, receipt.clone(), owner_run_id, retired_run_id,
+            );
+            (Some(next), Some(receipt))
+        } else {
+            (None, None)
+        };
+        if let Some(damping) = prepared_damping.as_ref() {
+            damping.validate(state, snapshot)?;
+        }
+        let retired = crate::live_execution_binding::validate_active_scene_mutation(
+            state, snapshot, &scene_document, magnetization_apply.is_some(),
+        ).await?;
+        let target = candidate.as_mut().unwrap_or(&mut *snapshot);
+        if retired {
+            if let Some(run) = target.run.as_mut() {
+                run.status = "cancelled".into();
+            }
+            target.session.status = "awaiting_command".into();
+            target.session.finished_at_unix_ms = 0;
+            target.stage_execution = None;
+            target.simulation_preparation = None;
+            if let Some(live) = target.live_state.as_mut() {
+                live.status = "awaiting_command".into();
+            }
+            crate::session::refresh_runtime_status(target);
+        }
+        target.builder_adapter = builder_state;
+        let domain_changed = previous_mesh_signature.as_ref() != Some(&scene_mesh_signature(&scene_document));
+        target.scene_document = Some(scene_document.clone());
+        target.region_realization_revisions = next_region_revisions;
+        let allow_live_magnetization_rebuild = magnetization_apply.is_none()
+            && !metadata_only && region_impact.initial_state && target
             .live_state
             .as_ref()
             .map(|live_state| {
@@ -5590,32 +5898,39 @@ async fn commit_current_live_scene_document_with_context(
             })
             .unwrap_or(true);
         let live_rebuild_stats = if allow_live_magnetization_rebuild {
-            rebuild_live_scene_magnetization(snapshot)
+            rebuild_live_scene_magnetization(target)
         } else {
             None
         };
-        let previous_preview = snapshot.preview.clone();
-        snapshot.preview = build_preview_state(
-            snapshot,
-            &snapshot.display_selection,
-            &snapshot.preview_config,
-        )
-        .or(previous_preview);
-        // Polling clients gate updates on `state_version`, so scene-authoring
-        // changes must advance it just like solver publishes do.
-        snapshot.state_version = snapshot.state_version.wrapping_add(1);
-        if previous_mesh_signature.as_ref() != Some(&next_mesh_signature) {
-            snapshot.mesh_revision = snapshot.mesh_revision.wrapping_add(1).max(1);
-            snapshot.mesh_build_revision = snapshot.mesh_build_revision.wrapping_add(1).max(1);
+        if let Some(damping) = prepared_damping {
+            damping.publish(target);
+        } else if domain_changed && previous_scene.is_some() {
+            crate::live_authored_damping::mark_prepared_domain_changed(target, next_revision);
+        }
+        let previous_preview = target.preview.clone();
+        target.preview = build_preview_state(
+            target, &target.display_selection, &target.preview_config,
+        ).or(previous_preview);
+        // Polling clients gate updates on `state_version`.
+        target.state_version = target.state_version.wrapping_add(1);
+        if domain_changed {
+            target.mesh_revision = target.mesh_revision.wrapping_add(1).max(1);
+            target.mesh_build_revision = target.mesh_build_revision.wrapping_add(1).max(1);
         }
         let preset_texture_change_logs =
             detect_preset_texture_changes(previous_scene.as_ref(), &scene_document);
+        let realtime_snapshot = target.clone();
+        let display_revision = target.display_selection.revision;
+        if let Some(candidate) = candidate {
+            *snapshot = candidate;
+        }
         (
             scene_document,
-            snapshot.clone(),
-            snapshot.display_selection.revision,
+            realtime_snapshot,
+            display_revision,
             preset_texture_change_logs,
             live_rebuild_stats,
+            apply_receipt,
         )
     };
     if let Some(context) = context {
@@ -5675,7 +5990,7 @@ async fn commit_current_live_scene_document_with_context(
         summary = %scene_magnetization_summary(&scene_document),
         "frontend scene update committed"
     );
-    Ok(scene_document)
+    Ok((scene_document, apply_receipt))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -6318,8 +6633,16 @@ fn detect_preset_texture_changes(
     out
 }
 
-fn scene_mesh_signature(scene: &SceneDocument) -> Value {
-    json!({
+/// Authored inputs of topology and region markers, excluding material
+/// coefficients and magnetization. Solver support has its own revision.
+pub(crate) fn scene_mesh_signature(scene: &SceneDocument) -> Value {
+    let mut signature = json!({
+        "backend": scene.study.requested_backend,
+        "fdm_grid": scene.study.fdm.as_ref().map(|fdm| json!({
+            "default_cell": fdm.default_cell,
+            "per_object_grid": fdm.per_object_grid,
+        })),
+        "fdm_periodicity": scene.study.pbc,
         "universe": scene.universe,
         "study_universe_mesh": scene.study.universe_mesh,
         "shared_domain_mesh": scene.study.shared_domain_mesh,
@@ -6329,7 +6652,8 @@ fn scene_mesh_signature(scene: &SceneDocument) -> Value {
             "id": object.id,
             "geometry": object.geometry,
             "transform": object.transform,
-            "material_ref": object.material_ref,
+            "role": object.role,
+            "region_name": object.region_name,
             // Only region inputs consumed by FEM mesh marker/membership
             // realization belong to mesh identity. Metadata and material
             // overrides get their own realization revisions.
@@ -6350,7 +6674,11 @@ fn scene_mesh_signature(scene: &SceneDocument) -> Value {
             "object_mesh": object.object_mesh,
             "mesh_override": object.mesh_override,
         })).collect::<Vec<_>>(),
-    })
+    });
+    if let Some(reference) = scene.study.fem_domain_mesh.as_ref() {
+        signature["fem_domain_mesh"] = json!(reference);
+    }
+    signature
 }
 
 async fn list_physics_docs(
@@ -6466,7 +6794,8 @@ fn build_spatial_preview_state(
         .live_state
         .as_ref()
         .and_then(|state| state.latest_step.preview_field.as_ref())
-        .filter(|field| field.config_revision == config.revision && field.quantity == quantity)
+        .filter(|field| field.config_revision == config.revision && field.quantity == quantity
+            && crate::session::preview_field_source_is_qualified(current, field))
     {
         return build_preview_state_from_live_field(
             current,
@@ -6483,7 +6812,8 @@ fn build_spatial_preview_state(
         .live_state
         .as_ref()
         .and_then(|state| state.latest_step.preview_field.as_ref())
-        .filter(|field| field.quantity == quantity)
+        .filter(|field| field.quantity == quantity
+            && crate::session::preview_field_source_is_qualified(current, field))
         .cloned()
     {
         field.config_revision = config.revision;
@@ -6498,7 +6828,9 @@ fn build_spatial_preview_state(
         );
     }
 
-    if let Some(mut field) = cached_preview_field_owned(current, &quantity) {
+    if let Some(mut field) = cached_preview_field_owned(current, &quantity)
+        .filter(|field| crate::session::preview_field_source_is_qualified(current, field))
+    {
         field.config_revision = config.revision;
         return build_preview_state_from_live_field(
             current,
@@ -6554,7 +6886,7 @@ fn build_spatial_preview_state(
             auto_downscaled: false,
             auto_downscale_message: None,
             preview_grid: [vectors.len(), 1, 1],
-            fem_mesh: Some(mesh.clone()),
+            fem_mesh: Some(fullmag_runner::FemMeshPayload::clone(mesh)),
             original_node_count: Some(mesh.nodes.len()),
             original_face_count: Some(mesh.facet_count()),
             active_mask,
@@ -6846,7 +7178,7 @@ fn build_preview_state_from_live_field(
             auto_downscaled: field.auto_downscaled,
             auto_downscale_message: field.auto_downscale_message.clone(),
             preview_grid,
-            fem_mesh: Some(mesh.clone()),
+            fem_mesh: Some(fullmag_runner::FemMeshPayload::clone(&mesh)),
             original_node_count: Some(mesh.nodes.len()),
             original_face_count: Some(mesh.facet_count()),
             active_mask,
@@ -7007,6 +7339,9 @@ fn resolve_global_scalar_quantity(
 }
 
 fn current_preview_source(current: &SessionStateResponse) -> (u64, f64) {
+    if let Some(publication) = crate::live_authored_initial_state::current_publication(current) {
+        return (publication.frame.source_step, publication.frame.source_time_seconds.unwrap_or(0.0));
+    }
     if let Some(live_state) = current
         .live_state
         .as_ref()
@@ -7053,12 +7388,9 @@ fn current_global_scalar_value(current: &SessionStateResponse, quantity: &str) -
             // Only the component fallback needs plan provenance. Do not clone
             // mesh/material arrays on live reads or unrelated scalar requests.
             let plan = (metric_key == "e_rotated_dmi")
-                .then(|| current.metadata.as_ref()?.get("execution_plan"))
-                .flatten()
-                .and_then(|value| {
-                    serde_json::from_value::<fullmag_ir::ExecutionPlanIR>(value.clone()).ok()
-                });
-            run_manifest_scalar_value(current.run.as_ref(), metric_key, plan.as_ref())
+                .then(|| current.metadata.as_ref()?.execution_plan())
+                .flatten();
+            run_manifest_scalar_value(current.run.as_ref(), metric_key, plan.as_deref())
         })
 }
 
@@ -7074,3 +7406,9 @@ fn scalar_row_metric_value(row: &ScalarRow, metric_key: &str) -> Option<f64> {
         _ => None,
     }
 }
+
+mod imported_geometry_sources;
+
+#[cfg(test)]
+#[path = "material_library/tests.rs"]
+mod material_library_tests;

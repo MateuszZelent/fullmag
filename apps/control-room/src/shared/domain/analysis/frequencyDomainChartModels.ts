@@ -969,7 +969,100 @@ export function readEigenSpectrumPayload(
   return { modes };
 }
 
+// Builders below are called from many inspector, explorer and summary hooks
+// for the same resource revision (19 spectrum, 7 dispersion and 8 branch call
+// sites). Results are cached per resource object and reused only while every
+// own field of that resource still holds the same reference, so an in-place
+// mutation of a resource invalidates its entry. Cached results are shared and
+// must be treated as read-only by callers.
+interface ResourceMemoEntry<T> {
+  snapshot: readonly (readonly [string, unknown])[];
+  value: T;
+}
+
+const NULL_MEMO_KEY: object = Object.freeze({});
+
+function resourceSnapshot(resource: object): (readonly [string, unknown])[] {
+  return Object.keys(resource).map(
+    (key) => [key, (resource as Record<string, unknown>)[key]] as const,
+  );
+}
+
+function resourceSnapshotMatches(
+  resource: object,
+  snapshot: readonly (readonly [string, unknown])[],
+): boolean {
+  if (Object.keys(resource).length !== snapshot.length) return false;
+  return snapshot.every(
+    ([key, value]) =>
+      Object.is((resource as Record<string, unknown>)[key], value),
+  );
+}
+
+function memoizeByResource<R extends object, T>(
+  cache: WeakMap<object, ResourceMemoEntry<T>>,
+  resource: R,
+  compute: () => T,
+): T {
+  const cached = cache.get(resource);
+  if (cached && resourceSnapshotMatches(resource, cached.snapshot)) {
+    return cached.value;
+  }
+  const value = compute();
+  cache.set(resource, { snapshot: resourceSnapshot(resource), value });
+  return value;
+}
+
+interface ResourcePairMemoEntry<T> extends ResourceMemoEntry<T> {
+  secondarySnapshot: readonly (readonly [string, unknown])[] | null;
+}
+
+function memoizeByResourcePair<A extends object, B extends object, T>(
+  cache: WeakMap<object, WeakMap<object, ResourcePairMemoEntry<T>>>,
+  primary: A,
+  secondary: B | null | undefined,
+  compute: () => T,
+): T {
+  let inner = cache.get(primary);
+  if (!inner) {
+    inner = new WeakMap();
+    cache.set(primary, inner);
+  }
+  const secondaryKey = secondary ?? NULL_MEMO_KEY;
+  const cached = inner.get(secondaryKey);
+  if (
+    cached &&
+    resourceSnapshotMatches(primary, cached.snapshot) &&
+    (secondary == null ||
+      (cached.secondarySnapshot != null &&
+        resourceSnapshotMatches(secondary, cached.secondarySnapshot)))
+  ) {
+    return cached.value;
+  }
+  const value = compute();
+  inner.set(secondaryKey, {
+    snapshot: resourceSnapshot(primary),
+    secondarySnapshot: secondary != null ? resourceSnapshot(secondary) : null,
+    value,
+  });
+  return value;
+}
+
+const eigenSpectrumChartModelCache = new WeakMap<
+  object,
+  ResourceMemoEntry<FrequencyDomainChartBuildResult<EigenSpectrumPoint>>
+>();
+
 export function buildEigenSpectrumChartModel(
+  resource: FrequencyDomainJsonArtifactLike | null | undefined,
+): FrequencyDomainChartBuildResult<EigenSpectrumPoint> {
+  if (resource == null) return computeEigenSpectrumChartModel(resource);
+  return memoizeByResource(eigenSpectrumChartModelCache, resource, () =>
+    computeEigenSpectrumChartModel(resource),
+  );
+}
+
+function computeEigenSpectrumChartModel(
   resource: FrequencyDomainJsonArtifactLike | null | undefined,
 ): FrequencyDomainChartBuildResult<EigenSpectrumPoint> {
   const payload = readEigenSpectrumPayload(resource?.payload);
@@ -1071,7 +1164,27 @@ export function buildEigenModeSelectionRef(
   });
 }
 
+const eigenDispersionChartModelCache = new WeakMap<
+  object,
+  WeakMap<object, ResourcePairMemoEntry<FrequencyDomainChartBuildResult<EigenDispersionPoint>>>
+>();
+
 export function buildEigenDispersionChartModel(
+  resource: FrequencyDomainTextArtifactLike | null | undefined,
+  branchesModel?: EigenBranchesModel | null,
+): FrequencyDomainChartBuildResult<EigenDispersionPoint> {
+  if (resource == null) {
+    return computeEigenDispersionChartModel(resource, branchesModel);
+  }
+  return memoizeByResourcePair(
+    eigenDispersionChartModelCache,
+    resource,
+    branchesModel,
+    () => computeEigenDispersionChartModel(resource, branchesModel),
+  );
+}
+
+function computeEigenDispersionChartModel(
   resource: FrequencyDomainTextArtifactLike | null | undefined,
   branchesModel?: EigenBranchesModel | null,
 ): FrequencyDomainChartBuildResult<EigenDispersionPoint> {
@@ -1353,7 +1466,27 @@ function eigenArtifactsShareOwnership(
   return true;
 }
 
+const eigenBranchesModelCache = new WeakMap<
+  object,
+  WeakMap<object, ResourcePairMemoEntry<EigenBranchesModel>>
+>();
+
 export function buildEigenBranchesModel(
+  resource: FrequencyDomainJsonArtifactLike | null | undefined,
+  dispersionResource?: FrequencyDomainTextArtifactLike | null,
+): EigenBranchesModel {
+  if (resource == null) {
+    return computeEigenBranchesModel(resource, dispersionResource);
+  }
+  return memoizeByResourcePair(
+    eigenBranchesModelCache,
+    resource,
+    dispersionResource,
+    () => computeEigenBranchesModel(resource, dispersionResource),
+  );
+}
+
+function computeEigenBranchesModel(
   resource: FrequencyDomainJsonArtifactLike | null | undefined,
   dispersionResource?: FrequencyDomainTextArtifactLike | null,
 ): EigenBranchesModel {
@@ -2135,7 +2268,34 @@ function finiteCsvNumber(value: string | undefined): number | null {
   return value == null || value.trim() === "" ? null : finiteNumber(value);
 }
 
-function parseDispersionCsv(csv: string): {
+type ParsedDispersionCsv = {
+  droppedPointCount: number;
+  points: EigenDispersionPoint[];
+};
+
+// The same dispersion text is parsed by the branch model and the dispersion
+// chart model; keep a few recent parses keyed by the text itself. Consumers
+// copy or map the returned points and never mutate them in place.
+const DISPERSION_CSV_CACHE_LIMIT = 4;
+const dispersionCsvCache = new Map<string, ParsedDispersionCsv>();
+
+function parseDispersionCsv(csv: string): ParsedDispersionCsv {
+  const cached = dispersionCsvCache.get(csv);
+  if (cached) {
+    dispersionCsvCache.delete(csv);
+    dispersionCsvCache.set(csv, cached);
+    return cached;
+  }
+  const parsed = parseDispersionCsvUncached(csv);
+  dispersionCsvCache.set(csv, parsed);
+  if (dispersionCsvCache.size > DISPERSION_CSV_CACHE_LIMIT) {
+    const oldest = dispersionCsvCache.keys().next().value;
+    if (oldest !== undefined) dispersionCsvCache.delete(oldest);
+  }
+  return parsed;
+}
+
+function parseDispersionCsvUncached(csv: string): {
   droppedPointCount: number;
   points: EigenDispersionPoint[];
 } {

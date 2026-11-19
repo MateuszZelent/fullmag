@@ -1,46 +1,75 @@
 "use client";
 
 import { isUniverseOuterBoundaryCarrier } from "@/kernel/selection/semanticRenderTargetCatalog";
-import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
-import { useMeshSharedDomainManifestResource } from "@/kernel/resources/geometryLifecycleResources";
-import { shouldLoadRuntimeMeshManifest } from "@/kernel/resources/studyRuntimeResources";
+import {
+  useMeshSharedDomainManifestResource,
+  useSceneResource,
+} from "@/kernel/resources/geometryLifecycleResources";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
+import {
+  matchesAirboxTopologyIdentity,
+  shouldLoadAirboxMeshManifest,
+  useAirboxInspectorRuntimeStatus,
+} from "../airbox/airboxInspectorRuntimeStatus";
+
+function revisionsMatch(currentRevision: unknown, sourceRevision: unknown): boolean {
+  const isRevision = (value: unknown) =>
+    (typeof value === "number" && Number.isFinite(value)) ||
+    (typeof value === "string" && value.length > 0);
+  return isRevision(currentRevision) &&
+    isRevision(sourceRevision) &&
+    String(currentRevision) === String(sourceRevision);
+}
 
 export function BoundaryFacesOverviewPanel({ selection }: InspectorPanelProps) {
   void selection;
-  const sessionStatus = useSessionStatusSelector((status) => status.data);
+  const runtimeStatus = useAirboxInspectorRuntimeStatus();
+  const meshEnabled = shouldLoadAirboxMeshManifest(true, runtimeStatus);
+  const scene = useSceneResource({ enabled: meshEnabled });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(true, sessionStatus),
+    enabled: meshEnabled,
   });
-  const outerBoundaryCarriers = (manifest.data?.mesh_parts ?? []).filter(
-    isUniverseOuterBoundaryCarrier,
-  );
-  const boundaryFaceCount = outerBoundaryCarriers.reduce(
+  const currentSceneRevision = scene.data?.revision ?? scene.data?.scene_revision;
+  const carrierInventoryAvailable = manifest.status === "ready" &&
+    scene.status === "ready" &&
+    revisionsMatch(currentSceneRevision, manifest.data?.source_scene_revision) &&
+    matchesAirboxTopologyIdentity(runtimeStatus, manifest.data) &&
+    Array.isArray(manifest.data?.mesh_parts);
+  const outerBoundaryCarriers = carrierInventoryAvailable
+    ? manifest.data?.mesh_parts?.filter(isUniverseOuterBoundaryCarrier) ?? []
+    : null;
+  const boundaryFaceCount = outerBoundaryCarriers?.reduce(
     (count, carrier) => count + carrier.boundary_face_count,
     0,
-  );
+  ) ?? null;
 
   return (
     <div className="fm-inspector-panel">
       <InspectorGroup
-        badge={outerBoundaryCarriers.length > 0 ? "realized" : "unavailable"}
+        badge={outerBoundaryCarriers === null
+          ? "unavailable"
+          : outerBoundaryCarriers.length > 0
+            ? "realized"
+            : "none in manifest"}
         title="Boundary Faces Overview"
       >
         <FieldRow label="Explorer address" value="model:boundary-faces" />
         <FieldRow label="Semantic role" value="outer_boundary" />
         <FieldRow
           label="Realized carriers"
-          value={outerBoundaryCarriers.length.toLocaleString("en-US")}
+          value={outerBoundaryCarriers?.length.toLocaleString("en-US") ?? "unavailable"}
         />
         <FieldRow
           label="Boundary faces"
           value={
-            outerBoundaryCarriers.length > 0
-              ? boundaryFaceCount.toLocaleString("en-US")
-              : "mesh required"
+            outerBoundaryCarriers === null
+              ? "unavailable"
+              : outerBoundaryCarriers.length > 0 && boundaryFaceCount !== null
+                ? boundaryFaceCount.toLocaleString("en-US")
+                : "not published in manifest"
           }
         />
         <FieldRow label="Manifest state" value={manifest.status} />

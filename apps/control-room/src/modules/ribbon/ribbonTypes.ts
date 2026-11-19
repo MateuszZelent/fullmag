@@ -36,6 +36,11 @@ export interface RibbonAction {
   active?: boolean;
   activeCommandId?: string;
   accent?: boolean;
+  /** Explicitly marks an unimplemented preview that production may omit. */
+  preview?: boolean;
+  /** Large is reserved for the primary action in a full-density group. */
+  size?: "large" | "compact";
+  status?: RibbonActionStatus;
   menu?: RibbonMenuNode[];
   commandId?: string;
   commandInput?: unknown;
@@ -48,6 +53,13 @@ export interface RibbonAction {
    */
   splitButton?: boolean;
 }
+
+export type RibbonActionStatus =
+  | "pending"
+  | "running"
+  | "failed"
+  | "stale"
+  | "degraded";
 
 export interface RibbonGroup {
   id: string;
@@ -64,7 +76,7 @@ export interface RibbonTabContent {
 
 type RibbonStaticOrMappedInput<T> = unknown | ((value: T) => unknown);
 
-export type RibbonMenuNode =
+export type RibbonMenuNode = (
   | {
       type: "label";
       id: string;
@@ -92,6 +104,7 @@ export type RibbonMenuNode =
       label: string;
       checked: boolean;
       disabled?: boolean;
+      tooltip?: string;
       commandId?: string;
       commandInput?: RibbonStaticOrMappedInput<boolean>;
     }
@@ -104,12 +117,15 @@ export type RibbonMenuNode =
         value: string;
         label: string;
         disabled?: boolean;
+        preview?: boolean;
+        tooltip?: string;
         commandId?: string;
         commandInput?: unknown;
       }>;
       disabled?: boolean;
       commandId?: string;
       commandInput?: RibbonStaticOrMappedInput<string>;
+      tooltip?: string;
     }
   | {
       type: "status";
@@ -124,6 +140,7 @@ export type RibbonMenuNode =
       label: string;
       disabled?: boolean;
       nodes: RibbonMenuNode[];
+      tooltip?: string;
     }
   | {
       type: "slider";
@@ -137,6 +154,7 @@ export type RibbonMenuNode =
       disabled?: boolean;
       commandId?: string;
       commandInput?: RibbonStaticOrMappedInput<number>;
+      tooltip?: string;
     }
   | {
       type: "color";
@@ -146,6 +164,7 @@ export type RibbonMenuNode =
       disabled?: boolean;
       commandId?: string;
       commandInput?: RibbonStaticOrMappedInput<string>;
+      tooltip?: string;
     }
   | {
       type: "text";
@@ -156,7 +175,9 @@ export type RibbonMenuNode =
       disabled?: boolean;
       commandId?: string;
       commandInput?: RibbonStaticOrMappedInput<string>;
-    };
+      tooltip?: string;
+    }
+) & { preview?: boolean };
 
 export const RIBBON_TABS: RibbonTabDef[] = [
   { id: "home", label: "Workspace" },

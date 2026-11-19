@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import {
   PLATFORM_CAPABILITIES_PATH,
   PLATFORM_COMPUTE_NODES_PATH,
   PLATFORM_HEALTH_PATH,
+  PLATFORM_RUNTIME_SERVICE_PATH,
   SIMULATION_COMMANDS_PATH,
 } from "../api/apiPaths";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
@@ -14,31 +15,86 @@ import type {
   ComputeNodesResource,
   HealthResource,
   PlatformCapabilitiesResource,
+  RuntimeServiceStatusResource,
 } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 import type { RuntimeCommandDetailEntry } from "./runtimeExplorerTypes";
 
 import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 import { useResource } from "./useResource";
+import type { ResourceStatus } from "./resourceTypes";
 
 interface RuntimeExplorerResourceOptions {
   enabled?: boolean;
 }
 
+interface PlatformHealthResourceOptions extends RuntimeExplorerResourceOptions {
+  pollIntervalMs?: number;
+}
+
 export function usePlatformHealthResource({
   enabled = true,
-}: RuntimeExplorerResourceOptions = {}) {
-  const { api } = useKernel();
+  pollIntervalMs = 0,
+}: PlatformHealthResourceOptions = {}) {
+  const { api, resources } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) => api.platform.health({ signal }),
     [api],
   );
-  return useResource<HealthResource>({
+  const refresh = useCallback(
+    () => resources.invalidate(PLATFORM_HEALTH_PATH, Date.now()),
+    [resources],
+  );
+  const resource = useResource<HealthResource>({
     enabled,
     load,
+    // Health only feeds the degraded-runtime banner and diagnostics; an
+    // unreachable probe must not raise a global resource-failure toast.
+    notifyOnError: false,
     resolveRevision: () => null,
     resourceKey: PLATFORM_HEALTH_PATH,
   });
+  useBoundedResourcePolling(resource.status, refresh, enabled, pollIntervalMs);
+  return resource;
+}
+
+export function usePlatformRuntimeServiceResource({
+  enabled = true,
+  pollIntervalMs = 0,
+}: PlatformHealthResourceOptions = {}) {
+  const { api, resources } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => api.platform.runtimeService({ signal }),
+    [api],
+  );
+  const refresh = useCallback(
+    () => resources.invalidate(PLATFORM_RUNTIME_SERVICE_PATH, Date.now()),
+    [resources],
+  );
+  const resource = useResource<RuntimeServiceStatusResource>({
+    enabled,
+    load,
+    resolveRevision: (status) =>
+      `${status.configured}:${status.state}:${status.reason.code}:${status.reason.message}`,
+    resourceKey: PLATFORM_RUNTIME_SERVICE_PATH,
+  });
+  useBoundedResourcePolling(resource.status, refresh, enabled, pollIntervalMs);
+  return resource;
+}
+
+function useBoundedResourcePolling(
+  status: ResourceStatus,
+  refresh: () => void,
+  enabled: boolean,
+  intervalMs: number,
+): void {
+  useEffect(() => {
+    if (!enabled || intervalMs <= 0 || status === "idle" || status === "loading") {
+      return;
+    }
+    const timer = window.setTimeout(refresh, intervalMs);
+    return () => window.clearTimeout(timer);
+  }, [enabled, intervalMs, refresh, status]);
 }
 
 export function usePlatformCapabilitiesResource({

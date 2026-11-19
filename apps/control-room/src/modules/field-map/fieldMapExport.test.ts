@@ -49,3 +49,27 @@ describe("field-map PNG export", () => {
     );
   });
 });
+
+describe("planar data export", () => {
+  it("writes one SI row per pixel centre with world coordinates and empty cells", async () => {
+    const { planarDataCsv } = await import("./fieldMapExport");
+    const csv = planarDataCsv({
+      bounds: [0, 2, 0, 1],
+      component: "z",
+      fieldRevision: 7,
+      mask: new Uint8Array([1, 0]),
+      origin: [0, 0, 5e-9],
+      quantityId: "m",
+      resolution: [2, 1],
+      sampleToken: "token",
+      uAxis: [1, 0, 0],
+      unit: "",
+      vAxis: [0, 1, 0],
+      values: new Float64Array([0.25, 0.5]),
+    });
+    const lines = csv.trim().split("\n");
+    expect(lines[3]).toBe("u_m,v_m,x_m,y_m,z_m,value");
+    expect(lines[4]).toBe("5.000000000e-1,5.000000000e-1,5.000000000e-1,5.000000000e-1,5.000000000e-9,2.500000000e-1");
+    expect(lines[5]!.endsWith(",")).toBe(true);
+  });
+});

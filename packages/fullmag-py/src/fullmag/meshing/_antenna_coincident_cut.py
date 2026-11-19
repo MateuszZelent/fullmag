@@ -147,7 +147,8 @@ def split_coincident_sourcecut(mesh, *, seam_faces, stable_vertex_ids, normal_wo
         raise ValueError("sourcecut changed a source cell coordinate or volume")
     result = MeshData.from_legacy_tet4(nodes=result_nodes, elements=cells,
         element_markers=np.array(mesh.element_markers, copy=True), boundary_faces=np.asarray(boundary),
-        boundary_markers=np.asarray(markers), vertex_identity=None)
+        boundary_markers=np.asarray(markers), vertex_identity=None,
+        quality=mesh.quality, per_domain_quality=mesh.per_domain_quality)
     cut = ConservativeCurrentSourceCut(source_cut_id, (0.0, 0.0, 0.0), potential_jump_v, pairs,
                                       closure_operator_version="fem_closed_current_geometry.v2")
     return result, new_ids, cut
@@ -172,7 +173,7 @@ def _validate_loop_request(closure, geometry, object_id, hmax_m):
 def realize_antenna_coincident_loop_mesh(closure, *, geometry, object_id, hmax_m, mesh_options=None):
     cut = _validate_loop_request(closure, geometry, object_id, hmax_m)
     offset = cut.plane.offset_m
-    from ._gmsh_infra import _import_gmsh, _configure_gmsh_threads
+    from ._gmsh_infra import _import_gmsh, _configure_gmsh_threads, _quality_volumes_in_si
     from ._gmsh_fields import _apply_mesh_options, _apply_post_mesh_options
     from ._gmsh_extraction import _extract_mesh_data, _extract_quality_metrics
     from ._gmsh_waveguides import add_antenna_layout_parts_to_occ, add_antenna_layout_terminal_physical_groups
@@ -215,7 +216,12 @@ def realize_antenna_coincident_loop_mesh(closure, *, geometry, object_id, hmax_m
                                  quality=quality, per_domain_quality=per_domain)
     finally:
         gmsh.finalize()
-    return replace(raw, nodes=raw.nodes / scale)
+    return replace(raw, nodes=raw.nodes / scale,
+        quality=_quality_volumes_in_si(raw.quality, scale),
+        per_domain_quality=(
+            {marker: _quality_volumes_in_si(report, scale)
+             for marker, report in raw.per_domain_quality.items()}
+            if raw.per_domain_quality is not None else None))
 
 
 def prepare_antenna_coincident_loop(closure, *, geometry, object_id, hmax_m, raw_mesh=None):

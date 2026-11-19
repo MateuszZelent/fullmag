@@ -1,3 +1,4 @@
+import type { Viewport3DVisibleColorScale } from "../model/viewport3DVisibleColorScale";
 import {
   buildVectorGlyphColors,
   buildVectorGlyphTransforms,
@@ -6,6 +7,8 @@ import {
 } from "./vectorGlyphGeometry";
 
 export interface VectorGlyphBuildRequest {
+  colorScale?: Viewport3DVisibleColorScale | null;
+  colorsOverride?: Float32Array | null;
   colorMode?: string;
   headLengthRatio?: number;
   headRadiusRatio?: number;
@@ -14,6 +17,7 @@ export interface VectorGlyphBuildRequest {
 }
 
 export interface VectorGlyphBuildResult {
+  colorScale?: Viewport3DVisibleColorScale | null;
   colors: Float32Array | null;
   sourceFieldBufferId?: string | null;
   sourceResourceKey?: string | null;
@@ -30,9 +34,16 @@ export function buildViewport3DVectorGlyphs(
     headRadiusRatio: request.headRadiusRatio,
     shaftRadiusRatio: request.shaftRadiusRatio,
   };
+  const transforms = buildVectorGlyphTransforms(request.segments, options);
+  if (request.colorsOverride && request.colorsOverride.length !== transforms.count * 3) {
+    throw new RangeError("Vector glyph colors do not match the source transforms");
+  }
   return {
-    colors: buildVectorGlyphColors(request.segments, request.colorMode),
-    transforms: buildVectorGlyphTransforms(request.segments, options),
+    ...(request.colorScale !== undefined ? { colorScale: request.colorScale
+      ? { ...request.colorScale, range: { ...request.colorScale.range } } : null } : {}),
+    // Own this copy: worker output transfer must not detach the input buffer.
+    colors: request.colorsOverride?.slice() ?? buildVectorGlyphColors(request.segments, request.colorMode),
+    transforms,
   };
 }
 

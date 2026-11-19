@@ -67,7 +67,7 @@ pub use dataset_slice::{
     MAX_DATASET_SLICE_BYTES, MAX_DATASET_SLICE_ELEMENTS, MAX_DATASET_SLICE_PARTS,
 };
 pub use descriptor::{
-    NormalizationHint, QuantityDomain, QuantityLocation, QuantitySpec, QuantityTensorDescriptor,
+    NormalizationHint, QuantityDomain, QuantityLocation, QuantitySpec, QuantityTensorDescriptor, QuantityTensorProjection,
 };
 pub use eval::{eval_global_scalar, reduce_scalars, reduce_vector_field, QuantityValue};
 pub use id::{normalize_quantity_id, QuantityId, QuantityIdError};

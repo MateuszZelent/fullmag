@@ -19,6 +19,7 @@ const vitestConfig = {
   test: {
     exclude: [
       ...configDefaults.exclude,
+      "tests/abl-browser/**/*.spec.ts",
       "scripts/fdm-terminal-field-contract.test.mjs",
       "scripts/smoke-viewport-2d.test.mjs",
       "scripts/lib/antenna-authoring-browser.test.mjs",

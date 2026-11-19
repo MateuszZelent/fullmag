@@ -8,12 +8,11 @@ import { cn } from "@/shared/utils/className";
 
 const Tabs = TabsPrimitive.Root;
 
-const tabsListVariants = cva("fm-tabs-list flex min-w-0 items-center", {
+const tabsListVariants = cva("fm-tabs-list", {
   variants: {
     presentation: {
-      line: "gap-1 border-b border-fm-subtle",
-      segmented:
-        "gap-0.5 rounded-fm-control border border-fm-subtle bg-fm-disabled p-0.5",
+      line: "fm-tabs-list--line",
+      segmented: "fm-tabs-list--segmented",
     },
   },
   defaultVariants: {
@@ -51,7 +50,7 @@ function TabsTrigger({
     <TabsPrimitive.Trigger
       ref={ref}
       className={cn(
-        "fm-tabs-trigger inline-flex h-fm-control-sm min-w-0 items-center justify-center rounded-fm-control border border-transparent px-2 font-fm-ui text-fm-control font-medium text-fm-muted outline-none transition-colors hover:bg-fm-disabled hover:text-fm-primary focus-visible:ring-2 focus-visible:ring-fm-accent data-[state=active]:border-fm-border data-[state=active]:bg-fm-selected data-[state=active]:text-fm-accent disabled:cursor-not-allowed disabled:text-fm-disabled-text disabled:opacity-100",
+        "fm-tabs-trigger",
         className,
       )}
       data-slot="tabs-trigger"

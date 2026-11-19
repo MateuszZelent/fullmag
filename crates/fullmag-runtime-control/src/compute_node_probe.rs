@@ -33,6 +33,258 @@ const NVIDIA_SAMPLE_TIMEOUT: Duration = Duration::from_secs(2);
 const NVIDIA_NVML_SAMPLE_TIMEOUT: Duration = Duration::from_secs(5);
 const NVIDIA_MEMORY_MIB: u64 = 1024 * 1024;
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DockerHostCpuMax {
+    #[serde(deserialize_with = "required_nullable_u64")]
+    quota_micros: Option<u64>,
+    #[serde(deserialize_with = "required_nullable_u64")]
+    period_micros: Option<u64>,
+}
+
+/// Root/VM facts published by the existing privileged maintenance helper.
+/// Container quotas remain separate process constraints, never host identity.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DockerHostCapacity {
+    schema: String,
+    scope: String,
+    project_id: String,
+    daemon_id_sha256: String,
+    boot_id: String,
+    allowed_cpu_ids: Vec<u32>,
+    cpu_max: DockerHostCpuMax,
+    #[serde(deserialize_with = "required_nullable_u64")]
+    memory_max_bytes: Option<u64>,
+    kernel_memory_total_bytes: u64,
+    docker_cpu_count: u64,
+    docker_memory_total_bytes: u64,
+}
+
+fn required_nullable_u64<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<u64>, D::Error> {
+    serde::Deserialize::deserialize(deserializer)
+}
+
+impl DockerHostCapacity {
+    fn cpu_quota(&self) -> Result<CpuQuota> {
+        match (self.cpu_max.quota_micros, self.cpu_max.period_micros) {
+            // The true cgroup v2 root has no cpu.max file.
+            (None, None) => Ok(CpuQuota::Unlimited),
+            (None, Some(period)) if period > 0 => Ok(CpuQuota::Unlimited),
+            (Some(quota), Some(period)) if period > 0 => {
+                let millis = u64::try_from(u128::from(quota) * 1000 / u128::from(period))
+                    .context("Docker root CPU capacity overflowed")?;
+                if millis == 0 {
+                    bail!("Docker root CPU quota has no positive milli-CPU capacity");
+                }
+                Ok(CpuQuota::Limited {
+                    capacity_millis: millis,
+                })
+            }
+            _ => bail!("Docker root CPU quota/period binding is invalid"),
+        }
+    }
+
+    fn allowed_cpu_ids(&self, topology: &CpuTopology) -> Result<BTreeSet<u32>> {
+        if self.allowed_cpu_ids.is_empty()
+            || self
+                .allowed_cpu_ids
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            || u64::try_from(self.allowed_cpu_ids.len())? > self.docker_cpu_count
+        {
+            bail!("Docker root CPU mask must be nonempty, sorted and within Docker capacity");
+        }
+        let online: BTreeSet<u32> = topology.logical_cpus.iter().map(|cpu| cpu.id).collect();
+        let allowed: BTreeSet<u32> = self.allowed_cpu_ids.iter().copied().collect();
+        if !allowed.is_subset(&online) {
+            bail!("Docker root CPU mask differs from the observed CPU topology");
+        }
+        Ok(allowed)
+    }
+
+    fn memory(&self, mut observed: MemoryObservation) -> Result<MemoryObservation> {
+        if self.kernel_memory_total_bytes == 0
+            || self.docker_memory_total_bytes == 0
+            || self.memory_max_bytes == Some(0)
+            || observed.total_bytes != self.kernel_memory_total_bytes
+        {
+            bail!("Docker host memory descriptor differs from the current kernel observation");
+        }
+        observed.total_bytes = observed
+            .total_bytes
+            .min(self.docker_memory_total_bytes)
+            .min(self.memory_max_bytes.unwrap_or(u64::MAX));
+        observed.available_bytes = observed.available_bytes.min(observed.total_bytes);
+        validate_memory(observed)
+    }
+}
+
+fn docker_host_capacity_from_environment() -> Result<Option<DockerHostCapacity>> {
+    let (path, digest) = match (
+        std::env::var_os("FULLMAG_DOCKER_HOST_CAPACITY_PATH"),
+        std::env::var_os("FULLMAG_DOCKER_HOST_CAPACITY_SHA256"),
+    ) {
+        (None, None) => return Ok(None),
+        (Some(path), Some(digest)) => (path, digest),
+        _ => bail!("Docker host capacity path and digest must be set together"),
+    };
+    if std::env::var("FULLMAG_DOCKER_HOST_EXECUTION").as_deref() != Ok("1")
+        || std::env::var("FULLMAG_HOST_LEDGER_PROFILE").as_deref() != Ok("host-ledger-v1")
+    {
+        bail!("Docker host capacity requires the explicit managed host profile");
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (path, digest);
+        bail!("Docker root capacity is supported only in the Linux runtime");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let digest = digest
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("invalid Docker capacity digest"))?;
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            bail!("Docker host capacity digest must be lowercase SHA-256");
+        }
+        let root = Path::new("/host-ledger");
+        let relative = format!("capacity/{digest}.json");
+        if std::path::PathBuf::from(path) != root.join(&relative) {
+            bail!("Docker host capacity path differs from its immutable descriptor");
+        }
+        for directory in [root.to_path_buf(), root.join("capacity")] {
+            let metadata = std::fs::symlink_metadata(directory)?;
+            if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+                bail!("Docker host capacity directory is not root-controlled");
+            }
+        }
+        let metadata = std::fs::symlink_metadata(root.join(&relative))?;
+        if !metadata.is_file()
+            || metadata.uid() != 0
+            || metadata.nlink() != 1
+            || metadata.mode() & 0o222 != 0
+        {
+            bail!("Docker host capacity descriptor is not immutable and root-owned");
+        }
+        let bytes = read_bounded_regular_file(root, &relative, 64 * 1024)?;
+        if format!("{:x}", Sha256::digest(&bytes)) != digest {
+            bail!("Docker host capacity bytes differ from the pinned digest");
+        }
+        let capacity: DockerHostCapacity =
+            serde_json::from_slice(&bytes).context("decode Docker host capacity descriptor")?;
+        if capacity.schema != "fullmag.docker-host-capacity.v1"
+            || capacity.scope != "docker_vm_root"
+            || std::env::var("FULLMAG_DOCKER_HOST_ID").as_deref()
+                != Ok(capacity.daemon_id_sha256.as_str())
+            || std::env::var("FULLMAG_HOST_LEDGER_PROJECT_ID").as_deref()
+                != Ok(capacity.project_id.as_str())
+            || format!("linux-boot-{}", capacity.boot_id) != current_host_boot_id(Utc::now())?
+            || capacity.docker_cpu_count == 0
+            || capacity.kernel_memory_total_bytes == 0
+            || capacity.docker_memory_total_bytes == 0
+            || capacity.memory_max_bytes == Some(0)
+            || capacity.allowed_cpu_ids.is_empty()
+            || capacity
+                .allowed_cpu_ids
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            || u64::try_from(capacity.allowed_cpu_ids.len())? > capacity.docker_cpu_count
+        {
+            bail!("Docker host capacity scope, project, daemon or boot differs");
+        }
+        capacity.cpu_quota()?;
+        Ok(Some(capacity))
+    }
+}
+
+/// True only after validating the pinned root/VM descriptor. An invalid
+/// explicit descriptor never falls back to consumer-scoped inventory.
+pub fn docker_host_capacity_is_configured() -> Result<bool> {
+    Ok(docker_host_capacity_from_environment()?.is_some())
+}
+
+pub struct ProcessCpuCapacity {
+    pub allowed_cpu_ids: BTreeSet<u32>,
+    pub cpu_millis: u64,
+}
+
+/// Observe the actual consumer constraints independently of global inventory.
+pub fn current_process_cpu_capacity() -> Result<ProcessCpuCapacity> {
+    let topology = observe_cpu_topology()?;
+    let allowed_cpu_ids = observe_allowed_cpu_ids(&topology)?;
+    let quota = observe_cpu_quota()?;
+    let cpu_millis =
+        effective_cpu_capacity_millis(Ok(0), &Ok(allowed_cpu_ids.clone()), &Ok(quota))?;
+    if cpu_millis == 0 {
+        bail!("current process has no positive CPU capacity");
+    }
+    Ok(ProcessCpuCapacity {
+        allowed_cpu_ids,
+        cpu_millis,
+    })
+}
+
+/// The managed Docker consumer's memory ceiling, including all visible v2
+/// ancestors. This is separate from the root/VM memory in shared inventory.
+#[cfg(target_os = "linux")]
+pub fn current_process_memory_capacity_bytes() -> Result<u64> {
+    let memberships =
+        parse_linux_cgroup_memberships(&std::fs::read_to_string("/proc/self/cgroup")?)?;
+    let mounts = parse_linux_cgroup_mounts(&std::fs::read_to_string("/proc/self/mountinfo")?)?;
+    let membership = memberships
+        .iter()
+        .find(|entry| entry.version == LinuxCgroupVersion::V2)
+        .context("Docker memory capacity requires a unified cgroup membership")?;
+    let mount = mounts
+        .iter()
+        .filter(|mount| {
+            mount.version == LinuxCgroupVersion::V2 && membership.path.starts_with(&mount.root)
+        })
+        .min_by_key(|mount| mount.root.components().count())
+        .context("Docker memory capacity requires a matching cgroup v2 mount")?;
+    let mut current = linux_cgroup_mount_path(&membership.path, &mount.root, &mount.mount_point)?;
+    let mut limit = observe_memory()?.total_bytes;
+    let mut observed = false;
+    loop {
+        match std::fs::read_to_string(current.join("memory.max")) {
+            Ok(raw) => {
+                observed = true;
+                let value = raw.trim();
+                if value != "max" {
+                    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                        bail!("invalid cgroup v2 memory.max");
+                    }
+                    limit = limit.min(value.parse::<u64>().context("parse cgroup v2 memory.max")?);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("read cgroup v2 memory.max"),
+        }
+        if current == mount.mount_point {
+            break;
+        }
+        if !current.starts_with(&mount.mount_point) || !current.pop() {
+            bail!("Docker memory cgroup path escaped its mount point");
+        }
+    }
+    if !observed || limit == 0 {
+        bail!("Docker consumer memory capacity is not proven positive");
+    }
+    Ok(limit)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn current_process_memory_capacity_bytes() -> Result<u64> {
+    bail!("Docker consumer memory capacity requires the Linux runtime")
+}
+
 #[derive(Debug)]
 enum NvidiaProbeUnavailableKind {
     Launch(std::io::Error),
@@ -313,7 +565,7 @@ pub fn probe_native_fem_gpu_readiness() -> Result<HostRuntimeReadiness> {
         bail!("native FEM/GPU ABI returned invalid CUDA memory bounds");
     }
 
-    let devices = discover_nvidia_gpus()?;
+    let devices = discover_nvidia_gpus(None)?;
     if devices.len() != usize::try_from(status.visible_cuda_device_count)? {
         bail!(
             "native CUDA visibility ({}) differs from the current NVIDIA inventory ({})",
@@ -631,12 +883,24 @@ fn sample_compute_node_inner(
     previous: Option<&ComputeNodeSnapshot>,
     readiness: Option<&HostRuntimeReadiness>,
 ) -> Result<ComputeNodeSnapshot> {
+    let host_capacity = docker_host_capacity_from_environment()?;
     let cpu_topology_probe = observe_cpu_topology();
-    let allowed_cpu_ids_probe = match &cpu_topology_probe {
-        Ok(topology) => observe_allowed_cpu_ids(topology),
-        Err(error) => Err(anyhow::anyhow!("CPU topology is unavailable: {error:#}")),
+    let allowed_cpu_ids_probe = match &host_capacity {
+        Some(capacity) => {
+            let topology = cpu_topology_probe.as_ref().map_err(|error| {
+                anyhow::anyhow!("Docker host CPU topology is unavailable: {error:#}")
+            })?;
+            Ok(capacity.allowed_cpu_ids(topology)?)
+        }
+        None => match &cpu_topology_probe {
+            Ok(topology) => observe_allowed_cpu_ids(topology),
+            Err(error) => Err(anyhow::anyhow!("CPU topology is unavailable: {error:#}")),
+        },
     };
-    let cpu_quota_probe = observe_cpu_quota();
+    let cpu_quota_probe = match &host_capacity {
+        Some(capacity) => capacity.cpu_quota(),
+        None => observe_cpu_quota(),
+    };
     let cpu_capacity_fallback = std::thread::available_parallelism()
         .context("detect effective logical CPU capacity")
         .and_then(|count| {
@@ -655,12 +919,24 @@ fn sample_compute_node_inner(
         .err()
         .map(probe_failure_reason)
         .unwrap_or(UnavailableReason::ProbeFailed);
-    let memory = observe_memory();
+    let memory = match &host_capacity {
+        Some(capacity) => Ok(capacity.memory(observe_memory()?)?),
+        None => observe_memory(),
+    };
     // A CPU readiness profile intentionally does not query NVIDIA at all.
     // This keeps an absent device an explicit unavailable observation rather
     // than turning an empty probe result into a verified GPU inventory.
     let cpu_only_profile = readiness.is_some_and(HostRuntimeReadiness::is_cpu_only_profile);
-    let gpus = (!cpu_only_profile).then(discover_nvidia_gpus);
+    // Partition identity survives an absent NVML observation only within the
+    // node and boot that proved it.
+    let previous_gpus = previous
+        .filter(|snapshot| {
+            snapshot.node_id == node_id
+                && current_host_boot_id(Utc::now()).is_ok_and(|boot_id| boot_id == snapshot.boot_id)
+        })
+        .and_then(|snapshot| snapshot.gpus.known_value())
+        .map(Vec::as_slice);
+    let gpus = (!cpu_only_profile).then(|| discover_nvidia_gpus(previous_gpus));
     let now = Utc::now();
     let boot_monotonic_ns = current_boot_monotonic_ns()?;
     let boot_id = current_host_boot_id(now.clone())?;
@@ -783,7 +1059,7 @@ fn sample_compute_node_inner(
     let cpu_quota_enforcement = {
         #[cfg(target_os = "linux")]
         {
-            if crate::worker_cgroup::probe_delegated_cpu_quota().is_ok() {
+            if crate::worker_cgroup::probe_delegated_cpu_quota_settled().is_ok() {
                 EnforcementStatus::Supported
             } else {
                 EnforcementStatus::Unavailable
@@ -954,7 +1230,9 @@ fn validate_warm_gpu_inventory(
                 device.uuid
             );
         }
-        if !matches!(&device.partition, Reported::Available { .. }) {
+        // A partition retained as last-known after an absent NVML observation
+        // is still the identity bound by the digests checked above.
+        if device.partition.known_value().is_none() {
             bail!(
                 "previous GPU {} has no complete durable partition identity",
                 device.uuid
@@ -1244,12 +1522,16 @@ fn parse_cpu_id_list(value: &str) -> Result<BTreeSet<u32>> {
 fn observe_cpu_quota() -> Result<CpuQuota> {
     use std::fs;
 
-    let memberships = parse_linux_cgroup_memberships(
+    observe_linux_cpu_quota(
         &fs::read_to_string("/proc/self/cgroup").context("read Linux cgroup membership")?,
-    )?;
-    let mounts = parse_linux_cgroup_mounts(
         &fs::read_to_string("/proc/self/mountinfo").context("read Linux cgroup mounts")?,
-    )?;
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn observe_linux_cpu_quota(cgroup: &str, mountinfo: &str) -> Result<CpuQuota> {
+    let memberships = parse_linux_cgroup_memberships(cgroup)?;
+    let mounts = parse_linux_cgroup_mounts(mountinfo)?;
 
     // Prefer the widest visible hierarchy. A more specific delegated bind
     // mount can hide an ancestor quota even though it matches this process.
@@ -2018,7 +2300,9 @@ fn validate_memory(memory: MemoryObservation) -> Result<MemoryObservation> {
     Ok(memory)
 }
 
-fn discover_nvidia_gpus() -> Result<Vec<GpuDeviceSnapshot>> {
+/// `previous_devices` is the GPU inventory of the last published sample of
+/// this node and boot; it is consulted only when NVML gives no observation.
+fn discover_nvidia_gpus(previous_devices: Option<&[GpuDeviceSnapshot]>) -> Result<Vec<GpuDeviceSnapshot>> {
     const QUERY_WITH_MIG_MODE: &str =
         "uuid,pci.bus_id,name,memory.total,utilization.gpu,temperature.gpu,mig.mode.current";
     const LEGACY_QUERY: &str =
@@ -2036,6 +2320,11 @@ fn discover_nvidia_gpus() -> Result<Vec<GpuDeviceSnapshot>> {
     };
     let stdout = String::from_utf8(output).context("nvidia-smi output is not UTF-8")?;
     let mut devices = parse_nvidia_smi_output(&stdout, includes_mig_mode)?;
+    let mig_enabled = if includes_mig_mode {
+        nvidia_smi_mig_enabled_uuids(&stdout)
+    } else {
+        BTreeSet::new()
+    };
     // NVML is a separate, bounded evidence path. Do not spend the remaining
     // nvidia-smi budget on a child probe: a slow SMI query must not turn a
     // valid physical GPU into an unobserved partition.
@@ -2066,11 +2355,53 @@ fn discover_nvidia_gpus() -> Result<Vec<GpuDeviceSnapshot>> {
                         report.attempts,
                         report.timed_out,
                     );
+                    if reason.is_retryable() && !mig_enabled.contains(&device.uuid) {
+                        retain_unconfirmed_full_device_partition(device, previous_devices);
+                    }
                 }
             }
         }
     }
     Ok(devices)
+}
+
+/// UUIDs for which nvidia-smi positively reported MIG mode as enabled. That
+/// report is evidence against a full device even when NVML gives none.
+fn nvidia_smi_mig_enabled_uuids(output: &str) -> BTreeSet<String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let columns = line.split(',').map(str::trim).collect::<Vec<_>>();
+            (columns.len() == 7 && columns[6].eq_ignore_ascii_case("enabled"))
+                .then(|| columns[0].to_owned())
+        })
+        .collect()
+}
+
+/// An inconclusive NVML probe is an absent observation, not a partition
+/// change. When the previous sample of this boot proved the same UUID at the
+/// same PCI id to be a full device, the partition is reported unavailable
+/// with that identity as last-known: the inventory digest is unchanged, so
+/// the sample stays publishable, while GPU admission, which requires a
+/// current `full_device`, stays closed until a probe confirms it again.
+/// A positive non-full result, a new device or a changed binding is never
+/// retained and keeps failing publication closed.
+fn retain_unconfirmed_full_device_partition(
+    device: &mut GpuDeviceSnapshot,
+    previous_devices: Option<&[GpuDeviceSnapshot]>,
+) {
+    let proven_full_device = previous_devices.unwrap_or_default().iter().any(|previous| {
+        previous.uuid == device.uuid
+            && previous.pci_id.known_value().is_some()
+            && previous.pci_id.known_value() == device.pci_id.known_value()
+            && previous.partition.known_value() == Some(&GpuPartition::FullDevice)
+    });
+    if proven_full_device {
+        device.partition = Reported::Unavailable {
+            reason: UnavailableReason::ProbeFailed,
+            last_known: Some(GpuPartition::FullDevice),
+        };
+    }
 }
 
 fn query_nvidia_smi(
@@ -2204,19 +2535,25 @@ fn observed_percent(value: &str) -> Result<Observation<u8>> {
 }
 
 fn observed_temperature(value: &str) -> Result<Observation<i32>> {
-    match parse_optional_u64(value, "GPU temperature")? {
-        Some(celsius) => {
-            let milli = celsius
-                .checked_mul(1000)
-                .context("GPU temperature overflow")?;
-            Ok(Observation::Available {
-                value: i32::try_from(milli).context("GPU temperature does not fit in i32")?,
-            })
-        }
-        None => Ok(Observation::Unavailable {
+    if is_unavailable_text(value) {
+        return Ok(Observation::Unavailable {
             reason: UnavailableReason::NotReported,
-        }),
+        });
     }
+    let celsius = value
+        .trim()
+        .parse::<f64>()
+        .context("parse GPU temperature from nvidia-smi")?;
+    if !celsius.is_finite() || celsius < 0.0 {
+        bail!("nvidia-smi returned an invalid GPU temperature");
+    }
+    let milli = (celsius * 1000.0).round();
+    if !milli.is_finite() || milli > f64::from(i32::MAX) {
+        bail!("GPU temperature does not fit in i32 millicelsius");
+    }
+    Ok(Observation::Available {
+        value: milli as i32,
+    })
 }
 
 fn parse_optional_u64(value: &str, field: &str) -> Result<Option<u64>> {
@@ -2661,6 +2998,40 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_cgroup_subtree_mount_does_not_hide_parent_cpu_quota() {
+        let directory = tempfile::tempdir().unwrap();
+        let full = directory.path().join("full");
+        let subtree = directory.path().join("subtree");
+        std::fs::create_dir_all(full.join("workers/control")).unwrap();
+        std::fs::create_dir_all(subtree.join("control")).unwrap();
+        std::fs::write(full.join("cpu.max"), "400000 100000\n").unwrap();
+        for path in [
+            full.join("workers"),
+            full.join("workers/control"),
+            subtree.clone(),
+            subtree.join("control"),
+        ] {
+            std::fs::write(path.join("cpu.max"), "max 100000\n").unwrap();
+        }
+        let full_mount = format!(
+            "31 20 0:28 / {} ro - cgroup2 cgroup rw\n", full.display(),
+        );
+        let subtree_mount = format!(
+            "32 20 0:28 /workers {} rw - cgroup2 cgroup rw\n", subtree.display(),
+        );
+        for mountinfo in [
+            format!("{full_mount}{subtree_mount}"),
+            format!("{subtree_mount}{full_mount}"),
+        ] {
+            assert_eq!(
+                observe_linux_cpu_quota("0::/workers/control\n", &mountinfo).unwrap(),
+                CpuQuota::Limited { capacity_millis: 4000 },
+            );
+        }
+    }
+
     #[test]
     fn unknown_cpu_quota_does_not_publish_fallback_capacity() {
         let fallback: Result<u64> = Ok(2000);
@@ -2686,6 +3057,23 @@ mod tests {
             .unwrap(),
             std::path::PathBuf::from("/sys/fs/cgroup/job")
         );
+    }
+
+    #[test]
+    fn gpu_temperature_accepts_decimal_and_integral_degrees() {
+        assert_eq!(observed_temperature("52.90").unwrap(),
+                   Observation::Available { value: 52_900 });
+        assert_eq!(observed_temperature("71").unwrap(),
+                   Observation::Available { value: 71_000 });
+    }
+
+    #[test]
+    fn gpu_temperature_rejects_invalid_reports_and_preserves_unavailable() {
+        for value in ["NaN", "inf", "-1", "2147484", "invalid"] {
+            assert!(observed_temperature(value).is_err(), "{value}");
+        }
+        assert_eq!(observed_temperature("N/A").unwrap(),
+                   Observation::Unavailable { reason: UnavailableReason::NotReported });
     }
 
     #[test]
@@ -2746,6 +3134,66 @@ mod tests {
                 value: GpuPartition::Unknown
             }
         );
+    }
+
+    #[test]
+    fn absent_nvml_observation_retains_only_a_proven_full_device_partition() {
+        let row = "GPU-a,pci-0000:01:00.0,NVIDIA A,4096,0,42,N/A\n";
+        let unresolved = parse_nvidia_smi_output(row, true).unwrap().remove(0);
+        let mut proven = unresolved.clone();
+        proven.partition = Reported::Available {
+            value: GpuPartition::FullDevice,
+        };
+        let retained = Reported::Unavailable {
+            reason: UnavailableReason::ProbeFailed,
+            last_known: Some(GpuPartition::FullDevice),
+        };
+
+        let mut device = unresolved.clone();
+        retain_unconfirmed_full_device_partition(&mut device, Some(std::slice::from_ref(&proven)));
+        assert_eq!(device.partition, retained);
+        // A retained partition chains, and the inventory identity is unchanged.
+        let mut chained = proven.clone();
+        chained.partition = retained.clone();
+        let mut device = unresolved.clone();
+        retain_unconfirmed_full_device_partition(&mut device, Some(std::slice::from_ref(&chained)));
+        assert_eq!(device.partition, retained);
+        assert_eq!(device.partition.known_value(), proven.partition.known_value());
+
+        // No previous sample, a never-proven device, another UUID or another
+        // PCI binding keep the unknown partition that fails publication.
+        for previous in [
+            None,
+            Some(vec![unresolved.clone()]),
+            Some(vec![GpuDeviceSnapshot {
+                uuid: "GPU-b".into(),
+                ..proven.clone()
+            }]),
+            Some(vec![GpuDeviceSnapshot {
+                pci_id: reported_text("pci-0000:02:00.0"),
+                ..proven.clone()
+            }]),
+        ] {
+            let mut device = unresolved.clone();
+            retain_unconfirmed_full_device_partition(&mut device, previous.as_deref());
+            assert_eq!(
+                device.partition,
+                Reported::Available {
+                    value: GpuPartition::Unknown
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_mig_enabled_report_is_evidence_against_a_full_device() {
+        let enabled = nvidia_smi_mig_enabled_uuids(concat!(
+            "GPU-b,pci-0000:02:00.0,NVIDIA B,8192,63,71,Enabled\n",
+            "GPU-a,pci-0000:01:00.0,NVIDIA A,4096,N/A,N/A,N/A\n",
+            "GPU-c,pci-0000:03:00.0,NVIDIA C,4096,0,42,Disabled\n",
+        ));
+        assert_eq!(enabled, BTreeSet::from(["GPU-b".to_owned()]));
+        assert!(nvidia_smi_mig_enabled_uuids("GPU-a,pci-0000:01:00.0,NVIDIA A,4096,0,42\n").is_empty());
     }
 
     #[test]

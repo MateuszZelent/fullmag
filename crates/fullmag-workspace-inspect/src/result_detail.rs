@@ -41,6 +41,11 @@ pub fn is_result_dir(dir: &Path) -> bool {
     if !dir.is_dir() {
         return false;
     }
+    // Discovery only needs the bounded descriptor. Full geometry/Zarr
+    // qualification remains explicit in playback metadata/frame requests.
+    if crate::playback::probe_playback(dir).is_ok() {
+        return true;
+    }
     if manifest_path(dir).is_file() {
         return true;
     }

@@ -69,7 +69,7 @@ impl ClosedLoopPreparationReceipt {
         let carrier = fullmag_plan::plan(problem).map_err(|error| failure(error.to_string()))?;
         if step.execution_plan.as_ref() != Some(&carrier) { return Err(failure("operation preparation carrier differs from accepted lowering")); }
         let problem_fingerprint = fingerprint(problem)?;
-        Ok(ClosedLoopPreparationPlan { schema_version: "closed_loop_preparation_plan.v1".into(), source: AcceptedRunPreparationSource::for_study_step(specification, &step.step_id, &problem_fingerprint)?, problem_fingerprint, carrier_fingerprint: fingerprint(&carrier)?, operation_fingerprint: fingerprint(&serde_json::json!({"input":&input,"requested_execution":&requested_execution,"output_id":&output_id}))?, source_mesh_fingerprint: format!("sha256:{}", input.source_mesh.topology_fingerprint_v6()), stage_id: stage_id.clone(), port_mode_id: port_mode_id.clone(), output_id })
+        Ok(ClosedLoopPreparationPlan { schema_version: "closed_loop_preparation_plan.v1".into(), source: AcceptedRunPreparationSource::for_study_step(specification, &step.step_id, &problem_fingerprint)?, problem_fingerprint, carrier_fingerprint: fingerprint(&carrier)?, operation_fingerprint: fingerprint(&serde_json::json!({"input":&input,"requested_execution":&requested_execution,"output_id":&output_id}))?, source_mesh_fingerprint: input.source_mesh.topology_fingerprint_v6(), stage_id: stage_id.clone(), port_mode_id: port_mode_id.clone(), output_id })
     }
 
     pub fn validate_for(&self, specification: &RunSpecification, canonical_task_id: &str, step: &StudyStepExecutionPlan, problem: &ProblemIR) -> Result<(), crate::PreparationReceiptError> {

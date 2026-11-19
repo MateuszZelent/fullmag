@@ -1,3 +1,4 @@
+import { CONTROL_ROOM_JSON_BODY_LIMIT_BYTES, JSON_UPLOAD_ENVELOPE_RESERVE_BYTES, STL_UPLOAD_MAX_BYTES } from "./src/kernel/api/transportLimits";
 import {
   mkdtempSync,
   mkdirSync,
@@ -11,21 +12,99 @@ import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 
 import nextConfig, {
+  CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS,
+  controlRoomDocsProxyTarget,
   DOCKER_DEV_WATCH_POLLING_DEFAULT_MS,
+  INSTANCE_TAB_FRAME_ANCESTORS,
+  instanceTabFrameSources,
+  instanceTabPortsClientValue,
   isDockerDevGeneratedWatchPath,
   resolveControlRoomDistDir,
   resolveDockerDevWatchOptions,
   resolveDockerDevWatchPollingMs,
   validateManagedControlRoomStorage,
 } from "./next.config";
+import {
+  isInstanceTabHostOrigin,
+  parseInstanceTabPortWindow,
+} from "./src/kernel/layout/instanceTabVisibility";
 
 describe("control-room Next dev proxy config", () => {
+  it("forwards complete large STL and project bodies within the admitted API limit", () => {
+    const backend = readFileSync(new URL("../../crates/fullmag-api/src/main.rs", import.meta.url), "utf8");
+    const limit = /LOCAL_BRIDGE_BODY_LIMIT_BYTES[^=]*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024/.exec(backend);
+    expect(limit).not.toBeNull();
+    const backendBytes = Number(limit![1]) * 1024 * 1024;
+    expect(CONTROL_ROOM_JSON_BODY_LIMIT_BYTES).toBe(backendBytes);
+    expect(nextConfig.experimental?.proxyClientMaxBodySize).toBe(backendBytes);
+    expect(Math.ceil(STL_UPLOAD_MAX_BYTES / 3) * 4 + JSON_UPLOAD_ENVELOPE_RESERVE_BYTES)
+      .toBeLessThanOrEqual(backendBytes);
+    expect(STL_UPLOAD_MAX_BYTES).toBeGreaterThan(100_000_084); // maximum binary STL at the parser's 2M-face limit
+  });
+
+  it("keeps proxy waiting compatible with the synchronous command phase owners", () => {
+    const script = readFileSync(new URL("../../crates/fullmag-api/src/script.rs", import.meta.url), "utf8");
+    const preparation = readFileSync(new URL("../../crates/fullmag-api/src/live_scene_preparation.rs", import.meta.url), "utf8");
+    const duration = (source: string, name: string, unit: string) => {
+      const match = new RegExp("const " + name + "[^;]*from_" + unit + "\\((\\d+)\\)").exec(source);
+      expect(match, name).not.toBeNull();
+      return Number(match![1]);
+    };
+    const phaseBudget =
+      (duration(script, "BOUNDED_PYTHON_HELPER_TIMEOUT", "secs") +
+       duration(script, "BOUNDED_SOURCE_CAPTURE_TIMEOUT", "secs") +
+       duration(preparation, "ACCEPTED_LIVE_PREPARATION_WAIT_TIMEOUT", "secs")) * 1000 +
+      duration(preparation, "ACCEPTED_LIVE_PREPARATION_POLL_INTERVAL", "millis");
+    expect(CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS).toBe(phaseBudget);
+    expect(nextConfig.experimental?.proxyTimeout).toBe(phaseBudget);
+    expect(Number.isFinite(phaseBudget)).toBe(true);
+    expect(phaseBudget).toBeGreaterThan(30_000);
+    expect(phaseBudget).toBeLessThan(2 ** 31 - 1);
+  });
+
+  it("keeps API commands on the existing same-origin rewrite", async () => {
+    expect(await nextConfig.rewrites?.()).toContainEqual({
+      source: "/v2/:path*",
+      destination: expect.stringMatching(/\/v2\/:path\*$/),
+    });
+  });
+
   it("redirects the bootstrap root before lazily compiling the workspace", async () => {
     await expect(nextConfig.redirects?.()).resolves.toContainEqual({
       source: "/",
       destination: "/workspace",
       permanent: false,
     });
+  });
+
+  it("proxies /docs/:path* to the configured online documentation host when local static files are absent", async () => {
+    expect(controlRoomDocsProxyTarget()).toBe("https://fullmag.mzelent.pl");
+    const rewrites = await nextConfig.rewrites?.();
+    expect(Array.isArray(rewrites)).toBe(true);
+    expect(rewrites).toContainEqual({
+      source: "/docs/:path*",
+      destination: "https://fullmag.mzelent.pl/:path*",
+    });
+  });
+
+  it("permits MathJax, fonts, and logo assets needed by locally bundled /docs/ pages in CSP", async () => {
+    const headerRules = await nextConfig.headers?.();
+    expect(Array.isArray(headerRules)).toBe(true);
+    const cspHeader = headerRules?.[0]?.headers.find(
+      (header) => header.key === "Content-Security-Policy",
+    );
+    expect(cspHeader?.value).toContain(
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://cdn.jsdelivr.net",
+    );
+    expect(cspHeader?.value).toContain(
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    );
+    expect(cspHeader?.value).toContain(
+      "img-src 'self' data: blob: https://raw.githubusercontent.com",
+    );
+    expect(cspHeader?.value).toContain(
+      "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
+    );
   });
 
   it("keeps live Docker source trees watchable while ignoring generated trees", () => {
@@ -101,9 +180,11 @@ describe("control-room Next dev proxy config", () => {
     expect(webpack).toBeTypeOf("function");
     const originalMode = process.env.FULLMAG_DOCKER_FRONTEND;
     const originalPolling = process.env.WATCHPACK_POLLING;
+    const originalWatchMode = process.env.FULLMAG_WATCHPACK_MODE;
     try {
       process.env.FULLMAG_DOCKER_FRONTEND = "dev";
       delete process.env.WATCHPACK_POLLING;
+      delete process.env.FULLMAG_WATCHPACK_MODE;
       const dockerDevConfig = webpack?.(
         { watchOptions: { ignored: /\.git/ } } as never,
         { dev: true } as never,
@@ -129,7 +210,22 @@ describe("control-room Next dev proxy config", () => {
       } else {
         process.env.WATCHPACK_POLLING = originalPolling;
       }
+      if (originalWatchMode === undefined) {
+        delete process.env.FULLMAG_WATCHPACK_MODE;
+      } else {
+        process.env.FULLMAG_WATCHPACK_MODE = originalWatchMode;
+      }
     }
+  });
+
+  it("watches natively without polling when the launcher selects native mode", () => {
+    const native = resolveDockerDevWatchOptions(/\.git/, "5000", "native");
+    expect(native.poll).toBeUndefined();
+    expect(native.ignored).toBeInstanceOf(RegExp);
+    expect(resolveDockerDevWatchOptions(undefined, "5000", "polling").poll).toBe(5000);
+    expect(() => resolveDockerDevWatchOptions(undefined, "5000", "inotify")).toThrow(
+      /FULLMAG_WATCHPACK_MODE/,
+    );
   });
 
   it("uses the managed export child so Next cleans storage instead of a repo directory", () => {
@@ -238,7 +334,9 @@ describe("control-room Next dev proxy config", () => {
 
   it("keeps generated Next route types stable across dev and audit builds", () => {
     const nextEnvSource = readFileSync(
-      new URL("./next-env.d.ts", import.meta.url),
+      process.env.FULLMAG_TEST_SOURCE_ROOT
+        ? resolve(process.env.FULLMAG_TEST_SOURCE_ROOT, "apps/control-room/next-env.d.ts")
+        : new URL("./next-env.d.ts", import.meta.url),
       "utf8",
     );
     const packageSource = readFileSync(
@@ -250,10 +348,10 @@ describe("control-room Next dev proxy config", () => {
       "utf8",
     );
 
-    // Next writes dev/ for development and the default types/ for typegen.
-    // The wrappers preserve whichever canonical entry point was present.
+    // Next writes dev/ for development and types/ for typegen. Docker DEV
+    // uses the fixed managed distDir; audit wrappers preserve either entry.
     expect(nextEnvSource).toMatch(
-      /import ["']\.\/\.next\/(?:dev\/)?types\/routes\.d\.ts["'];/,
+      /import ["']\.\/(?:\.next\/(?:dev\/)?|\.next-control-room-8080\/dev\/)types\/routes\.d\.ts["'];/,
     );
     expect(packageSource).toContain(
       '"build:audit:webpack": "node scripts/build-audit-control-room.mjs"',
@@ -300,5 +398,50 @@ describe("control-room Next dev proxy config", () => {
         process.env.FULLMAG_API_PROXY_TARGET = previousTarget;
       }
     }
+  });
+
+  it("serves every tab address with the workspace page", async () => {
+    const rewrites = await nextConfig.rewrites?.();
+    for (const source of ["/home", "/session/:slug", "/instance/:port"]) {
+      expect(rewrites).toContainEqual({ source, destination: "/workspace" });
+    }
+  });
+});
+
+describe("instance tab framing (ADR 0069)", () => {
+  it("lists only http loopback origins of the discovery window", () => {
+    expect(INSTANCE_TAB_FRAME_ANCESTORS[0]).toBe("'self'");
+    expect(INSTANCE_TAB_FRAME_ANCESTORS).toContain("http://127.0.0.1:3197");
+    expect(INSTANCE_TAB_FRAME_ANCESTORS).toContain("http://localhost:3260");
+    expect(INSTANCE_TAB_FRAME_ANCESTORS).not.toContain("http://127.0.0.1:3261");
+    for (const source of INSTANCE_TAB_FRAME_ANCESTORS.slice(1)) {
+      expect(source).toMatch(/^http:\/\/(127\.0\.0\.1|localhost):\d+$/);
+    }
+  });
+
+  it("follows the discovery port window and rejects an invalid one", () => {
+    expect(instanceTabFrameSources("4000-4001")).toEqual([
+      "'self'",
+      "http://127.0.0.1:4000",
+      "http://localhost:4000",
+      "http://127.0.0.1:4001",
+      "http://localhost:4001",
+    ]);
+    expect(() => instanceTabFrameSources("4001-4000")).toThrow();
+    expect(() => instanceTabFrameSources("3000-3256")).toThrow();
+  });
+
+  it("gives the client the same window its CSP lists", () => {
+    expect(nextConfig.env?.FULLMAG_INSTANCE_TAB_PORTS).toBe(
+      instanceTabPortsClientValue(process.env.FULLMAG_INSTANCE_DISCOVERY_PORTS),
+    );
+    expect(instanceTabPortsClientValue(undefined)).toBe("3197-3260");
+    const ports = parseInstanceTabPortWindow(instanceTabPortsClientValue("4000-4001"));
+    expect(ports).toEqual({ first: 4000, last: 4001 });
+    for (const origin of instanceTabFrameSources("4000-4001").slice(1)) {
+      expect(isInstanceTabHostOrigin(origin, ports)).toBe(true);
+    }
+    expect(isInstanceTabHostOrigin("http://localhost:3999", ports)).toBe(false);
+    expect(isInstanceTabHostOrigin("http://localhost:4002", ports)).toBe(false);
   });
 });

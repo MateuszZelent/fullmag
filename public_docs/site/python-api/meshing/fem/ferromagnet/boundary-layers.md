@@ -9,26 +9,15 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-ferromagnet-boundary-layers)=
 # Boundary-Layer API
 
-(python-api-meshing-fem-ferromagnet-boundary-layers-python-api)=
-<!-- (python-api)= -->
-## Python API
-
-The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
-
-(python-api-meshing-fem-ferromagnet-boundary-layers-problem-statement)=
-<!-- (problem-statement)= -->
-(python-api-meshing-fem-ferromagnet-boundary-layers-governing-equations)=
-<!-- (governing-equations)= -->
 (python-api-meshing-fem-ferromagnet-boundary-layers-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
 
 (python-api-meshing-fem-ferromagnet-boundary-layers-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
+(python-api-meshing-fem-ferromagnet-boundary-layers-problem-statement)=
 ## 1. What it is and when to use it
 
 Boundary layers are anisotropic element refinement near selected object
@@ -45,6 +34,7 @@ When to use it:
 Impact on the simulation: layers improve normal resolution at controlled cost;
 excessive `stretching` degrades Jacobian quality and can harm convergence.
 
+(python-api-meshing-fem-ferromagnet-boundary-layers-governing-equations)=
 ## 2. Physical and mathematical explanation
 
 This page introduces no equation of its own; it controls discretization
@@ -100,6 +90,7 @@ study.build_domain_mesh()
 study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 ```
 
+(python-api-meshing-fem-ferromagnet-boundary-layers-python-api)=
 ## 4. Exact API
 
 Two equivalent authoring levels:
@@ -129,17 +120,14 @@ ProblemIR mapping: fields land in the object recipe (`PerObjectMeshRecipe`) and 
 the ordered mesh-operation list.
 
 (python-api-meshing-fem-ferromagnet-boundary-layers-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
 The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
 
 (python-api-meshing-fem-ferromagnet-boundary-layers-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
 Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
 
 (python-api-meshing-fem-ferromagnet-boundary-layers-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
 The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
 
@@ -157,6 +145,7 @@ the boundary-layer fields; the *Advanced JSON* group accepts the full canonical
 recipe payload (including `operations`). Full panel description:
 {doc}`../../../../frontend/meshing/object-mesh`.
 
+(python-api-meshing-fem-ferromagnet-boundary-layers-implementation-mapping)=
 ## 6. Backend support
 
 | Solver | Device | Status | Notes |
@@ -166,12 +155,10 @@ recipe payload (including `operations`). Full panel description:
 | FDM | CPU/GPU | not applicable | no boundary-layer concept on a Cartesian grid |
 
 (python-api-meshing-fem-ferromagnet-boundary-layers-validation)=
-<!-- (validation)= -->
 ## Validation
 Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
 
 (python-api-meshing-fem-ferromagnet-boundary-layers-limitations)=
-<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - Numeric Gmsh tags are unstable across geometry rebuilds — use semantic
@@ -180,29 +167,16 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
   statistics after the build.
 
 (python-api-meshing-fem-ferromagnet-boundary-layers-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. C. Geuzaine and J.-F. Remacle, “Gmsh,” *Int. J. Numer. Methods Eng.* **79**, 1309–1331 (2009).
 
-(python-api-meshing-fem-ferromagnet-boundary-layers-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 (python-api-meshing-fem-ferromagnet-boundary-layers-source-code-index)=
-<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
+| object boundary-layer policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | recipe validation tests |
 | boundary-layer fields | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.configure` | signature (`boundary_layer_*`) |
 | mesh operation spec | `packages/fullmag-py/src/fullmag/world.py` | `_MeshOperationSpec` | class definition |
-| object recipe | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe.boundary_layer_count` | validation tests |
-## Source-code index
-
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
-
-
-### Source-map coverage
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Object boundary-layer policy and lowering. | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | Object boundary-layer policy and lowering. | Source-map validator and focused API tests |
+| object recipe field | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe.boundary_layer_count` | validation tests |

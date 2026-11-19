@@ -1,21 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-const redirectMock = vi.hoisted(() => vi.fn());
-
-vi.mock("next/navigation", () => ({
-  redirect: redirectMock,
+vi.mock("./workspace/page", () => ({
+  default: function WorkspacePage() {
+    return null;
+  },
 }));
 
 describe("HomePage route", () => {
-  beforeEach(() => {
-    redirectMock.mockClear();
-  });
-
-  it("redirects the root route to the canonical workspace", async () => {
+  it("renders the workspace, which selects the tab from the address", async () => {
     const { default: HomePage } = await import("./page");
+    const { default: WorkspacePage } = await import("./workspace/page");
 
-    HomePage();
-
-    expect(redirectMock).toHaveBeenCalledWith("/workspace");
+    expect(HomePage().type).toBe(WorkspacePage);
   });
 });

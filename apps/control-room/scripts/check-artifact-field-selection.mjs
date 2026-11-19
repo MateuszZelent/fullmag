@@ -3,7 +3,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import vm from "node:vm";
 const root=new URL("../src/",import.meta.url),cache=new Map();
-function load(url){if(!cache.has(url.href)){const resolved=existsSync(url)?url:new URL(url.href.replace(/\.ts$/,"/index.ts"));cache.set(url.href,new vm.SourceTextModule(stripTypeScriptTypes(readFileSync(resolved,"utf8")),{identifier:resolved.href}));}return cache.get(url.href);}
+function load(url){if(!cache.has(url.href)){const resolved=existsSync(url)?url:new URL(url.href.replace(/\.ts$/,"/index.ts"));cache.set(url.href,new vm.SourceTextModule(stripTypeScriptTypes(readFileSync(resolved,"utf8"),{mode:"transform"}),{identifier:resolved.href}));}return cache.get(url.href);}
 const entry=load(new URL("kernel/visualization/artifactFieldSelection.ts",root));
 await entry.link((name,parent)=>load(name.startsWith("@/")?new URL(`${name.slice(2)}.ts`,root):new URL(`${name}.ts`,parent.identifier)));await entry.evaluate();
 const {artifactInspectionQuantity:gate,artifactSelectionForQuantity:select}=entry.namespace;
@@ -47,7 +47,7 @@ check("new matching sessions get separate metadata range identities",()=>{for(co
 check("malformed locator and owner are rejected without throwing",()=>{for(const locator of [{},{owner:null},{owner:[]},[],"invalid",null]){const m=metadata();m.artifact_field_locator=locator;assert.equal(matches(m,bindPin()),false);}});
 // Interpret the real resource wrapper with deterministic hook dependencies.
 let currentResource={data:metadata(),status:"ready",error:null,revision:1,refetch:()=>{}},lastQuery;
-const wrapper=new vm.SourceTextModule(stripTypeScriptTypes(readFileSync(new URL("kernel/resources/useVisualizationFieldMeta.ts",root),"utf8")));
+const wrapper=new vm.SourceTextModule(stripTypeScriptTypes(readFileSync(new URL("kernel/resources/useVisualizationFieldMeta.ts",root),"utf8"),{mode:"transform"}));
 await wrapper.link(name=>{
  if(name==="../visualization/artifactFieldSelection")return entry;
  if(name==="react")return new vm.SyntheticModule(["useMemo"],function(){this.setExport("useMemo",factory=>factory());});
@@ -76,7 +76,7 @@ const storeModule=load(new URL("modules/viewport-3d/viewport3dStore.ts",root));
 await storeModule.link((name,parent)=>{
  if(name==="react")return new vm.SyntheticModule(["useCallback","useSyncExternalStore"],function(){this.setExport("useCallback",fn=>fn);this.setExport("useSyncExternalStore",(_subscribe,snapshot)=>snapshot());});
  // Visual-profile initialization is unrelated to range selection; no WebGL dependency is loaded.
- if(name==="./viewport3dVisualProfile")return new vm.SyntheticModule(["DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID"],function(){this.setExport("DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID","interactive");});
+ if(name==="./viewport3dVisualProfile")return new vm.SyntheticModule(["DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID","getViewport3DVisualProfile"],function(){this.setExport("DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID","interactive");this.setExport("getViewport3DVisualProfile",()=>({antialias:true}));});
  return load(name.startsWith("@/")?new URL(`${name.slice(2)}.ts`,root):new URL(`${name}.ts`,parent.identifier));
 });await storeModule.evaluate();
 check("rendered range store isolates live, owner and projection identities",()=>{
@@ -131,6 +131,185 @@ check("standalone artifact Inspector resolves only an explicit object without a 
 });
 check("admitted historical result never appears as live magnetic materialization",()=>{
  const ready={catalogReady:true,catalogError:false,quantityAvailable:true,ownerReady:true,presentationReady:true},resolve=panelModel.namespace.resolveArtifactInspectionDataState;
- assert.equal(resolve(ready),"Historical snapshot");assert.equal(resolve({...ready,presentationReady:false}),"Loading historical result");assert.equal(resolve({...ready,ownerReady:false}),"Select execution");assert.equal(resolve({...ready,quantityAvailable:false}),"Select raw SI quantity");assert.equal(resolve({...ready,catalogReady:false}),"Loading catalog");assert.equal(resolve({...ready,catalogError:true}),"Unavailable");
+ assert.equal(resolve(ready),"Historical snapshot");assert.equal(resolve({...ready,presentationReady:false}),"Loading historical result");assert.equal(resolve({...ready,ownerReady:false}),"Select execution");assert.equal(resolve({...ready,quantityAvailable:false}),"Select a compatible field");assert.equal(resolve({...ready,catalogReady:false}),"Loading catalog");assert.equal(resolve({...ready,catalogError:true}),"Unavailable");
+});
+check("Universe overview does not wait for a field rejected by its sampling mesh",()=>{
+ const source=readFileSync(new URL("modules/inspector/panels/ObjectVisualizationPanel.tsx",root),"utf8");
+ const initializer=source.match(/const dataState = (artifactInspection \?[\s\S]*?);\n  const targetFieldAvailability/)[1];
+ const h=catalog("H_ant");
+ const state={artifactInspection:true,artifactInspectionOwner:pin,catalogOwnerReady:true,catalogOwnerError:false,
+  rawQuantityCatalog:{data:h,status:"ready"},rawFieldCatalog:{status:"ready"},
+  quantityCatalog:{data:h},fieldCatalog:{data:{quantities:[]}},
+  settings:{activeQuantityId:"H_ant"},artifactPresentation:null,
+  artifactInspectionQuantity:gate,resolveArtifactInspectionDataState:panelModel.namespace.resolveArtifactInspectionDataState};
+ assert.equal(vm.runInNewContext(initializer,state),"Select a compatible field");
+ state.fieldCatalog.data.quantities=[{quantity_id:"H_ant"}];
+ assert.equal(vm.runInNewContext(initializer,state),"Loading historical result");
+ state.artifactPresentation={};
+ assert.equal(vm.runInNewContext(initializer,state),"Historical snapshot");
+ state.fieldCatalog.data.quantities=[];
+ assert.equal(vm.runInNewContext(initializer,state),"Select a compatible field");
+});
+check("Universe inspection never hides explicit live Airbox quantities in a scene with antennas",()=>{
+ const route=entry.namespace.artifactUniverseInspectionRoute;
+ assert.equal(route("H_demag",true,true),false);
+ assert.equal(route("H_demag",true,false),false);
+ assert.equal(route("m",true,false),false);
+ assert.equal(route("H_ant",true,true),false);
+ assert.equal(route("H_ant",true,false),true);
+ assert.equal(route("H_ant",false,false),false);
+});
+check("canonical Airbox presentation accepts historical topology without accepting foreign targets",()=>{
+ const target={kind:"airbox",id:"airbox"};
+ assert.strictEqual(panelModel.namespace.resolveObjectVisualizationTargetForLane({artifactInspection:true,lane:"fem",selection:{kind:"airbox.visualization"},selectionTarget:target}),target);
+});
+check("Universe metadata binds accepted global mesh while generic legacy inspection remains readable",()=>{
+ const presentationTarget={kind:"airbox",id:"airbox"};
+ const binding=bind({catalog:catalog("H_ant"),quantityId:"H_ant",selection:pin,sessionIdentity:pin.identity,targetScope:{scopeKind:"full",scopeId:null},presentationTarget});
+ const m=metadata(), locator=m.artifact_field_locator;
+ assert.equal(matches(m,binding),false);assert.equal(matches(m,bindPin()),true);
+ locator.owner.accepted_artifact={project_id:"p",task_id:"t",attempt_id:"a",ownership_epoch:"1",artifact_id:"i",object_ref:"a".repeat(64)};
+ locator.sample_carrier={domain:{kind:"global"},carrier_kind:"fem_domain_mesh_asset",location:"node",topology_digest:"sha256:"+"b".repeat(64)};
+ assert.equal(matches(m,binding),true);assert.equal(locator.owner.object_id,"source");
+ const key=entry.namespace.artifactCarrierPresentationKey(binding.expectedOwner,binding.query,presentationTarget);
+ assert.notEqual(key,entry.namespace.artifactCarrierPresentationKey(binding.expectedOwner,binding.query));
+ assert.equal(key,entry.namespace.artifactCarrierPresentationKey(binding.expectedOwner,binding.query,{...presentationTarget}));
+ for(const [field,value] of [["carrier_kind","fem_mesh_asset:geometry"],["location","cell"],["topology_digest","bad"]]){
+  const bad=structuredClone(m);bad.artifact_field_locator.sample_carrier[field]=value;assert.equal(matches(bad,binding),false,field);
+ }
+ for(const q of ["V_electric","J_charge"]){
+  const blocked=bind({catalog:catalog(q),quantityId:q,selection:{...pin,quantityId:q},sessionIdentity:pin.identity,targetScope:null,presentationTarget});
+  assert.equal(blocked.query,null,q);
+ }
+});
+const universeRoute=entry.namespace.artifactUniverseInspectionRoute;
+const liveUniverse=entry.namespace.artifactUniverseCatalogHasExplicitLiveQuantity;
+const discovery={ownerSelected:true,liveCatalogReady:true};
+function liveUniverseCatalog(q="H_demag"){
+ const c=catalog(q),entry=c.quantities[0];entry.domain="full_domain";
+ entry.resolved_capability.lane="fem_cpu";entry.resolved_capability.carriers[0].payload_state="current";
+ return c;
+}
+check("selected execution discovers historical catalog from empty or unavailable magnetic selection",()=>{
+ for(const q of ["","H_demag","H_ant"]){assert.equal(universeRoute(q,true,false,discovery),true);}
+});
+check("discovery requires a selected execution and inspection context",()=>{
+ for(const q of ["","H_demag","H_ant"]){
+  assert.equal(universeRoute(q,true,false,{...discovery,ownerSelected:false}),false);
+  assert.equal(universeRoute(q,false,false,discovery),false);
+ }
+});
+check("pending or failed live catalog cannot trigger historical takeover",()=>{
+ for(const q of ["","H_demag","H_ant"])assert.equal(universeRoute(q,true,false,{...discovery,liveCatalogReady:false}),false);
+});
+for(const q of ["H_demag","H_ant"])check(`compatible current ${q} keeps live priority`,()=>{
+ const c=liveUniverseCatalog(q);assert.equal(liveUniverse(c,q),true);
+ assert.equal(universeRoute(q,true,liveUniverse(c,q),discovery),false);
+});
+check("live discovery rejects missing, duplicate and unsupported current contracts",()=>{
+ assert.equal(liveUniverse(null,"H_demag"),false);assert.equal(liveUniverse(liveUniverseCatalog(),""),false);
+ for(const mutate of [c=>c.quantities.push(structuredClone(c.quantities[0])),
+  c=>{c.quantities[0].domain="magnetic_only";},
+  c=>{c.quantities[0].resolved_capability.provider="unavailable";},
+  c=>{c.quantities[0].resolved_capability.lane="artifact_inspection_read_only";},
+  c=>{c.quantities[0].resolved_capability.publication="offline";},
+  c=>{c.quantities[0].resolved_capability.quantity_id="H_ant";},
+  c=>{c.quantities[0].resolved_capability.carriers[0].components=1;},
+  c=>{c.quantities[0].resolved_capability.carriers[0].payload_state="historical";},
+  c=>{c.quantities[0].resolved_capability.carriers=[];}]){
+  const c=liveUniverseCatalog();mutate(c);assert.equal(liveUniverse(c,"H_demag"),false);
+ }
+});
+check("discovery preserves active quantity and owner pins without claiming data",()=>{
+ const selected={activeQuantityId:"H_demag",owner:structuredClone(pin)},before=structuredClone(selected);
+ assert.equal(universeRoute(selected.activeQuantityId,true,false,discovery),true);
+ assert.deepEqual(selected,before);assert.equal(gate({quantities:[]},"H_ant"),false);
+});
+check("Global provenance gate remains required after discovery",()=>{
+ const locator=metadata().artifact_field_locator;
+ assert.equal(entry.namespace.artifactFieldLocatorHasAcceptedGlobalSampling(locator),false);
+ locator.owner.accepted_artifact={project_id:"p",task_id:"t",attempt_id:"a",ownership_epoch:"1",artifact_id:"i",object_ref:"a".repeat(64)};
+ locator.sample_carrier={domain:{kind:"global"},carrier_kind:"fem_domain_mesh_asset",location:"node",topology_digest:"sha256:"+"b".repeat(64)};
+ assert.equal(entry.namespace.artifactFieldLocatorHasAcceptedGlobalSampling(locator),true);
+ for(const indexing of ["point_samples","source_nodes"]){const bad=structuredClone(locator);bad.indexing=indexing;assert.equal(entry.namespace.artifactFieldLocatorHasAcceptedGlobalSampling(bad),false);}
+});
+// Run the actual overlay hook: a conductor-only live H must not suppress Universe inspection.
+let overlayLiveCatalog = liveUniverseCatalog("H_ant"), overlayExecutionCalls = [];
+let overlayInspectionState = "retained", overlayScopedCalls = [], overlayPayloadEnabled = [];
+const availabilityModule = load(new URL("kernel/visualization/artifactInspectionAvailability.ts", root));
+await availabilityModule.link((name, parent) => load(new URL(name + ".ts", parent.identifier)));
+await availabilityModule.evaluate();
+const overlayNoResource = () => ({ status: "loading", data: null, error: null, refreshError: null });
+const overlayBindings = {
+  useQuantityCatalogResource: options => {
+    if (options.stageId === undefined) return { status: "ready", data: overlayLiveCatalog, error: null, refreshError: null };
+    overlayScopedCalls.push(options); return overlayNoResource();
+  },
+  useFieldCatalogResource: options => { overlayScopedCalls.push(options); return overlayNoResource(); },
+  useFieldMetaResource: options => { overlayPayloadEnabled.push(options.enabled); return overlayNoResource(); },
+  useStageExecutionResource: options => {
+    overlayExecutionCalls.push(options);
+    return { status: "ready", data: { session_id: "s", session_epoch: "e", request_scope_epoch: "r", run_id: "run",
+      stages: [{ stage_id: "stage", antenna_solve_stage_id: "solve", status: "completed",
+        ...(overlayInspectionState === "unknown" ? {} : { antenna_inspection: { state: overlayInspectionState } }) }] }, error: null, refreshError: null };
+  },
+};
+function overlaySynthetic(values) {
+  return new vm.SyntheticModule(Object.keys(values), function () { for (const [key, value] of Object.entries(values)) this.setExport(key, value); });
+}
+const overlayHook = new vm.SourceTextModule(stripTypeScriptTypes(readFileSync(new URL("modules/viewport-3d/hooks/useArtifactFieldOverlay.ts", root), "utf8"), { mode: "transform" }));
+await overlayHook.link(name => {
+  if (name === "react") return overlaySynthetic({ useMemo: fn => fn(), useEffect: () => {}, useEffectEvent: fn => fn });
+  if (name === "@/kernel/visualization/artifactFieldSelection") return entry;
+  if (name === "@/kernel/visualization/artifactInspectionAvailability") return availabilityModule;
+  if (name === "@/kernel/resources/studyRuntimeResources") return overlaySynthetic(overlayBindings);
+  if (name === "@/kernel/resources/useSessionStatus") return overlaySynthetic({ useSessionResourceIdentity: () => pin.identity });
+  if (name === "@/kernel/visualization/useObjectVisualization") return overlaySynthetic({
+    useObjectVisualizationSelector: fn => fn({ artifactFieldSelection: pin }),
+    useObjectVisualizationController: () => ({ getSnapshot: () => ({ artifactFieldSelection: pin }), setArtifactFieldSelection: () => assert.fail("Read must not mutate selection") }),
+  });
+  if (name === "../model/artifactFieldOverlayModel") return overlaySynthetic({ artifactInspectionOwnerPlan: entry.namespace.artifactInspectionOwnerPlan,
+    artifactOverlayLocator: () => assert.fail("Loading metadata must not be admitted"), artifactUniverseInspectionLocator: () => assert.fail("Loading metadata must not be admitted"),
+    prepareArtifactFieldOverlay: () => assert.fail("No payload is ready"), presentArtifactFieldOverlay: () => assert.fail("No payload is ready") });
+  if (name === "../model/artifactFieldCarrierModel") return overlaySynthetic({ artifactCarrierQueries: () => assert.fail("No locator is ready"), admitArtifactFieldCarrier: () => assert.fail("No payload is ready") });
+  if (name === "../viewport3dResources") return overlaySynthetic({
+    useViewport3DFieldVectorRequest: (_request, enabled) => { overlayPayloadEnabled.push(enabled); return overlayNoResource(); },
+    useViewport3DArtifactTopology: query => { overlayPayloadEnabled.push(Boolean(query)); return overlayNoResource(); },
+  });
+  if (name === "../model/viewport3DFieldDataPlan") return overlaySynthetic({ buildViewport3DFieldResourceRequestId: () => "disabled-request" });
+  throw new Error(`Unexpected overlay hook import ${name}`);
+});
+await overlayHook.evaluate();
+check("actual Universe hook preserves inspection when live H is conductor-only", () => {
+  overlayLiveCatalog = liveUniverseCatalog("H_ant"); overlayLiveCatalog.quantities[0].domain = "magnetic_only"; overlayExecutionCalls = [];
+  assert.equal(entry.namespace.artifactCatalogHasExplicitLiveQuantity(overlayLiveCatalog, "H_ant"), true,
+    "Regression must distinguish generic live eligibility from Universe eligibility");
+  const result = overlayHook.namespace.useArtifactFieldOverlay("H_ant", null, {}, false,
+    [{ id: "solve", source_object_id: "source" }], { kind: "airbox", id: "airbox" });
+  assert.equal(overlayExecutionCalls.length, 1); assert.equal(overlayExecutionCalls[0].enabled, true);
+  assert.equal(result.historical, true, "A magnetic-only live carrier cannot take over the Universe route");
+  assert.equal(result.selectedStageId, "stage");
+  assert.equal(overlayScopedCalls.length, 2);
+  assert.ok(overlayScopedCalls.every(options => options.enabled && options.stageId === "stage"));
+});
+check("actual Universe hook gives compatible full-domain live H priority", () => {
+  overlayLiveCatalog = liveUniverseCatalog("H_ant"); overlayExecutionCalls = [];
+  const result = overlayHook.namespace.useArtifactFieldOverlay("H_ant", null, {}, false,
+    [{ id: "solve", source_object_id: "source" }], { kind: "airbox", id: "airbox" });
+  assert.equal(overlayExecutionCalls[0].enabled, false); assert.equal(result.historical, false);
+});
+for (const state of ["retained", "absent", "unknown"]) check("actual Universe hook gates catalog and payload reads for " + state + " registry state", () => {
+  overlayInspectionState = state;
+  overlayLiveCatalog = liveUniverseCatalog("H_ant"); overlayLiveCatalog.quantities[0].domain = "magnetic_only";
+  overlayExecutionCalls = []; overlayScopedCalls = []; overlayPayloadEnabled = [];
+  const result = overlayHook.namespace.useArtifactFieldOverlay("H_ant", null, {}, false,
+    [{ id: "solve", source_object_id: "source" }], { kind: "airbox", id: "airbox" });
+  assert.equal(overlayExecutionCalls[0].enabled, true);
+  assert.equal(result.selectedStageId, state === "retained" ? "stage" : "");
+  assert.equal(overlayScopedCalls.length, 2);
+  assert.ok(overlayScopedCalls.every(options => options.enabled === (state === "retained")));
+  assert.ok(overlayPayloadEnabled.every(enabled => enabled === false), "Registry discovery cannot qualify unloaded payloads");
+  assert.equal(result.model, null);
+  assert.equal(result.catalog, null);
 });
 console.log(JSON.stringify({status:"passed",checks,unit_test_compilation:false}));

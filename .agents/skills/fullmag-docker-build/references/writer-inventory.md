@@ -6,6 +6,13 @@ sprawdzono natywnym Git dla Windows; WSL Git nie interpretuje jego Windowsowego
 wskaźnika `.git`. Numery linii odnoszą się do tego odczytu. To mapa do ponownej
 weryfikacji przy zmianie kodu, nie dowód uruchomienia wszystkich tras.
 
+**Status topologii:** dalsze sekcje są historycznym audytem implementacji.
+[ADR 0076](../../../../docs/adr/0076-single-private-volume-per-dev-group.md)
+zastępuje ich wcześniejsze zalecenia o wielu prywatnych volume’ach dla nowej
+polityki daily DEV. Starych receipts i szczegółów audytu nie usuwaj. Implementacja
+jednego `BuildControl.volume` oraz runtime pozostają **NOT VERIFIED** do czasu
+ponownego audytu źródeł, Compose i mountów.
+
 ## Doprecyzowanie 20.10.2026 — idempotentny start i jawne wyniki skryptu
 
 Task `docker-dev-up-20261020` dodaje orkiestrator `docker_dev_up.ensure_up`.
@@ -122,7 +129,7 @@ volumes, obrazów ani BuildKit cache i nie ustala quota. Wolumeny `external`
 przeżywają odtworzenie/usunięcie kontenera. Nie używaj `compose down -v` jako
 zamiennika bezpiecznego cleanupu. Kontrolowana retencja grupy to osobny zakres;
 bez niej nie twierdź, że całe zużycie dysku jest ograniczone. Aktywny Docker
-Desktop cold build/start, inspect, incremental cache-hit, HMR, run `.py` i GC
+Desktop cold build/start, inspect, package cache-hit, HMR, run `.py` i GC
 pozostają `NOT VERIFIED`.
 
 ### Generowanie źródeł API — delta 19.10.2026
@@ -233,7 +240,6 @@ Stan bazowy powyżej pozostaje historyczny. Bieżące writery zarządzanej trasy
 | `docker_build_control.py::build_volume_toolchain`, `build_volume_runtime_images` | Kontekst allowlist bez hostowego stagingu; warstwy w BuildKit; logi, manifesty i receipty w build-control volume. |
 | `docker_volume_dev.py::start`, `_backend_cache`, `_frontend` | Overlaye i metadata w wolumenie kontrolnym; backend/cache/pakiety oraz frontend/pnpm/Next w named volumes. |
 | `backend_dev.py::_publish_runtime_provenance`, `_run_canonical_make` | `/build/provenance.json` i ograniczony log Make w build volume. |
-| `backend_dev.py::_run_automatic_package_retention`, `::_recover_retention_journal`, `docker_package_retention.py` | Po nowej publikacji: plan/journal i zweryfikowane backupy w package volume, ostatni raport w backend subpath control volume. Bieżący pakiet, rollback i archiwa pozostają. Cache hit nie skanuje historii; manualny dry-run/apply/recovery dotyczy tej samej zatrzymanej grupy. Runtime odzysku bajtów NOT VERIFIED. |
 | `frontend_dev.py::_BoundedLog` | Ograniczony next.log w frontend volume; nadmiar w pierścieniu Docker local. |
 | `docker_volume_dev.py::_host_ledger`, `_finish` | Kopia helpera i logi/receipty utrzymania w control volume. Właściwy ledger oraz certyfikaty storage pozostają danymi runtime Windows. |
 | `setup_docker.py`, rejestr zadania `fullmag_storage.py::register` | Konfiguracja operatora i metadane własności worktree na hoście; nie są receiptem ani cache buildu. |

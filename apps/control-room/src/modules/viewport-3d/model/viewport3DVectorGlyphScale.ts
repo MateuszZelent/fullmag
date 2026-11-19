@@ -9,24 +9,32 @@ export interface Viewport3DAdaptiveVectorGlyphLengthInput {
   scope: "full" | "surface";
 }
 
-export function resolveViewport3DAdaptiveVectorGlyphLength({
+export function resolveViewport3DAdaptiveVectorGlyphSpacing({
   boundsSize,
   glyphCount,
-  lengthScale,
   scope,
-}: Viewport3DAdaptiveVectorGlyphLengthInput): number {
+}: Omit<Viewport3DAdaptiveVectorGlyphLengthInput, "lengthScale">): number | null {
+  const count = Math.floor(Number.isFinite(glyphCount) ? glyphCount : 0);
+  if (count <= 0) return null;
   const dimensions = boundsSize
     .filter((value) => Number.isFinite(value) && value > 0)
     .sort((left, right) => right - left);
-  const count = Math.floor(Number.isFinite(glyphCount) ? glyphCount : 0);
-  if (count <= 0) return 0;
-  const multiplier = Math.max(0, Number.isFinite(lengthScale) ? lengthScale : 1);
-  if (dimensions.length === 0 || multiplier === 0) return MIN_VECTOR_GLYPH_LENGTH;
+  if (dimensions.length === 0) return 0;
   const dimensionality = scope === "surface"
     ? Math.min(2, dimensions.length)
     : Math.min(3, dimensions.length);
   const measure = dimensions.slice(0, dimensionality).reduce((product, value) => product * value, 1);
-  const spacing = Math.pow(measure / count, 1 / dimensionality);
+  return Math.pow(measure / count, 1 / dimensionality);
+}
+
+export function resolveViewport3DAdaptiveVectorGlyphLength(
+  input: Viewport3DAdaptiveVectorGlyphLengthInput,
+): number {
+  const spacing = resolveViewport3DAdaptiveVectorGlyphSpacing(input);
+  if (spacing === null) return 0;
+  const { lengthScale, scope } = input;
+  const multiplier = Math.max(0, Number.isFinite(lengthScale) ? lengthScale : 1);
+  if (multiplier === 0) return MIN_VECTOR_GLYPH_LENGTH;
   const fill = scope === "surface" ? SURFACE_SPACING_FILL : FULL_SPACING_FILL;
   return Math.max(spacing * fill * multiplier, MIN_VECTOR_GLYPH_LENGTH);
 }

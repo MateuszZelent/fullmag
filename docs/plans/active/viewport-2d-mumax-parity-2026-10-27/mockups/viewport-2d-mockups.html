@@ -1,0 +1,831 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Widok 2D Fullmag — makiety</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one working Control Room frame (explorer | 2D surface | inspector) on top,
+   followed by decision panels. Tokens mirror apps/control-room/src/design/styles/theme.css
+   (Catppuccin Latte light / Mocha dark). Field colormaps are scientific data colors and
+   intentionally identical in both themes. */
+:root {
+  --fm-bg-app: #eff1f5; --fm-bg-chrome: #e6e9ef; --fm-bg-panel: #eff1f5; --fm-bg-raised: #e6e9ef;
+  --fm-bg-canvas: #dce0e8; --fm-bg-surface: #f7f8fb; --fm-bg-hover: #dce0e8; --fm-bg-selected: #c4d7f5;
+  --fm-border-subtle: #ccd0da; --fm-border-default: #bcc0cc; --fm-border-strong: #acb0be;
+  --fm-text-primary: #4c4f69; --fm-text-secondary: #5c5f77; --fm-text-tertiary: #6c6f85;
+  --fm-accent: #1e66f5; --fm-accent-soft: #dbe6fd; --fm-on-accent: #eff1f5;
+  --fm-ok: #40a02b; --fm-warn: #df8e1d; --fm-danger: #d20f39; --fm-info: #179299;
+  --fm-chart-1: #d20f39; --fm-chart-2: #40a02b; --fm-chart-3: #1e66f5; --fm-chart-4: #8839ef;
+  --fm-font-ui: "Inter", "Aptos", "Segoe UI", system-ui, sans-serif;
+  --fm-font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+  --fm-radius: 6px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --fm-bg-app: #1e1e2e; --fm-bg-chrome: #181825; --fm-bg-panel: #1e1e2e; --fm-bg-raised: #313244;
+  --fm-bg-canvas: #11111b; --fm-bg-surface: #242438; --fm-bg-hover: #3b3c4f; --fm-bg-selected: #264069;
+  --fm-border-subtle: #313244; --fm-border-default: #45475a; --fm-border-strong: #585b70;
+  --fm-text-primary: #cdd6f4; --fm-text-secondary: #bac2de; --fm-text-tertiary: #a6adc8;
+  --fm-accent: #89b4fa; --fm-accent-soft: #2a2d52; --fm-on-accent: #1e1e2e;
+  --fm-ok: #a6e3a1; --fm-warn: #f9e2af; --fm-danger: #f38ba8; --fm-info: #94e2d5;
+  --fm-chart-1: #f38ba8; --fm-chart-2: #a6e3a1; --fm-chart-3: #89b4fa; --fm-chart-4: #cba6f7;
+  color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --fm-bg-app: #1e1e2e; --fm-bg-chrome: #181825; --fm-bg-panel: #1e1e2e; --fm-bg-raised: #313244;
+  --fm-bg-canvas: #11111b; --fm-bg-surface: #242438; --fm-bg-hover: #3b3c4f; --fm-bg-selected: #264069;
+  --fm-border-subtle: #313244; --fm-border-default: #45475a; --fm-border-strong: #585b70;
+  --fm-text-primary: #cdd6f4; --fm-text-secondary: #bac2de; --fm-text-tertiary: #a6adc8;
+  --fm-accent: #89b4fa; --fm-accent-soft: #2a2d52; --fm-on-accent: #1e1e2e;
+  --fm-ok: #a6e3a1; --fm-warn: #f9e2af; --fm-danger: #f38ba8; --fm-info: #94e2d5;
+  --fm-chart-1: #f38ba8; --fm-chart-2: #a6e3a1; --fm-chart-3: #89b4fa; --fm-chart-4: #cba6f7;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--fm-bg-app); color: var(--fm-text-primary); font: 13px/1.5 var(--fm-font-ui); }
+.page { max-width: 1320px; margin: 0 auto; padding-block: 24px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 40px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; line-height: 1.25; }
+h1 { font-size: 22px; font-weight: 650; }
+h2 { font-size: 17px; font-weight: 650; }
+h3 { font-size: 13px; font-weight: 600; }
+p { margin: 0; max-width: 72ch; color: var(--fm-text-secondary); }
+code, .mono { font-family: var(--fm-font-mono); font-size: 12px; }
+.num { font-variant-numeric: tabular-nums; }
+header.intro { display: grid; gap: 10px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--fm-border-default); font-size: 11px; color: var(--fm-text-secondary); background: var(--fm-bg-surface); }
+.chip--warn { border-color: var(--fm-warn); color: var(--fm-text-primary); }
+.chip--ok { border-color: var(--fm-ok); }
+.chip--danger { border-color: var(--fm-danger); }
+.chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .7; }
+.chip--warn::before { background: var(--fm-warn); opacity: 1; }
+.chip--ok::before { background: var(--fm-ok); opacity: 1; }
+.chip--danger::before { background: var(--fm-danger); opacity: 1; }
+section { display: grid; gap: 14px; }
+.section-head { display: grid; gap: 6px; }
+
+/* Scenario bar */
+.scenario { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+.scenario label.cap { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fm-text-tertiary); }
+.seg { display: inline-flex; border: 1px solid var(--fm-border-default); border-radius: var(--fm-radius); overflow: hidden; background: var(--fm-bg-surface); flex-wrap: wrap; }
+.seg button { font: inherit; font-size: 12px; color: var(--fm-text-secondary); background: transparent; border: 0;
+  padding: 4px 10px; cursor: pointer; border-right: 1px solid var(--fm-border-subtle); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--fm-accent-soft); color: var(--fm-text-primary); font-weight: 600; }
+.seg button:disabled { color: var(--fm-text-tertiary); cursor: not-allowed; text-decoration: line-through; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--fm-accent); outline-offset: 1px; }
+
+/* Control Room frame */
+.frame { display: grid; grid-template-columns: 190px minmax(0, 1fr) 290px; border: 1px solid var(--fm-border-default);
+  border-radius: 8px; overflow: hidden; background: var(--fm-bg-panel); min-height: 560px; }
+.pane { min-width: 0; }
+.explorer { background: var(--fm-bg-chrome); border-right: 1px solid var(--fm-border-subtle); padding: 10px; display: grid; align-content: start; gap: 4px; font-size: 12px; }
+.explorer .tree-h { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fm-text-tertiary); margin-top: 8px; }
+.explorer .node { padding: 3px 6px; border-radius: 4px; color: var(--fm-text-secondary); }
+.explorer .node--sel { background: var(--fm-bg-selected); color: var(--fm-text-primary); }
+.center { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; background: var(--fm-bg-canvas); }
+.tabs { display: flex; gap: 2px; padding: 6px 8px 0; background: var(--fm-bg-chrome); border-bottom: 1px solid var(--fm-border-subtle); }
+.tabs span { padding: 5px 12px; font-size: 12px; color: var(--fm-text-tertiary); border-radius: 6px 6px 0 0; }
+.tabs span.on { background: var(--fm-bg-panel); color: var(--fm-text-primary); font-weight: 600; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; padding: 8px 10px; background: var(--fm-bg-panel); border-bottom: 1px solid var(--fm-border-subtle); }
+.tb-group { display: inline-flex; align-items: center; gap: 6px; }
+.tb-label { font-size: 11px; color: var(--fm-text-tertiary); }
+select, input[type="number"] { font: inherit; font-size: 12px; color: var(--fm-text-primary); background: var(--fm-bg-surface);
+  border: 1px solid var(--fm-border-default); border-radius: var(--fm-radius); padding: 3px 6px; }
+input[type="range"] { accent-color: var(--fm-accent); width: 160px; }
+.toggle { font: inherit; font-size: 12px; border: 1px solid var(--fm-border-default); border-radius: var(--fm-radius); background: var(--fm-bg-surface);
+  color: var(--fm-text-secondary); padding: 3px 8px; cursor: pointer; }
+.toggle[aria-pressed="true"] { background: var(--fm-accent-soft); color: var(--fm-text-primary); border-color: var(--fm-accent); }
+.layer-readout { font-family: var(--fm-font-mono); font-size: 11.5px; color: var(--fm-text-primary); white-space: nowrap; }
+.layer-readout .req { color: var(--fm-text-tertiary); }
+.stepper { font: inherit; width: 24px; height: 24px; border: 1px solid var(--fm-border-default); border-radius: var(--fm-radius); background: var(--fm-bg-surface); color: var(--fm-text-primary); cursor: pointer; }
+.stage { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 108px; gap: 10px; padding: 12px; min-height: 0; }
+.plot-wrap { position: relative; min-width: 0; }
+canvas.plot { display: block; width: 100%; height: 400px; cursor: crosshair; }
+.legend { display: grid; align-content: start; gap: 6px; justify-items: center; font-size: 11px; color: var(--fm-text-secondary); }
+.legend canvas { width: 96px; }
+.badge { position: absolute; top: 8px; right: 8px; display: inline-flex; gap: 6px; align-items: center; padding: 3px 8px; border-radius: 4px;
+  font-size: 11px; background: var(--fm-bg-panel); border: 1px solid var(--fm-border-default); color: var(--fm-text-primary); }
+.badge[data-kind="preview"] { border-color: var(--fm-info); }
+.badge[data-kind="stale"] { border-color: var(--fm-warn); }
+.badge[data-kind="analysis"] { border-color: var(--fm-ok); }
+.tooltip { position: absolute; pointer-events: none; padding: 6px 8px; border-radius: 4px; background: var(--fm-bg-panel);
+  border: 1px solid var(--fm-border-strong); font-family: var(--fm-font-mono); font-size: 11px; color: var(--fm-text-primary); white-space: nowrap; z-index: 2; }
+.blocker { position: absolute; inset: 12px 130px 12px 12px; display: grid; place-content: center; gap: 8px; text-align: center; padding: 20px;
+  background: var(--fm-bg-panel); border: 1px dashed var(--fm-border-strong); border-radius: 6px; }
+.blocker h3 { font-size: 14px; }
+.blocker code { color: var(--fm-danger); }
+.statusbar { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 6px 10px; background: var(--fm-bg-chrome); border-top: 1px solid var(--fm-border-subtle);
+  font-family: var(--fm-font-mono); font-size: 11px; color: var(--fm-text-secondary); }
+.statusbar b { color: var(--fm-text-primary); font-weight: 500; }
+.inspector { border-left: 1px solid var(--fm-border-subtle); background: var(--fm-bg-panel); padding: 10px 12px; display: grid; align-content: start; gap: 12px; font-size: 12px; }
+.insp-title { display: flex; justify-content: space-between; align-items: baseline; }
+.insp-sec { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--fm-border-subtle); }
+.insp-sec h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fm-text-tertiary); font-weight: 600; }
+.row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; align-items: center; }
+.row > span:first-child { color: var(--fm-text-tertiary); }
+.kv { font-family: var(--fm-font-mono); font-size: 11px; color: var(--fm-text-primary); overflow-wrap: anywhere; }
+.note { font-size: 11px; color: var(--fm-text-tertiary); }
+
+/* Decision cards */
+.variants { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.variant { border: 1px solid var(--fm-border-default); border-radius: 8px; padding: 12px; display: grid; gap: 10px; background: var(--fm-bg-surface); align-content: start; }
+.variant--rec { border-color: var(--fm-accent); }
+.variant .tag { font-size: 11px; color: var(--fm-accent); font-weight: 600; }
+.wire { display: grid; gap: 3px; height: 150px; font-size: 10px; color: var(--fm-text-tertiary); }
+.wire div { background: var(--fm-bg-canvas); border: 1px solid var(--fm-border-subtle); border-radius: 3px; display: grid; place-items: center; text-align: center; padding: 2px; }
+.wire .hot { background: var(--fm-accent-soft); color: var(--fm-text-primary); }
+.variant ul { margin: 0; padding-left: 18px; color: var(--fm-text-secondary); display: grid; gap: 2px; }
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.panel { border: 1px solid var(--fm-border-default); border-radius: 8px; padding: 12px; background: var(--fm-bg-surface); display: grid; gap: 10px; align-content: start; min-width: 0; }
+.multi { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.multi figure { margin: 0; display: grid; gap: 2px; }
+.multi canvas { width: 100%; aspect-ratio: 2 / 1; display: block; border: 1px solid var(--fm-border-subtle); }
+.multi figcaption { font-family: var(--fm-font-mono); font-size: 10.5px; color: var(--fm-text-tertiary); }
+canvas.profile { width: 100%; height: 190px; display: block; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 12px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--fm-border-subtle); vertical-align: top; }
+th { font-size: 11px; color: var(--fm-text-tertiary); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+td:first-child { white-space: nowrap; }
+
+@media (max-width: 1100px) {
+  .frame { grid-template-columns: minmax(0, 1fr); }
+  .explorer { display: none; }
+  .inspector { border-left: 0; border-top: 1px solid var(--fm-border-subtle); }
+  .variants { grid-template-columns: minmax(0, 1fr); }
+  .two { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .stage { grid-template-columns: minmax(0, 1fr); }
+  .legend { grid-auto-flow: column; justify-content: start; }
+  .blocker { inset: 12px; }
+  canvas.plot { height: 300px; }
+  .multi { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="intro">
+    <h1>Widok 2D Fullmag — makiety docelowego zachowania</h1>
+    <p>Makiety do planu <code>viewport-2d-mumax-parity-2026-10-27</code>. Dane są syntetyczne (wir magnetyczny z rdzeniem), ale kontrolki, odczyty i stany odpowiadają proponowanemu kontraktowi. Wszystkie decyzje oznaczone jako propozycje czekają na akceptację użytkownika.</p>
+    <div class="chips">
+      <span class="chip chip--warn">PROPOSED · do akceptacji</span>
+      <span class="chip">Canvas 2D + worker (ADR 0020)</span>
+      <span class="chip">Tokeny Catppuccin Latte / Mocha</span>
+      <span class="chip">Dane syntetyczne</span>
+    </div>
+  </header>
+
+  <section aria-labelledby="s-main">
+    <div class="section-head">
+      <h2 id="s-main">1. Powierzchnia 2D — wariant zalecany C (pasek „jak mumax” + Inspector)</h2>
+      <p>Najczęstsze decyzje (wielkość, składowa, płaszczyzna, warstwa, strzałki) są w pasku nad mapą, jak w panelu Display w mumax3. Szczegóły (operator, rozdzielczość, zakres ręczny, nakładki, monitor) zostają w Inspectorze. Przełącz scenariusz, żeby zobaczyć, jak to samo UI zachowuje się dla FDM i trzech przypadków FEM.</p>
+    </div>
+    <div class="scenario">
+      <div class="tb-group"><label class="cap" id="lbl-scn">Scenariusz</label>
+        <div class="seg" role="group" aria-labelledby="lbl-scn" id="scn">
+          <button type="button" data-v="fdm" aria-pressed="true">FDM · siatka strukturalna</button>
+          <button type="button" data-v="swept" aria-pressed="false">FEM · swept Prism6</button>
+          <button type="button" data-v="tet" aria-pressed="false">FEM · Tet4 niestrukturalna</button>
+          <button type="button" data-v="mixed" aria-pressed="false">FEM · mieszana z Pyramid5</button>
+        </div></div>
+      <div class="tb-group"><label class="cap" id="lbl-state">Stan klatki</label>
+        <div class="seg" role="group" aria-labelledby="lbl-state" id="state">
+          <button type="button" data-v="ready" aria-pressed="true">Gotowa</button>
+          <button type="button" data-v="stale" aria-pressed="false">Nieaktualna</button>
+          <button type="button" data-v="empty" aria-pressed="false">Brak próbki</button>
+          <button type="button" data-v="unsupported" aria-pressed="false">Nieobsługiwana</button>
+        </div></div>
+    </div>
+
+    <div class="frame">
+      <nav class="pane explorer" aria-label="Explorer (makieta)">
+        <div class="tree-h">Model</div>
+        <div class="node">disk · Py</div>
+        <div class="node" id="exp-air">airbox</div>
+        <div class="tree-h">Monitory planarne</div>
+        <div class="node node--sel">Domyślne (sesja)</div>
+        <div class="node">mid-plane · monitor</div>
+        <div class="tree-h">Wyniki</div>
+        <div class="node">m · na żywo</div>
+        <div class="node">H_demag</div>
+        <div class="node">e_ex</div>
+      </nav>
+
+      <div class="pane center">
+        <div class="tabs" aria-hidden="true"><span>3D</span><span class="on">2D</span><span>Wykresy</span></div>
+        <div class="toolbar" role="toolbar" aria-label="Pasek widoku 2D">
+          <div class="tb-group"><label class="tb-label" for="q">Wielkość</label>
+            <select id="q"><option value="m">m</option><option value="hd">H_demag</option><option value="eex">e_ex</option></select></div>
+          <div class="tb-group"><span class="tb-label" id="lbl-c">Składowa</span>
+            <div class="seg" role="group" aria-labelledby="lbl-c" id="comp"></div></div>
+          <div class="tb-group"><span class="tb-label" id="lbl-p">Płaszczyzna</span>
+            <div class="seg" role="group" aria-labelledby="lbl-p" id="plane">
+              <button type="button" data-v="xy" aria-pressed="true">XY</button>
+              <button type="button" data-v="xz" aria-pressed="false">XZ</button>
+              <button type="button" data-v="yz" aria-pressed="false">YZ</button>
+            </div></div>
+          <div class="tb-group">
+            <label class="tb-label" for="layer" id="layer-label">Warstwa</label>
+            <button type="button" class="stepper" id="lprev" aria-label="Poprzednia warstwa">‹</button>
+            <input type="range" id="layer" min="0" max="7" step="1" value="3">
+            <button type="button" class="stepper" id="lnext" aria-label="Następna warstwa">›</button>
+            <span class="layer-readout num" id="lread" aria-live="polite"></span>
+          </div>
+          <div class="tb-group">
+            <button type="button" class="toggle" id="arrows" aria-pressed="true">Strzałki</button>
+            <button type="button" class="toggle" id="mesh" aria-pressed="false">Siatka</button>
+          </div>
+        </div>
+        <div class="stage">
+          <div class="plot-wrap">
+            <canvas class="plot" id="plot" role="img" aria-label="Mapa pola 2D"></canvas>
+            <span class="badge" id="badge" data-kind="analysis">Analiza · 512²</span>
+            <div class="tooltip" id="tip" hidden></div>
+          </div>
+          <div class="legend" id="legend">
+            <canvas id="leg" width="192" height="420"></canvas>
+            <div id="legtxt" class="num"></div>
+          </div>
+          <div class="blocker" id="blocker" hidden></div>
+        </div>
+        <div class="statusbar num" id="status"></div>
+      </div>
+
+      <aside class="pane inspector" aria-label="Inspector (makieta)">
+        <div class="insp-title"><h2 style="font-size:14px">Widok 2D</h2><span class="note">Inspector</span></div>
+        <div class="insp-sec">
+          <h3>Źródło</h3>
+          <div class="row"><span>Źródło</span><select id="src"><option>Domyślne (sesja)</option><option>mid-plane · monitor</option></select></div>
+          <div class="row"><span>Tryb warstwy</span><div class="seg" role="group" aria-label="Tryb warstwy" id="lmode">
+            <button type="button" data-v="cell" aria-pressed="true">Komórka</button>
+            <button type="button" data-v="cont" aria-pressed="false">Ciągła</button>
+            <button type="button" data-v="named" aria-pressed="false">Nazwana</button></div></div>
+          <div class="row"><span>Operator</span><select id="op"><option value="plane">próbka płaszczyzny</option><option value="slab">średnia slab</option><option value="depth">projekcja głębokości</option></select></div>
+          <div class="row"><span>Żądane</span><span class="kv" id="i-req"></span></div>
+          <div class="row"><span>Rozwiązane</span><span class="kv" id="i-res"></span></div>
+          <p class="note" id="i-note"></p>
+        </div>
+        <div class="insp-sec">
+          <h3>Prezentacja</h3>
+          <div class="row"><span>Zakres</span><div class="seg" role="group" aria-label="Zakres" id="range">
+            <button type="button" data-v="auto" aria-pressed="true">auto</button>
+            <button type="button" data-v="sym" aria-pressed="false">sym</button>
+            <button type="button" data-v="man" aria-pressed="false">ręczny</button></div></div>
+          <div class="row" id="man-row" hidden><span>min / max</span><span style="display:flex;gap:4px"><input id="rmin" type="number" step="0.1" value="-1" style="width:70px" aria-label="Minimum"><input id="rmax" type="number" step="0.1" value="1" style="width:70px" aria-label="Maksimum"></span></div>
+          <div class="row"><span>Gęstość strzałek</span><input type="range" id="dens" min="14" max="44" value="26" aria-label="Odstęp strzałek w pikselach"></div>
+          <div class="row"><span>Tło rastra</span><span class="kv">krycie 1.00 · bez wygładzania</span></div>
+        </div>
+        <div class="insp-sec">
+          <h3>Tożsamość klatki</h3>
+          <div class="row"><span>frame_id</span><span class="kv" id="i-frame"></span></div>
+          <div class="row"><span>sample_token</span><span class="kv" id="i-token"></span></div>
+          <div class="row"><span>Sampler</span><span class="kv" id="i-sampler"></span></div>
+        </div>
+      </aside>
+    </div>
+    <p class="note">Najedź na mapę, żeby zobaczyć sondę. Przeciąganie suwaka warstwy pokazuje szybki podgląd (<em>interactive</em>), a puszczenie suwaka zastępuje go klatką analityczną w jednym kroku, bez migotania i bez przyciemniania ostatniej dobrej klatki.</p>
+  </section>
+
+  <section aria-labelledby="s-layout">
+    <div class="section-head">
+      <h2 id="s-layout">2. Układ powierzchni — trzy warianty (otwarta decyzja §26.3.1)</h2>
+      <p>Wariant C łączy ergonomię mumax3 (wszystko, co zmieniasz co minutę, jest nad mapą) z istniejącym kontraktem Inspectora. Wymaga, aby pasek i Inspector czytały ten sam stan <code>visualization/state.planar</code> — bez lokalnej kopii.</p>
+    </div>
+    <div class="variants">
+      <div class="variant">
+        <h3>A · Tylko Inspector (stan obecny)</h3>
+        <div class="wire" style="grid-template-columns: 1fr 3fr 1.3fr; grid-template-rows: 1fr;">
+          <div>Explorer</div><div>mapa 2D</div><div class="hot">wszystkie kontrolki 2D</div>
+        </div>
+        <ul><li>Zero nowych komponentów.</li><li>Zmiana warstwy wymaga przejścia do panelu po prawej; brak skrótu klawiszowego dla warstwy.</li><li>Najdalej od mumax3.</li></ul>
+      </div>
+      <div class="variant">
+        <h3>B · Pływający panel w mapie</h3>
+        <div class="wire" style="grid-template-columns: 1fr 4fr; grid-template-rows: 1fr;">
+          <div>Explorer</div><div style="position:relative">mapa 2D<span style="position:absolute;top:6px;left:6px;padding:2px 6px;border:1px solid var(--fm-accent);border-radius:3px;background:var(--fm-accent-soft);color:var(--fm-text-primary)">panel</span></div>
+        </div>
+        <ul><li>Maksymalna powierzchnia mapy.</li><li>Panel zasłania dane i walczy z sondą o kursor.</li><li>Dubluje Inspector — ryzyko drugiego źródła stanu.</li></ul>
+      </div>
+      <div class="variant variant--rec">
+        <span class="tag">Zalecany (PROPOSED)</span>
+        <h3>C · Pasek nad mapą + Inspector</h3>
+        <div class="wire" style="grid-template-columns: 1fr 3fr 1.3fr; grid-template-rows: 40px 1fr;">
+          <div style="grid-row: span 2">Explorer</div><div class="hot">pasek: wielkość · składowa · płaszczyzna · warstwa · strzałki</div><div style="grid-row: span 2">Inspector: źródło, operator, zakres, nakładki</div><div>mapa 2D + legenda</div>
+        </div>
+        <ul><li>Analog panelu Display mumax3.</li><li>Skróty: <code>[</code>/<code>]</code> warstwa, <code>x y z v</code> składowa, <code>a</code> strzałki.</li><li>Jeden stan, dwóch konsumentów, jedna subskrypcja.</li></ul>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-modes">
+    <div class="section-head">
+      <h2 id="s-modes">3. Co znaczy „warstwa” w każdym torze</h2>
+      <p>Zatwierdzone tryby FDM (decyzja 7) przeniesione na FEM. Odczyt zawsze pokazuje wartość żądaną i rozwiązaną (decyzja 8); snap nigdy nie jest ukryty.</p>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Tor</th><th>Suwak „Warstwa”</th><th>Dyskretne przystanki</th><th>Przykładowy odczyt</th><th>Wartość w pikselu</th></tr></thead>
+      <tbody>
+        <tr><td>FDM · komórka</td><td>indeks k</td><td>środki komórek z<sub>k</sub> = z₀ + (k+½)Δz</td><td class="mono">k 3/7 · z = 26.25 nm</td><td>wartość komórki (jak mumax3)</td></tr>
+        <tr><td>FDM · ciągła</td><td>z [m]</td><td>brak; snap do komórki jawny</td><td class="mono">żąd. 24.00 → rozw. 26.25 nm (k 3)</td><td>wartość komórki zawierającej z</td></tr>
+        <tr><td>FDM · nazwana</td><td>obiekt/warstwa</td><td>warstwy z <code>FdmLayerPlanIR.layer_id</code></td><td class="mono">free · k 0–3 · slab</td><td>średnia slab ważona objętością</td></tr>
+        <tr><td>FEM · swept Prism6</td><td>indeks płaszczyzny węzłów</td><td><code>magnetic_plane_coordinates_m</code> z certyfikatu</td><td class="mono">płaszczyzna 2/4 · z = 10.00 nm</td><td>P1 na trójkątach płaszczyzny węzłów (dokładne węzły)</td></tr>
+        <tr><td>FEM · Tet4 / mieszana</td><td>z [m]</td><td>brak warstw danych; znaczniki nawigacyjne co h<sub>⊥</sub></td><td class="mono">z = 12.40 nm · 1 932 el. przecięte</td><td>interpolacja kształtów elementu w punkcie piksela</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section aria-labelledby="s-multi">
+    <div class="section-head">
+      <h2 id="s-multi">4. Multislice i profil liniowy (otwarte decyzje §26.3.2 i §26.3.6)</h2>
+      <p>Propozycja: multislice jako siatka zsynchronizowanych paneli 2D z jednym wspólnym zakresem i jednym <code>frame_id</code> na panel; podgląd w 3D jako druga, późniejsza forma nad tym samym zbiorem danych. Profil liniowy to zasób pochodny tej samej klatki.</p>
+    </div>
+    <div class="two">
+      <div class="panel">
+        <h3>Multislice · m, XY, 4 warstwy, wspólny zakres</h3>
+        <div class="multi" id="multi"></div>
+        <p class="note">Każdy panel ma własną tożsamość próbki; zakres i paleta są współdzielone, a sonda pokazuje ten sam punkt (x, y) we wszystkich panelach.</p>
+      </div>
+      <div class="panel">
+        <h3>Profil liniowy przez rdzeń wiru · y = środek</h3>
+        <canvas class="profile" id="profile" role="img" aria-label="Profil m_x, m_y, m_z wzdłuż linii"></canvas>
+        <p class="note">Linia rysowana na mapie (Shift + przeciągnięcie). Oś X w nm, wartości bezwymiarowe; w FEM próbki leżą w punktach przecięć krawędzi elementów i są łączone liniowo, bez wygładzania.</p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-states">
+    <div class="section-head">
+      <h2 id="s-states">5. Stany klatki (otwarta decyzja §26.3.7)</h2>
+      <p>Ostatnia dobra klatka pozostaje widoczna i nie jest przyciemniana. Stan komunikuje odznaka i pasek statusu; kontrolki pozostają aktywne.</p>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Stan</th><th>Warunek</th><th>Co widać</th><th>Kod diagnostyczny</th></tr></thead>
+      <tbody>
+        <tr><td>Podgląd</td><td>przeciąganie suwaka / zmiana parametru</td><td>raster profilu <em>interactive</em>, odznaka „Podgląd”</td><td class="mono">quality=interactive</td></tr>
+        <tr><td>Analiza</td><td>meta + scalar + raster mają ten sam frame_id</td><td>raster pełnej rozdzielczości, odznaka „Analiza”</td><td class="mono">quality=analysis</td></tr>
+        <tr><td>Nieaktualna</td><td>solver opublikował nowszą rewizję, nowa klatka w drodze</td><td>ostatnia dobra klatka + odznaka z numerem rewizji</td><td class="mono">frame_stale</td></tr>
+        <tr><td>Brak próbki</td><td>płaszczyzna poza domeną lub pusty target</td><td>komunikat z zakresem domeny; suwak pokazuje dozwolony przedział</td><td class="mono">plane_outside_domain</td></tr>
+        <tr><td>Nieobsługiwana</td><td>typ elementu lub operator bez wsparcia w danym torze</td><td>komunikat z liczbą elementów i linkiem do macierzy możliwości</td><td class="mono">unsupported_element_order</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+  // ---------- Synthetic scenarios (all lengths in nm) ----------
+  const SCN = {
+    fdm:   { kind: "fdm", name: "FDM CPU", box: [0, 512, 0, 256, 0, 60], grid: [64, 32, 8], center: [256, 128],
+             named: [{ id: "free", k: [0, 3] }, { id: "ref", k: [4, 7] }] },
+    swept: { kind: "swept", name: "FEM GPU", R: 200, box: [-200, 200, -200, 200, 0, 20], planes: [0, 5, 10, 15, 20], center: [0, 0], elems: "Prism6 · 18 432 el." },
+    tet:   { kind: "tet", name: "FEM CPU", R: 200, box: [-200, 200, -200, 200, 0, 20], center: [0, 0], elems: "Tet4 · 61 204 el." },
+    mixed: { kind: "mixed", name: "FEM CPU", R: 200, box: [-200, 200, -200, 200, 0, 20], center: [0, 0], elems: "Prism6 + Pyramid5 + Tet4" }
+  };
+  const S = { scn: "fdm", state: "ready", q: "m", comp: "vec", plane: "xy", lmode: "cell", layer: 3, cont: 24, arrows: true, mesh: false,
+              range: "auto", rmin: -1, rmax: 1, dens: 26, op: "plane", quality: "analysis", rev: 412 };
+
+  // ---------- Field model ----------
+  function mAt(sc, x, y, z) {
+    const [z0, z1] = [sc.box[4], sc.box[5]];
+    const t = (z - z0) / (z1 - z0);
+    const dx = x - sc.center[0], dy = y - sc.center[1];
+    const r = Math.hypot(dx, dy);
+    const rc = 14 * (1 + 0.6 * Math.abs(t - 0.5));
+    const mz = Math.exp(-((r / rc) ** 2));
+    const phi = Math.atan2(dy * (sc.kind === "fdm" ? 1.6 : 1), dx) + Math.PI / 2 + 0.7 * (t - 0.5);
+    const ip = Math.sqrt(Math.max(0, 1 - mz * mz));
+    return [ip * Math.cos(phi), ip * Math.sin(phi), mz];
+  }
+  function inside(sc, x, y, z) {
+    const b = sc.box;
+    if (z < b[4] || z > b[5]) return false;
+    if (sc.kind === "fdm") return x >= b[0] && x <= b[1] && y >= b[2] && y <= b[3];
+    return Math.hypot(x, y) <= sc.R;
+  }
+  function fieldAt(sc, q, x, y, z) {
+    const mag = inside(sc, x, y, z);
+    if (q === "m") return mag ? mAt(sc, x, y, z) : null;
+    if (q === "eex") {
+      if (!mag) return null;
+      const r = Math.hypot(x - sc.center[0], y - sc.center[1]);
+      return [13 * 1.3e3 / (1 + (r / 14) ** 2) ** 2 + 2.6e3 * 13 / (r * r + 60)];
+    }
+    // H_demag in kA/m: inside -N·Ms·m, outside weak stray field of the core (FEM airbox only)
+    if (mag) { const m = mAt(sc, x, y, z); return [-0.04 * 800 * m[0], -0.04 * 800 * m[1], -0.9 * 800 * m[2]]; }
+    if (sc.kind === "fdm") return null;
+    const air = sc.R * 1.5;
+    if (Math.abs(x) > air || Math.abs(y) > air) return null;
+    const r = Math.hypot(x, y), zc = z - 10;
+    const d = Math.hypot(r, zc) + 8, s = 2.2e5 / (d * d * d);
+    return [s * x / d * 3 * zc / d, s * y / d * 3 * zc / d, s * (3 * zc * zc / (d * d) - 1)];
+  }
+
+  // ---------- Plane geometry ----------
+  function layerInfo(sc) {
+    const b = sc.box;
+    if (S.plane !== "xy") {
+      const span = S.plane === "xz" ? [b[2], b[3]] : [b[0], b[1]];
+      if (sc.kind === "fdm") {
+        const n = S.plane === "xz" ? sc.grid[1] : sc.grid[0], d = (span[1] - span[0]) / n;
+        const k = Math.min(n - 1, Math.max(0, S.layer)), c = span[0] + (k + 0.5) * d;
+        return { max: n - 1, step: 1, k, coord: c, req: c, axis: S.plane === "xz" ? "y" : "x", text: `${S.plane === "xz" ? "j" : "i"} ${k}/${n - 1} · ${S.plane === "xz" ? "y" : "x"} = ${c.toFixed(2)} nm` };
+      }
+      const v = span[0] + (span[1] - span[0]) * (S.cont / 60);
+      return { max: 60, step: 0.1, k: S.cont, coord: v, req: v, axis: S.plane === "xz" ? "y" : "x", cont: true, text: `${S.plane === "xz" ? "y" : "x"} = ${v.toFixed(2)} nm (ciągła)` };
+    }
+    if (sc.kind === "fdm") {
+      const n = sc.grid[2], dz = (b[5] - b[4]) / n;
+      if (S.lmode === "cont") {
+        const req = S.cont * (b[5] - b[4]) / 60, k = Math.min(n - 1, Math.floor(req / dz)), c = b[4] + (k + 0.5) * dz;
+        return { max: 60, step: 0.1, k, coord: c, req, axis: "z", cont: true, text: `<span class="req">żąd. ${req.toFixed(2)} →</span> rozw. ${c.toFixed(2)} nm (k ${k})` };
+      }
+      if (S.lmode === "named") {
+        const L = sc.named[Math.min(sc.named.length - 1, S.layer)];
+        const c = b[4] + ((L.k[0] + L.k[1] + 1) / 2) * dz;
+        return { max: sc.named.length - 1, step: 1, k: S.layer, coord: c, req: c, axis: "z", named: L, slab: [b[4] + L.k[0] * dz, b[4] + (L.k[1] + 1) * dz], text: `${L.id} · k ${L.k[0]}–${L.k[1]} · slab` };
+      }
+      const k = Math.min(n - 1, S.layer), c = b[4] + (k + 0.5) * dz;
+      return { max: n - 1, step: 1, k, coord: c, req: c, axis: "z", text: `k ${k}/${n - 1} · z = ${c.toFixed(2)} nm` };
+    }
+    if (sc.kind === "swept" && S.lmode !== "cont") {
+      const k = Math.min(sc.planes.length - 1, S.layer), c = sc.planes[k];
+      return { max: sc.planes.length - 1, step: 1, k, coord: c, req: c, axis: "z", text: `płaszczyzna węzłów ${k}/${sc.planes.length - 1} · z = ${c.toFixed(2)} nm` };
+    }
+    const req = S.cont * (b[5] - b[4]) / 60;
+    return { max: 60, step: 0.1, k: S.cont, coord: req, req, axis: "z", cont: true, text: `z = ${req.toFixed(2)} nm (ciągła)` };
+  }
+  function planeExtent(sc) {
+    const b = sc.box, pad = (sc.kind !== "fdm" && S.q === "hd") ? sc.R * 0.5 : 0;
+    if (S.plane === "xy") return { u: [b[0] - pad, b[1] + pad], v: [b[2] - pad, b[3] + pad], uL: "x", vL: "y" };
+    if (S.plane === "xz") return { u: [b[0] - pad, b[1] + pad], v: [b[4], b[5]], uL: "x", vL: "z" };
+    return { u: [b[2] - pad, b[3] + pad], v: [b[4], b[5]], uL: "y", vL: "z" };
+  }
+  function toWorld(u, v, L) {
+    if (S.plane === "xy") return [u, v, L.coord];
+    if (S.plane === "xz") return [u, L.coord, v];
+    return [L.coord, u, v];
+  }
+  function sampleWorld(sc, L, x, y, z) {
+    if (sc.kind === "fdm") { // cell-constant, like mumax3
+      const b = sc.box, g = sc.grid;
+      const i = Math.floor((x - b[0]) / ((b[1] - b[0]) / g[0])), j = Math.floor((y - b[2]) / ((b[3] - b[2]) / g[1])), k = Math.floor((z - b[4]) / ((b[5] - b[4]) / g[2]));
+      const cx = b[0] + (Math.min(g[0] - 1, i) + 0.5) * (b[1] - b[0]) / g[0], cy = b[2] + (Math.min(g[1] - 1, j) + 0.5) * (b[3] - b[2]) / g[1];
+      if (L.slab && S.plane === "xy") { // named layer: volume-weighted slab average
+        const n = 4; let acc = null;
+        for (let s = 0; s < n; s++) { const zz = L.slab[0] + (s + 0.5) * (L.slab[1] - L.slab[0]) / n; const f = fieldAt(sc, S.q, cx, cy, zz); if (!f) return null; acc = acc ? acc.map((a, q) => a + f[q] / n) : f.map((a) => a / n); }
+        return { f: acc, id: `komórki (${i}, ${j}, ${L.named.k[0]}–${L.named.k[1]})` };
+      }
+      const cz = b[4] + (Math.min(g[2] - 1, k) + 0.5) * (b[5] - b[4]) / g[2];
+      const f = fieldAt(sc, S.q, S.plane === "yz" ? L.coord : cx, S.plane === "xz" ? L.coord : cy, S.plane === "xy" ? L.coord : cz);
+      return f ? { f, id: `komórka (${i}, ${j}, ${k})` } : null;
+    }
+    const f = fieldAt(sc, S.q, x, y, z);
+    if (!f) return null;
+    const ring = Math.floor(Math.hypot(x, y) / 25), sector = Math.floor((Math.atan2(y, x) + Math.PI) * 7);
+    const fam = Math.hypot(x, y) > sc.R ? (sc.kind === "mixed" ? "Pyramid5" : "Tet4") : sc.kind === "swept" ? "Prism6" : sc.kind === "mixed" ? "Prism6" : "Tet4";
+    return { f, id: `element #${(ring * 977 + sector * 31 + 18000).toLocaleString("pl-PL")} (${fam})` };
+  }
+
+  // ---------- Colormaps ----------
+  function hsl2rgb(h, s, l) {
+    const a = s * Math.min(l, 1 - l), f = (n) => { const k = (n + h / 30) % 12; return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
+    return [f(0) * 255, f(8) * 255, f(4) * 255];
+  }
+  // mumax3 HSLMap (draw/hslscale.go) in the world frame, matching magnetizationHslRgb in viewport-3d:
+  // h = atan2(v̂y, v̂x), s = 1, l = 0.5·v̂z + 0.5; a vector with no direction maps to grey 0.6, not NaN.
+  function wheel(v) {
+    const n = Math.hypot(v[0], v[1], v[2]);
+    if (!(n > 0)) return [153, 153, 153];
+    const x = v[0] / n, y = v[1] / n, z = v[2] / n;
+    const h = ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+    return hsl2rgb(h, 1, 0.5 + 0.5 * z);
+  }
+  const lerp = (a, b, t) => a + (b - a) * t;
+  function ramp(stops, t) {
+    t = Math.max(0, Math.min(1, t)); const p = t * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(p)), f = p - i;
+    return [0, 1, 2].map((c) => lerp(stops[i][c], stops[i + 1][c], f));
+  }
+  const DIV = [[33, 102, 172], [103, 169, 207], [247, 247, 247], [239, 138, 98], [178, 24, 43]];
+  const SEQ = [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]];
+
+  function scalarOf(f) {
+    if (f.length === 1) return f[0];
+    if (S.comp === "x") return f[0]; if (S.comp === "y") return f[1]; if (S.comp === "z") return f[2];
+    return Math.hypot(f[0], f[1], f[2]);
+  }
+  const isSeq = () => S.q === "eex" || S.comp === "mag";
+
+  // ---------- Rendering ----------
+  const plot = $("plot");
+  let last = null;
+  function render() {
+    const sc = SCN[S.scn], L = layerInfo(sc), E = planeExtent(sc);
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const W = plot.clientWidth, H = plot.clientHeight;
+    plot.width = Math.round(W * dpr); plot.height = Math.round(H * dpr);
+    const g = plot.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    const m = { l: 58, r: 8, t: 8, b: 34 };
+    const du = E.u[1] - E.u[0], dv = E.v[1] - E.v[0];
+    const sc2 = Math.min((W - m.l - m.r) / du, (H - m.t - m.b) / dv);
+    const pw = du * sc2, ph = dv * sc2, ox = m.l, oy = m.t + (H - m.t - m.b - ph) / 2;
+    last = { sc, L, E, ox, oy, pw, ph, sc2 };
+    if (S.state === "empty" || S.state === "unsupported") { drawAxes(g, last); return; }
+
+    // raster
+    const res = S.quality === "preview" ? 6 : 1.5;
+    const nx = Math.max(2, Math.round(pw / res)), ny = Math.max(2, Math.round(ph / res));
+    const vals = new Array(nx * ny);
+    let lo = Infinity, hi = -Infinity;
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const u = E.u[0] + (i + 0.5) / nx * du, v = E.v[1] - (j + 0.5) / ny * dv;
+      const w = toWorld(u, v, L), s = sampleWorld(sc, L, w[0], w[1], w[2]);
+      vals[j * nx + i] = s ? s.f : null;
+      if (s && S.comp !== "vec") { const q = scalarOf(s.f); lo = Math.min(lo, q); hi = Math.max(hi, q); }
+    }
+    if (S.range === "sym") { const a = Math.max(Math.abs(lo), Math.abs(hi)); lo = -a; hi = a; }
+    if (S.range === "man") { lo = S.rmin; hi = S.rmax; }
+    if (!isFinite(lo)) { lo = 0; hi = 0; }
+    last.lo = lo; last.hi = hi;
+    const img = g.createImageData(nx, ny);
+    for (let p = 0; p < vals.length; p++) {
+      const f = vals[p]; let c;
+      if (!f) { img.data[p * 4 + 3] = 0; continue; }
+      if (S.comp === "vec" && f.length === 3) c = wheel(f);
+      else { const q = scalarOf(f), t = hi > lo ? (q - lo) / (hi - lo) : 0.5; c = ramp(isSeq() ? SEQ : DIV, t); }
+      img.data[p * 4] = c[0]; img.data[p * 4 + 1] = c[1]; img.data[p * 4 + 2] = c[2]; img.data[p * 4 + 3] = 255;
+    }
+    const off = document.createElement("canvas"); off.width = nx; off.height = ny; off.getContext("2d").putImageData(img, 0, 0);
+    g.imageSmoothingEnabled = false;
+    g.drawImage(off, ox, oy, pw, ph);
+
+    if (S.mesh) drawMesh(g, last);
+    if (S.arrows && S.q !== "eex") drawArrows(g, last);
+    drawAxes(g, last);
+  }
+
+  function drawMesh(g, P) {
+    const { sc, ox, oy, pw, ph, E, sc2 } = P;
+    const X = (u) => ox + (u - E.u[0]) * sc2, Y = (v) => oy + ph - (v - E.v[0]) * sc2;
+    g.save(); g.lineWidth = 0.6; g.strokeStyle = "rgba(30,30,46,0.45)";
+    g.beginPath();
+    if (sc.kind === "fdm") {
+      const b = sc.box, gr = sc.grid;
+      const nu = S.plane === "yz" ? gr[1] : gr[0], nv = S.plane === "xy" ? gr[1] : gr[2];
+      for (let i = 0; i <= nu; i++) { const x = ox + i * pw / nu; g.moveTo(x, oy); g.lineTo(x, oy + ph); }
+      for (let j = 0; j <= nv; j++) { const y = oy + j * ph / nv; g.moveTo(ox, y); g.lineTo(ox + pw, y); }
+    } else if (S.plane === "xy") {
+      const N = 8, R = sc.R, jit = sc.kind !== "swept";
+      const rings = [];
+      for (let r = 0; r <= N; r++) {
+        const n = Math.max(1, 6 * r), pts = [];
+        for (let a = 0; a < n; a++) {
+          let rr = R * r / N, th = 2 * Math.PI * a / n;
+          if (jit && r > 0 && r < N) { rr += Math.sin(a * 12.9898 + r * 78.233) * 4; th += Math.cos(a * 4.1 + r) * 0.04; }
+          pts.push([rr * Math.cos(th), rr * Math.sin(th)]);
+        }
+        rings.push(pts);
+      }
+      for (let r = 0; r < N; r++) {
+        const A = rings[r], B = rings[r + 1];
+        for (let b = 0; b < B.length; b++) { const p = B[b], q = B[(b + 1) % B.length]; g.moveTo(X(p[0]), Y(p[1])); g.lineTo(X(q[0]), Y(q[1])); const a = A[Math.round(b * A.length / B.length) % A.length]; g.moveTo(X(p[0]), Y(p[1])); g.lineTo(X(a[0]), Y(a[1])); }
+      }
+      if (S.q === "hd") { g.rect(X(-1.5 * R), Y(1.5 * R), 3 * R * sc2, 3 * R * sc2); for (const k of [1.2, 1.35]) { g.moveTo(X(k * R), Y(0)); g.arc(X(0), Y(0), k * R * sc2, 0, 2 * Math.PI); } }
+    } else {
+      const planes = sc.kind === "swept" ? sc.planes : [0, 6.5, 13.1, 20];
+      for (const z of planes) { g.moveTo(X(E.u[0]), Y(z)); g.lineTo(X(E.u[1]), Y(z)); }
+      for (let u = -200; u <= 200; u += 25) { const sk = sc.kind === "swept" ? 0 : 6; g.moveTo(X(u), Y(0)); g.lineTo(X(u + sk), Y(20)); }
+    }
+    g.stroke(); g.restore();
+  }
+
+  function arrow(g, x, y, ang, len, col) {
+    const hl = Math.max(4, len * 0.38), hw = hl * 0.55;
+    const tx = x + Math.cos(ang) * len / 2, ty = y - Math.sin(ang) * len / 2, bx = x - Math.cos(ang) * len / 2, by = y + Math.sin(ang) * len / 2;
+    const hx = tx - Math.cos(ang) * hl, hy = ty + Math.sin(ang) * hl;
+    g.beginPath(); g.moveTo(bx, by); g.lineTo(hx, hy); g.stroke();
+    g.beginPath(); g.moveTo(tx, ty); g.lineTo(hx + Math.sin(ang) * hw, hy + Math.cos(ang) * hw); g.lineTo(hx - Math.sin(ang) * hw, hy - Math.cos(ang) * hw); g.closePath(); g.fill();
+  }
+  function drawArrows(g, P) {
+    const { sc, L, E, ox, oy, pw, ph, sc2 } = P, sp = S.dens;
+    g.save(); g.lineWidth = 1.4; g.strokeStyle = "rgba(17,17,27,0.9)"; g.fillStyle = "rgba(17,17,27,0.9)";
+    for (let y = oy + sp / 2; y < oy + ph; y += sp) for (let x = ox + sp / 2; x < ox + pw; x += sp) {
+      const u = E.u[0] + (x - ox) / sc2, v = E.v[0] + (oy + ph - y) / sc2;
+      const w = toWorld(u, v, L), s = sampleWorld(sc, L, w[0], w[1], w[2]);
+      if (!s || s.f.length < 3) continue;
+      const f = s.f, n = Math.hypot(f[0], f[1], f[2]) || 1;
+      const a = S.plane === "xy" ? [f[0], f[1], f[2]] : S.plane === "xz" ? [f[0], f[2], -f[1]] : [f[1], f[2], f[0]];
+      const ip = Math.hypot(a[0], a[1]) / n;
+      if (ip < 0.25) { // normal-component glyph instead of a sub-pixel arrow
+        g.beginPath(); g.arc(x, y, 3.2, 0, 2 * Math.PI); g.stroke();
+        if (a[2] > 0) { g.beginPath(); g.arc(x, y, 1.1, 0, 2 * Math.PI); g.fill(); } else { g.beginPath(); g.moveTo(x - 2, y - 2); g.lineTo(x + 2, y + 2); g.moveTo(x + 2, y - 2); g.lineTo(x - 2, y + 2); g.stroke(); }
+        continue;
+      }
+      arrow(g, x, y, Math.atan2(a[1], a[0]), Math.max(7, sp * 0.82 * ip), null);
+    }
+    g.restore();
+  }
+
+  function niceTicks(a, b, n) {
+    const span = b - a, step0 = span / n, mag = 10 ** Math.floor(Math.log10(step0)), r = step0 / mag;
+    const step = (r < 1.5 ? 1 : r < 3 ? 2 : r < 7 ? 5 : 10) * mag, out = [];
+    for (let t = Math.ceil(a / step) * step; t <= b + 1e-9; t += step) out.push(+t.toFixed(6));
+    return out;
+  }
+  function drawAxes(g, P) {
+    const { E, ox, oy, pw, ph, sc2 } = P;
+    g.save(); g.strokeStyle = css("--fm-border-strong"); g.fillStyle = css("--fm-text-secondary");
+    g.font = "11px " + css("--fm-font-mono"); g.lineWidth = 1;
+    g.strokeRect(ox + 0.5, oy + 0.5, pw, ph);
+    g.textAlign = "center"; g.textBaseline = "top";
+    for (const t of niceTicks(E.u[0], E.u[1], 6)) { const x = ox + (t - E.u[0]) * sc2; g.beginPath(); g.moveTo(x, oy + ph); g.lineTo(x, oy + ph + 4); g.stroke(); g.fillText(String(t), x, oy + ph + 6); }
+    g.textAlign = "right"; g.textBaseline = "middle";
+    for (const t of niceTicks(E.v[0], E.v[1], ph > 140 ? 5 : 2)) { const y = oy + ph - (t - E.v[0]) * sc2; g.beginPath(); g.moveTo(ox, y); g.lineTo(ox - 4, y); g.stroke(); g.fillText(String(t), ox - 6, y); }
+    g.fillStyle = css("--fm-text-tertiary"); g.textAlign = "left"; g.textBaseline = "top";
+    g.fillText(`${E.uL} [nm] →`, ox + pw - 70, oy + ph + 20 > plot.clientHeight - 12 ? oy + ph + 20 : oy + ph + 20);
+    g.save(); g.translate(12, oy + ph / 2); g.rotate(-Math.PI / 2); g.textAlign = "center"; g.fillText(`${E.vL} [nm]`, 0, 0); g.restore();
+    g.restore();
+  }
+
+  // ---------- Legend ----------
+  function units() { return S.q === "m" ? "" : S.q === "hd" ? "kA/m" : "J/m³"; }
+  function fmt(v) { const a = Math.abs(v); return a !== 0 && (a < 0.01 || a >= 1e4) ? v.toExponential(2) : v.toFixed(a < 10 ? 2 : 0); }
+  function drawLegend() {
+    const c = $("leg"), g = c.getContext("2d"); g.clearRect(0, 0, c.width, c.height);
+    const txt = $("legtxt");
+    if (S.state === "empty" || S.state === "unsupported") { txt.textContent = ""; return; }
+    if (S.comp === "vec" && S.q !== "eex") {
+      c.style.height = "200px"; c.height = 400;
+      for (const [cy, sgn] of [[100, 1], [300, -1]]) {
+        const img = g.createImageData(180, 180);
+        for (let j = 0; j < 180; j++) for (let i = 0; i < 180; i++) {
+          const x = (i - 90) / 85, y = (90 - j) / 85, r = Math.hypot(x, y), p = (j * 180 + i) * 4;
+          if (r > 1) continue;
+          const col = wheel([x, y, sgn * Math.sqrt(1 - r * r)]);
+          img.data[p] = col[0]; img.data[p + 1] = col[1]; img.data[p + 2] = col[2]; img.data[p + 3] = 255;
+        }
+        g.putImageData(img, 6, cy - 90);
+      }
+      g.fillStyle = css("--fm-text-secondary"); g.font = "22px " + css("--fm-font-ui"); g.textAlign = "center";
+      g.fillText("ẑ > 0", 96, 210); g.fillText("ẑ < 0", 96, 398);
+      txt.innerHTML = `kierunek ${S.q === "m" ? "m" : "Ĥ"}<br>barwa = kąt w XY świata<br>jasność = składowa z<br>(jak w widoku 3D)`;
+      return;
+    }
+    c.style.height = "300px"; c.height = 600;
+    const stops = isSeq() ? SEQ : DIV;
+    for (let y = 0; y < 560; y++) { const col = ramp(stops, 1 - y / 559); g.fillStyle = `rgb(${col.map(Math.round).join(",")})`; g.fillRect(60, 20 + y, 60, 1); }
+    g.strokeStyle = css("--fm-border-strong"); g.strokeRect(60, 20, 60, 560);
+    const lo = last ? last.lo : 0, hi = last ? last.hi : 1;
+    txt.innerHTML = `${fmt(hi)}<br>…<br>${fmt(lo)}<br><span class="note">${S.q === "eex" ? "e_ex" : S.q === "m" ? "m" : "H_demag"}${S.q === "eex" ? "" : S.comp === "mag" ? " |·|" : "_" + S.comp} ${units()}</span><br><span class="note">zakres: ${S.range === "auto" ? "auto (tylko zajęte piksele)" : S.range === "sym" ? "symetryczny" : "ręczny"}</span>`;
+  }
+
+  // ---------- Chrome sync ----------
+  function setPressed(groupId, v) { for (const b of $(groupId).querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.v === v)); }
+  function buildComp() {
+    const opts = S.q === "eex" ? [["val", "wartość"]] : [["vec", "wektor"], ["x", "x"], ["y", "y"], ["z", "z"], ["mag", "|·|"]];
+    if (!opts.some((o) => o[0] === S.comp)) S.comp = opts[0][0];
+    $("comp").innerHTML = opts.map(([v, t]) => `<button type="button" data-v="${v}" aria-pressed="${v === S.comp}">${t}</button>`).join("");
+  }
+  function syncChrome() {
+    const sc = SCN[S.scn], L = layerInfo(sc);
+    const lmodeOk = { cell: sc.kind === "fdm" || sc.kind === "swept", named: sc.kind === "fdm", cont: true };
+    for (const b of $("lmode").querySelectorAll("button")) b.disabled = !lmodeOk[b.dataset.v] || S.plane !== "xy";
+    if (!lmodeOk[S.lmode]) S.lmode = "cont";
+    setPressed("lmode", S.lmode);
+    const layer = $("layer"); layer.max = String(L.max); layer.step = String(L.step); layer.value = String(L.cont ? S.cont : S.layer);
+    $("layer-label").textContent = L.cont ? (S.plane === "xy" ? "z" : L.axis) : S.plane === "xy" ? (sc.kind === "swept" ? "Płaszczyzna" : S.lmode === "named" ? "Warstwa" : "Warstwa k") : "Indeks";
+    $("lread").innerHTML = L.text;
+    $("i-req").textContent = L.cont ? `${L.axis} = ${L.req.toFixed(2)} nm` : L.named ? `warstwa „${L.named.id}”` : `indeks ${L.k}`;
+    $("i-res").textContent = L.named ? `slab z ∈ [${L.slab[0].toFixed(1)}, ${L.slab[1].toFixed(1)}] nm` : `${L.axis} = ${L.coord.toFixed(2)} nm`;
+    const notes = {
+      fdm: "Wartość komórki zawierającej płaszczyznę (bez interpolacji), jak w mumax3. Tryb ciągły zawsze pokazuje snap do środka komórki.",
+      swept: "Przystanki = płaszczyzny węzłów z certyfikatu swept. Na płaszczyźnie węzłów P1 jest dokładne; między nimi wartość jest liniowa w z.",
+      tet: "Brak warstw danych. Płaszczyzna ciągła przecina elementy; wartość = funkcje kształtu elementu w punkcie piksela.",
+      mixed: "Pyramid5 w strefie przejściowej airboxu. Do czasu wsparcia natywnych funkcji kształtu sampler odmawia (fail-closed)."
+    };
+    $("i-note").textContent = notes[sc.kind];
+    $("exp-air").style.color = sc.kind === "fdm" ? css("--fm-text-tertiary") : "";
+    $("i-frame").textContent = `f-${String(S.rev).padStart(5, "0")}`;
+    $("i-token").textContent = `pm:${S.scn}:${S.plane}:${L.cont ? L.coord.toFixed(2) : L.k}:${S.op}`;
+    $("i-sampler").textContent = sc.kind === "fdm" ? "fdm.cell_constant · CPU f64" : "fem.p1_shape · BVH · CPU f64";
+    const badge = $("badge");
+    if (S.state === "stale") { badge.dataset.kind = "stale"; badge.textContent = `Nieaktualna · f-${S.rev} (solver: f-${S.rev + 3})`; }
+    else if (S.quality === "preview") { badge.dataset.kind = "preview"; badge.textContent = "Podgląd · interactive"; }
+    else { badge.dataset.kind = "analysis"; badge.textContent = "Analiza · analysis"; }
+    badge.hidden = S.state === "empty" || S.state === "unsupported";
+    const bl = $("blocker");
+    if (S.state === "empty") {
+      bl.hidden = false; bl.innerHTML = `<h3>Brak próbki w tej płaszczyźnie</h3><p>Płaszczyzna ${L.axis} = 75.00 nm leży poza domeną ${L.axis} ∈ [${sc.box[4]}, ${sc.box[5]}] nm. Przesuń suwak do dozwolonego przedziału.</p><code>plane_outside_domain</code>`;
+    } else if (S.state === "unsupported" || (sc.kind === "mixed" && S.q === "hd")) {
+      bl.hidden = false; bl.innerHTML = `<h3>Ten typ siatki nie jest jeszcze obsługiwany w widoku 2D</h3><p>Przekrój przecina 1 284 elementy Pyramid5 w strefie przejściowej airboxu. Sampler nie zamienia ich po cichu na tetraedry.</p><code>unsupported_element_order · pyramid5</code><span class="note">Zobacz docs/specs/capability-matrix-v0.md · pole m w magnesie (Prism6) jest dostępne.</span>`;
+    } else bl.hidden = true;
+    const b = sc.box;
+    $("status").innerHTML = `<span><b>${sc.name}</b> · ${sc.kind === "fdm" ? `${sc.grid.join("×")} komórek · Δ = ${((b[1] - b[0]) / sc.grid[0]).toFixed(1)}×${((b[3] - b[2]) / sc.grid[1]).toFixed(1)}×${((b[5] - b[4]) / sc.grid[2]).toFixed(1)} nm` : sc.elems}</span><span>t = <b>1.250 ns</b> · krok 4 210 · etap relax→run</span><span>źródło: <b>${$("src").value}</b> · operator: ${$("op").selectedOptions[0].text}</span>`;
+    $("man-row").hidden = S.range !== "man";
+  }
+  function update() { syncChrome(); render(); drawLegend(); drawMulti(); drawProfile(); }
+
+  // ---------- Probe ----------
+  plot.addEventListener("mousemove", (e) => {
+    const tip = $("tip"); if (!last || S.state === "empty" || S.state === "unsupported") { tip.hidden = true; return; }
+    const r = plot.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, P = last;
+    if (x < P.ox || x > P.ox + P.pw || y < P.oy || y > P.oy + P.ph) { tip.hidden = true; return; }
+    const u = P.E.u[0] + (x - P.ox) / P.sc2, v = P.E.v[0] + (P.oy + P.ph - y) / P.sc2, w = toWorld(u, v, P.L);
+    const s = sampleWorld(P.sc, P.L, w[0], w[1], w[2]);
+    const pos = `${P.E.uL} = ${u.toFixed(1)} nm, ${P.E.vL} = ${v.toFixed(1)} nm`;
+    tip.innerHTML = s ? `${pos}<br>${S.q === "eex" ? "e_ex" : S.q === "m" ? "m" : "H_demag"} = ${s.f.length === 1 ? fmt(s.f[0]) + " J/m³" : "(" + s.f.map(fmt).join(", ") + ")" + (units() ? " " + units() : "")}<br>${s.id}` : `${pos}<br>brak próbki (poza targetem)`;
+    tip.hidden = false;
+    const tx = Math.min(x + 14, r.width - tip.offsetWidth - 4); tip.style.left = tx + "px"; tip.style.top = Math.max(0, y - tip.offsetHeight - 10) + "px";
+  });
+  plot.addEventListener("mouseleave", () => { $("tip").hidden = true; });
+
+  // ---------- Multislice + profile ----------
+  function drawMulti() {
+    const host = $("multi"), sc = SCN.fdm, n = sc.grid[2], ks = [0, 2, 5, 7];
+    if (!host.children.length) host.innerHTML = ks.map((k) => `<figure><canvas width="128" height="64"></canvas><figcaption>k ${k} · z = ${((k + 0.5) * 7.5).toFixed(2)} nm</figcaption></figure>`).join("");
+    host.querySelectorAll("canvas").forEach((c, idx) => {
+      const g = c.getContext("2d"), img = g.createImageData(64, 32), z = (ks[idx] + 0.5) * 60 / n;
+      for (let j = 0; j < 32; j++) for (let i = 0; i < 64; i++) { const col = wheel(mAt(sc, (i + 0.5) * 8, (31 - j + 0.5) * 8, z)), p = (j * 64 + i) * 4; img.data[p] = col[0]; img.data[p + 1] = col[1]; img.data[p + 2] = col[2]; img.data[p + 3] = 255; }
+      const off = document.createElement("canvas"); off.width = 64; off.height = 32; off.getContext("2d").putImageData(img, 0, 0);
+      g.imageSmoothingEnabled = false; g.drawImage(off, 0, 0, 128, 64);
+    });
+  }
+  function drawProfile() {
+    const c = $("profile"), dpr = Math.min(2, window.devicePixelRatio || 1), W = c.clientWidth, H = c.clientHeight;
+    c.width = W * dpr; c.height = H * dpr; const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+    const sc = SCN.fdm, m = { l: 36, r: 10, t: 10, b: 26 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
+    const X = (x) => m.l + x / 512 * pw, Y = (v) => m.t + (1 - (v + 1) / 2) * ph;
+    g.strokeStyle = css("--fm-border-subtle"); g.lineWidth = 1;
+    for (const v of [-1, -0.5, 0, 0.5, 1]) { g.beginPath(); g.moveTo(m.l, Y(v)); g.lineTo(m.l + pw, Y(v)); g.stroke(); }
+    g.fillStyle = css("--fm-text-secondary"); g.font = "10.5px " + css("--fm-font-mono"); g.textAlign = "right"; g.textBaseline = "middle";
+    for (const v of [-1, 0, 1]) g.fillText(String(v), m.l - 6, Y(v));
+    g.textAlign = "center"; g.textBaseline = "top";
+    for (const x of [0, 128, 256, 384, 512]) g.fillText(String(x), X(x), m.t + ph + 6);
+    const series = [["m_x", "--fm-chart-1", 0], ["m_y", "--fm-chart-2", 1], ["m_z", "--fm-chart-3", 2]];
+    for (const [name, tok, ci] of series) {
+      g.strokeStyle = css(tok); g.lineWidth = 1.6; g.beginPath();
+      for (let i = 0; i < 64; i++) { const x = (i + 0.5) * 8, v = mAt(sc, x, 132, 26.25)[ci]; if (i) g.lineTo(X(x), Y(v)); else g.moveTo(X(x), Y(v)); }
+      g.stroke();
+    }
+    g.textAlign = "left"; g.textBaseline = "top";
+    series.forEach(([name, tok], i) => { g.fillStyle = css(tok); g.fillRect(m.l + 8 + i * 58, m.t + 4, 10, 3); g.fillStyle = css("--fm-text-secondary"); g.fillText(name, m.l + 22 + i * 58, m.t); });
+  }
+
+  // ---------- Wiring ----------
+  function seg(id, key, after) {
+    $(id).addEventListener("click", (e) => {
+      const b = e.target.closest("button"); if (!b || b.disabled) return;
+      S[key] = b.dataset.v; setPressed(id, S[key]); if (after) after(); update();
+    });
+  }
+  seg("scn", "scn", () => { S.layer = S.scn === "swept" ? 2 : 3; S.lmode = S.scn === "fdm" || S.scn === "swept" ? "cell" : "cont"; S.rev += 1; });
+  seg("state", "state");
+  seg("plane", "plane", () => { S.layer = S.plane === "xy" ? 3 : 16; });
+  seg("lmode", "lmode", () => { S.layer = 0; });
+  seg("range", "range");
+  $("comp").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; S.comp = b.dataset.v; setPressed("comp", S.comp); update(); });
+  $("q").addEventListener("change", () => { S.q = $("q").value; if (S.q === "hd" && S.comp === "vec") S.comp = "z"; if (S.q === "hd") S.range = "sym"; setPressed("range", S.range); buildComp(); update(); });
+  $("op").addEventListener("change", () => { S.op = $("op").value; update(); });
+  $("src").addEventListener("change", update);
+  for (const id of ["rmin", "rmax"]) $(id).addEventListener("input", () => { S.rmin = +$("rmin").value; S.rmax = +$("rmax").value; update(); });
+  $("dens").addEventListener("input", () => { S.dens = 58 - +$("dens").value; update(); });
+  for (const id of ["arrows", "mesh"]) $(id).addEventListener("click", () => { S[id] = !S[id]; $(id).setAttribute("aria-pressed", String(S[id])); update(); });
+  let settle = 0;
+  function setLayer(v) {
+    const L = layerInfo(SCN[S.scn]);
+    if (L.cont) S.cont = Math.max(0, Math.min(60, v)); else S.layer = Math.max(0, Math.min(L.max, Math.round(v)));
+  }
+  $("layer").addEventListener("input", () => { setLayer(+$("layer").value); S.quality = "preview"; clearTimeout(settle); update(); });
+  $("layer").addEventListener("change", () => { S.quality = "analysis"; S.rev += 1; update(); });
+  $("lprev").addEventListener("click", () => { const L = layerInfo(SCN[S.scn]); setLayer((L.cont ? S.cont : S.layer) - (L.cont ? 1 : 1)); S.rev += 1; update(); });
+  $("lnext").addEventListener("click", () => { const L = layerInfo(SCN[S.scn]); setLayer((L.cont ? S.cont : S.layer) + 1); S.rev += 1; update(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.target.closest("input, select")) return;
+    if (e.key === "[") $("lprev").click(); else if (e.key === "]") $("lnext").click();
+    else if (e.key === "a") $("arrows").click();
+    else if (["x", "y", "z", "v"].includes(e.key) && S.q !== "eex") { S.comp = e.key === "v" ? "vec" : e.key; setPressed("comp", S.comp); update(); }
+  });
+  new ResizeObserver(() => { render(); drawProfile(); }).observe(plot);
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", update);
+  new MutationObserver(update).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  buildComp();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(update);
+  update();
+})();
+</script>
+</body>
+</html>

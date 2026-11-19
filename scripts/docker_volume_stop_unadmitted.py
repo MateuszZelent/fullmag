@@ -503,7 +503,12 @@ def _validate_network(
     project: str,
     *,
     allow_stopped_frontend: bool = False,
+    allow_stopped_backend: bool = False,
 ) -> None:
+    if allow_stopped_backend and (
+        allow_stopped_frontend or actual["backend"].get("State", {}).get("Running") is not False
+    ):
+        raise _fail("Stopped-backend network proof requires the exact stopped backend and running frontend")
     _assert_private_restart_network(actual, ids, project)
     backend_networks = actual["backend"].get("NetworkSettings", {}).get("Networks", {})
     frontend_networks = actual["frontend"].get("NetworkSettings", {}).get("Networks", {})
@@ -523,10 +528,11 @@ def _validate_network(
     network = documents[0]
     consumers = set(network.get("Containers", {}))
     allowed = set(ids.values())
-    expected = allowed if not allow_stopped_frontend else {ids["backend"]}
+    expected = ({ids["frontend"]} if allow_stopped_backend else
+                allowed if not allow_stopped_frontend else {ids["backend"]})
     if (network.get("Driver") != "bridge"
             or network.get("Labels", {}).get("com.docker.compose.project") != project
-            or ids["backend"] not in consumers
+            or (not allow_stopped_backend and ids["backend"] not in consumers)
             or consumers - allowed
             or (not allow_stopped_frontend and consumers != expected)
             or (allow_stopped_frontend and consumers not in (expected, allowed))):
@@ -569,6 +575,7 @@ def _validate_preflight(args: argparse.Namespace, selected: Path, identity: Mapp
         raise _fail("backend source identity does not match the selected checkout")
     _validate_source_bind(actual["frontend"], selected,
                           compose["services"]["frontend"].get("x-fullmag-daemon-binds"))
+    _preflight_terminal_process_receipt(actual["backend"], control)
     probe = _probe(args.backend_container_id, args.request_id, args.session_id, args.source_sha256, args.failure_marker_sha256)
     _validate_probe_document(probe, args)
     return retained, dict(actual), probe
@@ -592,7 +599,8 @@ def _runtime_control_volume_mount(
     actual_backend: Mapping[str, object], project: str, *, namespace: str | None = None,
 ) -> tuple[str, str]:
     """Return the exact named volume and selected namespace subpath."""
-    if namespace is not None and re.fullmatch(r"namespaces/[0-9a-f]{32}", namespace) is None:
+    # BuildControl records a group without a quarantined namespace as "".
+    if namespace and re.fullmatch(r"namespaces/[0-9a-f]{32}", namespace) is None:
         raise _fail("runtime-control namespace is invalid")
     expected_subpath = f"{namespace}/{RUNTIME_CONTROL_SUBPATH}" if namespace else RUNTIME_CONTROL_SUBPATH
     mounts = actual_backend.get("Mounts")
@@ -699,6 +707,17 @@ sys.stdout.buffer.write(data)
         "-B", "-c", script,
     ]
     return args
+
+
+def _preflight_terminal_process_receipt(
+    actual_backend: Mapping[str, object], control: BuildControl
+) -> None:
+    """Prove before any stop that the drained receipt can be read afterwards.
+
+    The read itself needs the stopped backend; its image, runtime-control
+    mount and volume ownership do not change across a graceful stop.
+    """
+    _runtime_control_validation_helper(actual_backend, control)
 
 
 def _read_terminal_process_receipt(

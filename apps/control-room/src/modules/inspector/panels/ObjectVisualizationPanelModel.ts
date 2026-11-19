@@ -25,8 +25,10 @@ import {
   fieldCatalogQuantitySupportsAirbox,
   fieldCatalogQuantitySupportsSpatialVisualization,
   isScalarSpatialQuantityId,
+  quantityCatalogEntrySupportsAnyAirboxVisualization,
   quantityCatalogEntrySupportsAirbox,
-  quantityCatalogEntrySupportsSpatialVisualization,
+  quantityCatalogEntrySupportsAnySpatialVisualization,
+  quantityCatalogPickerItem,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
 import {
@@ -68,6 +70,11 @@ import {
   type VisualizationTopologyFreshness,
 } from "@/kernel/visualization/visualizationDisplayResolution";
 import {
+  SCALAR_COLOR_PALETTE_ITEMS,
+  normalizeScalarColorPalette,
+  scalarColorPaletteGradientCss,
+} from "@/shared/visualization/scalarColorPalette";
+import {
   fdmMultilayerAirboxVisualizationVectorCapacitySource,
   fdmNativeLayerVisualizationVectorCapacitySource,
   fdmVisualizationVectorCapacitySource,
@@ -100,6 +107,11 @@ export {
   resolveVisualizationRenderResolution,
 } from "@/kernel/visualization/visualizationDisplayResolution";
 export type { VisualizationVectorCapacityDescriptor } from "@/kernel/visualization/visualizationVectorCapacity";
+export {
+  SCALAR_COLOR_PALETTE_ITEMS,
+  normalizeScalarColorPalette,
+  scalarColorPaletteGradientCss,
+};
 
 /**
  * Resolve the overview's field state from target-scoped carrier evidence.
@@ -112,6 +124,7 @@ export function resolveObjectVisualizationDataState({
   backendAvailabilityStatus,
   carrier,
   fieldCatalog,
+  fieldCatalogRequested = true,
   fieldCatalogStatus,
   quantityId,
   requiresFieldData,
@@ -121,6 +134,8 @@ export function resolveObjectVisualizationDataState({
   backendAvailabilityStatus?: string;
   carrier?: TargetFieldCarrierDescriptor | null;
   fieldCatalog: FieldCatalogResource | null | undefined;
+  /** False while the catalog is demand-driven and nobody has asked for it. */
+  fieldCatalogRequested?: boolean;
   fieldCatalogStatus: string;
   quantityId: string;
   requiresFieldData: boolean;
@@ -152,6 +167,9 @@ export function resolveObjectVisualizationDataState({
       return "Supported";
     }
     if (backendState === "ready" && !fieldCatalog) {
+      // An unrequested catalog never arrives; the backend's ready state is
+      // then the only evidence, so do not show an endless "Loading".
+      if (!fieldCatalogRequested) return "Ready";
       // The backend reports the quantity, but its field payload has not
       // reached the inspector yet: that is loading, not ready data.
       return fieldCatalogStatus === "error" ? "Ready" : "Loading";
@@ -352,19 +370,8 @@ export const SURFACE_COLOR_SOURCE_ITEMS: Array<{
   { value: "component_x", label: "Component X" },
   { value: "component_y", label: "Component Y" },
   { value: "component_z", label: "Component Z" },
-  { value: "magnitude", label: "Magnitude |m|" },
+  { value: "magnitude", label: "Magnitude" },
   { value: "colormap", label: "Colormap" },
-];
-
-export const SCALAR_COLOR_PALETTE_ITEMS: Array<{
-  label: string;
-  value: string;
-}> = [
-  { value: "viridis", label: "Viridis" },
-  { value: "inferno", label: "Inferno" },
-  { value: "magma", label: "Magma" },
-  { value: "coolwarm", label: "Coolwarm" },
-  { value: "jet", label: "Jet" },
 ];
 
 export const SURFACE_FIELD_PROJECTION_ITEMS: Array<{
@@ -384,15 +391,6 @@ export function resolveSurfaceColorSourceItems(
     : SURFACE_COLOR_SOURCE_ITEMS;
 }
 
-export function normalizeScalarColorPalette(
-  value: string | null | undefined,
-): string {
-  const candidate = typeof value === "string" ? value : "";
-  return SCALAR_COLOR_PALETTE_ITEMS.some((item) => item.value === candidate)
-    ? candidate
-    : "viridis";
-}
-
 export function scalarColorPalettePatch(
   value: string,
 ): VisualizationTargetPatch {
@@ -410,18 +408,6 @@ export function surfaceFieldProjectionModePatch(
   return {
     surfaceProjectionMode: mode,
   };
-}
-
-export function scalarColorPaletteGradientCss(
-  value: string | null | undefined,
-): string {
-  const stops = SCALAR_COLOR_PALETTE_STOPS[normalizeScalarColorPalette(value)];
-  return `linear-gradient(90deg, ${stops
-    .map(
-      ([red, green, blue]) =>
-        `rgb(${Math.round(red * 255)}, ${Math.round(green * 255)}, ${Math.round(blue * 255)})`,
-    )
-    .join(", ")})`;
 }
 
 export function formatScalarColorbarValue(value: number): string {
@@ -749,7 +735,7 @@ export function resolveObjectVisualizationTargetForLane({
   selection: Selection;
   selectionTarget: VisualizationTargetRef | null;
 }): VisualizationTargetRef | null {
-  if (artifactInspection) return selectionTarget?.kind === "object" ? selectionTarget : null;
+  if (artifactInspection) return selectionTarget?.kind === "object" || selectionTarget?.kind === "airbox" && selectionTarget.id === "airbox" ? selectionTarget : null;
 
   const objectVisualizationSelection =
     selection.kind === "object.antenna.visualization" ||
@@ -1121,41 +1107,6 @@ export function resolveObjectVisualizationPanelSelectionTarget({
     label: selection.label,
   };
 }
-
-const SCALAR_COLOR_PALETTE_STOPS: Record<string, [number, number, number][]> = {
-  coolwarm: [
-    [0x3b / 255, 0x4c / 255, 0xc0 / 255],
-    [0xdd / 255, 0xdd / 255, 0xdd / 255],
-    [0xb4 / 255, 0x04 / 255, 0x26 / 255],
-  ],
-  inferno: [
-    [0x00 / 255, 0x00 / 255, 0x04 / 255],
-    [0x42 / 255, 0x0a / 255, 0x68 / 255],
-    [0x93 / 255, 0x2b / 255, 0x5d / 255],
-    [0xdd / 255, 0x51 / 255, 0x3a / 255],
-    [0xfc / 255, 0xff / 255, 0xa4 / 255],
-  ],
-  jet: [
-    [0x00 / 255, 0x00 / 255, 0x7f / 255],
-    [0x00 / 255, 0x7f / 255, 0xff / 255],
-    [0x7f / 255, 0xff / 255, 0x7f / 255],
-    [0xff / 255, 0x7f / 255, 0x00 / 255],
-    [0x7f / 255, 0x00 / 255, 0x00 / 255],
-  ],
-  magma: [
-    [0x00 / 255, 0x00 / 255, 0x04 / 255],
-    [0x3b / 255, 0x0f / 255, 0x70 / 255],
-    [0x8c / 255, 0x29 / 255, 0x80 / 255],
-    [0xde / 255, 0x49 / 255, 0x68 / 255],
-    [0xfc / 255, 0xfd / 255, 0xbf / 255],
-  ],
-  viridis: [
-    [0x44 / 255, 0x01 / 255, 0x54 / 255],
-    [0x31 / 255, 0x68 / 255, 0x8e / 255],
-    [0x35 / 255, 0xb7 / 255, 0x79 / 255],
-    [0xfd / 255, 0xe7 / 255, 0x25 / 255],
-  ],
-};
 
 export function resolveObjectVisualizationPanelTopologyFreshness({
   manifest,
@@ -2282,13 +2233,12 @@ export function visualizationQuantityItems(
     ? quantityCatalog.quantities
         .filter(
           targetKind === "airbox"
-            ? quantityCatalogEntrySupportsAirbox
-            : quantityCatalogEntrySupportsSpatialVisualization,
+            ? quantityCatalogEntrySupportsAnyAirboxVisualization
+            : quantityCatalogEntrySupportsAnySpatialVisualization,
         )
-        .map((quantity) => ({
-          label: quantity.label || quantity.id,
-          value: quantity.id,
-        }))
+        .map((quantity) =>
+          quantityCatalogPickerItem(quantity, quantity.label || quantity.id),
+        )
     : [];
   const fieldItems = fieldCatalog
     ? fieldCatalog.quantities
@@ -2308,7 +2258,10 @@ export function visualizationQuantityItems(
         })
     : [];
   const baseItems = quantityCatalog
-    ? mergeVisualizationQuantityItems(capabilityItems, fieldItems)
+    ? mergeVisualizationQuantityItems<{ disabled?: boolean; label: string; value: string }>(
+        mergeVisualizationQuantityItems(capabilityItems, fieldItems),
+        targetKind === "airbox" ? pendingAirboxQuantityItems(quantityCatalog) : [],
+      )
     : targetKind === "airbox"
       ? fieldItems.filter((item) =>
           fieldCatalogQuantitySupportsAirbox(fieldCatalog, item.value),
@@ -2370,11 +2323,68 @@ export function visualizationQuantityItems(
   ];
 }
 
-function mergeVisualizationQuantityItems(
-  capabilityItems: Array<{ label: string; value: string }>,
-  fieldItems: Array<{ label: string; value: string }>,
-): Array<{ label: string; value: string }> {
-  const merged = new Map<string, { label: string; value: string }>();
+/** Keep the selector and overview honest about catalog availability. */
+export function visualizationQuantitySelectionState({ activeQuantityId, items, loading, error, executionRequired = false }: {
+  activeQuantityId: string;
+  items: readonly { value: string; label: string; disabled?: boolean }[];
+  loading: boolean;
+  error?: string | null;
+  executionRequired?: boolean;
+}) {
+  const selected = items.find(item =>
+    resolveCanonicalQuantityId(item.value) === resolveCanonicalQuantityId(activeQuantityId));
+  const status = executionRequired ? "execution-required" : error ? "error" : loading ? "loading" : items.length === 0
+    ? "empty" : selected?.disabled ? "unavailable" : selected ? "selected" : "unselected";
+  const placeholder = status === "execution-required" ? "Select a source and execution"
+    : status === "error" ? "Field catalog unavailable"
+    : status === "loading" ? "Loading quantities…"
+      : status === "empty" ? "No compatible field available" : "Select an available quantity";
+  return {
+    status,
+    selectedValue: executionRequired ? "" : selected?.value ?? "",
+    placeholder,
+    summary: status === "selected" ? selected!.label
+      : status === "unavailable" ? `Unavailable / ${selected!.label}` : placeholder,
+  };
+}
+
+/**
+ * Full-domain fields the Airbox can show once the solver provides them
+ * (H_demag, H_ext, H_eff before or early in a run). Listing them disabled
+ * explains an otherwise empty Airbox quantity list.
+ */
+function pendingAirboxQuantityItems(
+  quantityCatalog: QuantityCatalogResource,
+): Array<{ disabled: true; label: string; value: string }> {
+  return quantityCatalog.quantities
+    .filter(
+      (quantity) =>
+        quantity.domain === "full_domain" &&
+        (quantity.shape === "vector_field" || quantity.shape === "spatial_scalar") &&
+        quantity.interactive_preview &&
+        !quantityCatalogEntrySupportsAirbox(quantity),
+    )
+    .map((quantity) => ({
+      disabled: true,
+      // A term the study does not contain (no external field, say) never
+      // becomes available; anything else is still waiting for the solver.
+      label: `${quantity.label || quantity.id} (${
+        quantity.resolved_capability?.reason_code === "quantity_unsupported"
+          ? "not in this study"
+          : "not available yet"
+      })`,
+      value: quantity.id,
+    }));
+}
+
+function mergeVisualizationQuantityItems<
+  Item extends { disabled?: boolean; label: string; value: string },
+>(
+  capabilityItems: Item[],
+  fieldItems: Item[],
+): Item[] {
+  const merged = new Map<string, Item>();
+
   for (const item of capabilityItems) merged.set(item.value, item);
   for (const item of fieldItems) {
     if (!merged.has(item.value)) merged.set(item.value, item);
@@ -2400,7 +2410,7 @@ export function quantitySourcePatch(
   quantityId: string,
 ): VisualizationTargetPatch {
   const activeQuantityId = resolveCanonicalQuantityId(quantityId);
-  const patch: VisualizationTargetPatch = { activeQuantityId };
+  const patch: VisualizationTargetPatch = { activeQuantityId, tensorProjection: null };
 
   if (isScalarSpatialQuantityId(activeQuantityId)) {
     if (settings.surfaceColorSource !== "colormap") {
@@ -2843,7 +2853,8 @@ export interface VisualizationPanelSection {
     | "quantity-source"
     | "surface-coloring"
     | "vectors"
-    | "wireframe";
+    | "wireframe"
+    | "wireframe-mesh";
   title: string;
 }
 
@@ -3094,17 +3105,21 @@ export function buildAirboxVisibilityDiagnostic({
 }
 
 export function buildVisualizationPanelSections({
+  artifactInspection = false,
   effectiveSettings,
+  lane = "unresolved",
   settings,
   target,
 }: {
+  artifactInspection?: boolean;
   effectiveSettings: VisualizationTargetSettings;
+  lane?: ObjectVisualizationLane;
   settings: VisualizationTargetSettings;
   target?: VisualizationTargetRef;
 }): VisualizationPanelSection[] {
   const passDisabled = !settings.visible;
-  const capabilities = target ? visualizationTargetCapabilities(target) : null;
-  const isAirboxTarget = target?.kind === "airbox";
+  const capabilities = target ? visualizationTargetCapabilities(target, artifactInspection) : null;
+  const isAirboxTarget = target?.kind === "airbox" && !artifactInspection;
   const isFdmAirboxTarget = target ? isFdmUniverseOutsideSupportTarget(target) : false;
 
   if (capabilities?.supportsFieldData === false) {
@@ -3212,6 +3227,24 @@ export function buildVisualizationPanelSections({
     title: "Wireframe",
   });
 
+  if (
+    lane === "fem" &&
+    capabilities?.showWireframeGeometryScopeControl === true
+  ) {
+    sections.push({
+      disabled: passDisabled,
+      fields: [
+        {
+          id: "wireframeGeometryScope",
+          kind: "mode",
+          label: "Wireframe mesh",
+        },
+      ],
+      id: "wireframe-mesh",
+      title: "Wireframe mesh",
+    });
+  }
+
   if (capabilities?.supportsVectors !== false) {
     const vectorFields: VisualizationPanelField[] = [
       { id: "vectorColorMode", kind: "mode", label: "Vector coloring" },
@@ -3273,7 +3306,7 @@ export function resolveArtifactInspectionDataState({ executionSelected = true, c
   if (!executionSelected) return "Select execution";
   if (catalogError) return "Unavailable";
   if (!catalogReady) return "Loading catalog";
-  if (!quantityAvailable) return "Select raw SI quantity";
+  if (!quantityAvailable) return "Select a compatible field";
   if (!ownerReady) return "Select execution";
   return presentationReady ? "Historical snapshot" : "Loading historical result";
 }

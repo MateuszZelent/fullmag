@@ -95,6 +95,32 @@ fn emit_unix_runtime_rpath(path: &str) {
     }
 }
 
+fn cargo_makeflags_for_unix_makefiles(
+    build_dir: &std::path::Path,
+    cargo_makeflags: Option<String>,
+) -> Result<String, &'static str> {
+    let cache = std::fs::read_to_string(build_dir.join("CMakeCache.txt"))
+        .map_err(|_| "CMakeCache.txt is unavailable")?;
+    let generator = cache
+        .lines()
+        .find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            (key.split(':').next() == Some("CMAKE_GENERATOR")).then_some(value.trim())
+        })
+        .ok_or("CMAKE_GENERATOR is missing from CMakeCache.txt")?;
+    if generator != "Unix Makefiles" {
+        return Err("CMake generator is not Unix Makefiles");
+    }
+
+    let makeflags = cargo_makeflags.ok_or("CARGO_MAKEFLAGS is unavailable")?;
+    if !makeflags.split_whitespace().any(|flag| {
+        flag.starts_with("--jobserver-auth=") || flag.starts_with("--jobserver-fds=")
+    }) {
+        return Err("CARGO_MAKEFLAGS does not contain Cargo jobserver flags");
+    }
+    Ok(makeflags)
+}
+
 fn main() {
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     generate_gpu_execution_receipt_abi_assertions(&out_dir);
@@ -134,6 +160,7 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed=../../native/include/fullmag_fem.h");
+    println!("cargo:rerun-if-changed=../../native/include/fullmag_fem_cuda_trace.h");
     println!("cargo:rerun-if-changed=../../native/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../../native/cmake/ImportFullmagFdm.cmake");
     println!("cargo:rerun-if-changed=../../native/cmake/RequireFemGpu.cmake");
@@ -286,7 +313,26 @@ fn main() {
         .arg(cmake_build_type)
         .arg("--target")
         .arg("fullmag_fem");
-    if let Ok(jobs) = std::env::var("NUM_JOBS") {
+    if direct_compose && cfg!(unix) {
+        build.env_remove("CMAKE_BUILD_PARALLEL_LEVEL");
+        match cargo_makeflags_for_unix_makefiles(
+            &build_dir,
+            std::env::var("CARGO_MAKEFLAGS").ok(),
+        ) {
+            Ok(makeflags) => {
+                build.env("MAKEFLAGS", makeflags);
+            }
+            Err(reason) => {
+                build
+                    .env_remove("MAKEFLAGS")
+                    .arg("--parallel")
+                    .arg("1");
+                println!(
+                    "cargo:warning=direct Compose FEM native build uses --parallel 1: {reason}"
+                );
+            }
+        }
+    } else if let Ok(jobs) = std::env::var("NUM_JOBS") {
         if jobs.parse::<usize>().is_ok_and(|value| value > 0) {
             build.arg("--parallel").arg(jobs);
         }

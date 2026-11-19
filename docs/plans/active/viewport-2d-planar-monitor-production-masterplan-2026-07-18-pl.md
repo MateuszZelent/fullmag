@@ -1,5 +1,10 @@
 # 2D Viewport and Planar Monitor Production Implementation Plan
 
+> **Status: superseded (2026-10-27).** Otwarte pozycje tego planu przeniesiono do
+> `docs/plans/active/viewport-2d-mumax-parity-2026-10-27/05-plan-wdrozenia.md`;
+> jedynym ledgerem statusu jest `docs/status/2d-slice-capabilities.md`. Checkboxy
+> poniżej są historyczne i nie są dowodem działania.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Dostarczyć produkcyjny moduł `field-map`, prezentowany użytkownikowi jako **2D View**, który wizualizuje wszystkie opublikowane wielkości przestrzenne Fullmag na płaszczyźnie, w warstwie o skończonej grubości, w projekcji przez domenę albo na wybranej powierzchni; wprowadzić kanoniczny i reprodukowalny `PlanarMonitor`; oraz zapewnić jeden wspólny system inspektorów obsługujący konteksty 3D i 2D, w tym pola wektorowe.

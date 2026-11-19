@@ -8,6 +8,7 @@ use crate::{
     RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace, Result, StepReport, TimeIntegrator,
     Vector3,
 };
+use crate::fdm::shared::terms::{SlonczewskiTimeExpression, TimeEvaluationSide};
 use sha2::Digest;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -52,11 +53,24 @@ pub struct ExchangeLlgProblem {
     pub ms_field: Option<Vec<f64>>,
     pub a_field: Option<Vec<f64>>,
     pub alpha_field: Option<Vec<f64>>,
+    /// Per-connection exchange coefficients (note 0104,
+    /// `material-fdm-connection-coefficient`). `None` keeps the per-cell
+    /// harmonic stencil built from `a_field`.
+    pub exchange_faces: Option<std::sync::Arc<crate::ExchangeFaces>>,
     /// Canonical regional field drives, separate from legacy per-node fields.
     pub regional_field_drives: Vec<RegionalFieldDriveTerm>,
+    /// Optional scalar multiplier for the canonical Slonczewski current,
+    /// evaluated at every physical RK stage time.
+    slonczewski_time_expression: Option<SlonczewskiTimeExpression>,
     /// Resolved static external H_ext profile [A/m], kept separate from the
     /// legacy Oersted/antenna per-node buffer for observable provenance.
     pub static_external_field: Option<Vec<Vector3>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepEndpointPolicy {
+    Ordinary,
+    HardPhysicalEndpoint,
 }
 
 impl ExchangeLlgProblem {
@@ -152,9 +166,43 @@ impl ExchangeLlgProblem {
             ms_field: None,
             a_field: None,
             alpha_field: None,
+            exchange_faces: None,
             regional_field_drives: Vec::new(),
+            slonczewski_time_expression: None,
             static_external_field: None,
         })
+    }
+
+    /// Attach a compiled dimensionless multiplier to the canonical CPP STT.
+    /// The runner calls this only after the planner has admitted the matching
+    /// FP64 single-grid FDM RK45 lane.
+    pub fn set_slonczewski_time_expression(
+        &mut self,
+        expression: &fullmag_ir::TimeExpressionIR,
+    ) -> Result<()> {
+        if self.terms.slonczewski_stt.is_none() {
+            return Err(crate::EngineError::with_code(
+                crate::EngineErrorCode::InvalidInput,
+                "Slonczewski time expression requires an active Slonczewski STT term",
+            ));
+        }
+        self.slonczewski_time_expression = Some(SlonczewskiTimeExpression::compile(expression)?);
+        Ok(())
+    }
+
+    pub(crate) fn slonczewski_current_multiplier_at_time(
+        &self,
+        time_seconds: f64,
+        side: TimeEvaluationSide,
+    ) -> Result<f64> {
+        match &self.slonczewski_time_expression {
+            Some(expression) => expression.evaluate(time_seconds, side),
+            None => Ok(1.0),
+        }
+    }
+
+    pub(crate) fn has_slonczewski_time_expression(&self) -> bool {
+        self.slonczewski_time_expression.is_some()
     }
 
     pub fn regional_drive_field_at_time(&self, evaluation_time_s: f64) -> Vec<Vector3> {
@@ -298,6 +346,19 @@ impl ExchangeLlgProblem {
 
     /// Build a reusable FFT workspace matching this problem's grid.
     pub fn create_workspace(&self) -> FftWorkspace {
+        if self.grid.nz == 1
+            && !self.boundary_policy.has_any_periodic()
+            && self.demag_boundary == FdmDemagBoundary::Open
+        {
+            return FftWorkspace::new_open_single_layer(
+                self.grid.nx,
+                self.grid.ny,
+                self.cell_size.dx,
+                self.cell_size.dy,
+                self.cell_size.dz,
+            );
+        }
+
         if self.boundary_policy.has_any_periodic()
             && matches!(
                 self.demag_boundary,
@@ -384,6 +445,22 @@ impl ExchangeLlgProblem {
         })
     }
 
+    /// Full-domain stray field using a workspace created for this problem.
+    /// Observation callers may retain it across accepted states; it must not
+    /// be shared concurrently with an integrator evaluation.
+    pub fn observable_demag_field_with_workspace(
+        &self,
+        state: &ExchangeLlgState,
+        ws: &mut FftWorkspace,
+    ) -> Result<Vec<Vector3>> {
+        self.ensure_state_matches_grid(state)?;
+        Ok(if self.terms.demag {
+            self.observable_demag_field_from_vectors_ws(state.magnetization(), ws)
+        } else {
+            zero_vectors(self.grid.cell_count())
+        })
+    }
+
     pub fn external_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         Ok(self.external_field_vectors())
@@ -402,9 +479,20 @@ impl ExchangeLlgProblem {
     pub fn observable_effective_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         let mut ws = self.create_workspace();
+        self.observable_effective_field_with_workspace(state, &mut ws)
+    }
+
+    /// Evaluate the current observable field without rebuilding FFT plans or
+    /// Newell spectra. The workspace must have this problem's geometry/policy.
+    pub fn observable_effective_field_with_workspace(
+        &self,
+        state: &ExchangeLlgState,
+        ws: &mut FftWorkspace,
+    ) -> Result<Vec<Vector3>> {
+        self.ensure_state_matches_grid(state)?;
         Ok(self.observable_effective_field_from_vectors_ws_at_time(
             state.magnetization(),
-            &mut ws,
+            ws,
             state.time_seconds,
         ))
     }
@@ -469,6 +557,11 @@ impl ExchangeLlgProblem {
         Ok(self.external_energy_density_from_fields(state.magnetization(), &field))
     }
 
+    pub fn magnetoelastic_energy_density(&self, state: &ExchangeLlgState) -> Result<Vec<f64>> {
+        self.ensure_state_matches_grid(state)?;
+        Ok(self.magnetoelastic_energy_density_from_vectors(state.magnetization()))
+    }
+
     pub fn anisotropy_energy_density(&self, state: &ExchangeLlgState) -> Result<Vec<f64>> {
         self.ensure_state_matches_grid(state)?;
         Ok(self.anisotropy_energy_density_from_vectors(state.magnetization()))
@@ -486,6 +579,7 @@ impl ExchangeLlgProblem {
             self.exchange_energy_density(state)?,
             self.demag_energy_density(state)?,
             self.external_energy_density(state)?,
+            self.magnetoelastic_energy_density(state)?,
             self.anisotropy_energy_density(state)?,
             self.dmi_energy_density(state)?,
         ] {
@@ -553,6 +647,75 @@ impl ExchangeLlgProblem {
         bufs: &mut IntegratorBuffers,
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
+        self.step_with_buffers_evaluation_policy(
+            state,
+            dt,
+            ws,
+            bufs,
+            evaluation,
+            StepEndpointPolicy::Ordinary,
+        )
+    }
+
+    /// Execute the final, sub-`dt_min` RK45 interval to the exact physical
+    /// endpoint supplied by the CPU reference runner. This is an internal
+    /// runtime seam, not a second public timestep policy.
+    #[doc(hidden)]
+    pub fn step_rk45_to_hard_endpoint_with_buffers_evaluation(
+        &self,
+        state: &mut ExchangeLlgState,
+        endpoint_time_s: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let dt = self.rk45_hard_endpoint_interval(state.time_seconds, endpoint_time_s)?;
+        self.step_with_buffers_evaluation_policy(
+            state,
+            dt,
+            ws,
+            bufs,
+            evaluation,
+            StepEndpointPolicy::HardPhysicalEndpoint,
+        )
+    }
+
+    fn rk45_hard_endpoint_interval(
+        &self,
+        current_time_s: f64,
+        endpoint_time_s: f64,
+    ) -> Result<f64> {
+        if self.dynamics.integrator != TimeIntegrator::RK45 || !self.dynamics.adaptive_enabled {
+            return Err(EngineError::with_code(
+                EngineErrorCode::CapabilityUnavailable,
+                "hard-endpoint subminimum stepping is available only for adaptive RK45",
+            ));
+        }
+        let dt = endpoint_time_s - current_time_s;
+        if !current_time_s.is_finite()
+            || !endpoint_time_s.is_finite()
+            || !dt.is_finite()
+            || dt <= 0.0
+            || dt >= self.dynamics.adaptive.dt_min
+            || current_time_s + dt != endpoint_time_s
+        {
+            return Err(EngineError::with_code(
+                EngineErrorCode::InvalidTimestep,
+                "hard-endpoint RK45 interval must be positive, representable, and shorter than dt_min",
+            ));
+        }
+        Ok(dt)
+    }
+
+    fn step_with_buffers_evaluation_policy(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+        endpoint_policy: StepEndpointPolicy,
+    ) -> Result<StepReport> {
         self.ensure_state_matches_grid(state)?;
         if !dt.is_finite() || dt <= 0.0 {
             return Err(EngineError::with_code(
@@ -568,27 +731,41 @@ impl ExchangeLlgProblem {
         bufs.begin_adaptive_step();
         self.set_thermal_dt_for_attempt(dt);
 
-        let result = match self.dynamics.integrator {
-            TimeIntegrator::Heun if self.soa_fast_path_supported() => {
-                self.heun_step_soa_buf(state, dt, ws, bufs, evaluation)
-            }
-            TimeIntegrator::Heun => self.heun_step_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::RK4 if self.soa_fast_path_supported() => {
-                self.rk4_step_soa_buf(state, dt, ws, bufs, evaluation)
-            }
-            TimeIntegrator::RK4 => self.rk4_step_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::RK23 if self.soa_fast_path_supported() => {
-                self.rk23_step_soa_buf(state, dt, ws, bufs, evaluation)
-            }
-            TimeIntegrator::RK23 => self.rk23_step_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::RK45 if self.soa_fast_path_supported() => {
-                self.rk45_step_soa_buf(state, dt, ws, bufs, evaluation)
-            }
-            TimeIntegrator::RK45 => self.rk45_step_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::ABM3 if self.soa_fast_path_supported() => {
-                self.abm3_step_soa_buf(state, dt, ws, bufs, evaluation)
-            }
-            TimeIntegrator::ABM3 => self.abm3_step_buf(state, dt, ws, bufs, evaluation),
+        let result = match endpoint_policy {
+            StepEndpointPolicy::HardPhysicalEndpoint => match self.dynamics.integrator {
+                TimeIntegrator::RK45 if self.soa_fast_path_supported() => {
+                    self.rk45_step_soa_buf_at_hard_endpoint(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::RK45 => {
+                    self.rk45_step_buf_at_hard_endpoint(state, dt, ws, bufs, evaluation)
+                }
+                _ => Err(EngineError::with_code(
+                    EngineErrorCode::CapabilityUnavailable,
+                    "hard-endpoint subminimum stepping requires adaptive RK45",
+                )),
+            },
+            StepEndpointPolicy::Ordinary => match self.dynamics.integrator {
+                TimeIntegrator::Heun if self.soa_fast_path_supported() => {
+                    self.heun_step_soa_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::Heun => self.heun_step_buf(state, dt, ws, bufs, evaluation),
+                TimeIntegrator::RK4 if self.soa_fast_path_supported() => {
+                    self.rk4_step_soa_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::RK4 => self.rk4_step_buf(state, dt, ws, bufs, evaluation),
+                TimeIntegrator::RK23 if self.soa_fast_path_supported() => {
+                    self.rk23_step_soa_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::RK23 => self.rk23_step_buf(state, dt, ws, bufs, evaluation),
+                TimeIntegrator::RK45 if self.soa_fast_path_supported() => {
+                    self.rk45_step_soa_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::RK45 => self.rk45_step_buf(state, dt, ws, bufs, evaluation),
+                TimeIntegrator::ABM3 if self.soa_fast_path_supported() => {
+                    self.abm3_step_soa_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::ABM3 => self.abm3_step_buf(state, dt, ws, bufs, evaluation),
+            },
         };
         self.clear_thermal_dt_for_attempt();
         if result.is_ok() {
@@ -612,6 +789,47 @@ impl ExchangeLlgProblem {
         bufs: &mut IntegratorBuffers,
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
+        self.step_soa_with_buffers_evaluation_policy(
+            state,
+            dt,
+            ws,
+            bufs,
+            evaluation,
+            StepEndpointPolicy::Ordinary,
+        )
+    }
+
+    /// Persistent-SoA counterpart of
+    /// [`step_rk45_to_hard_endpoint_with_buffers_evaluation`].
+    #[doc(hidden)]
+    pub fn step_rk45_soa_to_hard_endpoint_with_buffers_evaluation(
+        &self,
+        state: &mut ExchangeLlgStateSoA,
+        endpoint_time_s: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let dt = self.rk45_hard_endpoint_interval(state.time_seconds, endpoint_time_s)?;
+        self.step_soa_with_buffers_evaluation_policy(
+            state,
+            dt,
+            ws,
+            bufs,
+            evaluation,
+            StepEndpointPolicy::HardPhysicalEndpoint,
+        )
+    }
+
+    fn step_soa_with_buffers_evaluation_policy(
+        &self,
+        state: &mut ExchangeLlgStateSoA,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+        endpoint_policy: StepEndpointPolicy,
+    ) -> Result<StepReport> {
         self.ensure_soa_state_matches_grid(state)?;
         if !dt.is_finite() || dt <= 0.0 {
             return Err(EngineError::with_code(
@@ -632,12 +850,31 @@ impl ExchangeLlgProblem {
         bufs.begin_adaptive_step();
         self.set_thermal_dt_for_attempt(dt);
 
-        let result = match self.dynamics.integrator {
-            TimeIntegrator::Heun => self.heun_step_soa_state_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::RK4 => self.rk4_step_soa_state_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::RK23 => self.rk23_step_soa_state_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::RK45 => self.rk45_step_soa_state_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::ABM3 => self.abm3_step_soa_state_buf(state, dt, ws, bufs, evaluation),
+        let result = match endpoint_policy {
+            StepEndpointPolicy::HardPhysicalEndpoint => match self.dynamics.integrator {
+                TimeIntegrator::RK45 => {
+                    self.rk45_step_soa_state_buf_at_hard_endpoint(state, dt, ws, bufs, evaluation)
+                }
+                _ => Err(EngineError::with_code(
+                    EngineErrorCode::CapabilityUnavailable,
+                    "hard-endpoint subminimum stepping requires adaptive RK45",
+                )),
+            },
+            StepEndpointPolicy::Ordinary => match self.dynamics.integrator {
+                TimeIntegrator::Heun => {
+                    self.heun_step_soa_state_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::RK4 => self.rk4_step_soa_state_buf(state, dt, ws, bufs, evaluation),
+                TimeIntegrator::RK23 => {
+                    self.rk23_step_soa_state_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::RK45 => {
+                    self.rk45_step_soa_state_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::ABM3 => {
+                    self.abm3_step_soa_state_buf(state, dt, ws, bufs, evaluation)
+                }
+            },
         };
         self.clear_thermal_dt_for_attempt();
         if result.is_ok() {
@@ -664,6 +901,7 @@ impl ExchangeLlgProblem {
         Ok(())
     }
 
+    #[inline]
     pub(crate) fn is_active(&self, flat_index: usize) -> bool {
         self.active_mask
             .as_ref()
@@ -776,6 +1014,27 @@ impl ExchangeLlgProblem {
         Ok(self)
     }
 
+    /// Attach the realized exchange operator. `Uniform` keeps the scalar
+    /// stencil; `Faces` replaces the per-cell harmonic stencil.
+    pub fn with_exchange_operator(mut self, operator: crate::ExchangeOperator) -> Result<Self> {
+        self.exchange_faces = match operator {
+            crate::ExchangeOperator::Uniform => None,
+            crate::ExchangeOperator::Faces(faces) => {
+                let cells = self.grid.cell_count();
+                if [&faces.x_plus, &faces.y_plus, &faces.z_plus]
+                    .iter()
+                    .any(|values| values.len() != cells)
+                {
+                    return Err(EngineError::new(format!(
+                        "exchange face coefficients must have {cells} entries per axis"
+                    )));
+                }
+                Some(std::sync::Arc::new(faces))
+            }
+        };
+        Ok(self)
+    }
+
     pub fn with_static_external_field(
         mut self,
         static_external_field: Option<Vec<Vector3>>,
@@ -867,7 +1126,9 @@ impl Clone for ExchangeLlgProblem {
             ms_field: self.ms_field.clone(),
             a_field: self.a_field.clone(),
             alpha_field: self.alpha_field.clone(),
+            exchange_faces: self.exchange_faces.clone(),
             regional_field_drives: self.regional_field_drives.clone(),
+            slonczewski_time_expression: self.slonczewski_time_expression.clone(),
             static_external_field: self.static_external_field.clone(),
         }
     }
@@ -890,7 +1151,203 @@ impl PartialEq for ExchangeLlgProblem {
             && self.ms_field == other.ms_field
             && self.a_field == other.a_field
             && self.alpha_field == other.alpha_field
+            && self.exchange_faces == other.exchange_faces
             && self.regional_field_drives == other.regional_field_drives
             && self.static_external_field == other.static_external_field
+    }
+}
+
+#[cfg(test)]
+mod single_layer_workspace_tests {
+    use super::*;
+    use crate::{TimeIntegrator, VectorFieldSoA};
+
+    fn make_problem(shape: [usize; 3], active_mask: Option<Vec<bool>>) -> ExchangeLlgProblem {
+        let grid = GridShape::new(shape[0], shape[1], shape[2]).expect("valid grid");
+        let cell_count = grid.cell_count();
+        let terms = EffectiveFieldTerms {
+            exchange: false,
+            demag: true,
+            ..Default::default()
+        };
+        let problem = ExchangeLlgProblem::with_terms_and_mask(
+            grid,
+            CellSize::new(1.3e-9, 2.1e-9, 5.7e-9).expect("valid cell size"),
+            MaterialParameters::new(8.0e5, 1.3e-11, 0.2).expect("valid material"),
+            LlgConfig::new(2.211e5, TimeIntegrator::Heun).expect("valid LLG config"),
+            terms,
+            active_mask,
+        )
+        .expect("valid problem");
+        let ms_field = (0..cell_count)
+            .map(|index| {
+                if !problem.is_active(index) {
+                    0.0
+                } else {
+                    6.8e5 + (index % 5) as f64 * 4.1e4
+                }
+            })
+            .collect();
+        problem
+            .with_spatial_fields(Some(ms_field), None, None)
+            .expect("valid heterogeneous Ms field")
+    }
+
+    fn magnetization(cell_count: usize) -> Vec<Vector3> {
+        (0..cell_count)
+            .map(|index| {
+                let i = index as f64;
+                [0.31 + 0.07 * i, -0.42 + 0.03 * i, 0.84 - 0.02 * i]
+            })
+            .collect()
+    }
+
+    fn assert_close(actual: f64, expected: f64, absolute_floor: f64, label: &str) {
+        let tolerance = 1.0e-12 * actual.abs().max(expected.abs()) + absolute_floor;
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "{label} differs: actual={actual:e}, expected={expected:e}, tolerance={tolerance:e}"
+        );
+    }
+
+    fn assert_fields_close(actual: &[Vector3], expected: &[Vector3]) {
+        assert_eq!(actual.len(), expected.len());
+        for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            for component in 0..3 {
+                assert_close(
+                    actual[component],
+                    expected[component],
+                    1.0e-8,
+                    &format!("field[{index}][{component}]"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn open_single_layer_workspace_matches_legacy_aos_and_soa_oracle() {
+        for (shape, mask) in [
+            ([1, 1, 1], Some(vec![true])),
+            ([3, 2, 1], Some(vec![true, true, false, true, true, true])),
+        ] {
+            let problem = make_problem(shape, mask);
+            let state = magnetization(problem.grid.cell_count());
+            let state_soa = VectorFieldSoA::from_aos(&state);
+
+            let mut optimized_aos_ws = problem.create_workspace();
+            let mut legacy_aos_ws = FftWorkspace::new(
+                shape[0],
+                shape[1],
+                shape[2],
+                problem.cell_size.dx,
+                problem.cell_size.dy,
+                problem.cell_size.dz,
+            );
+            assert_eq!(optimized_aos_ws.pz, 1);
+            assert_eq!(legacy_aos_ws.pz, 2);
+
+            let optimized_aos_energy =
+                problem.total_energy_from_vectors_ws(&state, &mut optimized_aos_ws);
+            let legacy_aos_energy =
+                problem.total_energy_from_vectors_ws(&state, &mut legacy_aos_ws);
+            assert_close(
+                optimized_aos_energy,
+                legacy_aos_energy,
+                1.0e-30,
+                "AoS demag energy",
+            );
+            let optimized_aos_field =
+                problem.effective_field_from_vectors_ws(&state, &mut optimized_aos_ws);
+            let legacy_aos_field =
+                problem.effective_field_from_vectors_ws(&state, &mut legacy_aos_ws);
+            assert_fields_close(&optimized_aos_field, &legacy_aos_field);
+
+            let mut optimized_soa_ws = problem.create_workspace();
+            let mut legacy_soa_ws = FftWorkspace::new(
+                shape[0],
+                shape[1],
+                shape[2],
+                problem.cell_size.dx,
+                problem.cell_size.dy,
+                problem.cell_size.dz,
+            );
+            let mut optimized_scratch = VectorFieldSoA::zeros(state.len());
+            let mut legacy_scratch = VectorFieldSoA::zeros(state.len());
+            let optimized_soa_energy = problem.total_energy_from_soa_ws(
+                &state_soa,
+                &mut optimized_soa_ws,
+                &mut optimized_scratch,
+            );
+            let legacy_soa_energy = problem.total_energy_from_soa_ws(
+                &state_soa,
+                &mut legacy_soa_ws,
+                &mut legacy_scratch,
+            );
+            assert_close(
+                optimized_soa_energy,
+                legacy_soa_energy,
+                1.0e-30,
+                "SoA demag energy",
+            );
+            let mut optimized_soa_field = VectorFieldSoA::zeros(state.len());
+            let mut legacy_soa_field = VectorFieldSoA::zeros(state.len());
+            problem.effective_field_into_soa_ws(
+                &state_soa,
+                &mut optimized_soa_ws,
+                &mut optimized_soa_field,
+            );
+            problem.effective_field_into_soa_ws(
+                &state_soa,
+                &mut legacy_soa_ws,
+                &mut legacy_soa_field,
+            );
+            assert_fields_close(
+                &optimized_soa_field.gather_to_aos(),
+                &legacy_soa_field.gather_to_aos(),
+            );
+        }
+    }
+
+    #[test]
+    fn single_layer_specialization_excludes_3d_pbc_and_non_open_demag() {
+        let three_dimensional = make_problem([3, 2, 2], None);
+        assert_eq!(three_dimensional.create_workspace().pz, 4);
+
+        let mut periodic_x = make_problem([3, 2, 1], None);
+        periodic_x.boundary_policy.x = crate::AxisBoundary::Periodic;
+        periodic_x.demag_boundary = FdmDemagBoundary::PeriodicTruncatedImages {
+            image_counts: [1, 0, 0],
+        };
+        let periodic_workspace = periodic_x.create_workspace();
+        assert_eq!(
+            [
+                periodic_workspace.px,
+                periodic_workspace.py,
+                periodic_workspace.pz
+            ],
+            [3, 4, 2]
+        );
+
+        let mut periodic_stencil_open_demag = make_problem([3, 2, 1], None);
+        periodic_stencil_open_demag.boundary_policy.x = crate::AxisBoundary::Periodic;
+        assert_eq!(periodic_stencil_open_demag.create_workspace().pz, 2);
+
+        let mut non_open_demag = make_problem([3, 2, 1], None);
+        non_open_demag.demag_boundary = FdmDemagBoundary::PeriodicTruncatedImages {
+            image_counts: [1, 1, 1],
+        };
+        assert_eq!(non_open_demag.create_workspace().pz, 2);
+
+        let default_workspace = FftWorkspace::new(3, 2, 1, 1.3e-9, 2.1e-9, 5.7e-9);
+        assert_eq!(default_workspace.pz, 2);
+        let default_spectra = crate::compute_newell_kernel_spectra(3, 2, 1, 1.3e-9, 2.1e-9, 5.7e-9);
+        assert_eq!(default_spectra.pz, 2);
+        let thin_film_spectra =
+            crate::compute_newell_kernel_spectra_thin_film_2d(3, 2, 1.3e-9, 2.1e-9, 5.7e-9);
+        assert_eq!(thin_film_spectra.pz, 1);
+        assert_eq!(
+            thin_film_spectra.n_xx.len(),
+            2 * thin_film_spectra.px * thin_film_spectra.py
+        );
     }
 }

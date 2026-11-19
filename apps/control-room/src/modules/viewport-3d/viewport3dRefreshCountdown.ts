@@ -53,6 +53,9 @@ export function resolveViewport3DRefreshCountdownNextTickDelay(input: {
   if (input.nowMs < input.sample.flashUntilMs) {
     return clampTickDelay(input.sample.flashUntilMs - input.nowMs);
   }
+  if (input.sample.pulseId < 2) {
+    return null;
+  }
 
   const elapsedMs = Math.max(0, input.nowMs - input.sample.refreshedAtMs);
   const remainingMs = Math.max(0, input.sample.intervalMs - elapsedMs);
@@ -161,15 +164,25 @@ export function resolveViewport3DRefreshCountdownDisplay(input: {
     };
   }
 
+  if (input.sample.pulseId < 2) {
+    return {
+      ariaLabel: "Waiting for new field data",
+      detail: "no new data",
+      progress: 0,
+      state: "waiting",
+      title: "Field data",
+    };
+  }
+
   const elapsedMs = Math.max(0, input.nowMs - input.sample.refreshedAtMs);
   const remainingMs = Math.max(0, input.sample.intervalMs - elapsedMs);
   if (remainingMs <= 0) {
     return {
-      ariaLabel: "Waiting for next field refresh",
-      detail: "waiting",
-      progress: 1,
+      ariaLabel: "No new field data received",
+      detail: "no new data",
+      progress: 0,
       state: "waiting",
-      title: "Estimated next field sync",
+      title: "Field data",
     };
   }
 

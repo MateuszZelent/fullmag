@@ -3,6 +3,7 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 
 import { useKernel } from "../KernelContext";
+import { useProjectDocumentSnapshot } from "../persistence/ProjectDocumentStatus";
 import type {
   ObjectVisualizationController,
   ObjectVisualizationSnapshot,
@@ -46,4 +47,12 @@ export function useObjectVisualizationSelector<T>(
 
 export function useObjectVisualizationController(): ObjectVisualizationController {
   return useKernel().visualization;
+}
+
+/** Saved result identity is UI state; its payload remains in resource hooks. */
+export function useSavedFieldPresentation() {
+  const presentation = useObjectVisualizationSelector(snapshot => snapshot.savedFieldPresentation ?? null);
+  const project = useProjectDocumentSnapshot();
+  const projectId = project.state === "ready" ? project.resource.project_id : null;
+  return { presentation, projectId, projectMatches: presentation !== null && projectId === presentation.selection.projectId };
 }

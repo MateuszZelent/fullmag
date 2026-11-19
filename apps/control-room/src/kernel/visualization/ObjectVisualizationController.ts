@@ -1,5 +1,11 @@
+import { normalizeScalarColorPalette as normalizeSharedScalarColorPalette } from "@/shared/visualization/scalarColorPalette";
 import type { ArtifactFieldSelection } from "./artifactFieldSelection";
+import { validAntennaColorRange, type AntennaColorRange } from "./antennaColorRange";
+import { hasEmptyObjectMagneticModel } from "@/shared/domain/physics/objectMagneticModel";
+import { normalizeTensorProjection, type TensorProjectionToken } from "../api/tensorFieldProjection";
 import type {
+  QuantityCatalogResource,
+  SceneResource,
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "../api/apiTypes";
@@ -7,6 +13,7 @@ import type { AntennaFieldIntent, AntennaFieldDisplayStatus } from "./antennaFie
 import {
   isScalarSpatialQuantityId,
   normalizeQuantityIdOrDefault,
+  quantityCatalogEntrySupportsSpatialVisualization,
   resolveCanonicalQuantityId,
 } from "../api/quantityIds";
 import {
@@ -14,6 +21,8 @@ import {
   visualizationPartScopeIdFromTargetId,
   visualizationTargetIdForSceneObject,
   type Selection,
+  type PinnedMaterializedDatasetSelectionRef,
+  selectionRefEquals,
 } from "../selection/selectionTypes";
 import {
   canonicalVisualizationTargetId as canonicalPublicVisualizationTargetId,
@@ -60,12 +69,43 @@ export interface VisualizationTargetRef {
   label?: string | null;
 }
 
+export interface VisualizationObjectContext {
+  object: NonNullable<SceneResource["objects"]>[number] | null;
+  quantityCatalog: QuantityCatalogResource | null;
+}
+
+/** Presentation roles never grant field capabilities or activate magnetic physics. */
+export function resolveObjectVisualizationQuantityCatalog(
+  catalog: QuantityCatalogResource | null,
+  object: VisualizationObjectContext["object"],
+): QuantityCatalogResource | null {
+  if (!catalog || !object) return null;
+  if (!hasEmptyObjectMagneticModel(object)) return catalog;
+  const quantities = catalog.quantities.filter((entry) => entry.domain !== "magnetic_only");
+  return quantities.length === catalog.quantities.length ? catalog : { ...catalog, quantities };
+}
+
+function resolveObjectContextVisualizationSettings(
+  settings: VisualizationTargetSettings,
+  context: VisualizationObjectContext | undefined,
+): VisualizationTargetSettings {
+  if (!context) return settings;
+  const catalog = resolveObjectVisualizationQuantityCatalog(context.quantityCatalog, context.object);
+  const quantity = catalog?.quantities.find(
+    (entry) => resolveCanonicalQuantityId(entry.id) === resolveCanonicalQuantityId(settings.activeQuantityId),
+  );
+  return quantity && quantityCatalogEntrySupportsSpatialVisualization(quantity, settings.tensorProjection)
+    ? settings
+    : { ...settings, activeQuantityId: "" };
+}
+
 export interface VisualizationTargetSettings {
   activeQuantityId: string;
   airboxSyntheticVectorsEnabled: boolean;
   boundsOpacityPercent: number;
   boundsVisible: boolean;
   geometryScope: VisualizationGeometryScope;
+  wireframeGeometryScope: VisualizationGeometryScope;
   surfaceOpacityPercent: number;
   pointColor: string;
   pointOpacityPercent: number;
@@ -80,6 +120,7 @@ export interface VisualizationTargetSettings {
   shaderVisible: boolean;
   surfaceColorSource: SurfaceColorSource;
   surfaceProjectionMode: SurfaceFieldProjectionMode;
+  tensorProjection?: TensorProjectionToken | null;
   viewportColorbarVisible: boolean;
   vectorAlphaPercent: number;
   vectorBudget: number;
@@ -117,7 +158,14 @@ export interface ViewportTargetRenderingPreferences {
   vectorSurfaceOffsetScale?: number;
 }
 
+export interface SavedFieldPresentation {
+  selection: PinnedMaterializedDatasetSelectionRef;
+  settings: VisualizationTargetSettings;
+  colorRanges?: Partial<Record<"magnitude" | "x" | "y" | "z", AntennaColorRange>>;
+}
+
 export interface ObjectVisualizationSnapshot {
+  savedFieldPresentation?: SavedFieldPresentation | null;
   artifactFieldSelection?: ArtifactFieldSelection | null;
   antennaFieldIntent?: AntennaFieldIntent | null;
   antennaFieldDisplayStatus?: AntennaFieldDisplayStatus | null;
@@ -189,6 +237,7 @@ export interface VisualizationTargetCapabilities {
   primaryRenderModes: readonly VisualizationRenderMode[];
   showBoundsControl: boolean;
   showGeometryScopeControl: boolean;
+  showWireframeGeometryScopeControl: boolean;
   supportsFieldData: boolean;
   supportsPoints: boolean;
   supportsVectors: boolean;
@@ -199,6 +248,7 @@ const DEFAULT_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities
   primaryRenderModes: ["surface", "surface+edges", "wireframe", "points"],
   showBoundsControl: true,
   showGeometryScopeControl: true,
+  showWireframeGeometryScopeControl: true,
   supportsFieldData: true,
   supportsPoints: true,
   supportsVectors: true,
@@ -209,6 +259,7 @@ const AIRBOX_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities 
   primaryRenderModes: ["wireframe", "points"],
   showBoundsControl: true,
   showGeometryScopeControl: false,
+  showWireframeGeometryScopeControl: false,
   supportsFieldData: true,
   supportsPoints: true,
   supportsVectors: true,
@@ -219,6 +270,7 @@ const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET_CAPABILITIES: VisualizationTargetCapab
   primaryRenderModes: ["wireframe", "points"],
   showBoundsControl: true,
   showGeometryScopeControl: false,
+  showWireframeGeometryScopeControl: false,
   supportsFieldData: true,
   supportsPoints: true,
   supportsVectors: true,
@@ -227,13 +279,26 @@ const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET_CAPABILITIES: VisualizationTargetCapab
 
 export function visualizationTargetCapabilities(
   target: VisualizationTargetRef,
+  artifactInspection = false,
 ): VisualizationTargetCapabilities {
+  // Display passes derive from the owned result topology, never from magnetic physics.
+  if (artifactInspection && target.kind === "airbox") {
+    return {
+      ...DEFAULT_VISUALIZATION_TARGET_CAPABILITIES,
+      showWireframeGeometryScopeControl: false,
+    };
+  }
   if (isFdmUniverseOutsideSupportTarget(target)) {
     return FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET_CAPABILITIES;
   }
-  return target.kind === "airbox"
-    ? AIRBOX_VISUALIZATION_TARGET_CAPABILITIES
-    : DEFAULT_VISUALIZATION_TARGET_CAPABILITIES;
+  if (target.kind === "airbox") return AIRBOX_VISUALIZATION_TARGET_CAPABILITIES;
+  if (target.kind === "fdm-domain" || target.kind === "fdm-native-layer" || target.kind === "region") {
+    return {
+      ...DEFAULT_VISUALIZATION_TARGET_CAPABILITIES,
+      showWireframeGeometryScopeControl: false,
+    };
+  }
+  return DEFAULT_VISUALIZATION_TARGET_CAPABILITIES;
 }
 
 export function isFdmUniverseOutsideSupportTarget(
@@ -283,6 +348,8 @@ export function visualizationTargetUnsupportedPatchFields(
     "surfaceColorSource",
     "surfaceOpacityPercent",
     "surfaceProjectionMode",
+    "tensorProjection",
+    "wireframeGeometryScope",
     "viewportColorbarVisible",
   ]);
   if (target.kind === "airbox") {
@@ -330,6 +397,7 @@ export function visualizationTargetSupportedPatch(
             "surfaceColorSource",
             "surfaceOpacityPercent",
             "surfaceProjectionMode",
+    "tensorProjection",
             "viewportColorbarVisible",
           ].includes(field),
       ),
@@ -375,6 +443,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   boundsOpacityPercent: 100,
   boundsVisible: false,
   geometryScope: "surface",
+  wireframeGeometryScope: "surface",
   surfaceOpacityPercent: 100,
   pointColor: "var(--fm-border-strong)",
   pointOpacityPercent: 100,
@@ -389,6 +458,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   shaderVisible: true,
   surfaceColorSource: "orientation",
   surfaceProjectionMode: "raw_nodal",
+  tensorProjection: null,
   viewportColorbarVisible: false,
   vectorAlphaPercent: 100,
   vectorBudget: 1200,
@@ -412,6 +482,7 @@ export const DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION: VisualizationTa
   boundsOpacityPercent: 55,
   boundsVisible: true,
   geometryScope: "full",
+  wireframeGeometryScope: "full",
   pointColor: "var(--fm-info)",
   renderMode: "wireframe",
   shaderColorMode: "monochrome",
@@ -489,6 +560,7 @@ export const DEFAULT_FDM_DOMAIN_VISUALIZATION: VisualizationTargetSettings = {
   ...DEFAULT_OBJECT_VISUALIZATION,
   boundsVisible: false,
   geometryScope: "full",
+  wireframeGeometryScope: "full",
   renderMode: "wireframe",
   shaderVisible: false,
   surfaceColorSource: "solid",
@@ -532,6 +604,7 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   boundsOpacityPercent: 100,
   boundsVisible: false,
   geometryScope: "full",
+  wireframeGeometryScope: "full",
   surfaceOpacityPercent: 28,
   pointColor: "var(--fm-info)",
   pointOpacityPercent: 100,
@@ -544,6 +617,7 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   shaderVisible: false,
   surfaceColorSource: "solid",
   surfaceProjectionMode: "raw_nodal",
+  tensorProjection: null,
   viewportColorbarVisible: false,
   vectorAlphaPercent: 100,
   vectorBudget: 1200,
@@ -570,6 +644,65 @@ const DEFAULT_PART_VISUALIZATION: VisualizationTargetSettings = {
 
 
 export class ObjectVisualizationController {
+  private savedFieldPresentation: SavedFieldPresentation | null = null;
+
+  setSavedFieldPresentation(selection: PinnedMaterializedDatasetSelectionRef, quantityId: string, componentCount: string): void {
+    if (selectionRefEquals(this.savedFieldPresentation?.selection ?? null, selection)) return;
+    this.savedFieldPresentation = {
+      selection: { ...selection },
+      settings: {
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: quantityId,
+        geometryScope: "full",
+        shaderVisible: componentCount !== "3",
+        vectorsVisible: componentCount === "3",
+        renderMode: componentCount === "3" ? "off" : "surface",
+        shaderColorMode: "magnitude",
+        surfaceColorSource: "magnitude",
+        viewportColorbarVisible: true,
+      },
+    };
+    this.bump();
+  }
+
+  patchSavedFieldPresentation(selection: PinnedMaterializedDatasetSelectionRef, patch: VisualizationTargetPatch): void {
+    const current = this.savedFieldPresentation;
+    if (!current || !selectionRefEquals(current.selection, selection)) return;
+    const settings = normalizeVisualizationSettings({
+      ...current.settings,
+      ...normalizePatch(patch),
+      activeQuantityId: current.settings.activeQuantityId,
+      geometryScope: "full",
+      surfaceProjectionMode: "raw_nodal",
+    });
+    if (JSON.stringify(settings) === JSON.stringify(current.settings)) return;
+    this.savedFieldPresentation = { ...current, settings };
+    this.bump();
+  }
+
+  setSavedFieldColorRange(
+    selection: PinnedMaterializedDatasetSelectionRef,
+    component: keyof NonNullable<SavedFieldPresentation["colorRanges"]>,
+    range: AntennaColorRange | undefined,
+  ): void {
+    const current = this.savedFieldPresentation;
+    if (!current || !selectionRefEquals(current.selection, selection) ||
+        !["magnitude", "x", "y", "z"].includes(component) || range && !validAntennaColorRange(range)) return;
+    const previous = current.colorRanges?.[component];
+    if (previous?.minimum === range?.minimum && previous?.maximum === range?.maximum) return;
+    const colorRanges = { ...current.colorRanges };
+    if (range) colorRanges[component] = { ...range };
+    else delete colorRanges[component];
+    this.savedFieldPresentation = { ...current, colorRanges };
+    this.bump();
+  }
+
+  clearSavedFieldPresentation(): void {
+    if (!this.savedFieldPresentation) return;
+    this.savedFieldPresentation = null;
+    this.bump();
+  }
+
   private artifactFieldSelection: ArtifactFieldSelection | null = null;
 
   setArtifactFieldSelection(selection: ArtifactFieldSelection | null): void {
@@ -928,6 +1061,7 @@ export class ObjectVisualizationController {
 
   private bump(): void {
     this.snapshot = {
+      savedFieldPresentation: this.savedFieldPresentation,
       artifactFieldSelection: this.artifactFieldSelection,
       antennaFieldIntent: this.antennaFieldIntent,
       antennaFieldDisplayStatus: this.antennaFieldDisplayStatus,
@@ -1056,7 +1190,11 @@ export function resolveEffectiveVisualizationSettings(
   settings: VisualizationTargetSettings,
 ): VisualizationTargetSettings {
   if (settings.visible) {
-    return settings;
+    return settings.activeQuantityId ? settings : {
+      ...settings,
+      shaderVisible: settings.shaderVisible && settings.surfaceColorSource === "solid",
+      vectorsVisible: false,
+    };
   }
 
   return {
@@ -1106,11 +1244,13 @@ export function resolveDefaultVisualizationSettings(
 
 export function resolveTargetVisualization({
   inheritedSettings,
+  objectContext,
   snapshot,
   target,
   visualizationState,
 }: {
   inheritedSettings?: VisualizationTargetSettings;
+  objectContext?: VisualizationObjectContext;
   snapshot: ObjectVisualizationSnapshot;
   target: VisualizationTargetRef;
   visualizationState?: VisualizationStateResource | null;
@@ -1186,9 +1326,12 @@ export function resolveTargetVisualization({
     ...(viewportPreferenceDefaults ?? {}),
     ...(viewportPreferences ?? {}),
   });
-  const settings = isFdmUniverseOutsideSupportTarget(target)
-    ? normalizeFdmUniverseOutsideSupportVisualizationSettings(normalizedSettings)
-    : normalizedSettings;
+  const settings = resolveObjectContextVisualizationSettings(
+    isFdmUniverseOutsideSupportTarget(target)
+      ? normalizeFdmUniverseOutsideSupportVisualizationSettings(normalizedSettings)
+      : normalizedSettings,
+    objectContext,
+  );
 
   return {
     baseSettings,
@@ -1273,6 +1416,10 @@ function resolveVisualizationStateTargetOverride(
     ...(display?.geometry_scope === undefined || display.geometry_scope === null
       ? {}
       : { geometryScope: display.geometry_scope }),
+    ...(display?.wireframe_geometry_scope === undefined ||
+    display.wireframe_geometry_scope === null
+      ? {}
+      : { wireframeGeometryScope: display.wireframe_geometry_scope }),
     ...(surfaceOpacity === undefined || surfaceOpacity === null
       ? {}
       : {
@@ -1319,6 +1466,7 @@ function resolveVisualizationStateTargetOverride(
     style.surface_color_source === null
       ? {}
       : { surfaceColorSource: style.surface_color_source }),
+    ...(style?.tensor_projection === undefined ? {} : { tensorProjection: normalizeTensorProjection(style.tensor_projection) }),
     ...(style?.surface_projection_mode === undefined ||
     style.surface_projection_mode === null
       ? {}
@@ -1383,6 +1531,9 @@ export function visualizationStateOverrideFromTargetPatch(
     ...(normalized.geometryScope === undefined
       ? {}
       : { geometry_scope: normalized.geometryScope }),
+    ...(normalized.wireframeGeometryScope === undefined
+      ? {}
+      : { wireframe_geometry_scope: normalized.wireframeGeometryScope }),
     ...(normalized.boundsVisible === undefined &&
     normalized.boundsOpacityPercent === undefined
       ? {}
@@ -1446,6 +1597,7 @@ export function visualizationStateOverrideFromTargetPatch(
     ...(normalized.surfaceColorSource === undefined
       ? {}
       : { surface_color_source: normalized.surfaceColorSource }),
+    ...(normalized.tensorProjection === undefined ? {} : { tensor_projection: normalized.tensorProjection }),
     ...(normalized.surfaceProjectionMode === undefined
       ? {}
       : { surface_projection_mode: normalized.surfaceProjectionMode }),
@@ -1614,6 +1766,9 @@ function removeSerializedOverrideField(
     case "geometryScope":
       delete display.geometry_scope;
       break;
+    case "wireframeGeometryScope":
+      delete display.wireframe_geometry_scope;
+      break;
     case "surfaceOpacityPercent":
       delete display.opacity;
       if (display.surface) {
@@ -1669,6 +1824,9 @@ function removeSerializedOverrideField(
       break;
     case "shaderMonoColor":
       delete style.surface_mono_color;
+      break;
+    case "tensorProjection":
+      delete style.tensor_projection;
       break;
     case "surfaceProjectionMode":
       delete style.surface_projection_mode;
@@ -2071,6 +2229,7 @@ export function resolveAirboxVisualizationSettingsFromState(
       wireframeVisible,
     }),
     scalarColorPalette:
+      targetSettings?.scalarColorPalette ??
       state?.quantity?.colormap ??
       state?.colormap ??
       baseSettings.scalarColorPalette,
@@ -2103,6 +2262,8 @@ function visualizationSettingsFromResolvedTarget(
     boundsVisible: settings.bounds_visible,
     boundsOpacityPercent: layerOpacityToPercent(settings.bounds_opacity),
     geometryScope: settings.geometry_scope,
+    wireframeGeometryScope:
+      settings.wireframe_geometry_scope ?? defaultSettings.wireframeGeometryScope,
     surfaceOpacityPercent: layerOpacityToPercent(
       settings.surface_opacity ?? settings.opacity,
     ),
@@ -2119,6 +2280,7 @@ function visualizationSettingsFromResolvedTarget(
       defaultSettings.scalarColorPalette,
     surfaceColorSource: settings.surface_color_source,
     surfaceProjectionMode: settings.surface_projection_mode ?? "raw_nodal",
+    tensorProjection: normalizeTensorProjection(settings.tensor_projection),
     viewportColorbarVisible: settings.viewport_colorbar_visible,
     vectorAlphaPercent: layerOpacityToPercent(settings.vector_alpha),
     vectorBudget: Math.max(
@@ -2549,6 +2711,9 @@ function normalizePatch(
       normalized.surfaceColorSource,
     ) ?? "monochrome";
   }
+  if (normalized.tensorProjection !== undefined) {
+    normalized.tensorProjection = normalizeTensorProjection(normalized.tensorProjection);
+  }
   if (normalized.surfaceProjectionMode !== undefined) {
     normalized.surfaceProjectionMode =
       normalizeSurfaceProjectionMode(normalized.surfaceProjectionMode) ??
@@ -2661,6 +2826,8 @@ function normalizeVisualizationSettings(
       settings.geometryScope === "surface" || settings.geometryScope === "full"
         ? settings.geometryScope
         : "full",
+    wireframeGeometryScope:
+      settings.wireframeGeometryScope === "full" ? "full" : "surface",
 
     surfaceOpacityPercent: clampOpacity(settings.surfaceOpacityPercent),
     boundsOpacityPercent: clampOpacity(settings.boundsOpacityPercent),
@@ -2668,6 +2835,7 @@ function normalizeVisualizationSettings(
     shaderColorMode:
       surfaceColorSourceToColorMode(surfaceColorSource) ?? "monochrome",
     surfaceColorSource,
+    tensorProjection: normalizeTensorProjection(settings.tensorProjection),
     surfaceProjectionMode:
       normalizeSurfaceProjectionMode(settings.surfaceProjectionMode) ??
       "raw_nodal",
@@ -2718,17 +2886,7 @@ function normalizeSurfaceProjectionMode(
 }
 
 function normalizeScalarColorPalette(value: unknown): string {
-  const normalized =
-    typeof value === "string"
-      ? value.trim().toLowerCase().replace(/[\s-]+/g, "_")
-      : "";
-  return normalized === "coolwarm" ||
-    normalized === "inferno" ||
-    normalized === "jet" ||
-    normalized === "magma" ||
-    normalized === "viridis"
-    ? normalized
-    : "viridis";
+  return normalizeSharedScalarColorPalette(typeof value === "string" ? value : null);
 }
 
 function surfaceColorSourceFromColorMode(

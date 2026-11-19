@@ -22,7 +22,7 @@ These modules share the same kernel slot and command model. They do not duplicat
 3. Topology rebuilds are separate from field-buffer swaps; a field buffer may be reused only when its domain generation and mesh topology revision/hash remain compatible with the current topology.
 4. Render loops are dirty-driven, not always-on.
 5. Every GPU resource has explicit ownership and disposal.
-6. Non-3D center surfaces do not keep `viewport-3d` mounted. Server-rendered cross-section images use no browser WebGL. Any future WebGL-backed 2D mode must follow the same active-only mounting and teardown rules as `viewport-3d`.
+6. Non-3D center surfaces do not keep `viewport-3d` mounted unless 3D is explicitly selected as their companion (ADR 0070). Server-rendered cross-section images use no browser WebGL. Any future WebGL-backed 2D mode must follow the same active-only mounting and teardown rules as `viewport-3d`.
 7. Warm quantity switching reads published data resources; it does not enqueue preview-control commands unless the data truly does not exist.
 
 Field Map may retain one derived CPU render frame during resource refresh.
@@ -157,3 +157,7 @@ Global realtime invalidation and registry controllers may remain active, but the
 - geometry object authoring lifecycle: `24-geometry-object-authoring-lifecycle.md`
 - Charts and analysis: `16-charts-analysis-module.md`
 - Performance and profiling: `17-performance-memory-profiler.md`
+
+### Pasek narzędzi po audycie 26.10.2026
+
+Kontrolki 3D zajmują oddzielny wiersz nad canvasem. Nazwany region zachowuje appearance/settings, Details/Retry, freshness, quantity, target, źródło historyczne, mesh quality/size, Regions, Airbox, Frozen Spins, countdown oraz Render details. Dopuszczalne jest zawijanie i przewijanie narzędzi; nie redukuje ono danych ani domyślnej jakości sceny. ViewCube, legendy i wymiary zachowują dotychczasową semantykę.

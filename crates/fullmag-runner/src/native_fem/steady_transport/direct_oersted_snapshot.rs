@@ -7,7 +7,9 @@ use crate::antenna_field_solution::direct_quadrature::target_error_fits;
 use std::ffi::c_char;
 
 const MAX_LEAVES: u64 = 1_000_000;
+#[cfg(test)]
 const MAX_KERNEL_EVALUATIONS: u64 = 100_000_000;
+#[cfg(test)]
 const MAX_LEDGER_VISITS: u64 = 100_000_000;
 
 pub(crate) use crate::antenna_field_solution::direct_quadrature::DirectOerstedSnapshot;
@@ -65,12 +67,30 @@ impl SnapshotBuffer {
 
     // Consume only after the native status is OK. Never dereference a pointer returned by native.
     pub(super) fn finish(
+        self,
+        legacy: &ffi::fullmag_fem_steady_transport_rt0_oersted_result_v1,
+        target_points: &[[f64; 3]],
+        raw_h: &[f64],
+        source_count: usize,
+        expected_source_digest: &str,
+    ) -> Result<DirectOerstedSnapshot, RunError> {
+        let budget = fullmag_ir::antenna_closed_loop_direct_budget("production_default")
+            .ok_or_else(|| invalid("legacy budget policy missing"))?;
+        let snapshot = self.finish_with_budget(
+            legacy, target_points, raw_h, source_count, expected_source_digest, budget,
+        )?;
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+
+    pub(super) fn finish_with_budget(
         mut self,
         legacy: &ffi::fullmag_fem_steady_transport_rt0_oersted_result_v1,
         target_points: &[[f64; 3]],
         raw_h: &[f64],
         source_count: usize,
         expected_source_digest: &str,
+        expected_budget: fullmag_ir::AntennaClosedLoopDirectBudgetIR,
     ) -> Result<DirectOerstedSnapshot, RunError> {
         let h = &self.header;
         if h.abi_version != ffi::FULLMAG_FEM_DIRECT_OERSTED_SNAPSHOT_ABI_VERSION
@@ -107,10 +127,10 @@ impl SnapshotBuffer {
             || h.absolute_tolerance_apm.to_bits() != fullmag_ir::ANTENNA_DIRECT_OERSTED_ABSOLUTE_TOLERANCE_APM.to_bits()
             || h.relative_tolerance.to_bits() != fullmag_ir::ANTENNA_DIRECT_OERSTED_RELATIVE_TOLERANCE.to_bits()
             || h.relative_scale_floor_apm.to_bits() != 0.0_f64.to_bits()
-            || h.maximum_source_target_pairs != super::DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS
+            || h.maximum_source_target_pairs != expected_budget.maximum_source_target_pairs
             || h.maximum_final_leaves_per_target != MAX_LEAVES
-            || h.maximum_kernel_evaluations != MAX_KERNEL_EVALUATIONS
-            || h.maximum_ledger_leaf_visits != MAX_LEDGER_VISITS
+            || h.maximum_kernel_evaluations != expected_budget.maximum_kernel_evaluations
+            || h.maximum_ledger_leaf_visits != expected_budget.maximum_ledger_leaf_visits
         {
             return Err(invalid("request options or kernel budget mismatch"));
         }
@@ -154,7 +174,7 @@ impl SnapshotBuffer {
             maximum_kernel_evaluations: h.maximum_kernel_evaluations,
             maximum_ledger_leaf_visits: h.maximum_ledger_leaf_visits,
         };
-        snapshot.validate()?;
+        snapshot.validate_closed_loop()?;
         Ok(snapshot)
     }
 }
@@ -263,4 +283,56 @@ mod tests {
         assert!(SnapshotBuffer::new(0).is_err());
         assert!(SnapshotBuffer::new(ffi::FULLMAG_FEM_DIRECT_OERSTED_SNAPSHOT_MAX_TARGETS as usize + 1).is_err());
     }
+    #[test]
+    fn selected_volume_budget_is_explicit_and_legacy_finish_refuses_it() {
+        let volume = fullmag_ir::antenna_closed_loop_direct_budget("volume_inspection_v1").unwrap();
+        let (mut buffer, legacy, points, raw_h) = example();
+        buffer.header.maximum_source_target_pairs = volume.maximum_source_target_pairs;
+        buffer.header.maximum_kernel_evaluations = volume.maximum_kernel_evaluations;
+        buffer.header.maximum_ledger_leaf_visits = volume.maximum_ledger_leaf_visits;
+        let snapshot = buffer.finish_with_budget(&legacy, &points, &raw_h, 1, &"a".repeat(64), volume).unwrap();
+        assert_eq!(snapshot.maximum_source_target_pairs, 4_000_000);
+        assert_eq!(snapshot.maximum_kernel_evaluations, 500_000_000);
+        assert_eq!(snapshot.maximum_ledger_leaf_visits, 500_000_000);
+        let (mut buffer, legacy, points, raw_h) = example();
+        buffer.header.maximum_source_target_pairs = volume.maximum_source_target_pairs;
+        buffer.header.maximum_kernel_evaluations = volume.maximum_kernel_evaluations;
+        buffer.header.maximum_ledger_leaf_visits = volume.maximum_ledger_leaf_visits;
+        assert!(buffer.finish(&legacy, &points, &raw_h, 1, &"a".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn selected_budget_refuses_default_native_header_and_mixed_work_limits() {
+        let volume = fullmag_ir::antenna_closed_loop_direct_budget("volume_inspection_v1").unwrap();
+        for mutation in 0..4 {
+            let (mut buffer, legacy, points, raw_h) = example();
+            if mutation != 0 {
+                buffer.header.maximum_source_target_pairs = volume.maximum_source_target_pairs;
+                buffer.header.maximum_kernel_evaluations = volume.maximum_kernel_evaluations;
+                buffer.header.maximum_ledger_leaf_visits = volume.maximum_ledger_leaf_visits;
+                match mutation {
+                    1 => buffer.header.maximum_source_target_pairs -= 1,
+                    2 => buffer.header.maximum_kernel_evaluations = MAX_KERNEL_EVALUATIONS,
+                    _ => buffer.header.maximum_ledger_leaf_visits = MAX_LEDGER_VISITS,
+                }
+            }
+            assert!(buffer.finish_with_budget(&legacy, &points, &raw_h, 1, &"a".repeat(64), volume).is_err());
+        }
+    }
+
+    #[test]
+    fn prepared_volume_preflight_accepts_only_its_selected_pair_budget() {
+        let volume = fullmag_ir::antenna_closed_loop_direct_budget("volume_inspection_v1").unwrap();
+        assert!(super::super::preflight_direct_oersted_pair_budget(1867, 1154).is_err());
+        assert_eq!(super::super::preflight_direct_oersted_pair_budget_with_limit(
+            1867, 1154, volume.maximum_source_target_pairs, volume.policy_version,
+        ).unwrap(), 2_154_518);
+        assert!(super::super::preflight_direct_oersted_pair_budget_with_limit(
+            4_000_001, 1, volume.maximum_source_target_pairs, volume.policy_version,
+        ).is_err());
+        assert!(super::super::preflight_direct_oersted_pair_budget_with_limit(
+            usize::MAX, usize::MAX, volume.maximum_source_target_pairs, volume.policy_version,
+        ).is_err());
+    }
+
 }

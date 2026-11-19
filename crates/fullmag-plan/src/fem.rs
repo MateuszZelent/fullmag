@@ -19,8 +19,8 @@ use crate::mesh::{
     build_air_box_config, build_mesh_parts_from_segments, compatible_fem_material,
     geometry_object_translation, initial_vectors_for_magnet, load_mesh_from_source,
     merge_fem_meshes, mesh_bounds, object_space_sample_points, reject_unsupported_mixed_topology,
-    resolve_fem_domain_mesh_asset, resolved_domain_mesh_mode, study_universe_planner_note,
-    MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
+    resolve_fem_domain_mesh_asset, resolve_object_region_marker, resolved_domain_mesh_mode,
+    study_universe_planner_note, MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
 };
 use crate::oersted::{resolve_fem_oersted_term, ResolvedOerstedTerm};
 use crate::spin_torque::{
@@ -41,6 +41,13 @@ struct ResolvedFemTextureRegion<'a> {
     region: &'a fullmag_ir::ObjectRegionIR,
     entry_index: usize,
     predicate: crate::GeometryPredicate,
+}
+
+#[derive(Debug)]
+struct ResolvedFemRegionTextureOwnership<'a> {
+    owner_masks: Vec<Vec<bool>>,
+    resolved_regions: Vec<ResolvedFemTextureRegion<'a>>,
+    ownership: crate::region_textures::RegionTextureOwnership,
 }
 
 fn magnet_entry_matches_region_owner(
@@ -126,55 +133,12 @@ fn fem_owner_node_mask(
     Ok(mask)
 }
 
-/// Apply object-region texture overrides to the final FEM nodal vector.
-///
-/// Region ownership is resolved on the final merged/shared-domain mesh. The
-/// texture transform changes only the sampled analytic profile; it never changes
-/// the owner mask. Therefore any translated or rotated profile is clipped at the
-/// winning region boundary before it reaches the solver.
-fn apply_fem_region_texture_overrides(
-    problem: &ProblemIR,
+fn resolve_fem_region_texture_ownership<'a>(
+    problem: &'a ProblemIR,
     mesh: &fullmag_ir::MeshIR,
-    mesh_parts: &[fullmag_ir::FemMeshPartIR],
-    object_segments: &[fullmag_ir::FemObjectSegmentIR],
     magnet_entries: &[MagnetPlanningEntry],
-    initial_magnetization: &mut [[f64; 3]],
-) -> Result<(), PlanError> {
-    if !problem
-        .object_regions
-        .iter()
-        .any(|region| region.enabled && region.texture_override.is_some())
-    {
-        return Ok(());
-    }
-    if initial_magnetization.len() != mesh.nodes.len() {
-        return Err(PlanError {
-            reasons: vec![format!(
-                "FEM region texture target has {} vectors but the final mesh has {} nodes",
-                initial_magnetization.len(),
-                mesh.nodes.len()
-            )],
-        });
-    }
-
-    let owner_masks = magnet_entries
-        .iter()
-        .map(|entry| fem_owner_node_mask(mesh, mesh_parts, object_segments, entry))
-        .collect::<Result<Vec<_>, _>>()?;
-    let object_points = magnet_entries
-        .iter()
-        .map(|entry| {
-            object_space_sample_points(&mesh.nodes, entry.object_translation).map_err(|reason| {
-                PlanError {
-                    reasons: vec![format!(
-                        "FEM region texture owner '{}': {reason}",
-                        entry.magnet_name
-                    )],
-                }
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
+    owner_masks: Vec<Vec<bool>>,
+) -> Result<ResolvedFemRegionTextureOwnership<'a>, PlanError> {
     let mut resolved_regions = Vec::new();
     for region in problem
         .object_regions
@@ -230,19 +194,298 @@ fn apply_fem_region_texture_overrides(
                 reasons: vec![reason],
             })?;
 
-    for (region_index, resolved) in resolved_regions.iter().enumerate() {
-        let Some(texture_override) = resolved.region.texture_override.as_ref() else {
-            continue;
-        };
-        if ownership.matched_counts[region_index] == 0 {
+    Ok(ResolvedFemRegionTextureOwnership {
+        owner_masks,
+        resolved_regions,
+        ownership,
+    })
+}
+
+fn fem_magnet_planning_entries(problem: &ProblemIR) -> Result<Vec<MagnetPlanningEntry>, PlanError> {
+    let geometry_by_name: BTreeMap<&str, &GeometryEntryIR> = problem
+        .geometry
+        .entries
+        .iter()
+        .map(|entry| (entry.name(), entry))
+        .collect();
+    let region_to_geometry: BTreeMap<&str, &str> = problem
+        .regions
+        .iter()
+        .map(|region| (region.name.as_str(), region.geometry.as_str()))
+        .collect();
+
+    problem
+        .magnets
+        .iter()
+        .map(|magnet| {
+            let geometry_name = region_to_geometry
+                .get(magnet.region.as_str())
+                .copied()
+                .ok_or_else(|| PlanError {
+                    reasons: vec![format!(
+                        "magnet '{}' references region '{}' with no geometry binding",
+                        magnet.name, magnet.region
+                    )],
+                })?;
+            let geometry_entry = geometry_by_name
+                .get(geometry_name)
+                .copied()
+                .ok_or_else(|| PlanError {
+                    reasons: vec![format!(
+                        "magnet '{}' references geometry '{}' which is missing from geometry.entries",
+                        magnet.name, geometry_name
+                    )],
+                })?;
+            Ok(MagnetPlanningEntry {
+                magnet_name: magnet.name.clone(),
+                geometry_name: geometry_name.to_string(),
+                object_translation: geometry_object_translation(geometry_entry),
+                initial_magnetization: magnet.initial_magnetization.clone(),
+            })
+        })
+        .collect()
+}
+
+fn fem_magnet_entry_index_for_object_id(
+    problem: &ProblemIR,
+    object_id: &str,
+) -> Result<usize, PlanError> {
+    let matches = problem
+        .magnets
+        .iter()
+        .enumerate()
+        .filter_map(|(index, magnet)| {
+            // Legacy IRs without a stable object_id use the magnet name as the
+            // planner's canonical object identity.
+            let actual_id = magnet.object_id.as_deref().unwrap_or(magnet.name.as_str());
+            (actual_id == object_id).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [index] => Ok(*index),
+        [] => Err(PlanError {
+            reasons: vec![format!(
+                "FEM magnetization overlay object_id '{object_id}' is not a resolved magnetic object"
+            )],
+        }),
+        _ => Err(PlanError {
+            reasons: vec![format!(
+                "FEM magnetization overlay object_id '{object_id}' is ambiguous across magnetic objects"
+            )],
+        }),
+    }
+}
+
+/// Resolve the FEM true-DOF support affected by authored magnetization scopes.
+///
+/// Object scopes select the planner's magnetic node mask. Region scopes select
+/// only nodes won by that region under the same ownership and priority resolver
+/// used by FEM texture sampling. The returned mask has one entry per final mesh
+/// node.
+pub(crate) fn fem_study_magnetization_overlay_mask(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::FemPlanIR,
+    scopes: &[fullmag_ir::RegionRefIR],
+) -> Result<Vec<bool>, PlanError> {
+    let node_count = plan.mesh.nodes.len();
+    if plan.initial_magnetization.len() != node_count {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "FEM magnetization overlay plan has {} initial vectors but {} final mesh nodes",
+                plan.initial_magnetization.len(),
+                node_count
+            )],
+        });
+    }
+    let mut selected = vec![false; node_count];
+    if scopes.is_empty() {
+        return Ok(selected);
+    }
+
+    let magnet_entries = fem_magnet_planning_entries(problem)?;
+    let mut active_regions = Vec::new();
+    for scope in scopes {
+        let entry_index = fem_magnet_entry_index_for_object_id(problem, &scope.object_id)?;
+        if entry_index >= magnet_entries.len() {
             return Err(PlanError {
                 reasons: vec![format!(
-                    "object_region '{}' texture_override selects no magnetic FEM nodes",
-                    resolved.region.region_id
+                    "FEM magnetization overlay object_id '{}' has no matching planner entry",
+                    scope.object_id
                 )],
             });
         }
-        let selected = ownership
+        let Some(region_id) = scope.region_id.as_deref() else {
+            let owner_mask = fem_owner_node_mask(
+                &plan.mesh,
+                &plan.mesh_parts,
+                &plan.object_segments,
+                &magnet_entries[entry_index],
+            )?;
+            for (selected, owner) in selected.iter_mut().zip(&owner_mask) {
+                *selected |= *owner;
+            }
+            continue;
+        };
+
+        let regions = problem
+            .object_regions
+            .iter()
+            .filter(|region| region.region_id == region_id)
+            .collect::<Vec<_>>();
+        if regions.is_empty() {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "FEM magnetization overlay region_id '{region_id}' is not present on object_id '{}'",
+                    scope.object_id
+                )],
+            });
+        }
+        let mut matching_regions = Vec::new();
+        for region in regions {
+            if magnet_entry_index_for_region_owner(
+                problem,
+                &magnet_entries,
+                &region.owner_object,
+            )? == Some(entry_index)
+            {
+                matching_regions.push(region);
+            }
+        }
+        let region = match matching_regions.as_slice() {
+            [region] => *region,
+            [] => {
+                return Err(PlanError {
+                    reasons: vec![format!(
+                        "FEM magnetization overlay region_id '{region_id}' is not owned by object_id '{}'",
+                        scope.object_id
+                    )],
+                });
+            }
+            _ => {
+                return Err(PlanError {
+                    reasons: vec![format!(
+                        "FEM magnetization overlay region_id '{region_id}' is ambiguous for object_id '{}'",
+                        scope.object_id
+                    )],
+                });
+            }
+        };
+        if !region.enabled {
+            continue;
+        }
+        active_regions.push((region, entry_index));
+    }
+
+    if active_regions.is_empty() {
+        return Ok(selected);
+    }
+    let owner_masks = magnet_entries
+        .iter()
+        .map(|entry| {
+            fem_owner_node_mask(
+                &plan.mesh,
+                &plan.mesh_parts,
+                &plan.object_segments,
+                entry,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let resolved = resolve_fem_region_texture_ownership(
+        problem,
+        &plan.mesh,
+        &magnet_entries,
+        owner_masks,
+    )?;
+    for (region, entry_index) in active_regions {
+        let resolved_index = resolved
+            .resolved_regions
+            .iter()
+            .position(|candidate| {
+                candidate.entry_index == entry_index && std::ptr::eq(candidate.region, region)
+            })
+            .ok_or_else(|| PlanError {
+                reasons: vec![format!(
+                    "FEM magnetization overlay region_id '{}' has no resolved ownership candidate",
+                    region.region_id
+                )],
+            })?;
+        for (selected, winner) in selected.iter_mut().zip(&resolved.ownership.winners) {
+            *selected |= *winner == Some(resolved_index);
+        }
+    }
+
+    Ok(selected)
+}
+
+/// Apply object-region texture overrides to the final FEM nodal vector.
+///
+/// Region ownership is resolved on the final merged/shared-domain mesh. The
+/// texture transform changes only the sampled analytic profile; it never changes
+/// the owner mask. Therefore any translated or rotated profile is clipped at the
+/// winning region boundary before it reaches the solver.
+fn apply_fem_region_texture_overrides(
+    problem: &ProblemIR,
+    mesh: &fullmag_ir::MeshIR,
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
+    object_segments: &[fullmag_ir::FemObjectSegmentIR],
+    magnet_entries: &[MagnetPlanningEntry],
+    initial_magnetization: &mut [[f64; 3]],
+) -> Result<(), PlanError> {
+    if !problem
+        .object_regions
+        .iter()
+        .any(|region| region.enabled && region.texture_override.is_some())
+    {
+        return Ok(());
+    }
+    if initial_magnetization.len() != mesh.nodes.len() {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "FEM region texture target has {} vectors but the final mesh has {} nodes",
+                initial_magnetization.len(),
+                mesh.nodes.len()
+            )],
+        });
+    }
+
+    let owner_masks = magnet_entries
+        .iter()
+        .map(|entry| fem_owner_node_mask(mesh, mesh_parts, object_segments, entry))
+        .collect::<Result<Vec<_>, _>>()?;
+    let object_points = magnet_entries
+        .iter()
+        .map(|entry| {
+            object_space_sample_points(&mesh.nodes, entry.object_translation).map_err(|reason| {
+                PlanError {
+                    reasons: vec![format!(
+                        "FEM region texture owner '{}': {reason}",
+                        entry.magnet_name
+                    )],
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let resolved = resolve_fem_region_texture_ownership(
+        problem,
+        mesh,
+        magnet_entries,
+        owner_masks,
+    )?;
+
+    for (region_index, resolved_region) in resolved.resolved_regions.iter().enumerate() {
+        let Some(texture_override) = resolved_region.region.texture_override.as_ref() else {
+            continue;
+        };
+        if resolved.ownership.matched_counts[region_index] == 0 {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "object_region '{}' texture_override selects no magnetic FEM nodes",
+                    resolved_region.region.region_id
+                )],
+            });
+        }
+        let selected = resolved
+            .ownership
             .winners
             .iter()
             .map(|winner| *winner == Some(region_index))
@@ -253,8 +496,8 @@ fn apply_fem_region_texture_overrides(
         let points = mesh
             .nodes
             .iter()
-            .zip(&object_points[resolved.entry_index])
-            .zip(&owner_masks[resolved.entry_index])
+            .zip(&object_points[resolved_region.entry_index])
+            .zip(&resolved.owner_masks[resolved_region.entry_index])
             .map(
                 |((world, object), owner)| crate::magnetization_textures::TextureSamplePoint {
                     position_world: *world,
@@ -266,7 +509,7 @@ fn apply_fem_region_texture_overrides(
         let values = crate::region_textures::sample_region_initial_on_mask(
             &format!(
                 "object_region '{}' FEM texture_override",
-                resolved.region.region_id
+                resolved_region.region.region_id
             ),
             &texture_override.initial_magnetization,
             &points,
@@ -321,6 +564,20 @@ mod fem_region_texture_tests {
             realization_policy: RegionRealizationPolicyIR::Inherit,
             material_transition: None,
         }
+    }
+
+    fn overlay_plan(
+        mesh: &MeshIR,
+        mesh_parts: &[fullmag_ir::FemMeshPartIR],
+        object_segments: &[FemObjectSegmentIR],
+        vector_count: usize,
+    ) -> fullmag_ir::FemPlanIR {
+        let mut plan = fullmag_ir::FemPlanIR::default();
+        plan.mesh = mesh.clone();
+        plan.mesh_parts = mesh_parts.to_vec();
+        plan.object_segments = object_segments.to_vec();
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; vector_count];
+        plan
     }
 
     #[test]
@@ -415,6 +672,152 @@ mod fem_region_texture_tests {
         assert_eq!(initial[1], [0.0, 1.0, 0.0]);
         assert_eq!(initial[2], [1.0, 0.0, 0.0]);
         assert_eq!(initial[3], [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn fem_study_magnetization_scopes_use_exact_object_and_winning_region_masks() {
+        let mesh = MeshIR {
+            mesh_name: "overlay-mask-test".to_string(),
+            nodes: vec![
+                [-1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            cells: FemConnectivityIR {
+                types: vec![FemCellTypeIR::Tet4],
+                offsets: vec![0, 4],
+                nodes: vec![0, 1, 2, 3],
+                global_ordinals: vec![0],
+                mesh_parts: vec![FemCellMeshPartIR::Magnetic],
+            },
+            element_markers: vec![1],
+            facets: FemFacetConnectivityIR::empty(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: HashMap::new(),
+        };
+        let object_segments = vec![FemObjectSegmentIR {
+            object_id: "strip".to_string(),
+            geometry_id: Some("strip".to_string()),
+            node_start: 0,
+            node_count: 4,
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 0,
+        }];
+        let mesh_parts = build_mesh_parts_from_segments(
+            &mesh,
+            &object_segments,
+            fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+        );
+        let plan = overlay_plan(&mesh, &mesh_parts, &object_segments, mesh.nodes.len());
+        let stable_object_id = "magnet-strip-stable-id";
+
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.magnets[0].object_id = Some(stable_object_id.to_string());
+        problem.object_regions = vec![
+            region(
+                "strip:left",
+                -1.0,
+                InitialMagnetizationIR::Uniform {
+                    value: [0.0, 1.0, 0.0],
+                },
+            ),
+            region(
+                "strip:right",
+                1.0,
+                InitialMagnetizationIR::Uniform {
+                    value: [0.0, 0.0, 1.0],
+                },
+            ),
+        ];
+
+        let object_scope = [fullmag_ir::RegionRefIR {
+            object_id: stable_object_id.to_string(),
+            region_id: None,
+        }];
+        let object_mask = fem_study_magnetization_overlay_mask(&problem, &plan, &object_scope)
+            .expect("exact magnetic object scope should resolve");
+        assert_eq!(object_mask, vec![true; mesh.nodes.len()]);
+
+        let left_scope = [fullmag_ir::RegionRefIR {
+            object_id: stable_object_id.to_string(),
+            region_id: Some("strip:left".to_string()),
+        }];
+        let left_mask = fem_study_magnetization_overlay_mask(&problem, &plan, &left_scope)
+            .expect("region scope should use the winning support");
+        assert_eq!(left_mask, vec![true, false, false, false]);
+
+        let wrong_object_id = [fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }];
+        assert!(
+            fem_study_magnetization_overlay_mask(&problem, &plan, &wrong_object_id).is_err()
+        );
+
+        let wrong_dimensions = overlay_plan(&mesh, &mesh_parts, &object_segments, 3);
+        assert!(
+            fem_study_magnetization_overlay_mask(&problem, &wrong_dimensions, &object_scope)
+                .is_err()
+        );
+
+        let mut disabled = problem.clone();
+        disabled.object_regions[0].enabled = false;
+        assert_eq!(
+            fem_study_magnetization_overlay_mask(&disabled, &plan, &left_scope).unwrap(),
+            vec![false; mesh.nodes.len()]
+        );
+
+        let mut shadowed = region(
+            "strip:cleared",
+            -1.0,
+            InitialMagnetizationIR::Uniform {
+                value: [0.0, 0.0, 1.0],
+            },
+        );
+        shadowed.priority = 1;
+        shadowed.texture_override = None;
+        let mut winner = region(
+            "strip:winner",
+            -1.0,
+            InitialMagnetizationIR::Uniform {
+                value: [0.0, 1.0, 0.0],
+            },
+        );
+        winner.priority = 2;
+        let mut overlapping_object_regions = problem.clone();
+        overlapping_object_regions.object_regions = vec![shadowed, winner];
+        let shadowed_scope = [fullmag_ir::RegionRefIR {
+            object_id: stable_object_id.to_string(),
+            region_id: Some("strip:cleared".to_string()),
+        }];
+        assert_eq!(
+            fem_study_magnetization_overlay_mask(
+                &overlapping_object_regions,
+                &plan,
+                &shadowed_scope
+            )
+            .unwrap(),
+            vec![false; mesh.nodes.len()]
+        );
+
+        let mut equal_priority_overlap = problem;
+        let overlap_shape = equal_priority_overlap.object_regions[0].shape.clone();
+        equal_priority_overlap.object_regions[1].shape = overlap_shape;
+        assert_eq!(
+            fem_study_magnetization_overlay_mask(
+                &equal_priority_overlap,
+                &plan,
+                &object_scope
+            )
+            .unwrap(),
+            vec![true; mesh.nodes.len()],
+            "object-only scopes must not resolve irrelevant region conflicts"
+        );
     }
 }
 
@@ -689,6 +1092,14 @@ fn fem_plan_has_zhang_li_stt(plan: &FemPlanIR) -> bool {
         && !fem_plan_has_slonczewski_stt(plan)
 }
 
+const PRESCRIBED_SOT_FORMULA_VERSION: &str = "prescribed_sot.fullmag.v1";
+
+fn fem_plan_has_prescribed_sot(plan: &FemPlanIR) -> bool {
+    plan.spin_torque_contract
+        .as_ref()
+        .is_some_and(|contract| contract.formula_version == PRESCRIBED_SOT_FORMULA_VERSION)
+}
+
 fn first_unsupported_elementwise_ms_cpu_owner(plan: &FemPlanIR) -> Option<&'static str> {
     // This is intentionally the same precedence as the native Context
     // diagnostic. Consistent-mass exchange is the required CPU owner;
@@ -730,6 +1141,11 @@ fn first_unsupported_elementwise_ms_cpu_owner(plan: &FemPlanIR) -> Option<&'stat
     }
     if fem_plan_has_slonczewski_stt(plan) {
         return Some("Slonczewski STT");
+    }
+    // The prescribed-SOT RHS divides by a nodal Ms (or the scalar); a node
+    // shared by two DG0 elements has no single Ms value.
+    if fem_plan_has_prescribed_sot(plan) {
+        return Some("prescribed SOT");
     }
     if plan.has_oersted_cylinder
         || plan
@@ -778,6 +1194,34 @@ pub(crate) fn elementwise_material_legality_error(
     if fem_plan.a_element_field.is_some() && !fem_plan.enable_exchange {
         return Some(format!(
             "A_element_field is unsupported for exchange-disabled plan on resolved device '{device}': this runtime has no exchange weak form to consume the sharp coefficient"
+        ));
+    }
+    None
+}
+
+/// Reject Ms realizations that the bounded FEM spin-transport descriptor cannot
+/// represent. Its torque coefficient `-gamma_e hbar / (2 e Ms)` uses the one
+/// scalar `material.saturation_magnetisation`, so DG0 Ms and a nodal field that
+/// differs from that scalar would silently produce a wrong torque.
+pub(crate) fn fem_spin_transport_ms_realization_error(
+    has_spin_transport: bool,
+    material: &fullmag_ir::MaterialIR,
+    ms_element_field: Option<&[f64]>,
+) -> Option<String> {
+    if !has_spin_transport {
+        return None;
+    }
+    if ms_element_field.is_some() {
+        return Some("bounded FEM steady spin transport requires uniform saturation magnetization; per-element Ms is not supported by the native descriptor".to_string());
+    }
+    let scalar = material.saturation_magnetisation;
+    if material
+        .ms_field
+        .as_deref()
+        .is_some_and(|values| values_differ(values, scalar))
+    {
+        return Some(format!(
+            "bounded FEM steady spin transport uses one scalar saturation magnetization (Ms={scalar:e} A/m) in its torque coefficient; a spatially varying nodal 'material.ms_field' is not supported by the native descriptor"
         ));
     }
     None
@@ -1390,10 +1834,7 @@ fn eigen_policy_floquet_pair_sets_match(plan: &FemEigenPlanIR) -> bool {
         && (requested_set.is_empty() || requested_set == node_set)
 }
 
-fn eigen_policy_floquet_dynamic_demag_path(
-    plan: &FemEigenPlanIR,
-    planned_path: bool,
-) -> bool {
+fn eigen_policy_floquet_dynamic_demag_path(plan: &FemEigenPlanIR, planned_path: bool) -> bool {
     planned_path
         && plan.enable_demag
         && plan.operator.include_demag
@@ -1892,17 +2333,17 @@ fn allows_k0_kittel_synthetic_demag_factor(
 /// has one finite positive global target and does not claim a complete window
 /// or spectrum.  The native provider applies the same boundary before
 /// materializing the request, so the planner must not reject it earlier.
-fn floquet_airbox_dynamic_demag_target_supported(
-    target: &fullmag_ir::EigenTargetIR,
-) -> bool {
+fn floquet_airbox_dynamic_demag_target_supported(target: &fullmag_ir::EigenTargetIR) -> bool {
     match target {
         fullmag_ir::EigenTargetIR::FrequencyWindow {
             frequency_min_hz,
             frequency_max_hz,
-        } => frequency_min_hz.is_finite()
-            && frequency_max_hz.is_finite()
-            && *frequency_min_hz >= 0.0
-            && *frequency_max_hz > *frequency_min_hz,
+        } => {
+            frequency_min_hz.is_finite()
+                && frequency_max_hz.is_finite()
+                && *frequency_min_hz >= 0.0
+                && *frequency_max_hz > *frequency_min_hz
+        }
         fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => {
             frequency_hz.is_finite() && *frequency_hz > 0.0
         }
@@ -2614,10 +3055,8 @@ fn segment_node_indices(
 
 fn materialize_fem_spin_torque_target_masks(
     target: &fullmag_ir::RegionRefIR,
-    node_count: usize,
-    element_count: usize,
+    mesh: &fullmag_ir::MeshIR,
     object_segments: &[fullmag_ir::FemObjectSegmentIR],
-    mesh_parts: &[fullmag_ir::FemMeshPartIR],
 ) -> Result<(Vec<bool>, Vec<bool>), PlanError> {
     if let Some(region_id) = target.region_id.as_deref() {
         return Err(PlanError {
@@ -2644,23 +3083,23 @@ fn materialize_fem_spin_torque_target_masks(
         });
     }
 
-    let mut node_mask = vec![false; node_count];
-    let mut element_mask = vec![false; element_count];
+    let mut node_mask = vec![false; mesh.nodes.len()];
+    let mut element_mask = vec![false; mesh.cell_count()];
     for segment in matching {
-        for node in segment_node_indices(mesh_parts, segment, node_count)? {
-            node_mask[node] = true;
-        }
         let start = segment.element_start as usize;
         let end = start.saturating_add(segment.element_count as usize);
-        if end > element_count {
+        if end > mesh.cell_count() {
             return Err(PlanError {
                 reasons: vec![format!(
                     "FEM spin-torque target object '{}' element range {}..{} exceeds mesh element count {}",
-                    target.object_id, start, end, element_count
+                    target.object_id, start, end, mesh.cell_count()
                 )],
             });
         }
         element_mask[start..end].fill(true);
+        for node in segment_element_node_indices(mesh, segment)? {
+            node_mask[node] = true;
+        }
     }
     if !node_mask.iter().any(|selected| *selected) || !element_mask.iter().any(|selected| *selected)
     {
@@ -2677,6 +3116,29 @@ fn materialize_fem_spin_torque_target_masks(
 #[cfg(test)]
 mod spin_torque_target_tests {
     use super::*;
+
+    fn mesh_with_two_tets() -> fullmag_ir::MeshIR {
+        fullmag_ir::MeshIR {
+            mesh_name: "two-disjoint-tets".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [3.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [3.0, 1.0, 0.0],
+                [3.0, 0.0, 1.0],
+            ],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
+            element_markers: vec![1, 2],
+            facets: fullmag_ir::FemFacetConnectivityIR::empty(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: std::collections::HashMap::new(),
+        }
+    }
 
     fn segment(
         object_id: &str,
@@ -2704,10 +3166,10 @@ mod spin_torque_target_tests {
             region_id: None,
         };
         let segments = vec![segment("fixed", 0, 4, 0, 1), segment("free", 4, 4, 1, 1)];
+        let mesh = mesh_with_two_tets();
 
-        let (nodes, elements) =
-            materialize_fem_spin_torque_target_masks(&target, 8, 2, &segments, &[])
-                .expect("resolved FEM object target");
+        let (nodes, elements) = materialize_fem_spin_torque_target_masks(&target, &mesh, &segments)
+            .expect("resolved FEM object target");
 
         assert_eq!(
             nodes,
@@ -2722,12 +3184,11 @@ mod spin_torque_target_tests {
             object_id: "free".to_string(),
             region_id: Some("contact".to_string()),
         };
+        let mesh = mesh_with_two_tets();
         let err = materialize_fem_spin_torque_target_masks(
             &target,
-            4,
-            1,
+            &mesh,
             &[segment("free", 0, 4, 0, 1)],
-            &[],
         )
         .expect_err("FEM region target must not broaden silently to its object");
         assert!(err.reasons.iter().any(|reason| {
@@ -2915,11 +3376,13 @@ fn heterogeneous_fem_material_shape_supported(
         candidate.cubic_anisotropy_axis1,
         has_active_cubic_anisotropy(reference),
         has_active_cubic_anisotropy(candidate),
+        [1.0, 0.0, 0.0],
     ) && compatible_axis_for_region_material_field(
         reference.cubic_anisotropy_axis2,
         candidate.cubic_anisotropy_axis2,
         has_active_cubic_anisotropy(reference),
         has_active_cubic_anisotropy(candidate),
+        [0.0, 1.0, 0.0],
     )
 }
 
@@ -2928,9 +3391,12 @@ fn compatible_axis_for_region_material_field(
     candidate_axis: Option<[f64; 3]>,
     reference_active: bool,
     candidate_active: bool,
+    default_axis: [f64; 3],
 ) -> bool {
     match (reference_active, candidate_active) {
-        (true, true) => reference_axis == candidate_axis,
+        (true, true) => {
+            reference_axis.unwrap_or(default_axis) == candidate_axis.unwrap_or(default_axis)
+        }
         _ => true,
     }
 }
@@ -2969,9 +3435,10 @@ fn build_region_materials(
 }
 
 fn values_differ(values: &[f64], reference: f64) -> bool {
-    values
-        .iter()
-        .any(|value| (*value - reference).abs() > 1e-18)
+    values.iter().any(|value| {
+        let scale = value.abs().max(reference.abs());
+        (*value - reference).abs() > 64.0 * f64::EPSILON * scale
+    })
 }
 
 fn axes_differ(values: &[[f64; 3]], reference: [f64; 3]) -> bool {
@@ -3015,7 +3482,8 @@ fn should_promote_fem_material_template(
     reference: &fullmag_ir::MaterialIR,
     candidate: &fullmag_ir::MaterialIR,
 ) -> bool {
-    !has_active_anisotropy(reference) && has_active_anisotropy(candidate)
+    (!has_active_cubic_anisotropy(reference) && has_active_cubic_anisotropy(candidate))
+        || (!has_active_anisotropy(reference) && has_active_anisotropy(candidate))
 }
 
 fn has_nonzero_optional(value: Option<f64>) -> bool {
@@ -3112,12 +3580,55 @@ fn resolve_interfacial_dmi_normal(
     normalize_nonzero_vector3(raw_normal, "InterfacialDmi.interface_normal").map(Some)
 }
 
+/// Resolve the same nodal Gilbert coefficient as a FEM plan, on an already
+/// packed Build Mesh domain whose segments carry immutable scene object IDs.
+pub fn damping_on_geometry_mesh(
+    problem: &ProblemIR,
+    mesh: &fullmag_ir::MeshIR,
+    built_segments: &[fullmag_ir::FemObjectSegmentIR],
+) -> Result<Vec<f64>, PlanError> {
+    let invalid = |reason: &str| PlanError { reasons: vec![reason.to_owned()] };
+    let mut owners = BTreeMap::new();
+    let mut materials = BTreeMap::new();
+    let mut base = None;
+    for magnet in &problem.magnets {
+        let owner = magnet.object_id.as_deref().ok_or_else(|| invalid("missing FEM object ID"))?;
+        let material = problem.materials.iter().find(|m| m.name == magnet.material)
+            .ok_or_else(|| invalid("missing FEM magnet material"))?;
+        if owners.insert(owner, magnet.name.as_str()).is_some()
+            || materials.insert(magnet.name.clone(), material.clone()).is_some()
+        {
+            return Err(invalid("ambiguous FEM material owner"));
+        }
+        if base.is_none_or(|previous| should_promote_fem_material_template(previous, material)) {
+            base = Some(material);
+        }
+    }
+
+    let mut segments = built_segments.to_vec();
+    let mut matched = BTreeSet::new();
+    for segment in &mut segments {
+        if segment.object_id == AIR_OBJECT_SEGMENT_ID {
+            continue;
+        }
+        let name = *owners.get(segment.object_id.as_str())
+            .ok_or_else(|| invalid("unknown FEM mesh material owner"))?;
+        matched.insert(name);
+        segment.object_id = name.to_owned();
+    }
+    if matched.len() != owners.len() {
+        return Err(invalid("FEM magnet has no mesh segment"));
+    }
+    let base = base.ok_or_else(|| invalid("missing FEM base material"))?;
+    let (resolved, _) = build_region_material_fields(problem, base, mesh, &segments, &materials)?;
+    Ok(resolved.alpha_field.unwrap_or_else(|| vec![resolved.damping; mesh.nodes.len()]))
+}
+
 fn build_region_material_fields(
     problem: &ProblemIR,
     base_material: &fullmag_ir::MaterialIR,
     mesh: &fullmag_ir::MeshIR,
     object_segments: &[fullmag_ir::FemObjectSegmentIR],
-    mesh_parts: &[fullmag_ir::FemMeshPartIR],
     magnet_materials: &BTreeMap<String, fullmag_ir::MaterialIR>,
 ) -> Result<(fullmag_ir::MaterialIR, Option<Vec<[f64; 3]>>), PlanError> {
     let node_count = mesh.nodes.len();
@@ -3126,6 +3637,7 @@ fn build_region_material_fields(
     }
 
     let mut material = base_material.clone();
+    let node_spacings = crate::material::fem_node_spacings(mesh);
     let base_axis = normalize_nonzero_vector3(
         base_material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
         "anisotropy_axis",
@@ -3148,17 +3660,32 @@ fn build_region_material_fields(
     let sharp_conformal_ms_regions =
         sharp_conformal_parameter_regions(problem, fullmag_ir::MaterialParameterNameIR::Ms)?;
 
+    let mut node_indices_by_object = BTreeMap::<String, BTreeSet<usize>>::new();
     for segment in object_segments {
         if segment.object_id == AIR_OBJECT_SEGMENT_ID {
             continue;
         }
-        let Some(region_material) = magnet_materials.get(&segment.object_id) else {
+        if !magnet_materials.contains_key(&segment.object_id) {
             continue;
-        };
-        let node_indices = segment_node_indices(mesh_parts, segment, node_count)?;
+        }
+        // Conformal segments can share an owner/geometry identity. The first
+        // matching mesh part may belong to another segment of that owner;
+        // element connectivity is the authoritative node membership here.
+        let node_indices = segment_element_node_indices(mesh, segment)?;
         if node_indices.is_empty() {
             continue;
         }
+        node_indices_by_object
+            .entry(segment.object_id.clone())
+            .or_default()
+            .extend(node_indices);
+    }
+
+    for (object_id, node_index_set) in node_indices_by_object {
+        let Some(region_material) = magnet_materials.get(&object_id) else {
+            continue;
+        };
+        let node_indices = node_index_set.into_iter().collect::<Vec<_>>();
         let region_axis = normalize_nonzero_vector3(
             region_material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
             "anisotropy_axis",
@@ -3168,14 +3695,19 @@ fn build_region_material_fields(
         })?;
 
         let points: Vec<[f64; 3]> = node_indices.iter().map(|&idx| mesh.nodes[idx]).collect();
-        let object_translation = crate::material::object_translation(problem, &segment.object_id);
+        let point_spacings = node_indices
+            .iter()
+            .map(|&idx| node_spacings[idx])
+            .collect::<Vec<_>>();
+        let object_translation = crate::material::object_translation(problem, &object_id);
 
         let ms_resolved = crate::material::resolve_spatial_parameter_excluding_regions(
             problem,
-            &segment.object_id,
+            &object_id,
             fullmag_ir::MaterialParameterNameIR::Ms,
             region_material.saturation_magnetisation,
             &points,
+            crate::material::MaterialSampling::Nodes { spacings: &point_spacings },
             object_translation,
             &sharp_conformal_ms_regions,
         )
@@ -3183,10 +3715,11 @@ fn build_region_material_fields(
 
         let aex_resolved = crate::material::resolve_spatial_parameter_excluding_regions(
             problem,
-            &segment.object_id,
+            &object_id,
             fullmag_ir::MaterialParameterNameIR::Aex,
             region_material.exchange_stiffness,
             &points,
+            crate::material::MaterialSampling::Nodes { spacings: &point_spacings },
             object_translation,
             &sharp_conformal_aex_regions,
         )
@@ -3194,10 +3727,11 @@ fn build_region_material_fields(
 
         let alpha_resolved = crate::material::resolve_spatial_parameter(
             problem,
-            &segment.object_id,
+            &object_id,
             fullmag_ir::MaterialParameterNameIR::Alpha,
             region_material.damping,
             &points,
+            crate::material::MaterialSampling::Nodes { spacings: &point_spacings },
             object_translation,
         )
         .map_err(|e| PlanError { reasons: vec![e] })?;
@@ -3399,7 +3933,19 @@ fn build_conformal_region_element_fields(
                 .iter()
                 .any(|mesh_marker| *mesh_marker == marker.marker)
             {
-                marker_to_region.insert(marker.marker, marker.geometry_name.clone());
+                let Some(region) = resolve_object_region_marker(problem, &marker.geometry_name)
+                    .map_err(|message| PlanError {
+                        reasons: vec![message],
+                    })?
+                else {
+                    return Err(PlanError {
+                        reasons: vec![format!(
+                            "FEM object-region marker '{}' does not resolve to an enabled region",
+                            marker.geometry_name
+                        )],
+                    });
+                };
+                marker_to_region.insert(marker.marker, region);
             }
         }
     }
@@ -3407,23 +3953,10 @@ fn build_conformal_region_element_fields(
         return Ok((None, None));
     }
 
-    let mut region_by_key: BTreeMap<String, &fullmag_ir::ObjectRegionIR> = BTreeMap::new();
-    for region in problem
-        .object_regions
-        .iter()
-        .filter(|region| region.enabled)
-    {
-        region_by_key.insert(region.region_id.clone(), region);
-        region_by_key.insert(region.name.clone(), region);
-    }
-
     let mut ms_changed = false;
     let mut a_changed = false;
     for (element_index, marker) in mesh.element_markers.iter().copied().enumerate() {
-        let Some(region_key) = marker_to_region.get(&marker) else {
-            continue;
-        };
-        let Some(region) = region_by_key.get(region_key) else {
+        let Some(region) = marker_to_region.get(&marker) else {
             continue;
         };
         let owner_material = magnet_materials
@@ -3465,6 +3998,8 @@ fn gather_fem_material_field_plans(
     problem: &ProblemIR,
     material: &fullmag_ir::MaterialIR,
     node_count: usize,
+    ms_element_field: Option<&[f64]>,
+    a_element_field: Option<&[f64]>,
 ) -> Vec<fullmag_ir::MaterialFieldPlan> {
     let mut material_field_plans = Vec::new();
     let is_extended =
@@ -3530,18 +4065,27 @@ fn gather_fem_material_field_plans(
                     }
                 }
             }
-            let (values, fallback) = match plan.parameter {
+            let (nodal_values, element_values, fallback) = match plan.parameter {
                 fullmag_ir::MaterialParameterNameIR::Ms => (
                     material.ms_field.as_deref(),
+                    ms_element_field,
                     material.saturation_magnetisation,
                 ),
-                fullmag_ir::MaterialParameterNameIR::Aex => {
-                    (material.a_field.as_deref(), material.exchange_stiffness)
-                }
+                fullmag_ir::MaterialParameterNameIR::Aex => (
+                    material.a_field.as_deref(),
+                    a_element_field,
+                    material.exchange_stiffness,
+                ),
                 fullmag_ir::MaterialParameterNameIR::Alpha => {
-                    (material.alpha_field.as_deref(), material.damping)
+                    (material.alpha_field.as_deref(), None, material.damping)
                 }
-                _ => (None, 0.0),
+                _ => (None, None, 0.0),
+            };
+            let values = element_values.or(nodal_values);
+            plan.realization_location = if element_values.is_some() {
+                fullmag_ir::MaterialFieldLocationIR::Element
+            } else {
+                fullmag_ir::MaterialFieldLocationIR::Node
             };
             let (sample_count, min, max, mean) = if let Some(values) = values {
                 let min = values.iter().copied().fold(f64::INFINITY, f64::min);
@@ -3552,7 +4096,9 @@ fn gather_fem_material_field_plans(
                 (node_count, fallback, fallback, fallback)
             };
             plan.realization_method = Some(
-                if plan
+                if element_values.is_some() {
+                    "conformal_domain_element_sampling"
+                } else if plan
                     .warnings
                     .iter()
                     .any(|warning| warning.contains("projected approximation"))
@@ -3586,6 +4132,12 @@ pub(crate) fn plan_fem(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
+    if problem.energy_terms.iter().any(|term| matches!(term,
+        EnergyTermIR::RotatedInterfacialDmi { object_ids: Some(_), .. })) {
+        return Err(PlanError { reasons: vec![
+            "object-scoped RotatedInterfacialDmi is not implemented for FEM CPU/GPU; use FDM or global rDMI".to_string()
+        ] });
+    }
     let mut errors = Vec::new();
 
     let fem_hints = match &problem.backend_policy.discretization_hints {
@@ -3864,7 +4416,7 @@ pub(crate) fn plan_fem(
                 }
                 bulk_dmi = Some(*d);
             }
-            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d } => {
+            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d, .. } => {
                 if rotated_interfacial_dmi.replace(*d).is_some() {
                     errors.push("RotatedInterfacialDmi is declared more than once".to_string());
                 }
@@ -3974,6 +4526,7 @@ pub(crate) fn plan_fem(
             .any(|term| matches!(term, fullmag_ir::EnergyTermIR::ThermalNoise { .. })),
         has_mqs_antenna_field_source(problem) || has_prescribed_zeeman_mask_source(problem),
         problem.field_drives.iter().any(|drive| crate::util::field_drive_is_active(drive, problem))
+            || !crate::mask_field::active_mask_field_drives(problem).is_empty()
             || problem.solved_antenna_drives.iter().any(|drive| {
                 drive.peak_current_a.is_finite()
                     && drive.peak_current_a != 0.0
@@ -4282,7 +4835,6 @@ pub(crate) fn plan_fem(
         &base_material,
         &mesh,
         &object_segments,
-        &resolved_mesh_parts,
         &magnet_materials,
     )?;
     let (ms_element_field, a_element_field) = build_conformal_region_element_fields(
@@ -4463,10 +5015,8 @@ pub(crate) fn plan_fem(
         Some(target) => {
             let (nodes, elements) = materialize_fem_spin_torque_target_masks(
                 target,
-                mesh.nodes.len(),
-                mesh.cell_count(),
+                &mesh,
                 &object_segments,
-                &resolved_mesh_parts,
             )?;
             (Some(nodes), Some(elements))
         }
@@ -4499,10 +5049,8 @@ pub(crate) fn plan_fem(
         .map(|target| {
             materialize_fem_spin_torque_target_masks(
                 target,
-                mesh.nodes.len(),
-                mesh.cell_count(),
+                &mesh,
                 &object_segments,
-                &resolved_mesh_parts,
             )
             .map(|(nodes, _elements)| nodes)
         })
@@ -4528,13 +5076,22 @@ pub(crate) fn plan_fem(
             })
     });
 
-    if !problem.spin_transport_modules.is_empty() && ms_element_field.is_some() {
+    if let Some(reason) = fem_spin_transport_ms_realization_error(
+        !problem.spin_transport_modules.is_empty(),
+        &material,
+        ms_element_field.as_deref(),
+    ) {
         return Err(PlanError {
-            reasons: vec!["bounded FEM steady spin transport requires uniform saturation magnetization; per-element Ms is not supported by the native descriptor".to_string()],
+            reasons: vec![reason],
         });
     }
-    let charge_transport_plans =
-        resolve_fem_charge_only_transport(problem, &mesh, &object_segments, &resolved_mesh_parts, false)?;
+    let charge_transport_plans = resolve_fem_charge_only_transport(
+        problem,
+        &mesh,
+        &object_segments,
+        &resolved_mesh_parts,
+        false,
+    )?;
     let spin_transport_plans = crate::spin_transport::resolve_m1_fem_spin_transport(
         problem,
         &mesh,
@@ -4581,6 +5138,7 @@ pub(crate) fn plan_fem(
         antenna_zeeman_masks,
         field_drives: active_field_drives,
         solved_antenna_drive_bases: Vec::new(),
+        mask_field_term_bases: Vec::new(),
         field_drive_geometry_masks,
         time_stage: crate::util::time_stage_context(problem),
         current_modules: problem.current_modules.clone(),
@@ -4637,6 +5195,10 @@ pub(crate) fn plan_fem(
             None
         },
     };
+
+    // Hand-written mask terms at the mesh nodes (physics note 0922, section 8.3).
+    fem_plan.mask_field_term_bases =
+        crate::mask_field::resolve_fem_mask_field_terms(problem, &fem_plan)?;
 
     // ── Extract Oersted realizations from energy terms ──
     for (term_index, term) in problem.energy_terms.iter().enumerate() {
@@ -4848,8 +5410,13 @@ pub(crate) fn plan_fem(
     if let Some(note) = universe_note {
         provenance_notes.push(note);
     }
-    let material_field_plans =
-        gather_fem_material_field_plans(problem, &fem_plan.material, n_nodes);
+    let material_field_plans = gather_fem_material_field_plans(
+        problem,
+        &fem_plan.material,
+        n_nodes,
+        fem_plan.ms_element_field.as_deref(),
+        fem_plan.a_element_field.as_deref(),
+    );
     for field_plan in &material_field_plans {
         if let Some(statistics) = &field_plan.statistics {
             provenance_notes.push(format!(
@@ -6012,8 +6579,13 @@ pub(crate) fn plan_fem_eigen(
         "study: eigenmodes operator={:?} count={} normalization={:?} damping_policy={:?}",
         fem_plan.operator.kind, fem_plan.count, fem_plan.normalization, fem_plan.damping_policy
     );
-    let material_field_plans =
-        gather_fem_material_field_plans(problem, &fem_plan.material, fem_plan.mesh.nodes.len());
+    let material_field_plans = gather_fem_material_field_plans(
+        problem,
+        &fem_plan.material,
+        fem_plan.mesh.nodes.len(),
+        None,
+        None,
+    );
     let mut provenance_notes = vec![
         if resolved_domain_mesh_asset.is_some() {
             "Bootstrap FEM eigen planner using study-level shared-domain mesh asset".to_string()

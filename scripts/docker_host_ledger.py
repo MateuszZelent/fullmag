@@ -428,12 +428,16 @@ def _unknown(error: BaseException) -> bool:
     )
 
 
-def _daemon_info(docker_callable: Callable[..., Any]) -> dict[str, str]:
+def _daemon_info(
+    docker_callable: Callable[..., Any], *, include_capacity: bool = False
+) -> dict[str, Any]:
     stdout, stderr, combined = _invoke(docker_callable, "info", "--format", "{{json .}}", timeout=30)
     text = stdout.strip() or combined.strip()
     try:
         document = json.loads(text)
     except (ValueError, TypeError):
+        if include_capacity:
+            raise HostLedgerError("Docker info did not return JSON capacity fields")
         fields = text.split("|", 1)
         document = {"ID": fields[0].strip(), "OSType": fields[1].strip() if len(fields) == 2 else ""}
     if not isinstance(document, Mapping):
@@ -442,7 +446,19 @@ def _daemon_info(docker_callable: Callable[..., Any]) -> dict[str, str]:
     os_type = str(document.get("OSType") or "").strip().lower()
     if not daemon_id or "\n" in daemon_id or os_type != "linux":
         raise HostLedgerError("host-ledger requires a verified Linux Docker daemon with a non-empty ID")
-    return {"id_sha256": hashlib.sha256(daemon_id.encode("utf-8")).hexdigest(), "os_type": os_type}
+    result: dict[str, Any] = {
+        "id_sha256": hashlib.sha256(daemon_id.encode("utf-8")).hexdigest(),
+        "os_type": os_type,
+    }
+    if include_capacity:
+        cpu_count = document.get("NCPU")
+        memory_total_bytes = document.get("MemTotal")
+        if type(cpu_count) is not int or cpu_count <= 0:
+            raise HostLedgerError("Docker info CPU count is missing or invalid")
+        if type(memory_total_bytes) is not int or memory_total_bytes <= 0:
+            raise HostLedgerError("Docker info memory total is missing or invalid")
+        result.update(cpu_count=cpu_count, memory_total_bytes=memory_total_bytes)
+    return result
 
 
 def _image_attestation(image_id: str, docker_callable: Callable[..., Any]) -> dict[str, Any]:
@@ -588,8 +604,40 @@ def _expected_maintenance_environment(environment: Mapping[str, str]) -> dict[st
         "FULLMAG_HOST_LEDGER_RUNTIME_GID", "FULLMAG_HOST_LEDGER_LOCK_WAIT_SECONDS",
     )
     expected = {name: environment.get(name) for name in names}
-    if any(not isinstance(value, str) or not value for value in expected.values()):
+    expected.update({
+        "FULLMAG_DOCKER_HOST_ID": environment.get("FULLMAG_DOCKER_HOST_ID", ""),
+        "FULLMAG_HOST_LEDGER_PUBLISH_CAPACITY": environment.get(
+            "FULLMAG_HOST_LEDGER_PUBLISH_CAPACITY", "0"
+        ),
+        "FULLMAG_HOST_LEDGER_DOCKER_CPU_COUNT": environment.get(
+            "FULLMAG_HOST_LEDGER_DOCKER_CPU_COUNT", ""
+        ),
+        "FULLMAG_HOST_LEDGER_DOCKER_MEMORY_TOTAL_BYTES": environment.get(
+            "FULLMAG_HOST_LEDGER_DOCKER_MEMORY_TOTAL_BYTES", ""
+        ),
+    })
+    if any(not isinstance(value, str) or not value for name, value in expected.items()
+           if name not in {
+               "FULLMAG_HOST_LEDGER_DOCKER_CPU_COUNT",
+               "FULLMAG_HOST_LEDGER_DOCKER_MEMORY_TOTAL_BYTES",
+           }):
         raise HostLedgerError("maintenance environment is incomplete")
+    publish = expected["FULLMAG_HOST_LEDGER_PUBLISH_CAPACITY"]
+    if publish not in {"0", "1"}:
+        raise HostLedgerError("maintenance capacity publication flag is invalid")
+    if publish == "1":
+        if re.fullmatch(r"[0-9a-f]{64}", expected["FULLMAG_DOCKER_HOST_ID"]) is None:
+            raise HostLedgerError("maintenance capacity daemon identity is invalid")
+        for key in (
+            "FULLMAG_HOST_LEDGER_DOCKER_CPU_COUNT",
+            "FULLMAG_HOST_LEDGER_DOCKER_MEMORY_TOTAL_BYTES",
+        ):
+            value = expected[key]
+            if not isinstance(value, str) or not value.isdecimal() or int(value) <= 0:
+                raise HostLedgerError(f"maintenance capacity input is invalid: {key}")
+    elif (expected["FULLMAG_HOST_LEDGER_DOCKER_CPU_COUNT"]
+          or expected["FULLMAG_HOST_LEDGER_DOCKER_MEMORY_TOTAL_BYTES"]):
+        raise HostLedgerError("legacy maintenance environment has unexpected capacity inputs")
     return expected
 
 
@@ -613,13 +661,17 @@ def _validate_maintenance_service(
         if service.get(key) != expected:
             raise HostLedgerError(f"maintenance service contract differs at {key}")
     allowed_service_keys = {
-        "command", "entrypoint", "environment", "image", "network_mode", "pid",
+        "command", "entrypoint", "environment", "image", "network_mode", "pid", "cgroup",
         "profiles", "privileged", "read_only", "restart", "user", "volumes",
     }
     if set(service) - allowed_service_keys:
         raise HostLedgerError("maintenance service has an unsupported Compose field")
     if service.get("environment") != _expected_maintenance_environment(environment):
         raise HostLedgerError("maintenance service environment differs from the resolved contract")
+    publish_capacity = environment.get("FULLMAG_HOST_LEDGER_PUBLISH_CAPACITY", "0") == "1"
+    if (publish_capacity and service.get("cgroup") != "host"
+            or not publish_capacity and service.get("cgroup", "private") != "private"):
+        raise HostLedgerError("maintenance cgroup namespace differs from its capacity scope")
 
     volumes = service.get("volumes")
     if not isinstance(volumes, list) or len(volumes) != 3:

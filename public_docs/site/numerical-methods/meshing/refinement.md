@@ -47,77 +47,55 @@ The union denotes ordered composition in `_build_field_stack`, not a physical su
 
 ### Complete public signature and IR matrix
 
-The following rows are the exhaustive public-signature contract for this page; each row mirrors one public_api.parameters entry in the source map.
+The following rows document the public signature and `ProblemIR` contract for this page.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| hmax | float \| str \| None | None | $\mathrm{m}$ | compatibility alias; canonical maximum_element_size wins; numeric values must be positive and the only accepted string is exact `auto` | compatibility coarse-size spelling | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].maximum_element_size |
-| hmin | float \| None | None | $\mathrm{m}$ | compatibility alias; canonical minimum_element_size wins; positive and no greater than numeric maximum | compatibility lower-clamp spelling | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].minimum_element_size |
-| maximum_element_size | float \| str \| None | None | $\mathrm{m}$ | positive finite float or exact `auto` | coarse size target | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].maximum_element_size |
-| minimum_element_size | float \| None | None | $\mathrm{m}$ | positive and no greater than numeric maximum | lower size clamp | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].minimum_element_size |
-| order | int \| None | None | $1$ | prismatic route restricts order to `1`; other routes are backend-gated | FEM order request | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].order |
-| calibrate_for | str \| None | None | $1$ | normalized to a supported calibration name | calibration family | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].calibrate_for |
-| size_preset | str \| None | None | $1$ | normalized to `coarse`, `normal`, `fine`, `finer`, or `extra_fine` | preset family | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].size_preset |
-| algorithm_2d | int \| None | None | $1$ | stored without an authoring-time range check | Gmsh 2-D algorithm | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].algorithm_2d |
-| algorithm_3d | int \| None | None | $1$ | stored without an authoring-time range check | Gmsh 3-D algorithm | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].algorithm_3d |
-| optimize | str \| None | None | $1$ | stored without an authoring-time vocabulary check | optimizer | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].optimize |
-| optimize_iterations | int \| None | None (effective state `1`) | passes | stored without an authoring-time range check | optimizer passes | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].optimize_iterations |
-| smoothing_steps | int \| None | None (effective state `1`) | passes | stored without an authoring-time range check | smoothing passes | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].smoothing_steps |
-| size_factor | float \| None | None (effective state `1.0`) | $1$ | stored without an authoring-time positivity check | preset multiplier | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].size_factor |
-| size_from_curvature | int \| None | None (effective state `0`) | points per $2\pi$ | stored without an authoring-time range check | curvature sampling | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].size_from_curvature |
-| curvature_factor | float \| None | None | $1$ | coerced with `float()` | curvature refinement | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].curvature_factor |
-| maximum_element_growth_rate | float \| None | None | $1$ | finite, positive and at most `2.5` | neighboring-zone growth | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].maximum_element_growth_rate |
-| growth_rate | float \| None | None | $1$ | compatibility alias; canonical maximum_element_growth_rate wins; finite, positive and at most `2.5` | compatibility growth spelling | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].maximum_element_growth_rate |
-| narrow_regions | int \| None | None (effective state `0`) | elements | non-Boolean integer at least `0` | narrow-gap request | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].narrow_regions |
-| narrow_region_resolution | float \| None | None | $1$ | coerced with `float()` | narrow-gap strength | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].narrow_region_resolution |
-| interface_maximum_element_size | float \| None | None | $\mathrm{m}$ | positive | interface target | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].interface_hmax |
-| interface_hmax | float \| None | None | $\mathrm{m}$ | compatibility alias; canonical interface_maximum_element_size wins; positive | compatibility interface-target spelling | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].interface_hmax |
-| interface_thickness | float \| None | None | $\mathrm{m}$ | positive | interface-band thickness | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].interface_thickness |
-| transition_distance | float \| str \| None | None | $\mathrm{m}$ or symbol | non-negative numeric value or supported boundary symbol | interface transition span | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].transition_distance |
-| transition_growth | float \| None | None | $1$ | positive | interface transition growth | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].transition_growth |
-| edge_maximum_element_size | float \| None | None | $\mathrm{m}$ | positive | edge target | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].edge_hmax |
-| edge_hmax | float \| None | None | $\mathrm{m}$ | compatibility alias; canonical edge_maximum_element_size wins; positive | compatibility edge-target spelling | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].edge_hmax |
-| edge_thickness | float \| None | None | $\mathrm{m}$ | positive; perimeter validation also applies | edge-band width | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].edge_thickness |
-| edge_transition_distance | float \| str \| None | None | $\mathrm{m}$ or symbol | positive numeric value or supported boundary symbol | edge transition span | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].edge_transition_distance |
-| corner_maximum_element_size | float \| None | None | $\mathrm{m}$ | positive | corner target | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].corner_hmax |
-| corner_hmax | float \| None | None | $\mathrm{m}$ | compatibility alias; canonical corner_maximum_element_size wins; positive | compatibility corner-target spelling | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].corner_hmax |
-| corner_extent | float \| None | None | $\mathrm{m}$ | positive; perimeter validation also applies | corner extent | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].corner_extent |
-| corner_transition_distance | float \| str \| None | None | $\mathrm{m}$ or symbol | positive numeric value or supported boundary symbol | corner transition span | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].corner_transition_distance |
-| boundary_layer_count | int \| None | None | layers | `int()` coercion and at least `1` | boundary-layer count | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].boundary_layer_count |
-| boundary_layer_thickness | float \| None | None | $\mathrm{m}$ | positive | boundary-layer thickness | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].boundary_layer_thickness |
-| boundary_layer_stretching | float \| None | None | $1$ | positive | boundary-layer growth | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].boundary_layer_stretching |
-| boundary_layer_target_surface_tags | Sequence[int] \| None | None | $1$ | normalized by `_normalize_int_tags` | target surfaces | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].boundary_layer_target_surface_tags |
-| boundary_layer_target_curve_tags | Sequence[int] \| None | None | $1$ | normalized by `_normalize_int_tags` | target curves | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].boundary_layer_target_curve_tags |
-| boundary_layer_target_surface_selectors | Sequence[Mapping] \| None | None | $1$ | normalized by `_normalize_selector_list` | semantic target surfaces | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].boundary_layer_target_surface_selectors |
-| boundary_layer_target_curve_selectors | Sequence[Mapping] \| None | None | $1$ | normalized by `_normalize_selector_list` | semantic target curves | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].boundary_layer_target_curve_selectors |
-| compute_quality | bool \| None | None (effective state `False`) | $1$ | no explicit Python type check | aggregate quality request | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].compute_quality |
-| per_element_quality | bool \| None | None (effective state `False`) | $1$ | no explicit Python type check | per-element quality request | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].per_element_quality |
-| kind | str | required | $1$ | appended without authoring-time field validation | manual Gmsh field kind | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].size_fields[].kind |
-| **params | Mapping[str, object] | {} | mixed | appended without authoring-time field validation | manual Gmsh field parameters | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].size_fields[].params |
-
-
+| `hmax` | `float \| str \| None` | `None` | $\mathrm{m}$ | compatibility alias; canonical maximum_element_size wins; numeric values must be positive and the only accepted string is exact `auto` | compatibility coarse-size spelling | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].maximum_element_size` |
+| `hmin` | `float \| None` | `None` | $\mathrm{m}$ | compatibility alias; canonical minimum_element_size wins; positive and no greater than numeric maximum | compatibility lower-clamp spelling | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].minimum_element_size` |
+| `maximum_element_size` | `float \| str \| None` | `None` | $\mathrm{m}$ | positive finite float or exact `auto` | coarse size target | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].maximum_element_size` |
+| `minimum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive and no greater than numeric maximum | lower size clamp | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].minimum_element_size` |
+| `order` | `int \| None` | `None` | $1$ | prismatic route restricts order to `1`; other routes are backend-gated | FEM order request | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].order` |
+| `calibrate_for` | `str \| None` | `None` | $1$ | normalized to a supported calibration name | calibration family | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].calibrate_for` |
+| `size_preset` | `str \| None` | `None` | $1$ | normalized to `coarse`, `normal`, `fine`, `finer`, or `extra_fine` | preset family | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].size_preset` |
+| `algorithm_2d` | `int \| None` | `None` | $1$ | stored without an authoring-time range check | Gmsh 2-D algorithm | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].algorithm_2d` |
+| `algorithm_3d` | `int \| None` | `None` | $1$ | stored without an authoring-time range check | Gmsh 3-D algorithm | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].algorithm_3d` |
+| `optimize` | `str \| None` | `None` | $1$ | stored without an authoring-time vocabulary check | optimizer | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].optimize` |
+| `optimize_iterations` | `int \| None` | `None` (effective state `1`) | passes | stored without an authoring-time range check | optimizer passes | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].optimize_iterations` |
+| `smoothing_steps` | `int \| None` | `None` (effective state `1`) | passes | stored without an authoring-time range check | smoothing passes | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].smoothing_steps` |
+| `size_factor` | `float \| None` | `None` (effective state `1.0`) | $1$ | stored without an authoring-time positivity check | preset multiplier | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].size_factor` |
+| `size_from_curvature` | `int \| None` | `None` (effective state `0`) | points per $2\pi$ | stored without an authoring-time range check | curvature sampling | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].size_from_curvature` |
+| `curvature_factor` | `float \| None` | `None` | $1$ | coerced with `float()` | curvature refinement | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].curvature_factor` |
+| `maximum_element_growth_rate` | `float \| None` | `None` | $1$ | finite, positive and at most `2.5` | neighboring-zone growth | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].maximum_element_growth_rate` |
+| `growth_rate` | `float \| None` | `None` | $1$ | compatibility alias; canonical maximum_element_growth_rate wins; finite, positive and at most `2.5` | compatibility growth spelling | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].maximum_element_growth_rate` |
+| `narrow_regions` | `int \| None` | `None` (effective state `0`) | elements | non-Boolean integer at least `0` | narrow-gap request | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].narrow_regions` |
+| `narrow_region_resolution` | `float \| None` | `None` | $1$ | coerced with `float()` | narrow-gap strength | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].narrow_region_resolution` |
+| `interface_maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive | interface target | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].interface_hmax` |
+| `interface_hmax` | `float \| None` | `None` | $\mathrm{m}$ | compatibility alias; canonical interface_maximum_element_size wins; positive | compatibility interface-target spelling | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].interface_hmax` |
+| `interface_thickness` | `float \| None` | `None` | $\mathrm{m}$ | positive | interface-band thickness | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].interface_thickness` |
+| `transition_distance` | `float \| str \| None` | `None` | $\mathrm{m}$ or symbol | non-negative numeric value or supported boundary symbol | interface transition span | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].transition_distance` |
+| `transition_growth` | `float \| None` | `None` | $1$ | positive | interface transition growth | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].transition_growth` |
+| `edge_maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive | edge target | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].edge_hmax` |
+| `edge_hmax` | `float \| None` | `None` | $\mathrm{m}$ | compatibility alias; canonical edge_maximum_element_size wins; positive | compatibility edge-target spelling | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].edge_hmax` |
+| `edge_thickness` | `float \| None` | `None` | $\mathrm{m}$ | positive; perimeter validation also applies | edge-band width | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].edge_thickness` |
+| `edge_transition_distance` | `float \| str \| None` | `None` | $\mathrm{m}$ or symbol | positive numeric value or supported boundary symbol | edge transition span | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].edge_transition_distance` |
+| `corner_maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive | corner target | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].corner_hmax` |
+| `corner_hmax` | `float \| None` | `None` | $\mathrm{m}$ | compatibility alias; canonical corner_maximum_element_size wins; positive | compatibility corner-target spelling | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].corner_hmax` |
+| `corner_extent` | `float \| None` | `None` | $\mathrm{m}$ | positive; perimeter validation also applies | corner extent | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].corner_extent` |
+| `corner_transition_distance` | `float \| str \| None` | `None` | $\mathrm{m}$ or symbol | positive numeric value or supported boundary symbol | corner transition span | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].corner_transition_distance` |
+| `boundary_layer_count` | `int \| None` | `None` | layers | `int()` coercion and at least `1` | boundary-layer count | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_count` |
+| `boundary_layer_thickness` | `float \| None` | `None` | $\mathrm{m}$ | positive | boundary-layer thickness | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_thickness` |
+| `boundary_layer_stretching` | `float \| None` | `None` | $1$ | positive | boundary-layer growth | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_stretching` |
+| `boundary_layer_target_surface_tags` | `Sequence[int] \| None` | `None` | $1$ | normalized by `_normalize_int_tags` | target surfaces | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_target_surface_tags` |
+| `boundary_layer_target_curve_tags` | `Sequence[int] \| None` | `None` | $1$ | normalized by `_normalize_int_tags` | target curves | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_target_curve_tags` |
+| `boundary_layer_target_surface_selectors` | `Sequence[Mapping] \| None` | `None` | $1$ | normalized by `_normalize_selector_list` | semantic target surfaces | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_target_surface_selectors` |
+| `boundary_layer_target_curve_selectors` | `Sequence[Mapping] \| None` | `None` | $1$ | normalized by `_normalize_selector_list` | semantic target curves | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_target_curve_selectors` |
+| `compute_quality` | `bool \| None` | `None` (effective state `False`) | $1$ | no explicit Python type check | aggregate quality request | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].compute_quality` |
+| `per_element_quality` | `bool \| None` | `None` (effective state `False`) | $1$ | no explicit Python type check | per-element quality request | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].per_element_quality` |
+| `kind` | `str` | required | $1$ | appended without authoring-time field validation | manual Gmsh field kind | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].size_fields[].kind` |
+| `**params` | `Mapping[str, object]` | `{}` | mixed | appended without authoring-time field validation | manual Gmsh field parameters | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].size_fields[].params` |
 
 This page's public controls are normalized before `_build_field_stack`; the internal function is not a user callable. Use the documented mesh-policy/size-field API and inspect the resulting stack.
-
-| Python | Type | Default | SI unit | Validation and coercion | Meaning | Backend support | ProblemIR |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `maximum_element_size`, `hmax` | `float \| str \| None` | `None` | m | numeric values are positive; the only accepted string is exact `"auto"`; canonical name wins | coarse target | FEM CPU/GPU capability-gated | `per_geometry[].maximum_element_size` |
-| `minimum_element_size`, `hmin` | `float \| None` | `None` | m | positive and no greater than numeric `maximum_element_size`; canonical name wins | lower clamp | FEM CPU/GPU capability-gated | `per_geometry[].minimum_element_size` |
-| `order` | `int \| None` | `None` | 1 | prismatic intent permits only `1`; other orders are realized-backend decisions | FEM basis request | FEM CPU/GPU capability-gated | `per_geometry[].order` |
-| `calibrate_for`, `size_preset` | `str \| None` | `None` | 1 | calibration is normalized; preset is normalized to `coarse`, `normal`, `fine`, `finer`, or `extra_fine` | preset selection | FEM CPU/GPU capability-gated | `per_geometry[].calibrate_for`, `per_geometry[].size_preset` |
-| `algorithm_2d`, `algorithm_3d`, `optimize` | `int \| str \| None` | `None` | 1 | stored without an authoring-time range or vocabulary check | Gmsh algorithms and optimizer | FEM CPU/GPU capability-gated | matching `per_geometry[]` field |
-| `optimize_iterations`, `smoothing_steps` | `int \| None` | `None` (stored defaults `1`) | passes | direct public call stores values; recipe validation requires non-negative integral smoothing | optimization/smoothing passes | FEM CPU/GPU capability-gated | matching `per_geometry[]` field |
-| `size_factor`, `size_from_curvature`, `curvature_factor` | `float \| int \| None` | `None` (stored `1.0`, `0`, `None`) | 1 | `curvature_factor` uses `float()`; the first two are stored directly by this call | global and curvature sizing | FEM CPU/GPU capability-gated | matching `per_geometry[]` field |
-| `maximum_element_growth_rate`, `growth_rate` | `float \| None` | `None` | 1 | finite, positive, and at most `2.5`; canonical name wins | requested growth | FEM CPU/GPU capability-gated | `per_geometry[].maximum_element_growth_rate` |
-| `narrow_regions`, `narrow_region_resolution` | `int \| float \| None` | `None` (stored `0`, `None`) | elements, 1 | `narrow_regions` is non-Boolean integer >= 0; resolution uses `float()` | narrow-gap refinement | FEM CPU/GPU capability-gated | matching `per_geometry[]` field |
-| `interface_maximum_element_size`, `interface_hmax`, `interface_thickness`, `transition_distance`, `transition_growth` | `float \| str \| None` | `None` | m, 1 | positive sizes/thickness/growth; `transition_distance` is non-negative float or normalized `"airbox_boundary"`; canonical size name wins | interface band | FEM CPU/GPU capability-gated | interface fields in `per_geometry[]` |
-| `edge_maximum_element_size`, `edge_hmax`, `edge_thickness`, `edge_transition_distance` | `float \| str \| None` | `None` | m | positive sizes/thickness; transition is positive float or normalized `"airbox_boundary"`; size and thickness must occur together | edge band | FEM CPU/GPU capability-gated | edge fields in `per_geometry[]` |
-| `corner_maximum_element_size`, `corner_hmax`, `corner_extent`, `corner_transition_distance` | `float \| str \| None` | `None` | m | positive size/extent; transition is positive float or normalized `"airbox_boundary"`; size and extent must occur together and corner size <= edge size | corner band | FEM CPU/GPU capability-gated | corner fields in `per_geometry[]` |
-| `boundary_layer_count`, `boundary_layer_thickness`, `boundary_layer_stretching` | `int \| float \| None` | `None` | layers, m, 1 | count uses `int()` and is >= 1; thickness and stretching use `float()` then require positive | boundary layer | FEM CPU/GPU capability-gated | matching `per_geometry[]` field |
-| `boundary_layer_target_surface_tags`, `boundary_layer_target_curve_tags` | `Sequence[int] \| None` | `None` | 1 | each element uses `int()` and must be > 0 | numeric targets | FEM CPU/GPU capability-gated | matching `per_geometry[]` field |
-| `boundary_layer_target_surface_selectors`, `boundary_layer_target_curve_selectors` | `Sequence[Mapping] \| None` | `None` | 1 | every item must be a mapping and is copied with `dict()`; semantic selector parsing belongs downstream | semantic targets | FEM CPU/GPU capability-gated | matching `per_geometry[]` field |
-| `compute_quality`, `per_element_quality` | `bool \| None` | `None` (stored `False`) | 1 | no explicit type check in this public call | quality-report request | FEM CPU/GPU capability-gated | matching `per_geometry[]` field |
-| `size_field(kind, **params)` | `str`, `Mapping[str, object]` | required, `{}` | mixed | appends `{"kind": kind, "params": dict(params)}` without authoring-time field validation | manual Gmsh field | FEM CPU/GPU capability-gated | `per_geometry[].size_fields[]` |
 
 ```python
 # %%
@@ -165,12 +143,6 @@ study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
 ```
 
 (refinement-problem-ir)=
-## Parameters
-
-The complete parameter matrix in the Python API section is the public mesh-authoring contract.
-Defaults, validation, ProblemIR lowering and capability-gated lanes are listed there and mirrored
-by the adjacent source map.
-
 ## ProblemIR
 
 Mesh-policy and size-field descriptors are normalized to per-geometry and region-owned records; the resulting field stack is resolved execution data, not a user-authored IR literal.
@@ -183,7 +155,7 @@ Mesh-policy and size-field descriptors are normalized to per-geometry and region
 (refinement-discrete-realization)=
 ## Discrete realization
 
-The cited owners build unstructured FEM fields. FDM CPU and GPU are `not-applicable` for this page contract; structured-grid refinement belongs to the linked FDM-grid page.
+The cited owners build unstructured FEM fields. FDM CPU and GPU are `not-applicable` for unstructured FEM refinement; structured-grid refinement belongs to the linked FDM-grid page.
 
 (refinement-implementation-mapping)=
 ## Implementation mapping
@@ -206,21 +178,19 @@ The stack itself does not certify a requested physical resolution; convergence r
 Geuzaine and Remacle, *IJNME* 79 (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 
 (refinement-source-code-index)=
-## Contract source-code index
+## Source-code index
 
 | ID | Path | Symbol | Responsibility | Evidence |
 | --- | --- | --- | --- | --- |
-| field_stack | packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py | _build_field_stack | ordered refinement-field normalization | source-inspected |
-| public_study | packages/fullmag-py/src/fullmag/world.py | study | public study entry point | source-inspected |
-| mesh_authoring | packages/fullmag-py/src/fullmag/world.py | class GeometryMeshHandle | per-body mesh authoring | source-inspected |
-| surface_shell | packages/fullmag-py/src/fullmag/meshing/mesh_controls.py | surface_shell | public refinement descriptor | source-inspected |
-| problem_lowering | packages/fullmag-py/src/fullmag/world.py | _build_problem | builder-state lowering | source-inspected |
-| problem_ir | packages/fullmag-py/src/fullmag/model/problem.py | class Problem | ProblemIR mesh-workflow serialization | source-inspected |
-| domain_realization | packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py | realize_fem_domain_mesh_asset_from_components_with_report | field-plan mesh realization | source-inspected |
-| planner | crates/fullmag-plan/src/lib.rs | plan | ProblemIR planning and compatibility | source-inspected, runtime-unverified |
-| runtime | crates/fullmag-runner/src/lib.rs | run_planned_problem | planned runtime dispatch | source-inspected, device-unverified |
-
-**Last changes: 12:31 24.08.2026**
+| field_stack | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | ordered refinement-field normalization | source-inspected |
+| public_study | `packages/fullmag-py/src/fullmag/world.py` | `study` | public study entry point | source-inspected |
+| mesh_authoring | `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | per-body mesh authoring | source-inspected |
+| surface_shell | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py` | `surface_shell` | public refinement descriptor | source-inspected |
+| problem_lowering | `packages/fullmag-py/src/fullmag/world.py` | `_build_problem` | builder-state lowering | source-inspected |
+| problem_ir | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | ProblemIR mesh-workflow serialization | source-inspected |
+| domain_realization | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `realize_fem_domain_mesh_asset_from_components_with_report` | field-plan mesh realization | source-inspected |
+| planner | `crates/fullmag-plan/src/lib.rs` | `plan` | ProblemIR planning and compatibility | source-inspected, runtime-unverified |
+| runtime | `crates/fullmag-runner/src/lib.rs` | `run_planned_problem` | planned runtime dispatch | source-inspected, device-unverified |
 
 Refinement should be driven by physical length scales and observable error. Fullmag combines calibrated presets, explicit min/max sizes, interface/edge/corner controls and structured size fields.
 
@@ -264,7 +234,6 @@ the smallest geometric feature and the desired boundary accuracy. The exchange-l
 
 is a useful initial guide, but final values require a grid-refinement study. A one-cell film thickness
 is a thickness-averaged discretization; it cannot represent a nonuniform mode across the thickness.
-
 
 ### FEM scientific invariants
 
@@ -508,7 +477,4 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 - C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79** (2009), 1309–1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 - C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 - Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
-## Extended source notes
-
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Runtime realization is owned by the relevant `backends/fdm` or `backends/fem` implementation; the page must not claim a symbol not named in its implementation mapping.
 

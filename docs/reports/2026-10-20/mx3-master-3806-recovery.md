@@ -1,19 +1,39 @@
 # Fullmag master — recovery 3806 i poprawki primitive, 20.10.2026
 
 <!-- mx3-current-status:start -->
-## Aktualny status wdrożenia — 21.10.2026, 00:03 CEST
+## Aktualny status wdrożenia — 21.10.2026, po źródłowym review H2
 
-Build i publikacja pakietu `d2a4bdfb` przeszły. Frontend działa na **3198**,
-backend nadal sprawdza stare pakiety rollback przed API. Na żądanie zwiększono
-i potwierdzono jego limit **128 GiB RAM / 16 CPU + 8 GiB swapu**, zachowując
-ten sam kontener i dane. Profil kolejnych startów zapisany w control volume.
+Ostatni rzeczywisty build pozostaje na `73e275ce1`: Make exit 0 / 121700 ms,
+pakiet 24 plików / 6161 ms, verify 1564 ms. Backend `f7c035fd` ma
+128 GiB / 16 CPU, lecz zakończył się exit 1 przed API z powodu konfliktu
+wspólnej polityki hosta. Frontend pozostaje healthy na porcie 3198.
 
-Usunięcie opcjonalnej retencji z krytycznej ścieżki jest w źródłach
-`01cb8ed197e066fd25d2d9db26c52d6bf9d3d154`; działający stary proces tej poprawki
-jeszcze nie używa. Obowiązkowa walidacja bieżącego pakietu pozostaje wymagana.
-Nie uruchomiono replay skryptu, nowego preparation retry, Solve ani testów.
-API/native i ten sam run04, nowy mesh oraz pola/energie/Airbox w UI nadal
-wymagają odbioru. Pełny plan F0–F12 pozostaje otwarty.
+**H3: wykonano checkpoint `740722f4cef14f6fa6ca140205047160`, exit 0,
+`stopped-confirmed`.** Odczyt kontrolny receiptu potwierdza SHA
+`a15f43cbe50ab8ce9e25aef97ae81c777f4c1d712f74d7751c63adb1a60a6c5a`.
+Obserwowano istniejący stop; nie wysłano sygnału, nie uruchomiono API ani Solve.
+Zachowano pierwotny failed owner, config, released proofs i held04.
+
+**H0 i H1 są zapisane w źródłach; nie zastosowano ich do runtime.**
+H1 oddziela pojemność Docker VM od quota konkretnego backendu, zachowując
+limity procesu przy ofertach CPU/RAM. Rozszerza istniejący krótki helper;
+pozostają dokładnie dwie stałe usługi aplikacji. Nie zmienia wspólnej polityki.
+Parsery Python/Rust i review źródeł nie zastępują builda ani dowodu runtime.
+
+**H2: protokół i integracja przeszły review kodu oraz kontrolę składni; nie zostały zbudowane ani zastosowane.** Pozostaje migracja starej, niezmiennej polityki,
+z zachowaniem historii oraz koordynacją wszystkich korzystających grup.
+Odczyt opisany w §66 wykazał równoległą aktualizację snapshotu inventory: ledger miał
+wówczas SHA `04630db439fccb9ecad244f73557f076337e581867783ff7941776370e5c3bda`;
+polityka nadal ma revision 1, CPU 4000, RAM 7 GiB, 14 rezerwacji Released.
+Sam rekord inventory ownera ani Released nie dowodzą braku aktywnego writera.
+Nie nadpisano tej równoległej zmiany. Grupa docker-volume-only ma już inny
+kontener niż przy poprzedniej obserwacji; viewport nadal działa jako unhealthy.
+
+3806 i held04 zachowane. Brak retry04/Compute/Solve/testów oraz nowego
+buildu H0/H1/H2. Zastosowanie H2 wymaga rozszerzenia zgody na bezpieczny
+drain/recovery dwóch innych grup; pytanie pozostaje bez odpowiedzi.
+API, materializacja, mesh i widoczny render **NOT VERIFIED**.
+Browser tool nadal wymaga poprawnej karty HTTP; nie obchodzono odmowy.
 <!-- mx3-current-status:end -->
 
 
@@ -1635,3 +1655,384 @@ Backend nadal sprawdza historyczne pakiety rollback w starej, już załadowanej
 wersji startu. Odczyt 22:03 UTC: pakiet 6 z 14, zmieniający się offset pliku.
 Zwiększenie limitu nie dowodzi przyspieszenia tej operacji. API/native,
 preparation retry, nowy mesh, Solve i wizualizacja pól pozostają NOT VERIFIED.
+
+
+## 61. Restart użytkownika i checkpoint capture — 21.10.2026
+
+Użytkownik potwierdził ręczny restart Docker Desktop. Ta sama usługa
+`c007e2f1e113b82deaf205cc9cf1e2a97d45ed63d5a454e57d911ceb16935d26`
+ma nową inkarnację: StartedAt `2026-10-20T22:28:23.685193183Z`, FinishedAt
+`2026-10-20T22:36:58.657335216Z`, exited2/PID0/non-OOM. Źródła zmieniały się
+podczas capture; drugi zamknięty manifest różnił się od pierwszego. Root
+edytował wtedy launcher, a równolegle weszły merge8a290d6e i7c16297b.
+Nie zastosowano przygotowanej komendy stop-pre-api-start ani żadnego sygnału.
+
+Pierwotna zarządzana obserwacja53e zakończyła się rzeczywistym
+failed-confirmed: `Backend incarnation changed during build observation`.
+Zwykłe resume-volume52070 odmówiło bez mutacji: wymagany running backend
+oraz stopped frontend. Backend jest obecnie zatrzymany, frontendhealthy3198;
+API i nowy mesh nadal NOT VERIFIED. Przerwę źródeł zwolniono po faktycznym
+końcu capture, przed następnym spójnym capture będzie uzgodniona ponownie.
+
+Odczytowy istniejący validator potwierdził exact capture-only tej nowej
+inkarnacji, bez build/package/handoff/gate/API/runtime. Stdout0B SHA
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`,
+stderr4194B SHA
+`aaa7bb37c47df10296b7bcc52d2cf5e76be60228c0379ff19e8c496e3e466920`.
+Nie jest to dowód successful drain ani nowej awarii API.
+
+Dodano wąski create-only checkpoint pre-API z osobnymi action:
+`cancel-retention` wymaga jednego readonly rollback-reader i exact exit143;
+`observe-capture-failure` tylko obserwuje już martwe exit2 i archiwizuje
+ściśle timestampowane logi. Source review obu przypadków PASS; AST6plików
+Python i5embedded helpers oraz scoped diff-check PASS. Żadnych testów ani
+nowego buildu. Podgląd starego rollback-reader5291 przeszedł exit0; stop,
+resume-unissued i finalize nie zostały wykonane. Tych ścieżek nie uznaje się
+za odebrane runtime. Checkpoint capture zakończył się exit 0:
+operacja `c16da16dbfd54429a5cd4305795ca057`, state succeeded;
+wynik stopped-confirmed, action observe-capture-failure, signal_issued=false.
+Receipt `development/attempts/53e4c556247a4ef382e25b96467e4916/pre-api-stop/receipt.json`
+ma SHA-256 `dedd093a0b7dd0f6e5f8caee7df844e84eb51b48d09895a80c8bfab593c6d137`.
+Ten dowód obserwacji zakończonego capture nie jest dowodem uruchomienia API.
+
+Kontekst zachowuje pierwszy pre-ACK proof, exact Failed owner/process/native
+config, held04 bez start_release oraz dowody released zasobów. Nie mintuje
+drugiego certyfikatu pre-ACK, nie resetuje ownera ani nie powtarza Solve.
+Brak nowego preparation retry, replay skryptu i Solve.
+
+Odczyt ograniczeń buildu: DockerHostConfig zachowuje128GiB/16CPU, lecz Cmd
+nie podaje --jobs, CARGO_BUILD_JOBS nie ma w środowisku, a parser domyślnie
+wybiera2. CMAKE_BUILD_PARALLEL_LEVEL dziedziczy ten jobs w build environment.
+OMP_NUM_THREADS=4 jest odrębne od limitu zadań Cargo. Trwa wąska analiza
+pozostałych konsumentów budżetu; nie zwiększono jeszcze jobs kompilacji.
+
+
+## 62. Limity CPU podczas budowania — 21.10.2026
+
+Analiza dotyczy aktywnej trasy Docker DEV grupy `fullmag-master`.
+Zapisany i już zastosowany budżet wynosi 128 GiB RAM oraz 16 CPU.
+Nie oznaczał on 16 jobów: uruchomienie `backend_dev.py start` nie zawierało
+`--jobs`, środowisko nie miało `CARGO_BUILD_JOBS`, a parser wybierał 2.
+To rzeczywiste, zbędne ograniczenie kompilacji aplikacji.
+
+| Warstwa | Stan odczytany przed poprawką | Poprawka lub decyzja |
+|---|---|---|
+| Backend — quota | 16 CPU, 128 GiB RAM, 8 GiB swapu | Zachować zatwierdzony budżet |
+| Cargo | 2 joby mimo dostępnych 16 CPU | Renderowany Compose wyprowadza `CARGO_BUILD_JOBS=16` ze zweryfikowanego budżetu; bazowa konfiguracja bez profilu używa 4, zgodnie z quota 4 CPU |
+| CMake FDM/FEM w Cargo | Niezależna pula z `CMAKE_BUILD_PARALLEL_LEVEL`; FEM dodatkowo `--parallel NUM_JOBS` | W Docker DEV dla Unix Makefiles przekazywać `CARGO_MAKEFLAGS` jako `MAKEFLAGS`, bez osobnego `--parallel`; Rust i C++ dzielą tokeny Cargo. Inny generator lub brak jobservera: jawna, sygnalizowana serializacja |
+| Pozostałe natywne subprocessy | Mogły dziedziczyć pełny limit Cargo i tworzyć kolejne pule | Konserwatywne `CMAKE_BUILD_PARALLEL_LEVEL=1`; właściwy FDM/FEM usuwa je z childenv przy wspólnym jobserverze |
+| Capture manifestu źródeł | `LIVE_HASH_WORKERS=8` w `backend_source.py` | To osobna pula odczytu/hashowania plików; brak pomiaru wskazującego CPU jako wąskie gardło, bez zmiany |
+| OpenMP | `OMP_NUM_THREADS=4` w obrazie | To osobne ustawienie runtime, nie limit jobów Cargo; pozostaje bez zmiany w tej poprawce buildu |
+| Obraz zależności BuildKit | MFEM domyślnie `FULLMAG_MFEM_BUILD_JOBS=1`; część innych bibliotek używa `nproc` | To osobny build zależności, poza quota backendu. Obecny cache zachowany; nie przebudowywać MFEM tylko w celu zmiany tej wartości |
+| Frontend | 4 CPU / 16 GiB RAM | Brak dowodu, że to wąskie gardło obecnej awarii backendu; bez zmiany |
+| Liczba procesów backendu | `pids_limit=512` | Brak dowodu osiągnięcia limitu; bez zmiany |
+
+Powiązanie Cargo z zapisanym budżetem jest w
+`scripts/docker_volume_resources.py::apply_saved_budget`; wejście w
+`compose.dev.yaml`. Ustawienia i log `phase=make state=start` są w
+`docker/all-in-one/backend_dev.py`. Wspólną pulę konsumują
+`crates/fullmag-fem-sys/build.rs` i `crates/fullmag-fdm-sys/build.rs`.
+
+Przekazanie flag jobservera opisuje oficjalny
+[Cargo Book](https://doc.rust-lang.org/cargo/reference/environment-variables.html#environment-variables-cargo-sets-for-build-scripts).
+`NUM_JOBS` jest rozmiarem całej puli, a nie osobnym przydziałem dla każdego
+build scriptu. Dlatego nie ustawiamy niezależnego `-j16` w każdym podprocesie.
+
+Stan: poprawka źródłowa gotowa po review; kontrola Python AST i diff-check PASS.
+Parser Rust nie został potwierdzony: rustfmt odmówił dostępu do ścieżki.
+Pomiar CPU i czasu nowego buildu pozostaje
+**NOT VERIFIED**. Nie deklarujemy przyspieszenia 8×. Bez testów.
+Przed kolejnym buildem odczytano 95,1 GiB wolnego miejsca na C:.
+Zgodnie z `fullmag-build-stage-cleanup` zachowano cache Cargo/CMake, ostatni
+pakiet d2a4bdfb i wszystkie pakiety przypięte przez stare runy oraz rollback.
+Nie wykazano ich zbędności; ponowna ocena dopiero po weryfikacji następcy.
+Nie usunięto danych i nie wykonano prune.
+
+
+Przegląd audytu workflow zapisano w
+`docs/audits/2026-10-21-docker-dev-workflow-audit-review.md`.
+Potwierdza koszt capture i nadmiar wariantów recovery; rekomenduje zachowanie
+dwóch usług oraz rozdzielenie buildu od stanu symulacji. Uproszczenia nie zostały
+wdrożone jako nowy profil ani reset ownerów. Próba managed recreate z 72cd5efcd
+zakończyła się przed mutacją usług: `pre-admission recreation cannot replace
+native recovery authority`. Przyczyną był wybór ścieżki wymagającej pustego
+recovery context mimo uwierzytelnionego PreApiContext. Poprawiono warunek
+wyboru oraz analogiczny guard resume po usunięciu kontenerów; istniejąca
+walidacja obrazów, checkpointu, released leases i held04 pozostaje wymagana.
+AST/diff-check source-only; nowy build/API/mesh nadal NOT VERIFIED.
+
+
+## 63. Rzeczywisty start z Cargo 16 — 21.10.2026
+
+Po source review naprawy dispatch/resume zapisano commit
+`6c5a9792f6046bfb7b7cff85dbea7252760c3ea2`.
+Zarządzana operacja odtworzenia `9a6105d011224c309a97b56e9423595f`
+zakończyła się succeeded. Toolchain `0b654a4639304b7984253d4b7de046c5`
+był cache hit (image `9ceb0d68`). Obrazy helperów dev/backend przebudowano;
+backend image `sha256:f9484c9f16bb956580fd589463265a245f0fcce615753b6df7e9fa33c031e33f`.
+Nowa development attempt: `8bad15a80b074dc1ac771433000bfb3b`.
+
+Stały backend `f7c035fd8bbc54ea022f1bd22137e69165bb6e31fe1f9bbfbd0c9f510033dae5`
+StartedAt `2026-10-20T23:14:06.702506548Z`. Docker HostConfig potwierdza
+137438953472 B RAM i NanoCpus 16000000000. Odczyt środowiska działającego
+Cargo potwierdza `CARGO_BUILD_JOBS=16`; top-level Make ma tę samą wartość.
+W chwili odczytu nie było aktywnego CMake, więc współdzielenie tokenów
+przez natywny proces CMake pozostaje NOT VERIFIED bezpośrednim odczytem.
+
+Capture: PASS 9183 pliki; pass1 156822 ms, pass2 138434 ms,
+łączna faza 295448 ms. `git status` trwał odpowiednio 109175 i 91096 ms.
+Sync do ext4: 17199 ms. Przerwa źródeł RELEASE wysłana czterem czatom
+po zakończeniu sync i rozpoczęciu Make. Podczas Git status chwilowy odczyt
+CPU wynosił 21,31% jednego CPU, RAM 77,32 MiB. Podczas kompilacji Rust
+odczyt pokazał 112,80% CPU i 702,6 MiB RAM; są to próbki, nie benchmark.
+Cargo 16 nie gwarantuje 16 równoległych zadań na każdym etapie zależności.
+
+Make działa; ostatnio kompilował fullmag-py-core po fullmag-runner.
+Ostrzeżenia unused/dead_code nie są błędem kompilacji. Brak końcowego
+exit code oraz dowodu API/native/meshu/Solve. Frontend healthy3198.
+Nie uruchomiono testów, nowej aktywacji, preparation retry ani Solve.
+
+Drobna poprawka źródłowa logowania: `_log_phase` pomijał nowe pola budżetu,
+ponieważ nie dodano ich do jego allowlisty. Uzupełniono trzy nazwy; AST PASS.
+Ta lokalna zmiana nie jest obecna w działającym obrazie f9484c9f i nie powoduje
+restartu rozpoczętego buildu. Potwierdzenie Cargo 16 pochodzi z procesu,
+a nie z pominiętych pól logu.
+
+
+### Wynik próby 8bad15a8
+
+Make: exit 0 / 218431 ms. Package: complete, 24 pliki / 4028 ms;
+verify-complete / 1607 ms. Retention deferred outside-startup, obie bramki
+complete. Proces entrypoint przed bindowaniem API uruchomił
+`/opt/fullmag/package/bin/fullmag-bin runtime initialize-docker-accepted-store`.
+Komenda przekroczyła STORE_BOOTSTRAP_CLI_TIMEOUT_SECONDS=180. Backend
+exited1, OOM=false, FinishedAt `2026-10-20T23:28:02.157894447Z`.
+Development operation `8bad15a80b074dc1ac771433000bfb3b`: failed-confirmed;
+config SHA `7107acdd778f04edf3682eb39f6673fff2fa9d9698674744a70bca54e247eed6`.
+Nie wykonano ponownego bootstrapu, nowej aktywacji ani retry04/Solve.
+Stary process receipt (api_pid3467, exit-15) i writer owner metadata z18:46UTC
+są zachowane; nie kwalifikujemy ich jako nowej awarii ani żywego writera.
+Analiza przyczyny trwa w handlerze Rust inicjalizacji accepted store.
+To kolejny potwierdzony problem orkiestracji, nie błąd kompilacji i nie OOM.
+Porównanie 218431 ms z wcześniejszym217249 ms nie jest benchmarkiem zmiany
+jobów: zmieniły się źródła i warunki cache.
+
+## 64. Przegląd uproszczenia Docker DEV i diagnostyka loadera — 21.10.2026
+
+Szczegóły i korekty rekomendacji:
+[przegląd audytu Docker DEV](../../audits/2026-10-21-docker-dev-workflow-audit-review.md).
+Zachowano dwie stałe usługi i dane grupy. Nowego profilu, resetu ownerów,
+usuwania cache ani szerokiej migracji nie wykonano.
+
+Zarządzane operacje bez danych sesji i bez testów:
+
+- `adc1c0bf4bce464797a91538ef54513d`: `--version` timeout 20 s przed main,
+  ostatni komunikat LD_DEBUG — init libcublasLt;
+- `2207c2dcf5a1409091adc313318dfd05`: cuda-gdb przerwał wyłącznie własny proces
+  metadata; stos w libnvJitLink/libcublas oraz loaderze;
+- `3d9a7d86cc7447c19512c78af22416ba`: zgodne MD5 nvJitLink, osobne CDLL
+  nvJitLink 20 ms / cublas 88 ms; ten sam fullmag-bin --version exit 0 / 4500 ms.
+
+MD5 libcublasLt również zgodne z właściwym pakietem CUDA 12.6. Wcześniejsze
+expected=null dla metadanych 12.4 nie dowodziło uszkodzenia. Przyczyna timeoutu
+oryginalnego bootstrapu pozostaje niepotwierdzona; nie zwiększano 180 s ani
+nie uruchamiano bootstrapu ponownie. Aktualny backend stopped, frontend
+healthy3198; API/mesh/Solve/UI nadal NOT VERIFIED. Held04, historyczne błędy,
+process receipt oraz writer metadata zachowane.
+
+
+## 65. Restart a001 i potwierdzony konflikt quota wspólnego ledgera — 21.10.2026
+
+Próba `resume-volume --restart-backend` nie zmieniła container ID ani danych
+sesji. Kernel/Docker: Start `2026-10-21T00:06:40.618916283Z`,
+Finish `2026-10-21T00:16:42.740433157Z`, exit1, OOM=false.
+Receipt resume SHA256 `258a9a912c8204fd1d25529b264180dcd1d7c9005e5e571611616f36c1e505f6`.
+Build receipt SHA256 `db864d1bd9411efd6272291ab6d8b3962d79dbd6156e1d3b179dd76ef6ec74eb`,
+source commit `73e275ce1de772ea306714574a1be374cc4449df`, source snapshot
+`fb452f3047621e3cc80fe968c91115c44769b25efe3aa180a6b79ac84eb2e020`.
+Make121700ms/exit0, package24files6161ms, verify1564ms. Storage gatePASS.
+Mimo logu deferred worker gate hostowy receipt potwierdza świeży successful
+helper `fullmag-cgroup-a0019546f54c42dda7ec0024fdebc5d7` i rzeczywiste
+`cpu.max=1600000 100000`, `memory.max=137438953472`.
+
+Bootstrap accepted-store i accepted preflight przeszły: wyjątek powstał dopiero
+w `ensure_configuration` → `initialize_host_configuration`. Nie uruchomiono API,
+nie ma nowego ACK ani nowego Solve. Błąd to `host resource ledger initialization
+marker differs from configured policy`, a nie brak sesyjnego writera lub OOM.
+
+### Ścisły dowód wpływu quota
+
+Odczytany immutable CAS snapshot ma SHA256
+`fd8b3a134cba86d16727ffe43842eaec86116f49369931a58a355fde1084a61d`.
+Odtworzenie kolejności serializacji `CanonicalInventory` dało oryginalny hash
+`ede15957a5e6fbc441c777bc53323f02299e3eeff71a93439f85ee7da0a42b6e`.
+Zmiana wyłącznie `cpu_quota.capacity_millis: 4000 → 16000` dała
+`a0fe375e7713662e09cdf184cf665874f18b24580ab53461f2a1c52b8b276a6f`,
+czyli dokładnie hash odrzucony w runtime. Nie zmieniano CPU topology, cpuset,
+GPU UUID, PCI ani partition. Obliczenia wykonano na odczytanych bajtach w pamięci;
+bez ekstrakcji na dysk i bez modyfikacji CAS.
+
+Shared ledger SHA256 pozostał
+`3112bce5b3b7cfc3bec141c01692443224951ba8a055a26aad57789a5c9b43d3`.
+Zawiera 14 Released reservations. Master, `docker-volume-only-implementatio`
+i `viewport-visual-quality` montują ten sam
+`/mnt/fullmag-host-ledger-fullmag-0950f4dca4ffe38f`.
+Viewport potwierdził brak aktywnej pracy, lecz poprzedni native shutdown nie był
+potwierdzony. Właściciel docker-volume-only pozostaje do ustalenia.
+Nie wnioskujemy z tych danych o braku aktywnego inventory ownera.
+
+### Zakres naprawy i granice odbioru
+
+- **H0 — budżet, przygotowany source-only:** zweryfikowany saved budget
+  przekazuje CPU/RAM do natywnego profilu; para env jest obowiązkowa razem,
+  1GiB zostaje dla API, oferty compute/preparation mieszczą się w zatwierdzonym
+  limicie. Bez env obowiązuje legacy. To nie jest jeszcze działający runtime.
+- **H1 — wspólny host a konsument:** quota konkretnego backendu musi pozostać
+  jawnym ograniczeniem konsumenta, niezależnym od wspólnej tożsamości/inventory.
+  Nie usuwać quota z istniejącego digestu snapshot.v2: zmieniłoby to jego kontrakt
+  i nie naprawiłoby starych markerów/readiness.
+- **H2 — jawna migracja:** pod blokadą writera i przy potwierdzonej nieaktywności
+  inventory ownera oraz rezerwacji zachować starą politykę, wszystkie Released
+  rows, release proofs, CAS i held04. Dotychczasowa readiness rotation zachowuje
+  policy i nie wystarcza do tej zmiany. Nie kasować markera ani resetować ownera.
+- **H3 — lifecycle:** zastosowanie nowego obrazu/env musi zachować istniejącą
+  pre-ACK authority po nowym, potwierdzonym błędzie pre-API. Wykorzystać istniejący
+  checkpoint zamiast tworzyć kolejny niezależny moduł recovery.
+- **H4 — odbiór:** managed build/start → API ready i held04 bez replay → jedno
+  jawne preparation retry tej samej próby → rzeczywisty mesh/materializacja →
+  widoczny canvas, kolory primitive, pole i Airbox. Bez testów; kwalifikacja
+  naukowa pozostaje odrębną bramką.
+
+Żadnej migracji lub H0 do aktualnego kontenera jeszcze nie zastosowano.
+
+
+### H0 — zamknięcie przeglądu źródeł
+
+Review wykrył nadmiarowe przypięcia dla budżetów niepodzielnych przez 4:
+np. 5 CPU dawało żądanie 6 ID. Poprawiono podział na całe CPU;
+override wymaga co najmniej 2 CPU i wielokrotności 1000 mCPU.
+Python i Rust mają wspólny dodatni zakres u64. Końcowy przegląd: PASS.
+Dla 16 CPU: 12 compute + 4 preparation; pamięć 95,25 + 31,75 GiB,
+1 GiB pozostaje dla API. Kontrola AST Python i diff nie uruchamia runtime.
+Bez testów/builda tej poprawki. H0 nie rozwiązuje konfliktu wspólnego
+ledgera i nie jest zastosowane do działającej grupy. H1–H4 pozostają otwarte.
+
+
+## 66. Checkpoint H3 i rozdzielenie host/consumer H1
+
+Źródło checkpointu: commit `19e0475f0cab103636185c499e59588159ef2223`.
+Wykonana operacja: `740722f4cef14f6fa6ca140205047160`, exit 0,
+`stopped-confirmed`, wyłącznie obserwacja dokładnej wcześniejszej inkarnacji
+kontenera; bez sygnału, restartu, nowej aktywacji i Solve. Readback surowego
+receiptu: `a15f43cbe50ab8ce9e25aef97ae81c777f4c1d712f74d7751c63adb1a60a6c5a`.
+Oryginalny owner/config i wszystkie dowody Released są nadal przypięte.
+
+H1 przygotowano w sześciu plikach: existing maintenance publisher i Compose,
+launcher Python oraz compute_node_probe/runtime_service_main. Root/VM CPU/RAM
+są oddzielone od limitów konsumenta. Oferty respektują minimum obu zakresów;
+placementy używają przecięcia CPU IDs. Nie zmieniono publicznego algorytmu
+inventory SHA. Review usunęło błędy formatu boot ID, zakresu root cgroup,
+częściowego wznowienia i publikacji niepełnego CAS. Brak testów i builda H1.
+
+Świeży readback pokazał zmianę inventory przez równoległą grupę: SHA ledgera
+`04630db439fccb9ecad244f73557f076337e581867783ff7941776370e5c3bda`,
+snapshot `016ac655e055b971b5c44051d10af9d273257d15314b5a6058ff5f2a6a318748`.
+Policy revision 1, CPU 4000, RAM 7516192768, 14 Released. Inventory owner
+record ma epoch 106; sam jego zapis nie dowodzi utrzymywania blokady ownera.
+Nie naruszono tej równoległej aktualizacji. H2 musi przypinać świeże dane,
+a nie wcześniejszy dokument `3112bce5…`.
+
+H3 checkpoint jest zakończony; H3 właściwy restart po migracji pozostaje
+niewykonany. H2 nie ma jeszcze wdrożonego protokołu. Master backend pozostaje
+exited1/non-OOM, frontend healthy3198. API/mesh/render **NOT VERIFIED**.
+
+
+## 67. H2 — źródłowy protokół migracji i rzeczywisty preflight
+
+Baza: master `bbf3b2f44a02ed2d8b63bca3a5495e62e8b9c138` (H1).
+Przygotowano v5 ledger z ograniczoną historią polityk i CAS dokładnych poprzednich
+dokumentów. Init marker pozostaje niezmieniony. Migracja zachowuje Released rows,
+proofy, host_id, owner_epoch, rodzinę i mapę GPU oraz node policy. Każdy stary
+wiersz korzysta ze swojej polityki; admission używa bieżącej. Historyczne
+snapshot/order CAS są chronione przed istniejącym GC. Digest recovery wiąże
+historię, zachowując dawne digesty dla pustej historii.
+
+Native initializer dostał jawny tryb przypięty do descriptor SHA; zwykły start
+nie migruje. Po wcześniejszym zastosowaniu zgodna polityka jest adoptowana bez
+mutacji i bez kolejnego revision. Launcher przekazuje zgodę przez istniejący
+receipt i render, a częściowe wznowienie nie może jej poszerzyć. Nie dodano stałej
+usługi, nowego modułu recovery ani publicznego endpointu. Biblioteka przeszła
+review kodu; review integracji również zakończono po poprawkach opisanych niżej.
+Kontrola AST Python i parsera Rust PASS; bez testów, buildu i symulacji.
+To checkpoint źródeł, bez dowodu poprawności runtime.
+
+Wykonano sam odczytowy preflight rzeczywistego Dockera: wynik blocked, bez
+mutacji. Działają dwaj konsumenci `/host-ledger`:
+
+- docker-volume-only: `177b9c65e319b09baf1e94712815c20fa88c9bbf8d26576bdd7d8ff6eca37f0e`;
+- viewport: `bc2c9636ddadf53604d655f072274146323f15faee55e608969733f249d85a33`.
+
+Pierwsza grupa ponownie zmieniła kontener w trakcie prac. Nie zatrzymano żadnej
+obcej grupy i nie zastosowano migracji. Do właściciela viewport wysłano prośbę
+o sprawdzenie możliwości managed stop w granicach jego istniejącej autoryzacji;
+nie jest to nadanie nowej zgody. Właściciel docker-volume-only nadal nieustalony.
+Master frontend i dawne dane pozostały nietknięte. API/mesh/render NOT VERIFIED.
+
+
+### Aktualizacja koordynacji H2
+
+Właściciel viewport potwierdził przez własną inspekcję: backend należy do jego
+zadania, native owner ma stan unknown, receipt failed_outcome_retained,
+api_shutdown=unknown. Dawne zakończenie dzieci nie stanowi pełnego drain.
+Użytkownik w tamtym zadaniu polecił pominąć recovery i wykonać merge;
+właściciel nie ma wcześniejszej zgody na tę dodatkową operację i niczego nie
+zatrzymał. To wymaga jawnego rozszerzenia obecnego zakresu przed zastosowaniem.
+
+Kolejny odczyt Docker potwierdził, że docker-volume-only `177b9c65…` jest już
+healthy (StartedAt 2026-10-21T01:39:44.792884801Z), z procesami fullmag-api,
+fullmag-runtime i dwoma fullmag-api-acc. To działający runtime, a nie osierocony
+kontener po buildzie. Jego źródłem jest istniejący worktree
+`docker-volume-only-implementation-20261018`; właściciel sesji nadal nieustalony.
+Nie wnioskowano o bezczynności z nazwy ani starego wpisu rejestru.
+
+Stare klienty nie odczytają v5. Zezwolenie na migrację musi więc obejmować
+skoordynowane zakończenie pracy/drain obu grup i pozostawienie ich zatrzymanych
+do aktualizacji własnego kodu/obrazu. Nie wolno obiecywać automatycznego
+wznowienia starego pakietu po migracji. Nie kasuje to danych ani worktree.
+Dotychczasowa zgoda na master nie jest zgodą na przerwanie tych dwóch runtime.
+
+
+### Domknięcie źródłowej integracji i dodatkowa blokada adaptera
+
+Review integracji wykryło i poprawiło dwa błędy przed runtime: partial resume
+musi porównać już zapisany host-capacity-publication.json także bez compose.json;
+niepełny inspect bez poprawnej listy Mounts nie może oznaczać braku konsumentów.
+
+Bezpośredni odczyt `_rotate_configuration_generation` wykazał kolejną blokadę:
+zezwalał tylko na zmianę runtime generation. Budżety H0 i polityka H2 zostałyby
+odrzucone już po migracji. Native profile emituje teraz wyłącznie w jawnym trybie
+prywatny dowód zwalidowanych historycznych polityk. Python używa go przy
+kontrolowanej zmianie budżetów i CPU masks. Pozostałe identities/kinds, GPU UUID,
+ścieżki, concurrency, timeouty, previous-config SHA i istniejące owner/recovery
+bramki pozostają wymagane. Nie parsuje samodzielnie niezwalidowanego ledgera.
+Review adaptera zakończono po zawężeniu projekcji budżetu do CPU/RAM.
+Storage i GPU memory muszą pozostać dokładnie takie jak poprzednio.
+Nadal nie zastosowano migracji,
+nie przebudowano obrazu ani aplikacji i nie uruchomiono testów.
+
+
+### Checkpoint źródeł po końcowym review
+
+H2: review biblioteki i integracji zakończone. Poprawione ustalenia: związanie
+częściowego wznowienia z opublikowanym descriptor SHA, odrzucenie niepełnego
+inventory Mounts oraz zachowanie storage_bytes/gpu_memory_bytes przy zmianie
+CPU/RAM. Ponowny wąski review ostatniego hunku: PASS. Kontrola AST trzech
+plików Python i parsera dwóch plików Rust oraz scoped diff check: PASS.
+Manifest źródeł rozszerzono do 54 plików; identyfikuje bajty, bez kwalifikacji
+buildu/runtime. Nie uruchomiono testów ani kompilacji.
+
+Wdrożenie pozostaje zablokowane przez dwóch działających konsumentów wspólnego
+ledgera. Złożone pytanie o rozszerzenie zgody obejmuje ich skoordynowany
+drain/recovery i pozostawienie starych klientów zatrzymanych do aktualizacji.
+Bez odpowiedzi nie zatrzymuje się tych grup ani nie publikuje v5. Backend
+mastera nadal nie udostępnia API; materializacja, mesh i browser są NOT VERIFIED.

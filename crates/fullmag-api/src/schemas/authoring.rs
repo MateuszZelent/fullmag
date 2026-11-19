@@ -290,8 +290,7 @@ pub struct SceneObjectResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_parameter_fields: Vec<fullmag_authoring::SceneMaterialParameterAssignment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Object, nullable)]
-    pub absorbing_boundary: Option<Value>,
+    pub absorbing_boundary: Option<fullmag_ir::AbsorbingBoundaryIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -300,6 +299,10 @@ pub struct SceneObjectResource {
     pub locked: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Authored presentation metadata; it does not select physics modules.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schema(additional_properties)]
+    pub visualization_hint: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -310,6 +313,8 @@ pub struct SceneMaterialResource {
     pub properties: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<MaterialReferenceResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<fullmag_authoring::SceneMaterialSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -322,6 +327,18 @@ pub struct AntennaPortBranchResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AntennaPortNormalizationResource {
+    SourceCutRt0 {source_cut_ref: String, orientation: AntennaSourceCutOrientationResource},
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AntennaSourceCutOrientationResource {
+    MinusOutward,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AntennaPortModeResource {
     pub schema_version: String,
@@ -329,6 +346,8 @@ pub struct AntennaPortModeResource {
     pub source_object_id: String,
     pub current_transport_id: String,
     pub branches: Vec<AntennaPortBranchResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalization: Option<AntennaPortNormalizationResource>,
     #[serde(default = "default_antenna_normalization_current_a")]
     pub normalization_current_a: f64,
 }
@@ -533,6 +552,17 @@ pub struct AntennaSpectrumRequestResource {
     pub output_id: String,
 }
 
+/// Existing Brown-noise intent; seed is a lossless decimal u64 string on JSON transport.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ThermalNoiseResource {
+    /// Positive finite temperature in kelvin.
+    pub temperature: f64,
+    /// Positive u64 decimal without signs, whitespace or leading zeroes; absent uses entropy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SceneResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -607,6 +637,9 @@ pub struct SceneResource {
 pub struct FieldDriveListStateResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drives: Vec<RegionalFieldDriveResource>,
+    /// Hand-written mask antennas (`mask_field_drive.v1`, ADR 0081).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_drives: Vec<MaskFieldDriveResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -786,6 +819,196 @@ pub struct FieldDriveReplaceRequest {
 pub struct FieldDriveDeleteRequest {
     #[serde(default)]
     pub base_revision: Option<u64>,
+}
+
+/// Frame of a mask antenna's position and of its mask coordinates.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MaskFrameResource {
+    World,
+    Local,
+}
+
+/// Support shape of a mask antenna (`mask_field_drive.v1` has no CSG shapes).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MaskShapeResource {
+    Box {
+        size: [f64; 3],
+        center: [f64; 3],
+    },
+    Cylinder {
+        radius: f64,
+        height: f64,
+        center: [f64; 3],
+        axis: [f64; 3],
+    },
+    Sphere {
+        radius: f64,
+        center: [f64; 3],
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MaskFunctionParameterResource {
+    pub name: String,
+    pub value: f64,
+    /// Authored text of the value, for display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MaskFunctionLocalResource {
+    pub name: String,
+    /// `field_expr.v1` text.
+    pub expression: String,
+}
+
+/// A mask function of `x, y, z` (three outputs, tesla) or a time function of
+/// `t` (one output), as `field_expr.v1` equations.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MaskFunctionResource {
+    pub expression_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<MaskFunctionParameterResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locals: Vec<MaskFunctionLocalResource>,
+    pub outputs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MaskSourceResource {
+    Function {
+        function: MaskFunctionResource,
+    },
+    /// An array mask written by a loop: float32 3-vectors in tesla.
+    Sampled {
+        encoding: String,
+        data: String,
+        sha256: String,
+        size: [u32; 3],
+        cell_m: [f64; 3],
+        origin_m: [f64; 3],
+    },
+}
+
+/// The ready-antenna call (`fullmag.antennas`) that produced a term.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MaskLibraryCallResource {
+    pub function: String,
+    pub arguments: BTreeMap<String, f64>,
+    pub call_index: u32,
+    pub output_index: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MaskTermResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub mask: MaskSourceResource,
+    /// Absent: a static term.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<MaskFunctionResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<MaskLibraryCallResource>,
+}
+
+/// A hand-written mask antenna (`mask_field_drive.v1`, ADR 0081).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MaskFieldDriveResource {
+    pub schema_version: String,
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_field_drive_enabled")]
+    pub enabled: bool,
+    pub target: FieldTargetResource,
+    pub shape: MaskShapeResource,
+    pub position_m: [f64; 3],
+    pub frame: MaskFrameResource,
+    pub terms: Vec<MaskTermResource>,
+    pub time_origin: FieldTimeOriginResource,
+    pub activation: DriveActivationResource,
+}
+
+impl MaskFieldDriveResource {
+    pub fn into_ir(self) -> Result<fullmag_ir::MaskFieldDriveIR, serde_json::Error> {
+        serde_json::from_value(serde_json::to_value(self)?)
+    }
+
+    pub fn from_ir(value: fullmag_ir::MaskFieldDriveIR) -> Result<Self, serde_json::Error> {
+        serde_json::from_value(serde_json::to_value(value)?)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MaskFieldDriveListResource {
+    pub scene_revision: u64,
+    pub drives: Vec<MaskFieldDriveResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MaskFieldDriveCreateRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    pub drive: MaskFieldDriveResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MaskFieldDriveReplaceRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    pub drive: MaskFieldDriveResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadyAntennaArgumentResource {
+    pub name: String,
+    /// SI unit of the value.
+    pub unit: String,
+    pub doc: String,
+    /// Absent: the argument is required, or its default follows another argument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<f64>,
+}
+
+/// A ready antenna of `fullmag.antennas`: a function that returns mask terms.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadyAntennaResource {
+    /// Qualified name, the `function` of a term's origin.
+    pub function: String,
+    pub summary: String,
+    pub arguments: Vec<ReadyAntennaArgumentResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadyAntennaListResource {
+    pub antennas: Vec<ReadyAntennaResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadyAntennaTermsRequest {
+    pub function: String,
+    pub arguments: BTreeMap<String, f64>,
+}
+
+/// The terms one ready-antenna call returns, each with its origin.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ReadyAntennaTermsResource {
+    pub terms: Vec<MaskTermResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1285,28 +1508,7 @@ pub struct ObjectRegionReorderRequest {
     pub region_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct MaterialPropertiesResource {
-    #[serde(rename = "Ms")]
-    pub ms: Option<f64>,
-    #[serde(rename = "Aex")]
-    pub aex: Option<f64>,
-    pub alpha: f64,
-    #[serde(rename = "Dind")]
-    pub dind: Option<f64>,
-    #[serde(rename = "Dbulk")]
-    pub dbulk: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct MaterialReferenceResource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub citation: Option<String>,
-}
+pub use fullmag_workspace::material_catalog::{MaterialPropertiesResource, MaterialReferenceResource};
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MaterialResource {
@@ -1317,6 +1519,8 @@ pub struct MaterialResource {
     pub properties: MaterialPropertiesResource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<MaterialReferenceResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<fullmag_authoring::SceneMaterialSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1445,8 +1649,12 @@ pub struct ObjectPatchRequest {
     #[schema(value_type = Object, nullable)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Option<Object>, nullable)]
+    #[serde(
+        default,
+        deserialize_with = "super::common::deserialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schema(value_type = Option<fullmag_ir::AbsorbingBoundaryIR>, nullable)]
     pub absorbing_boundary: Option<Option<Value>>,
 }
 
@@ -1812,6 +2020,59 @@ pub struct ScenePatchRequest {
     pub merge_patch: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MagnetizationApplyScope {
+    pub object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MagnetizationApplyRequest {
+    pub operation_id: String,
+    pub scopes: Vec<MagnetizationApplyScope>,
+}
+
+pub use crate::study_execution_contract::PreparedInitialStateResource;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MagnetizationApplyStatus {
+    InitialStatePending,
+    InitialStateReady,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct MagnetizationApplyReceiptResource {
+    pub operation_id: String,
+    pub scene_revision: u64,
+    pub scopes: Vec<MagnetizationApplyScope>,
+    pub status: MagnetizationApplyStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepared_initial_state: Option<PreparedInitialStateResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MagnetizationApplyTarget {
+    Object {
+        object_id: String,
+        #[schema(value_type = Object, nullable)]
+        asset: Value,
+    },
+    Region {
+        object_id: String,
+        region_id: String,
+        #[serde(deserialize_with = "Deserialize::deserialize")]
+        #[schema(required, nullable)]
+        texture_override: Option<fullmag_authoring::SceneTextureOverride>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AuthoringTransactionRequest {
@@ -1829,6 +2090,16 @@ pub enum AuthoringTransactionRequest {
         base_revision: Option<u64>,
         #[schema(value_type = Object)]
         scene: Value,
+        /// A deliberate magnetization reset, including repeated assignments
+        /// whose authored texture value is unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        magnetization_apply: Option<MagnetizationApplyRequest>,
+    },
+    /// Save and explicitly reinitialize exactly one authored texture target.
+    ApplyMagnetization {
+        base_revision: u64,
+        operation_id: String,
+        target: MagnetizationApplyTarget,
     },
     MergePatch {
         #[serde(default)]
@@ -1895,6 +2166,10 @@ pub enum AuthoringTransactionRequest {
         properties: MaterialPropertiesResource,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         references: Vec<MaterialReferenceResource>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<fullmag_authoring::SceneMaterialSource>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assign_to_object_id: Option<String>,
     },
     PatchMaterial {
         #[serde(default)]
@@ -1987,6 +2262,8 @@ pub struct AuthoringTransactionResponse {
     pub transaction_kind: String,
     pub scene_revision: u64,
     pub committed_scene: SceneResource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_apply: Option<MagnetizationApplyReceiptResource>,
 }
 
 #[cfg(test)]
@@ -2031,6 +2308,29 @@ mod stage_autosave_tests {
             .validate()
             .unwrap_err()
             .contains("scalar tables only"));
+    }
+
+    #[test]
+    fn scene_resource_preserves_presentation_hints_without_magnetic_assignments() {
+        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version":"scene.v2", "objects":[{
+                "id":"conductor", "name":"Renamed source", "role":"antenna", "material_ref":"",
+                "geometry":{"geometry_kind":"Box","geometry_params":{"size":[1e-6,1e-6,1e-6]}},
+                "visualization_hint":{"display":"shaded_frame","role":"antenna"}
+            }]
+        })).unwrap();
+        let original = scene.objects[0].clone();
+        let resource = SceneResource::from_scene_document(scene).unwrap();
+        assert_eq!(resource.objects[0].visualization_hint, original.visualization_hint);
+        assert_eq!(resource.objects[0].role.as_deref(), Some("antenna"));
+        assert!(resource.objects[0].magnetization_ref.is_none());
+        assert!(resource.objects[0].physics_stack.is_empty());
+        assert!(resource.objects[0].region_overrides.is_empty());
+        let serialized = serde_json::to_value(resource).unwrap();
+        assert_eq!(serialized["objects"][0]["visualization_hint"],
+            serde_json::json!({"display":"shaded_frame","role":"antenna"}));
+        let without_hint: SceneObjectResource = serde_json::from_value(serde_json::json!({"id":"body"})).unwrap();
+        assert!(!serde_json::to_value(without_hint).unwrap().as_object().unwrap().contains_key("visualization_hint"));
     }
 
     #[test]

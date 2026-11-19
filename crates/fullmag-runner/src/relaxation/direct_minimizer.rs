@@ -155,17 +155,7 @@ pub(crate) fn energy_metric_dot(
     ms_apm: &[f64],
     volumes_m3: &[f64],
 ) -> f64 {
-    assert_eq!(a.len(), b.len());
-    assert_eq!(a.len(), ms_apm.len());
-    assert_eq!(a.len(), volumes_m3.len());
-    a.iter()
-        .zip(b)
-        .zip(ms_apm)
-        .zip(volumes_m3)
-        .map(|(((ai, bi), ms), volume)| {
-            MU0 * ms * volume * crate::relaxation::vector_math::dot_vec3(*ai, *bi)
-        })
-        .sum()
+    energy_metric_dot_free(a, b, ms_apm, volumes_m3, None)
 }
 
 pub(crate) fn energy_metric_dot_free(
@@ -178,16 +168,20 @@ pub(crate) fn energy_metric_dot_free(
     assert_eq!(a.len(), b.len());
     assert_eq!(a.len(), ms_apm.len());
     assert_eq!(a.len(), volumes_m3.len());
-    a.iter()
-        .zip(b)
-        .zip(ms_apm)
-        .zip(volumes_m3)
-        .enumerate()
-        .filter(|(index, _)| frozen.is_none_or(|state| !state.is_frozen(*index)))
-        .map(|(_, (((ai, bi), ms), volume))| {
-            MU0 * ms * volume * crate::relaxation::vector_math::dot_vec3(*ai, *bi)
-        })
-        .sum()
+    let mut result = 0.0;
+    for index in 0..a.len() {
+        // Inactive cells are outside the metric. In particular, tangent
+        // projection at their zero magnetization is undefined: multiplying
+        // its NaN by a zero weight would still poison the global BB secant.
+        if ms_apm[index] == 0.0 || volumes_m3[index] == 0.0
+            || frozen.is_some_and(|state| state.is_frozen(index))
+        {
+            continue;
+        }
+        result += MU0 * ms_apm[index] * volumes_m3[index]
+            * crate::relaxation::vector_math::dot_vec3(a[index], b[index]);
+    }
+    result
 }
 
 /// Return the first-order energy increment represented by the stored trial chord.
@@ -659,6 +653,14 @@ pub(crate) fn projected_gradient_step_size_update(
     let s_dot_y = energy_metric_dot(&s, &y, ms_apm, volumes_m3);
     let y_dot_y = energy_metric_dot(&y, &y, ms_apm, volumes_m3);
 
+    projected_gradient_step_size_from_products(s_dot_s, s_dot_y, y_dot_y, use_bb1, reset_consecutive)
+}
+
+/// Shared scalar policy for CPU vectors and native device reductions.
+pub(crate) fn projected_gradient_step_size_from_products(
+    s_dot_s: f64, s_dot_y: f64, y_dot_y: f64,
+    use_bb1: bool, reset_consecutive: u64,
+) -> ProjectedGradientStepSizeUpdate {
     let (step_size, bb_ok) = if use_bb1 {
         if s_dot_y.is_finite() && s_dot_y > 0.0 {
             (
@@ -759,8 +761,9 @@ pub(crate) fn apply_direct_minimizer_step_metrics(
     magnetization: &[[f64; 3]],
     h_eff: &[[f64; 3]],
     active_mask: Option<&[bool]>,
+    ms_field: Option<&[f64]>,
 ) -> f64 {
-    apply_average_m_to_step_stats_with_active_mask(stats, magnetization, active_mask);
+    apply_average_m_to_step_stats_with_active_mask(stats, magnetization, active_mask, ms_field);
     if let Some(values) = stats.per_object_scalars.get_mut("free") {
         values.insert("mx".to_string(), stats.mx);
         values.insert("my".to_string(), stats.my);
@@ -789,6 +792,31 @@ pub(crate) fn apply_direct_minimizer_step_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bb_update_ignores_zero_magnetization_cells_with_zero_metric_weight() {
+        let previous_m = vec![[3.0_f64.sqrt() / 2.0, 0.5, 0.0]];
+        let previous_h = vec![[1e6 * previous_m[0][0], 0.0, 0.0]];
+        let previous_g = tangent_gradient_from_field(&previous_m, &previous_h);
+        let trial_m = projected_gradient_trial_magnetization(&previous_m, &previous_g, 1e-7, None).unwrap();
+        let trial_h = vec![[1e6 * trial_m[0][0], 0.0, 0.0]];
+        let trial_g = tangent_gradient_from_field(&trial_m, &trial_h);
+        for use_bb1 in [true, false] {
+            let active = projected_gradient_step_size_update(&previous_m, &trial_m, &previous_g, &trial_g,
+                &[580000.0], &[1e-27], use_bb1, 0);
+            assert_eq!(active.reset_consecutive, 0);
+            let mut padded_previous = previous_m.clone(); padded_previous.push([0.0; 3]);
+            let mut padded_trial = trial_m.clone(); padded_trial.push([0.0; 3]);
+            let mut padded_g = previous_g.clone(); padded_g.push([0.0; 3]);
+            let mut padded_new_g = trial_g.clone(); padded_new_g.push([0.0; 3]);
+            let padded = projected_gradient_step_size_update(&padded_previous, &padded_trial, &padded_g, &padded_new_g,
+                &[580000.0, 1000000.0], &[1e-27, 0.0], use_bb1, 0);
+            assert_eq!(padded.reset_consecutive, 0);
+            assert_eq!(padded.step_size, active.step_size);
+            assert_eq!(padded.use_bb1, active.use_bb1);
+        }
+    }
+
     use fullmag_ir::{
         RelaxStopIR, RelaxationControlIR, ResolvedFrozenSpinsPlanIR,
         SelectionAuthoredFingerprintIR, SelectionCertificateIR,
@@ -924,7 +952,7 @@ mod tests {
         let magnetization = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
         let h_eff = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
 
-        apply_direct_minimizer_step_metrics(&mut stats, 1, 0.25, &magnetization, &h_eff, None);
+        apply_direct_minimizer_step_metrics(&mut stats, 1, 0.25, &magnetization, &h_eff, None, None);
 
         assert_eq!([stats.mx, stats.my, stats.mz], [0.5, 0.0, 0.5]);
         assert_eq!(
@@ -951,6 +979,7 @@ mod tests {
             &magnetization,
             &h_eff,
             Some(&active_mask),
+            None,
         );
 
         assert_eq!([stats.mx, stats.my, stats.mz], [0.5, 0.5, 0.0]);
@@ -1605,6 +1634,7 @@ mod tests {
             3e-6,
             &[[1.0, 0.0, 0.0]],
             &[[0.0, 4.0, 3.0]],
+            None,
             None,
         );
 

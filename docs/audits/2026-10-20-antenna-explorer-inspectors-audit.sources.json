@@ -1,0 +1,2438 @@
+{
+  "schema_version": "fullmag.internal_source_audit.v1",
+  "date": "2026-10-20",
+  "document": "2026-10-20-antenna-explorer-inspectors-audit.md",
+  "document_sha256": "4cbc0e7dbf46e1491a8f9489d02deb05373511f38a10f88f14317e9e438a84db",
+  "worktree": "D:/git/fullmag/worktrees/antenna-transport-e2e-20261011",
+  "head": "a63b50ca0c0c4b457f440b0ac276b483d282c555",
+  "origin_master": "a63b50ca0c0c4b457f440b0ac276b483d282c555",
+  "read_only_audit": true,
+  "runtime_qualified": false,
+  "source_groups": [
+    {
+      "id": "S01",
+      "entries": [
+        {
+          "path": "crates/fullmag-authoring/src/scene.rs",
+          "symbols": [
+            {
+              "symbol": "SceneObject",
+              "navigation_line": 26
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S02",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/explorer/builders/sceneModelTreeAdapter.ts",
+          "symbols": [
+            {
+              "symbol": "sceneObjectRole",
+              "navigation_line": 431
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S03",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/explorer/builders/objectExplorerNodes.ts",
+          "symbols": [
+            {
+              "symbol": "buildObjectExplorerNode",
+              "navigation_line": 65
+            },
+            {
+              "symbol": "antennaCompositionNodes",
+              "navigation_line": 135
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/explorer/builders/explorerNodeContract.ts",
+          "symbols": [
+            {
+              "symbol": "visualizationDebugNode",
+              "navigation_line": 81
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S04",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/explorer/explorerSelection.ts",
+          "symbols": [
+            {
+              "symbol": "selectionRefFromNode",
+              "navigation_line": 153
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/kernel/selection/selectionTypes.ts",
+          "symbols": [
+            {
+              "symbol": "SelectionRef",
+              "navigation_line": 281
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S05",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx",
+          "symbols": [
+            {
+              "symbol": "INSPECTOR_ROUTE_CONTRIBUTIONS",
+              "navigation_line": 644
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S06",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/explorer/builders/physicsGraphTree.ts",
+          "symbols": [
+            {
+              "symbol": "buildPhysicsGraphObjectNode",
+              "navigation_line": 135
+            },
+            {
+              "symbol": "buildModuleNode",
+              "navigation_line": 361
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/PhysicsGraphModuleInspectorPanel.tsx",
+          "symbols": [
+            {
+              "symbol": "PhysicsGraphModuleInspectorPanel",
+              "navigation_line": 70
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/ModelTreeOverviewInspectorPanels.tsx",
+          "symbols": [
+            {
+              "symbol": "ObjectPhysicsScopeInspectorPanel",
+              "navigation_line": 227
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/PhysicsInspectorOverview.tsx",
+          "symbols": [
+            {
+              "symbol": "PhysicsInspectorOverview",
+              "navigation_line": 136
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S07",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/ObjectGeneralPanel.tsx",
+          "symbols": [
+            {
+              "symbol": "ObjectGeneralPanel",
+              "navigation_line": 195
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/objectGeneralPanelModel.ts",
+          "symbols": [
+            {
+              "symbol": "resolveObjectGeneralPanelModel",
+              "navigation_line": 81
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/shared/domain/physics/objectMagneticModel.ts",
+          "symbols": [
+            {
+              "symbol": "hasEmptyObjectMagneticModel",
+              "navigation_line": 6
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/kernel/visualization/primitiveSurfaceColor.ts",
+          "symbols": [
+            {
+              "symbol": "primitiveMonoColorForRole",
+              "navigation_line": 69
+            },
+            {
+              "symbol": "resolvePrimitiveSurfaceColor",
+              "navigation_line": 79
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S08",
+      "entries": [
+        {
+          "path": "apps/control-room/src/kernel/visualization/ObjectVisualizationController.ts",
+          "symbols": [
+            {
+              "symbol": "DEFAULT_OBJECT_VISUALIZATION",
+              "navigation_line": 376
+            },
+            {
+              "symbol": "resolveTargetVisualization",
+              "navigation_line": 1113
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S09",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/ObjectVisualizationEntryPanel.tsx",
+          "symbols": [
+            {
+              "symbol": "ObjectVisualizationPanel",
+              "navigation_line": 5
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaVisualizationObjectModel.ts",
+          "symbols": [
+            {
+              "symbol": "isAntennaVisualizationObject",
+              "navigation_line": 3
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaArtifactVisualization.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaArtifactVisualization",
+              "navigation_line": 26
+            },
+            {
+              "symbol": "useAntennaInspectionSource",
+              "navigation_line": 27
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/ObjectVisualizationPanel.tsx",
+          "symbols": [
+            {
+              "symbol": "VisualizationTargetInspectorPanel",
+              "navigation_line": 1193
+            },
+            {
+              "symbol": "useObjectVisualizationPanelState",
+              "navigation_line": 260
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S10",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/ObjectVisualizationPanelModel.ts",
+          "symbols": [
+            {
+              "symbol": "visualizationQuantityItems",
+              "navigation_line": 2271
+            },
+            {
+              "symbol": "SURFACE_COLOR_SOURCE_ITEMS",
+              "navigation_line": 346
+            },
+            {
+              "symbol": "SCALAR_COLOR_PALETTE_ITEMS",
+              "navigation_line": 359
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx",
+          "symbols": [
+            {
+              "symbol": "VisualizationQuantitySection",
+              "navigation_line": 669
+            },
+            {
+              "symbol": "VisualizationSurfaceColoringSection",
+              "navigation_line": 292
+            },
+            {
+              "symbol": "VisualizationVectorsSection",
+              "navigation_line": 812
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/visualization/presentationSemantics.ts",
+          "symbols": [
+            {
+              "symbol": "SHARED_VECTOR_COLOR_MODE_ITEMS",
+              "navigation_line": 35
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/visualization/PlanarVisualizationSection.tsx",
+          "symbols": [
+            {
+              "symbol": "PlanarVisualizationSection",
+              "navigation_line": 106
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S11",
+      "entries": [
+        {
+          "path": "crates/fullmag-api/src/schemas/visualization_state.rs",
+          "symbols": [
+            {
+              "symbol": "default_planar_visualization_state",
+              "navigation_line": 30
+            }
+          ]
+        },
+        {
+          "path": "crates/fullmag-api/src/router_v2/handlers/visualization/display.rs",
+          "symbols": [
+            {
+              "symbol": "default_slice_visualization_for_presentation",
+              "navigation_line": 1156
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S12",
+      "entries": [
+        {
+          "path": "crates/fullmag-api/src/router_v2/handlers/data/quantities.rs",
+          "symbols": [
+            {
+              "symbol": "get_quantities_catalog",
+              "navigation_line": 28
+            },
+            {
+              "symbol": "annotate_runtime_quantity_state",
+              "navigation_line": 50
+            }
+          ]
+        },
+        {
+          "path": "crates/fullmag-api/src/router_v2/handlers/data/inspection_field_provider.rs",
+          "symbols": [
+            {
+              "symbol": "resolve",
+              "navigation_line": 232
+            },
+            {
+              "symbol": "require_binary_pins",
+              "navigation_line": 300
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/kernel/api/quantityIds.ts",
+          "symbols": [
+            {
+              "symbol": "isScalarSpatialQuantityId",
+              "navigation_line": 298
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/kernel/resources/antennaResources.ts",
+          "symbols": [
+            {
+              "symbol": "useAntennaFieldSolutionResource",
+              "navigation_line": 156
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/kernel/api/apiPaths.ts",
+          "symbols": [
+            {
+              "symbol": "antenna",
+              "navigation_line": 360
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/kernel/api/ControlRoomApi.ts",
+          "symbols": [
+            {
+              "symbol": "commitTransaction",
+              "navigation_line": 2647
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S13",
+      "entries": [
+        {
+          "path": "apps/control-room/src/kernel/object-extensions/objectExtensionRegistry.ts",
+          "symbols": [
+            {
+              "symbol": "OBJECT_EXTENSION_REGISTRY",
+              "navigation_line": 13
+            },
+            {
+              "symbol": "isCommittedObjectRoot",
+              "navigation_line": 5
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/kernel/object-extensions/ObjectExtensionsSectionModel.ts",
+          "symbols": [
+            {
+              "symbol": "resolveObjectExtensionsSectionModel",
+              "navigation_line": 42
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/extensions/ObjectExtensionsSection.tsx",
+          "symbols": [
+            {
+              "symbol": "ObjectExtensionsSection",
+              "navigation_line": 24
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S14",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaGeometryPanel.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaGeometryPanel",
+              "navigation_line": 39
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/MicrostripGeometryEditor.tsx",
+          "symbols": [
+            {
+              "symbol": "MicrostripGeometryEditor",
+              "navigation_line": 57
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/MicrostripGeometryEditorModel.ts",
+          "symbols": [
+            {
+              "symbol": "antennaLayoutDimensionFields",
+              "navigation_line": 85
+            },
+            {
+              "symbol": "MICROSTRIP_LOOP_FIELDS",
+              "navigation_line": 187
+            },
+            {
+              "symbol": "microstripCircuitDraft",
+              "navigation_line": 203
+            },
+            {
+              "symbol": "buildMicrostripCircuitPatch",
+              "navigation_line": 231
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaPlacementEditor.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaPlacementEditor",
+              "navigation_line": 36
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaPlacementModel.ts",
+          "symbols": [
+            {
+              "symbol": "antennaPlacementTargets",
+              "navigation_line": 17
+            },
+            {
+              "symbol": "resolveAntennaPlacement",
+              "navigation_line": 22
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S15",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionSummaryPanel.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaCompositionSummaryPanel",
+              "navigation_line": 25
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/explorer/antennaNavigation.ts",
+          "symbols": [
+            {
+              "symbol": "antennaNavigationLinks",
+              "navigation_line": 22
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S16",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/AntennaObjectPanel.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaObjectPanel",
+              "navigation_line": 89
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/AntennaObjectPanelModel.ts",
+          "symbols": [
+            {
+              "symbol": "antennaWaveformDefaults",
+              "navigation_line": 28
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S17",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaTerminalsPanel.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaTerminalsPanel",
+              "navigation_line": 32
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaTerminalSourceModel.ts",
+          "symbols": [
+            {
+              "symbol": "antennaTerminalSourceState",
+              "navigation_line": 27
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaTerminalSourceDetails.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaTerminalSourceDetails",
+              "navigation_line": 12
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaTerminalPreparationModel.ts",
+          "symbols": [
+            {
+              "symbol": "buildAntennaTerminalPreparationTransaction",
+              "navigation_line": 137
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S18",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionPanels.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaConductorPanel",
+              "navigation_line": 989
+            },
+            {
+              "symbol": "AntennaCompositionPanel",
+              "navigation_line": 862
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaConductorAuthoring.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaConductorAuthoring",
+              "navigation_line": 12
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaConductorMaterialEditor.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaConductorMaterialEditor",
+              "navigation_line": 20
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaConductorMaterialModel.ts",
+          "symbols": [
+            {
+              "symbol": "buildConductorMaterialTransaction",
+              "navigation_line": 49
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaPortComposer.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaPortComposer",
+              "navigation_line": 22
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaPortComposerModel.ts",
+          "symbols": [
+            {
+              "symbol": "buildAntennaPortCreationTransaction",
+              "navigation_line": 63
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S19",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaPortEditor.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaPortEditor",
+              "navigation_line": 32
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaPortEditorModel.ts",
+          "symbols": [
+            {
+              "symbol": "committedAntennaPortScene",
+              "navigation_line": 93
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaResourceEditor.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaResourceEditor",
+              "navigation_line": 37
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S20",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionPanels.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaSolutionPanel",
+              "navigation_line": 997
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaSolveTargetsEditor.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaSolveTargetsEditor",
+              "navigation_line": 33
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaStudyStageComposer.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaStudyStageComposer",
+              "navigation_line": 19
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaFieldSolveAuthoring.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaFieldSolveAuthoring",
+              "navigation_line": 16
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S21",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaProjectionDriveComposer.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaProjectionDriveComposer",
+              "navigation_line": 34
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaResourceEditorModel.ts",
+          "symbols": [
+            {
+              "symbol": "buildAntennaResourceTransaction",
+              "navigation_line": 59
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S22",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/SolvedAntennaDriveEditor.tsx",
+          "symbols": [
+            {
+              "symbol": "SolvedAntennaDriveEditor",
+              "navigation_line": 48
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/SolvedAntennaDriveEditorModel.ts",
+          "symbols": [
+            {
+              "symbol": "waveformDefaults",
+              "navigation_line": 54
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaPiecewisePointsEditor.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaPiecewisePointsEditor",
+              "navigation_line": 9
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaDrivePreview.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaDrivePreview",
+              "navigation_line": 12
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S23",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaSpectrumComposer.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaSpectrumComposer",
+              "navigation_line": 30
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaSamplingPlaneFields.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaSamplingPlaneFields",
+              "navigation_line": 23
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaSourceSpectrumPayloadView.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaSourceSpectrumPayloadView",
+              "navigation_line": 79
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaSpectrumExport.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaSpectrumExport",
+              "navigation_line": 22
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S24",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionPanels.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaCompositionPanel",
+              "navigation_line": 862
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionRuntime.ts",
+          "symbols": [
+            {
+              "symbol": "antennaFieldSolutionIdentityStatus",
+              "navigation_line": 63
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaFieldBasisPreview.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaFieldBasisPreview",
+              "navigation_line": 25
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaExternalLeadInspectionPanel.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaExternalLeadInspectionPanel",
+              "navigation_line": 37
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S25",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx",
+          "symbols": [
+            {
+              "symbol": "ObjectMeshPolicyPanel",
+              "navigation_line": 880
+            },
+            {
+              "symbol": "MESH_SIZE_CALIBRATIONS",
+              "navigation_line": 401
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts",
+          "symbols": [
+            {
+              "symbol": "draftFromObjectMeshPolicyResource",
+              "navigation_line": 277
+            },
+            {
+              "symbol": "buildObjectMeshPolicyReplaceRequest",
+              "navigation_line": 223
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/fdmMeshInspectorModel.ts",
+          "symbols": [
+            {
+              "symbol": "resolveMeshInspectorLane",
+              "navigation_line": 13
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/mesh-details/MeshBuildHistorySection.tsx",
+          "symbols": [
+            {
+              "symbol": "MeshBuildHistorySection",
+              "navigation_line": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S26",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaVisualizationPanel.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaVisualizationView",
+              "navigation_line": 39
+            },
+            {
+              "symbol": "AntennaPublishedVisualization",
+              "navigation_line": 67
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaVisualizationQuantity.ts",
+          "symbols": [
+            {
+              "symbol": "ANTENNA_RAW_QUANTITIES",
+              "navigation_line": 4
+            },
+            {
+              "symbol": "ANTENNA_CLOSED_LOOP_QUANTITIES",
+              "navigation_line": 10
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaColorRangeControl.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaColorRangeControl",
+              "navigation_line": 8
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaClippingControls.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaClippingControls",
+              "navigation_line": 17
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaCameraControls.tsx",
+          "symbols": [
+            {
+              "symbol": "AntennaCameraControls",
+              "navigation_line": 15
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaFieldBasisPreviewModel.ts",
+          "symbols": [
+            {
+              "symbol": "ANTENNA_BASIS_QUANTITIES",
+              "navigation_line": 18
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S27",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/visualization-debug/VisualizationDebugPanel.tsx",
+          "symbols": [
+            {
+              "symbol": "VisualizationDebugPanel",
+              "navigation_line": 50
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/visualization-debug/useVisualizationDebugPanelModel.ts",
+          "symbols": [
+            {
+              "symbol": "VisualizationDebugPanelModelAdapter",
+              "navigation_line": 160
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/visualization-debug/visualizationDebugExport.ts",
+          "symbols": [
+            {
+              "symbol": "buildVisualizationDebugExport",
+              "navigation_line": 88
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S28",
+      "entries": [
+        {
+          "path": "apps/control-room/src/kernel/selection/manifestRenderableCarriers.ts",
+          "symbols": [
+            {
+              "symbol": "diagnosticOnly",
+              "navigation_line": 42
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S29",
+      "entries": [
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspector.tsx",
+          "symbols": [
+            {
+              "symbol": "CurrentFields",
+              "navigation_line": 489
+            },
+            {
+              "symbol": "StructuredCurrentClosureFields",
+              "navigation_line": 688
+            },
+            {
+              "symbol": "CurrentTransportInspectorPanel",
+              "navigation_line": 580
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/TransportCollectionFields.tsx",
+          "symbols": [
+            {
+              "symbol": "TransportCollectionFields",
+              "navigation_line": 11
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/inspector/panels/TransportCollectionFieldsModel.ts",
+          "symbols": [
+            {
+              "symbol": "chargeMaterialFields",
+              "navigation_line": 35
+            },
+            {
+              "symbol": "chargeBoundaryKinds",
+              "navigation_line": 37
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S30",
+      "entries": [
+        {
+          "path": "crates/fullmag-api/src/quantities.rs",
+          "symbols": [
+            {
+              "symbol": "build_quantities",
+              "navigation_line": 9
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S31",
+      "entries": [
+        {
+          "path": "crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs",
+          "symbols": [
+            {
+              "symbol": "compute_fields_materialization_requirements",
+              "navigation_line": 433
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S32",
+      "entries": [
+        {
+          "path": "apps/control-room/src/shared/domain/geometry/authoredMicrostripGeometry.ts",
+          "symbols": [
+            {
+              "symbol": "buildAuthoredMicrostripGeometry",
+              "navigation_line": 36
+            },
+            {
+              "symbol": "buildAuthoredCpwGeometry",
+              "navigation_line": 41
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/viewport-3d/layers/PrimitiveObjectLayer.tsx",
+          "symbols": [
+            {
+              "symbol": "PrimitiveObjectLayer",
+              "navigation_line": 48
+            }
+          ]
+        },
+        {
+          "path": "apps/control-room/src/modules/viewport-3d/layers/PrimitiveObjectLayerModel.ts",
+          "symbols": [
+            {
+              "symbol": "createPrimitiveObjectGeometry",
+              "navigation_line": 56
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "source_files": [
+    {
+      "group": "S01",
+      "path": "crates/fullmag-authoring/src/scene.rs",
+      "sha256": "c0acc3ecb03836e13d9182d4bfdb671b06784b1c05b73c28cbb8f6b75cf7929a",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "SceneObject",
+          "navigation_line": 26
+        }
+      ]
+    },
+    {
+      "group": "S02",
+      "path": "apps/control-room/src/modules/explorer/builders/sceneModelTreeAdapter.ts",
+      "sha256": "4366e8f880f4a2dcc3eaacc1be2477acc0f2138b10967069917bb8926e8e7f88",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "sceneObjectRole",
+          "navigation_line": 431
+        }
+      ]
+    },
+    {
+      "group": "S03",
+      "path": "apps/control-room/src/modules/explorer/builders/objectExplorerNodes.ts",
+      "sha256": "b89e8b289539c919ffb397bd373a84369497b67b9395cc47137efd2b8b10e8c2",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "buildObjectExplorerNode",
+          "navigation_line": 65
+        },
+        {
+          "symbol": "antennaCompositionNodes",
+          "navigation_line": 135
+        }
+      ]
+    },
+    {
+      "group": "S03",
+      "path": "apps/control-room/src/modules/explorer/builders/explorerNodeContract.ts",
+      "sha256": "5b9810662d5beb1f0e373e48a5a75e2b0bc146d3a01c0aa5dab7d5d8ac0935ca",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "visualizationDebugNode",
+          "navigation_line": 81
+        }
+      ]
+    },
+    {
+      "group": "S04",
+      "path": "apps/control-room/src/modules/explorer/explorerSelection.ts",
+      "sha256": "34a454513e310faceba49c29acfbfefe1aca70bd9eb87a72efdebd939c5d7c62",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "selectionRefFromNode",
+          "navigation_line": 153
+        }
+      ]
+    },
+    {
+      "group": "S04",
+      "path": "apps/control-room/src/kernel/selection/selectionTypes.ts",
+      "sha256": "13fb7e1e21dfe4090346af4e9d38cdcbc094d42388eae7afa4947dfacdb72c99",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "SelectionRef",
+          "navigation_line": 281
+        }
+      ]
+    },
+    {
+      "group": "S05",
+      "path": "apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx",
+      "sha256": "af48c36662d04c4e5a8faa85e80ebca95a698f88964c7f5dd7dbed20f9632aac",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "INSPECTOR_ROUTE_CONTRIBUTIONS",
+          "navigation_line": 644
+        }
+      ]
+    },
+    {
+      "group": "S06",
+      "path": "apps/control-room/src/modules/explorer/builders/physicsGraphTree.ts",
+      "sha256": "1e18e2ca3d36dd545964a7d4243cfc32893adf98c013451fd36e4a66e719bc9e",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "buildPhysicsGraphObjectNode",
+          "navigation_line": 135
+        },
+        {
+          "symbol": "buildModuleNode",
+          "navigation_line": 361
+        }
+      ]
+    },
+    {
+      "group": "S06",
+      "path": "apps/control-room/src/modules/inspector/panels/PhysicsGraphModuleInspectorPanel.tsx",
+      "sha256": "e1535be7ec81adc859d42eba04835f05ff462ffdef5e4341109f1cbc0700b7ef",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "PhysicsGraphModuleInspectorPanel",
+          "navigation_line": 70
+        }
+      ]
+    },
+    {
+      "group": "S06",
+      "path": "apps/control-room/src/modules/inspector/panels/ModelTreeOverviewInspectorPanels.tsx",
+      "sha256": "062d95d4ab1513d8d524c94ee4f7d47a3a0387097940e9237aa0d8616e74ed5b",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "ObjectPhysicsScopeInspectorPanel",
+          "navigation_line": 227
+        }
+      ]
+    },
+    {
+      "group": "S06",
+      "path": "apps/control-room/src/modules/inspector/panels/PhysicsInspectorOverview.tsx",
+      "sha256": "0d584aa00e9b94f54b891802022f8288e8a2e992f192ac895ca3ba33c6ba782c",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "PhysicsInspectorOverview",
+          "navigation_line": 136
+        }
+      ]
+    },
+    {
+      "group": "S07",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectGeneralPanel.tsx",
+      "sha256": "5b87fad7ad48cbd4f26b875a03a7ceaaf468b0d50541805e6ec94df309e95a02",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "ObjectGeneralPanel",
+          "navigation_line": 195
+        }
+      ]
+    },
+    {
+      "group": "S07",
+      "path": "apps/control-room/src/modules/inspector/panels/objectGeneralPanelModel.ts",
+      "sha256": "bccef2cbc5da2ebbf2ec7f6e1f14db9c5ec5966c113fcb9f114615505e8c6993",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "resolveObjectGeneralPanelModel",
+          "navigation_line": 81
+        }
+      ]
+    },
+    {
+      "group": "S07",
+      "path": "apps/control-room/src/shared/domain/physics/objectMagneticModel.ts",
+      "sha256": "18bc50dfb0138463d4a83130aaab699e39c5a2a450a45638f15c6e6c6164f374",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "hasEmptyObjectMagneticModel",
+          "navigation_line": 6
+        }
+      ]
+    },
+    {
+      "group": "S07",
+      "path": "apps/control-room/src/kernel/visualization/primitiveSurfaceColor.ts",
+      "sha256": "b76b04a252e642c19fd192cf95b439e387cb603b9f0566080e247cd5554f5ccf",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "primitiveMonoColorForRole",
+          "navigation_line": 69
+        },
+        {
+          "symbol": "resolvePrimitiveSurfaceColor",
+          "navigation_line": 79
+        }
+      ]
+    },
+    {
+      "group": "S08",
+      "path": "apps/control-room/src/kernel/visualization/ObjectVisualizationController.ts",
+      "sha256": "0f03441d586e760d4f13837e4c51781ad080cc342e16aa868ac2d7fb7a9cdf24",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "DEFAULT_OBJECT_VISUALIZATION",
+          "navigation_line": 376
+        },
+        {
+          "symbol": "resolveTargetVisualization",
+          "navigation_line": 1113
+        }
+      ]
+    },
+    {
+      "group": "S09",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectVisualizationEntryPanel.tsx",
+      "sha256": "1f49a323ceb949281b06797aae154bb19f89aac898bb0a41ca0ef84cfbbb530a",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "ObjectVisualizationPanel",
+          "navigation_line": 5
+        }
+      ]
+    },
+    {
+      "group": "S09",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaVisualizationObjectModel.ts",
+      "sha256": "e298c3ed59cc23e19296dd5136080cac205a5b7ed228c7d0b797f03bb60ccf45",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "isAntennaVisualizationObject",
+          "navigation_line": 3
+        }
+      ]
+    },
+    {
+      "group": "S09",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaArtifactVisualization.tsx",
+      "sha256": "ad504c70f6c6bd2a3cd9824305d908b9f9265943755abb72506cb890d20fafff",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaArtifactVisualization",
+          "navigation_line": 26
+        },
+        {
+          "symbol": "useAntennaInspectionSource",
+          "navigation_line": 27
+        }
+      ]
+    },
+    {
+      "group": "S09",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectVisualizationPanel.tsx",
+      "sha256": "de7856359e8a4650a07244a07d2d9dca2bca7050e026412af7613f47f02b489c",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "VisualizationTargetInspectorPanel",
+          "navigation_line": 1193
+        },
+        {
+          "symbol": "useObjectVisualizationPanelState",
+          "navigation_line": 260
+        }
+      ]
+    },
+    {
+      "group": "S10",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectVisualizationPanelModel.ts",
+      "sha256": "6f9b7bfdcc20a9b80c8567f485e39c72f941fc158e07a4c41e02fe248c6d5128",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "visualizationQuantityItems",
+          "navigation_line": 2271
+        },
+        {
+          "symbol": "SURFACE_COLOR_SOURCE_ITEMS",
+          "navigation_line": 346
+        },
+        {
+          "symbol": "SCALAR_COLOR_PALETTE_ITEMS",
+          "navigation_line": 359
+        }
+      ]
+    },
+    {
+      "group": "S10",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx",
+      "sha256": "54e27ed4c23f43c442040f914a9883cdacb74f8c0831a715bf979db3492a9465",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "VisualizationQuantitySection",
+          "navigation_line": 669
+        },
+        {
+          "symbol": "VisualizationSurfaceColoringSection",
+          "navigation_line": 292
+        },
+        {
+          "symbol": "VisualizationVectorsSection",
+          "navigation_line": 812
+        }
+      ]
+    },
+    {
+      "group": "S10",
+      "path": "apps/control-room/src/modules/inspector/visualization/presentationSemantics.ts",
+      "sha256": "ba38b511dd846e1d30969d1e6a50a89b3816f74adfca06890fe9f09330d1fefc",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "SHARED_VECTOR_COLOR_MODE_ITEMS",
+          "navigation_line": 35
+        }
+      ]
+    },
+    {
+      "group": "S10",
+      "path": "apps/control-room/src/modules/inspector/visualization/PlanarVisualizationSection.tsx",
+      "sha256": "223ce520562f27d814344ecbc151f75836eaa6ee4f66fd20af143f74c04deb50",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "PlanarVisualizationSection",
+          "navigation_line": 106
+        }
+      ]
+    },
+    {
+      "group": "S11",
+      "path": "crates/fullmag-api/src/schemas/visualization_state.rs",
+      "sha256": "6f7bc8f5f00591f0ac371f57e14c29ccae94145c68f4f8e4e7651034898f87eb",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "default_planar_visualization_state",
+          "navigation_line": 30
+        }
+      ]
+    },
+    {
+      "group": "S11",
+      "path": "crates/fullmag-api/src/router_v2/handlers/visualization/display.rs",
+      "sha256": "a134452426717784635add1aa6accb70464f7e11958366d94078a132277c158e",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "default_slice_visualization_for_presentation",
+          "navigation_line": 1156
+        }
+      ]
+    },
+    {
+      "group": "S12",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/quantities.rs",
+      "sha256": "45ee54861bfde31b8af9f5d188e214a263160635e0693b6e286f383f9be45036",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "get_quantities_catalog",
+          "navigation_line": 28
+        },
+        {
+          "symbol": "annotate_runtime_quantity_state",
+          "navigation_line": 50
+        }
+      ]
+    },
+    {
+      "group": "S12",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/inspection_field_provider.rs",
+      "sha256": "bddd54ae10255cf9c56150c2b1cb2d7b71288b213fe2ef0bb9562a6dc3530df0",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "resolve",
+          "navigation_line": 232
+        },
+        {
+          "symbol": "require_binary_pins",
+          "navigation_line": 300
+        }
+      ]
+    },
+    {
+      "group": "S12",
+      "path": "apps/control-room/src/kernel/api/quantityIds.ts",
+      "sha256": "9579facbb844d9e67ca7f75f16fbfa9629cbea02a86900e723aa0e5073244498",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "isScalarSpatialQuantityId",
+          "navigation_line": 298
+        }
+      ]
+    },
+    {
+      "group": "S12",
+      "path": "apps/control-room/src/kernel/resources/antennaResources.ts",
+      "sha256": "5278afc41b605ca87681793c27320727b5a5c0beebe9070c64d9517cec460be5",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "useAntennaFieldSolutionResource",
+          "navigation_line": 156
+        }
+      ]
+    },
+    {
+      "group": "S12",
+      "path": "apps/control-room/src/kernel/api/apiPaths.ts",
+      "sha256": "b2d9c77a9aecf9742ca5867e04e912d77ed830c9fd6a7d9c4bc06cea8c0c570b",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "antenna",
+          "navigation_line": 360
+        }
+      ]
+    },
+    {
+      "group": "S12",
+      "path": "apps/control-room/src/kernel/api/ControlRoomApi.ts",
+      "sha256": "aa7a7e9e729637ed0051c8b80be1134a1f4434b16913bd3aa600b79a3e73fac2",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "commitTransaction",
+          "navigation_line": 2647
+        }
+      ]
+    },
+    {
+      "group": "S13",
+      "path": "apps/control-room/src/kernel/object-extensions/objectExtensionRegistry.ts",
+      "sha256": "60fce4bc6836620b4d3ab587c16a3022db0796b03c9c73b8918851eb9ad5074d",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "OBJECT_EXTENSION_REGISTRY",
+          "navigation_line": 13
+        },
+        {
+          "symbol": "isCommittedObjectRoot",
+          "navigation_line": 5
+        }
+      ]
+    },
+    {
+      "group": "S13",
+      "path": "apps/control-room/src/kernel/object-extensions/ObjectExtensionsSectionModel.ts",
+      "sha256": "3006b5104886ace92669b3bd324bc3e168c4a058dc701de1f64d306c85e6d7c5",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "resolveObjectExtensionsSectionModel",
+          "navigation_line": 42
+        }
+      ]
+    },
+    {
+      "group": "S13",
+      "path": "apps/control-room/src/modules/inspector/extensions/ObjectExtensionsSection.tsx",
+      "sha256": "9d776512201206d8b5d502cc079a32187eaeb1afca4c2de44e35c6947ac456dd",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "ObjectExtensionsSection",
+          "navigation_line": 24
+        }
+      ]
+    },
+    {
+      "group": "S14",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaGeometryPanel.tsx",
+      "sha256": "7b8b1aeef11b4a7ea4d7a6fb9cc6b791d29abfff37e241d423252b152c19211d",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaGeometryPanel",
+          "navigation_line": 39
+        }
+      ]
+    },
+    {
+      "group": "S14",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/MicrostripGeometryEditor.tsx",
+      "sha256": "eb04ce19b6caa12f3508ade5d857820d63f2eeac413c9917664219f126eb6455",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "MicrostripGeometryEditor",
+          "navigation_line": 57
+        }
+      ]
+    },
+    {
+      "group": "S14",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/MicrostripGeometryEditorModel.ts",
+      "sha256": "ce13853e147ae3d8a2c5be71c449659149619fa6463cc108abe5502b7a5bb373",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "antennaLayoutDimensionFields",
+          "navigation_line": 85
+        },
+        {
+          "symbol": "MICROSTRIP_LOOP_FIELDS",
+          "navigation_line": 187
+        },
+        {
+          "symbol": "microstripCircuitDraft",
+          "navigation_line": 203
+        },
+        {
+          "symbol": "buildMicrostripCircuitPatch",
+          "navigation_line": 231
+        }
+      ]
+    },
+    {
+      "group": "S14",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaPlacementEditor.tsx",
+      "sha256": "bfd069f702431a29123c9e8c34fe6b54d53438fe21ce068e51b350b836d8f3d9",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaPlacementEditor",
+          "navigation_line": 36
+        }
+      ]
+    },
+    {
+      "group": "S14",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaPlacementModel.ts",
+      "sha256": "46385b0b1ba89c026abe35d86cd03e6bc8909c90e6c23a884b31bc257195ed2b",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "antennaPlacementTargets",
+          "navigation_line": 17
+        },
+        {
+          "symbol": "resolveAntennaPlacement",
+          "navigation_line": 22
+        }
+      ]
+    },
+    {
+      "group": "S15",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionSummaryPanel.tsx",
+      "sha256": "a866ce6f71dc6cad10192e17e623bd96a440ae3393e4ffb680f7a7d0053b877c",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaCompositionSummaryPanel",
+          "navigation_line": 25
+        }
+      ]
+    },
+    {
+      "group": "S15",
+      "path": "apps/control-room/src/modules/explorer/antennaNavigation.ts",
+      "sha256": "9b21291d3b8e3094d3ac1a0a3526fc9a98f96117709d178ee135d10edd774c0e",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "antennaNavigationLinks",
+          "navigation_line": 22
+        }
+      ]
+    },
+    {
+      "group": "S16",
+      "path": "apps/control-room/src/modules/inspector/panels/AntennaObjectPanel.tsx",
+      "sha256": "c8c13f54c6a5e5fc42f1f28040f27c53180f695cdeaa954f8f6c812778c9ca79",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaObjectPanel",
+          "navigation_line": 89
+        }
+      ]
+    },
+    {
+      "group": "S16",
+      "path": "apps/control-room/src/modules/inspector/panels/AntennaObjectPanelModel.ts",
+      "sha256": "73455a67dfbebc4dcbe5b35fc19c95f051a58cc1f380900e196fbb2aab57967f",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "antennaWaveformDefaults",
+          "navigation_line": 28
+        }
+      ]
+    },
+    {
+      "group": "S17",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaTerminalsPanel.tsx",
+      "sha256": "c3b97f1ca7de0a1044de1ddf252b28f374349d262cde1a127c52263dadee016d",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaTerminalsPanel",
+          "navigation_line": 32
+        }
+      ]
+    },
+    {
+      "group": "S17",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaTerminalSourceModel.ts",
+      "sha256": "d96df79a7b53a125423f1f38484b38043620a5f9704e11e7aefbdd50e265bd59",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "antennaTerminalSourceState",
+          "navigation_line": 27
+        }
+      ]
+    },
+    {
+      "group": "S17",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaTerminalSourceDetails.tsx",
+      "sha256": "b36d2541b6e0ce3621f6b9b6e7bf82fe844cdb3e5ba0cabef38db030d819b19c",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaTerminalSourceDetails",
+          "navigation_line": 12
+        }
+      ]
+    },
+    {
+      "group": "S17",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaTerminalPreparationModel.ts",
+      "sha256": "61212002882d6352589f5a5f7ec769de30757f54b2d2de42a0679ddd5efa6279",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "buildAntennaTerminalPreparationTransaction",
+          "navigation_line": 137
+        }
+      ]
+    },
+    {
+      "group": "S18",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionPanels.tsx",
+      "sha256": "5845514c8be471f431aa0f335f8a6c43f3d2ca3d12b58759e029bd7eb5df08c8",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "AntennaConductorPanel",
+          "navigation_line": 989
+        },
+        {
+          "symbol": "AntennaCompositionPanel",
+          "navigation_line": 862
+        }
+      ]
+    },
+    {
+      "group": "S18",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaConductorAuthoring.tsx",
+      "sha256": "d8fbcc7a932bd7b24c58fdd14f66a2f14d782aaba07c87296012e71606d7e8be",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaConductorAuthoring",
+          "navigation_line": 12
+        }
+      ]
+    },
+    {
+      "group": "S18",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaConductorMaterialEditor.tsx",
+      "sha256": "bf5775539a3932392da2f704caf1f250160c9dcbdb85162b70b66ed14215f407",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaConductorMaterialEditor",
+          "navigation_line": 20
+        }
+      ]
+    },
+    {
+      "group": "S18",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaConductorMaterialModel.ts",
+      "sha256": "07f4d8f1f758b34341f31963f2ed2dad0a786a1e6bce3a982fb63617e60be220",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "buildConductorMaterialTransaction",
+          "navigation_line": 49
+        }
+      ]
+    },
+    {
+      "group": "S18",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaPortComposer.tsx",
+      "sha256": "e1c0f2bdb70ee236b064bdc5f2dc1ffd3fa88f4acd69a57fca9867cf1ed9d280",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaPortComposer",
+          "navigation_line": 22
+        }
+      ]
+    },
+    {
+      "group": "S18",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaPortComposerModel.ts",
+      "sha256": "4d90804da1904eace9fb747506dbbaf3c7a63898f90b7325fcb15147754318d3",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "buildAntennaPortCreationTransaction",
+          "navigation_line": 63
+        }
+      ]
+    },
+    {
+      "group": "S19",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaPortEditor.tsx",
+      "sha256": "ce4abae0b6fa6677b44344e6fff89daf1c8393b791c3ce7600b0504c818ae4d5",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaPortEditor",
+          "navigation_line": 32
+        }
+      ]
+    },
+    {
+      "group": "S19",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaPortEditorModel.ts",
+      "sha256": "3881b5c816c7bbfe0eefdd209f78f2df29a8e6e0b9d2a01a739c0472201536bc",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "committedAntennaPortScene",
+          "navigation_line": 93
+        }
+      ]
+    },
+    {
+      "group": "S19",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaResourceEditor.tsx",
+      "sha256": "94a991972547537dde83d2e7a6da7ccd18a6e4e0fcf49bbc46374f878920c6e9",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaResourceEditor",
+          "navigation_line": 37
+        }
+      ]
+    },
+    {
+      "group": "S20",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionPanels.tsx",
+      "sha256": "5845514c8be471f431aa0f335f8a6c43f3d2ca3d12b58759e029bd7eb5df08c8",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "AntennaSolutionPanel",
+          "navigation_line": 997
+        }
+      ]
+    },
+    {
+      "group": "S20",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaSolveTargetsEditor.tsx",
+      "sha256": "f576d3e3802419d4f1434c595f4efd6e72be640c47cef1b04b7473c07cc8dbc4",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaSolveTargetsEditor",
+          "navigation_line": 33
+        }
+      ]
+    },
+    {
+      "group": "S20",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaStudyStageComposer.tsx",
+      "sha256": "ff723bf731c4b20a94586fe3d6dd68c2f8fce24c8d5377af26afa4478d0d12c1",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaStudyStageComposer",
+          "navigation_line": 19
+        }
+      ]
+    },
+    {
+      "group": "S20",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaFieldSolveAuthoring.tsx",
+      "sha256": "cc58cb8232571701f25015ee771229a1df10881a8785687728ea2da2a4a86f06",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaFieldSolveAuthoring",
+          "navigation_line": 16
+        }
+      ]
+    },
+    {
+      "group": "S21",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaProjectionDriveComposer.tsx",
+      "sha256": "16b60305ce12d72806c0fc02d73aeab498d9dcf9b7092a68ebd68448ae6d4f79",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaProjectionDriveComposer",
+          "navigation_line": 34
+        }
+      ]
+    },
+    {
+      "group": "S21",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaResourceEditorModel.ts",
+      "sha256": "3f15b634c0b7aec8a8304180222a0582954e1059d5604998944611b0892497f6",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "buildAntennaResourceTransaction",
+          "navigation_line": 59
+        }
+      ]
+    },
+    {
+      "group": "S22",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/SolvedAntennaDriveEditor.tsx",
+      "sha256": "14227b2302aa5f499d402a4e25a0a74c1d58b7db0ad2a8a01100b5207589dae1",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "SolvedAntennaDriveEditor",
+          "navigation_line": 48
+        }
+      ]
+    },
+    {
+      "group": "S22",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/SolvedAntennaDriveEditorModel.ts",
+      "sha256": "480daf1c18250c51f807308cdbe483bbb4ad9a503641d4777587c8d81c72a58d",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "waveformDefaults",
+          "navigation_line": 54
+        }
+      ]
+    },
+    {
+      "group": "S22",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaPiecewisePointsEditor.tsx",
+      "sha256": "202ed0c76635f883b99c92123f44105181c640eda91332a8bc74d10b74cfef78",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaPiecewisePointsEditor",
+          "navigation_line": 9
+        }
+      ]
+    },
+    {
+      "group": "S22",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaDrivePreview.tsx",
+      "sha256": "ea0ce297392c6e7c929be97180d4fb70a40f91363777b1a7644a8a8fc15f1305",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaDrivePreview",
+          "navigation_line": 12
+        }
+      ]
+    },
+    {
+      "group": "S23",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaSpectrumComposer.tsx",
+      "sha256": "6eb1d1355094e340e613660476a5cd2db3847c04c8dbff4930483e9e0bc4b4a1",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaSpectrumComposer",
+          "navigation_line": 30
+        }
+      ]
+    },
+    {
+      "group": "S23",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaSamplingPlaneFields.tsx",
+      "sha256": "2fd9fc67bf4be0148d49fb99ff45ea9b45f201a1abbeada9322324a6d125d15a",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaSamplingPlaneFields",
+          "navigation_line": 23
+        }
+      ]
+    },
+    {
+      "group": "S23",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaSourceSpectrumPayloadView.tsx",
+      "sha256": "3741a40a11ae152c6d30089e7ff7a894ec2532d7b247090a9bd154145cd9f8b3",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaSourceSpectrumPayloadView",
+          "navigation_line": 79
+        }
+      ]
+    },
+    {
+      "group": "S23",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaSpectrumExport.tsx",
+      "sha256": "8c0eb5f6c169dc5dc318d251feefbbd1dddb9d892cb91c2234162bab61fcca34",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaSpectrumExport",
+          "navigation_line": 22
+        }
+      ]
+    },
+    {
+      "group": "S24",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionPanels.tsx",
+      "sha256": "5845514c8be471f431aa0f335f8a6c43f3d2ca3d12b58759e029bd7eb5df08c8",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "AntennaCompositionPanel",
+          "navigation_line": 862
+        }
+      ]
+    },
+    {
+      "group": "S24",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionRuntime.ts",
+      "sha256": "29e8e154cfa70bd65297ed907189848d0b26c1097df24704a7e235f304fdc664",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "antennaFieldSolutionIdentityStatus",
+          "navigation_line": 63
+        }
+      ]
+    },
+    {
+      "group": "S24",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaFieldBasisPreview.tsx",
+      "sha256": "68c7d8ad5d7bf5f82c1671d3c60ba72935147a74a5f3fafbdbc5286fdea4b2f3",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaFieldBasisPreview",
+          "navigation_line": 25
+        }
+      ]
+    },
+    {
+      "group": "S24",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaExternalLeadInspectionPanel.tsx",
+      "sha256": "ced736c3d718f9ca244f0ef4e65b10898d0618c41fbaa3de36a5f5375c895b9b",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "AntennaExternalLeadInspectionPanel",
+          "navigation_line": 37
+        }
+      ]
+    },
+    {
+      "group": "S25",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx",
+      "sha256": "2d6b52428d499e9640961a65e0c9460c175fba04307843dca6f40bcb1b3fe4f9",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "ObjectMeshPolicyPanel",
+          "navigation_line": 880
+        },
+        {
+          "symbol": "MESH_SIZE_CALIBRATIONS",
+          "navigation_line": 401
+        }
+      ]
+    },
+    {
+      "group": "S25",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts",
+      "sha256": "99afbe6d5f69476950224e1c63b6c5cac1547388da13c1270f1d49a910eadc11",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "draftFromObjectMeshPolicyResource",
+          "navigation_line": 277
+        },
+        {
+          "symbol": "buildObjectMeshPolicyReplaceRequest",
+          "navigation_line": 223
+        }
+      ]
+    },
+    {
+      "group": "S25",
+      "path": "apps/control-room/src/modules/inspector/panels/fdmMeshInspectorModel.ts",
+      "sha256": "2e0d8cdd2de7901fb0c85be1549877b3e28728904f1f23e110a7846a822e925f",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "resolveMeshInspectorLane",
+          "navigation_line": 13
+        }
+      ]
+    },
+    {
+      "group": "S25",
+      "path": "apps/control-room/src/modules/inspector/panels/mesh-details/MeshBuildHistorySection.tsx",
+      "sha256": "797fcd4e179163b324692c49536367bb4b845518d233355924324231391c767d",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "MeshBuildHistorySection",
+          "navigation_line": 10
+        }
+      ]
+    },
+    {
+      "group": "S26",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaVisualizationPanel.tsx",
+      "sha256": "83dc3484b98f01fedd6881fb175cb43f0785536c9d74a7785cd15fa36cc1a6bc",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaVisualizationView",
+          "navigation_line": 39
+        },
+        {
+          "symbol": "AntennaPublishedVisualization",
+          "navigation_line": 67
+        }
+      ]
+    },
+    {
+      "group": "S26",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaVisualizationQuantity.ts",
+      "sha256": "5c1a4025f49bfd3c4c441ed60313fba8676246b7e1f43f329a34343201339d3f",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "ANTENNA_RAW_QUANTITIES",
+          "navigation_line": 4
+        },
+        {
+          "symbol": "ANTENNA_CLOSED_LOOP_QUANTITIES",
+          "navigation_line": 10
+        }
+      ]
+    },
+    {
+      "group": "S26",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaColorRangeControl.tsx",
+      "sha256": "46e5eb2316aef9124d41b80fbb5f7127c75dd9e206d685508988367853db5f07",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaColorRangeControl",
+          "navigation_line": 8
+        }
+      ]
+    },
+    {
+      "group": "S26",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaClippingControls.tsx",
+      "sha256": "5c1b5905ef503110d6c06c8e08a00a545b58576c59914151717c8bb9edfb24c0",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaClippingControls",
+          "navigation_line": 17
+        }
+      ]
+    },
+    {
+      "group": "S26",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaCameraControls.tsx",
+      "sha256": "39f6484321bf3234346c5873cd08098fb35ea13d0c57fab14c36b96f6bff6a9d",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "AntennaCameraControls",
+          "navigation_line": 15
+        }
+      ]
+    },
+    {
+      "group": "S26",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaFieldBasisPreviewModel.ts",
+      "sha256": "5e2bc3334caeb229df9c3cc9f26a656abcf16bdc188910b07ced6ebb80872f16",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "ANTENNA_BASIS_QUANTITIES",
+          "navigation_line": 18
+        }
+      ]
+    },
+    {
+      "group": "S27",
+      "path": "apps/control-room/src/modules/inspector/panels/visualization-debug/VisualizationDebugPanel.tsx",
+      "sha256": "59e8a93d5b40c278743d8ce05a4280c9a3ca582e44cbb7df0ad8fd32a927ada4",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "VisualizationDebugPanel",
+          "navigation_line": 50
+        }
+      ]
+    },
+    {
+      "group": "S27",
+      "path": "apps/control-room/src/modules/inspector/panels/visualization-debug/useVisualizationDebugPanelModel.ts",
+      "sha256": "c1d2d6ae964f49acca082d964dc9fd39e095ba380ff48a297aba999fff33f1fa",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "VisualizationDebugPanelModelAdapter",
+          "navigation_line": 160
+        }
+      ]
+    },
+    {
+      "group": "S27",
+      "path": "apps/control-room/src/modules/inspector/panels/visualization-debug/visualizationDebugExport.ts",
+      "sha256": "2ae7724463f7ce1469307219b55bf67cabc935f98468a06e03415f8d0432cf92",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "buildVisualizationDebugExport",
+          "navigation_line": 88
+        }
+      ]
+    },
+    {
+      "group": "S28",
+      "path": "apps/control-room/src/kernel/selection/manifestRenderableCarriers.ts",
+      "sha256": "4afa44bbd3baadbb2ca5924c8e7bf967dc81a1e72e6125031c0ae50f3fc88d0d",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "diagnosticOnly",
+          "navigation_line": 42
+        }
+      ]
+    },
+    {
+      "group": "S29",
+      "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspector.tsx",
+      "sha256": "a03b1254617615b9a459d98c2e2355bc1dad6d3b5d55696e0052f939a48c93ad",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "CurrentFields",
+          "navigation_line": 489
+        },
+        {
+          "symbol": "StructuredCurrentClosureFields",
+          "navigation_line": 688
+        },
+        {
+          "symbol": "CurrentTransportInspectorPanel",
+          "navigation_line": 580
+        }
+      ]
+    },
+    {
+      "group": "S29",
+      "path": "apps/control-room/src/modules/inspector/panels/TransportCollectionFields.tsx",
+      "sha256": "59ec9d0f462f0e9d8ce483289728eea442fdc636300ea69b309acf85cfd414ac",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "TransportCollectionFields",
+          "navigation_line": 11
+        }
+      ]
+    },
+    {
+      "group": "S29",
+      "path": "apps/control-room/src/modules/inspector/panels/TransportCollectionFieldsModel.ts",
+      "sha256": "b57d9e2dc1ce1787803ecf642bad3c1085e2561f44833e3ad42c7c39a9b377a4",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "chargeMaterialFields",
+          "navigation_line": 35
+        },
+        {
+          "symbol": "chargeBoundaryKinds",
+          "navigation_line": 37
+        }
+      ]
+    },
+    {
+      "group": "S30",
+      "path": "crates/fullmag-api/src/quantities.rs",
+      "sha256": "54c250a02d5a4d749ecf460c99621f6261ff087144bd5db740c043875345ff56",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "build_quantities",
+          "navigation_line": 9
+        }
+      ]
+    },
+    {
+      "group": "S31",
+      "path": "crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs",
+      "sha256": "22ae959df76cca2485efdbdeb50789c96864cdd59f02074e5147d9c52ea00376",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "compute_fields_materialization_requirements",
+          "navigation_line": 433
+        }
+      ]
+    },
+    {
+      "group": "S32",
+      "path": "apps/control-room/src/shared/domain/geometry/authoredMicrostripGeometry.ts",
+      "sha256": "27f194b65d84d688a39a628b0dfd5b5e997bd1785f576ea0ef0fb8554f200ae3",
+      "differs_from_head_git": false,
+      "symbols": [
+        {
+          "symbol": "buildAuthoredMicrostripGeometry",
+          "navigation_line": 36
+        },
+        {
+          "symbol": "buildAuthoredCpwGeometry",
+          "navigation_line": 41
+        }
+      ]
+    },
+    {
+      "group": "S32",
+      "path": "apps/control-room/src/modules/viewport-3d/layers/PrimitiveObjectLayer.tsx",
+      "sha256": "940fcd95766392cae1018a540417d509056db8d2bef79a4b5876fd557c5c3bff",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "PrimitiveObjectLayer",
+          "navigation_line": 48
+        }
+      ]
+    },
+    {
+      "group": "S32",
+      "path": "apps/control-room/src/modules/viewport-3d/layers/PrimitiveObjectLayerModel.ts",
+      "sha256": "ffa2b50461e53b3b03885b7a6f7aad0166f6ca4a4fc99fc6a06ea3af81ef18c6",
+      "differs_from_head_git": true,
+      "symbols": [
+        {
+          "symbol": "createPrimitiveObjectGeometry",
+          "navigation_line": 56
+        }
+      ]
+    }
+  ],
+  "git_unmerged_paths": [],
+  "qualification_lanes": {
+    "FDM CPU": "NOT VERIFIED",
+    "FDM GPU": "NOT VERIFIED",
+    "FEM CPU": "NOT VERIFIED",
+    "FEM GPU": "NOT VERIFIED"
+  },
+  "validation": {
+    "node_families": 14,
+    "source_groups": 32,
+    "source_entries": 97,
+    "unique_source_paths": 95,
+    "source_paths_and_symbols": "PASS",
+    "markdown_table_columns": "PASS",
+    "git_unmerged": "NONE",
+    "local_links": "PASS"
+  },
+  "note_pl": "Piny źródeł i kontrola strukturalna audytu; nie scientific-publication source-map ani dowód działania UI/solverów."
+}

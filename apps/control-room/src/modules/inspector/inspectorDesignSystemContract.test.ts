@@ -22,8 +22,12 @@ describe("Inspector design-system reference contract", () => {
     const tokens = read("src/design/styles/tokens.css");
     const segmented = read("src/shared/ui/SegmentedControl.tsx");
 
-    expect(tokens).toContain("--fm-control-height-compact: 26px");
+    expect(tokens).toContain("--fm-control-height-compact: 28px");
+    expect(tokens).toContain("--fm-field-row-min-height: 28px");
     expect(tokens).toContain("--fm-slider-hit-height: 28px");
+    expect(tokens).toContain("--fm-font-size-control: 12px");
+    expect(tokens).toContain("--fm-font-size-field-label: 12px");
+    expect(tokens).toContain("--fm-font-size-help: 11px");
     expect(tokens).toContain("--fm-radius-input: 7px");
     expect(tokens).toContain("--fm-radius-segment: 8px");
     expect(tokens).toContain("--fm-radius-disclosure: 10px");
@@ -231,6 +235,7 @@ describe("Inspector design-system reference contract", () => {
     "SaveStateStageInspector.tsx",
     "ChangeDeviceStageInspector.tsx",
     "UnsupportedStageInspector.tsx",
+    "MaskFieldDriveStageInspector.tsx",
   ])("keeps stages/%s on compact Inspector groups", (fileName) => {
     const panel = read(`src/modules/inspector/panels/stages/${fileName}`);
 
@@ -262,15 +267,56 @@ describe("Inspector design-system reference contract", () => {
     expect(panel).not.toMatch(/<\/?InspectorSection\b/);
   });
 
-  it("keeps the main Study surface and pipeline on compact groups", () => {
+  it("keeps the delegated Study surface and pipeline on compact groups", () => {
     const study = read("src/modules/inspector/panels/StudyInspectorPanel.tsx");
+    const studySections = read(
+      "src/modules/inspector/panels/StudyInspectorSections.tsx",
+    );
+    const executionProfile = read(
+      "src/modules/inspector/panels/StudyExecutionProfileSection.tsx",
+    );
     const pipeline = read(
       "src/modules/inspector/panels/StudyPipelineSection.tsx",
     );
 
-    expect(study).toContain("InspectorGroup");
+    for (const section of [
+      "StudyRuntimeSection",
+      "StudySelectedStageSection",
+      "StudyBoundarySection",
+      "StudyRecoverySection",
+      "StudyHistorySection",
+      "StudyExecutionProfileSection",
+    ]) {
+      expect(study).toContain("<" + section);
+    }
     expect(study).not.toMatch(/<\/?InspectorSection\b/);
     expect(study).not.toContain("<Accordion");
+
+    for (const [source, section] of [
+      [studySections, "StudyRuntimeSection"],
+      [studySections, "StudySelectedStageSection"],
+      [studySections, "StudyBoundarySection"],
+      [studySections, "StudyRecoverySection"],
+      [studySections, "StudyHistorySection"],
+      [executionProfile, "StudyExecutionProfileEditor"],
+    ] as const) {
+      const start = source.indexOf("function " + section);
+      expect(start, section + " is present").toBeGreaterThanOrEqual(0);
+      const nextFunction = [
+        source.indexOf("\nfunction ", start + 1),
+        source.indexOf("\nexport function ", start + 1),
+      ]
+        .filter((index) => index !== -1)
+        .sort((left, right) => left - right)[0] ?? -1;
+      const implementation = source.slice(
+        start,
+        nextFunction === -1 ? undefined : nextFunction,
+      );
+      expect(implementation, section).toContain("<InspectorGroup");
+      expect(implementation, section).not.toMatch(/<\/?InspectorSection\b/);
+    }
+
+    expect(studySections).not.toContain("<Accordion");
     expect(pipeline).toContain("InspectorGroup");
     expect(pipeline).not.toMatch(/<\/?InspectorSection\b/);
   });

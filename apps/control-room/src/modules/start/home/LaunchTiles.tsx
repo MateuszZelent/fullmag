@@ -142,17 +142,18 @@ export function LaunchTiles({ disabledReasons, initialFocusRef, onRunCommand }: 
                 <span className="fm-start-tile__name" id={nameId}>
                   {tile.name}
                 </span>
+              </span>
+              <span className="fm-start-tile__desc" id={descriptionId}>
+                {tile.description}
+              </span>
+              {/* The shortcut sits in the foot so the title keeps the full row. */}
+              <span className="fm-start-tile__foot">
+                <span id={footId}>{reason ?? tile.foot}</span>
                 {tile.shortcut ? (
                   <kbd aria-hidden="true" className="fm-start-kbd">
                     {tile.shortcut}
                   </kbd>
                 ) : null}
-              </span>
-              <span className="fm-start-tile__desc" id={descriptionId}>
-                {tile.description}
-              </span>
-              <span className="fm-start-tile__foot" id={footId}>
-                {reason ?? tile.foot}
               </span>
             </button>
           );

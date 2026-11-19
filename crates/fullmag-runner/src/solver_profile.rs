@@ -150,6 +150,85 @@ pub struct SolverProfilePhaseSample {
     pub percent_of_total: f64,
 }
 
+/// Terminal outcome of an operation, independent of accepted LLG steps.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SolverProfileOperationOutcome {
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SolverProfileOperationSample {
+    pub sequence: u64,
+    pub operation_id: String,
+    pub outcome: SolverProfileOperationOutcome,
+    pub total_wall_time_ns: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_operator_wall_ns: Option<u64>,
+    /// Entire profiled native ABI call, including charge solve and native validation.
+    /// This contains the surface operator; it is not another exclusive phase.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_call_wall_ns: Option<u64>,
+    /// Exclusive phases in the fixed antenna surface operator order.
+    pub phases: [SolverProfilePhaseSample; 9],
+    pub accounting_issue: bool,
+}
+
+impl SolverProfileOperationSample {
+    /// Validate the canonical operation report without treating an explicitly
+    /// flagged clock-accounting anomaly as loss of the measured diagnostics.
+    /// Sequence ordering belongs to the enclosing bounded state or receipt.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.operation_id != ANTENNA_OPERATION_ID {
+            return Err("unknown solver profile operation".to_string());
+        }
+        let measured: u128 = self.phases[..8].iter()
+            .map(|phase| u128::from(phase.wall_time_ns)).sum();
+        let unattributed = u128::from(self.total_wall_time_ns).saturating_sub(measured) as u64;
+        if self.phases[8].wall_time_ns != unattributed {
+            return Err("operation unattributed time differs from measured phases".to_string());
+        }
+        if self.native_operator_wall_ns.is_none()
+            && self.phases[..8].iter().any(|phase| phase.wall_time_ns != 0) {
+            return Err("operation phases require an available native measurement".to_string());
+        }
+        let accounting_issue = self.native_call_wall_ns.is_some_and(|ns| {
+                ns > self.total_wall_time_ns
+                    || self.native_operator_wall_ns.is_some_and(|operator| operator > ns)
+            })
+            || measured > u128::from(self.total_wall_time_ns)
+            || self.native_operator_wall_ns.is_some_and(|ns| {
+                ns > self.total_wall_time_ns || measured > u128::from(ns)
+            });
+        if accounting_issue && !self.accounting_issue {
+            return Err("operation clock accounting anomaly is not flagged".to_string());
+        }
+        for (sample, (id, label)) in self.phases.iter().zip(ANTENNA_OPERATION_PHASES) {
+            let expected = phase(id, label, sample.wall_time_ns, self.total_wall_time_ns);
+            if !sample.percent_of_total.is_finite() || *sample != expected {
+                return Err("operation phase identity or percentage differs from canonical accounting".to_string());
+            }
+        }
+        Ok(())
+    }
+}
+
+const ANTENNA_OPERATION_ID: &str = "antenna.closed_loop.inspect";
+
+const ANTENNA_OPERATION_PHASES: [(&str, &str); 9] = [
+    ("antenna.surface.source_prepare", "Source preparation"),
+    ("antenna.surface.exact_geometry", "Exact geometry"),
+    ("antenna.surface.binary64", "Binary64 evaluation"),
+    ("antenna.surface.precision80", "80-digit evaluation"),
+    ("antenna.surface.precision120", "120-digit evaluation"),
+    ("antenna.surface.consistency", "Consistency checks"),
+    ("antenna.surface.reduction", "Reduction"),
+    ("antenna.surface.serialization", "Serialization"),
+    ("antenna.surface.unattributed", "Unattributed operation time"),
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SolverProfileSampleKind {
@@ -949,6 +1028,8 @@ pub struct SolverProfileSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threading: Option<SolverProfileThreading>,
     pub latest_samples: Vec<SolverProfileStepSample>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operation_samples: Vec<SolverProfileOperationSample>,
     pub aggregates: SolverProfileAggregates,
     #[serde(default)]
     pub rates: SolverRateDiagnostics,
@@ -978,6 +1059,8 @@ pub struct SolverProfileState {
     config: SolverProfileConfig,
     revision: u64,
     samples: VecDeque<SolverProfileStepSample>,
+    operation_samples: VecDeque<SolverProfileOperationSample>,
+    operation_sequence: u64,
     trace_sample_sequence: u64,
     artifact_refs: Vec<String>,
     last_sampled_instant: Option<Instant>,
@@ -1006,6 +1089,8 @@ impl SolverProfileState {
             config: config.normalized(),
             revision: 0,
             samples: VecDeque::new(),
+            operation_samples: VecDeque::new(),
+            operation_sequence: 0,
             trace_sample_sequence: 0,
             artifact_refs: Vec::new(),
             last_sampled_instant: None,
@@ -1032,10 +1117,54 @@ impl SolverProfileState {
         let config = config.normalized();
         if !config.enabled {
             self.samples.clear();
+            self.operation_samples.clear();
         }
         self.config = config;
         self.last_sampled_instant = None;
         self.pending_window = PendingProfileWindow::default();
+        self.trim_samples();
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Record exactly one terminal inspection operation. Sampling intervals
+    /// and accepted-step counters apply only to LLG and are not advanced here.
+    pub(crate) fn record_antenna_operation(
+        &mut self,
+        outcome: SolverProfileOperationOutcome,
+        total_wall_time_ns: u64,
+        native_operator_wall_ns: Option<u64>,
+        native_call_wall_ns: Option<u64>,
+        phase_wall_time_ns: [u64; 8],
+        accounting_issue: bool,
+    ) {
+        if !self.config.enabled {
+            return;
+        }
+        let sum: u128 = phase_wall_time_ns.iter().map(|&ns| u128::from(ns)).sum();
+        let accounting_issue = accounting_issue
+            || native_call_wall_ns.is_some_and(|ns| {
+                ns > total_wall_time_ns || native_operator_wall_ns.is_some_and(|operator| operator > ns)
+            })
+            || sum > u128::from(total_wall_time_ns)
+            || native_operator_wall_ns.is_some_and(|ns| {
+                ns > total_wall_time_ns || sum > u128::from(ns)
+            });
+        let unattributed = u128::from(total_wall_time_ns).saturating_sub(sum) as u64;
+        let sample = SolverProfileOperationSample {
+            sequence: self.operation_sequence,
+            operation_id: ANTENNA_OPERATION_ID.to_string(),
+            outcome,
+            total_wall_time_ns,
+            native_operator_wall_ns,
+            native_call_wall_ns,
+            phases: std::array::from_fn(|index| {
+                let (id, label) = ANTENNA_OPERATION_PHASES[index];
+                phase(id, label, if index < 8 { phase_wall_time_ns[index] } else { unattributed }, total_wall_time_ns)
+            }),
+            accounting_issue,
+        };
+        self.operation_sequence = self.operation_sequence.wrapping_add(1);
+        self.operation_samples.push_back(sample);
         self.trim_samples();
         self.revision = self.revision.wrapping_add(1);
     }
@@ -1430,6 +1559,7 @@ impl SolverProfileState {
             rates,
             overhead: self.overhead.clone(),
             latest_samples,
+            operation_samples: self.operation_samples.iter().cloned().collect(),
             artifact_refs: self.artifact_refs.clone(),
             persistence_failed: self.persistence_failed,
             live_publisher: None,
@@ -1492,6 +1622,9 @@ impl SolverProfileState {
     fn trim_samples(&mut self) {
         while self.samples.len() > self.config.max_samples {
             self.samples.pop_front();
+        }
+        while self.operation_samples.len() > self.config.max_samples {
+            self.operation_samples.pop_front();
         }
     }
 }
@@ -2073,5 +2206,163 @@ mod tests {
         let rates =
             super::SolverRateDiagnostics::from_closed_windows(7, 10, 2_000_000_000, 0, None);
         assert!(rates.end_to_end_steps_per_second.is_none());
+    }
+}
+
+#[cfg(test)]
+mod antenna_operation_tests {
+    use super::*;
+
+    fn enabled(max_samples: usize) -> SolverProfileState {
+        SolverProfileState::new(SolverProfileConfig {
+            enabled: true,
+            max_samples,
+            sample_every: 100,
+            sample_interval_wall_ms: 10_000,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn disabled_operations_preserve_snapshot_and_legacy_json() {
+        let mut state = SolverProfileState::default();
+        let before = state.snapshot();
+        state.record_antenna_operation(SolverProfileOperationOutcome::Failed, 100, None, None, [0; 8], false);
+        assert_eq!(state.snapshot(), before);
+        let json = serde_json::to_value(&before).unwrap();
+        assert!(json.get("operation_samples").is_none());
+        assert_eq!(serde_json::from_value::<SolverProfileSnapshot>(json).unwrap(), before);
+    }
+
+    #[test]
+    fn terminal_operations_have_independent_bounded_sequences_and_no_llg_rates() {
+        let mut state = enabled(2);
+        for outcome in [SolverProfileOperationOutcome::Completed,
+            SolverProfileOperationOutcome::Failed, SolverProfileOperationOutcome::Cancelled] {
+            state.record_antenna_operation(outcome, 100, None, None, [0; 8], false);
+        }
+        let snapshot = state.snapshot();
+        assert!(snapshot.latest_samples.is_empty());
+        assert_eq!(snapshot.aggregates, SolverProfileAggregates::default());
+        assert_eq!(snapshot.rates, SolverRateDiagnostics::default());
+        assert_eq!(snapshot.operation_samples.len(), 2);
+        assert_eq!(snapshot.operation_samples[0].sequence, 1);
+        assert_eq!(snapshot.operation_samples[0].outcome, SolverProfileOperationOutcome::Failed);
+        assert_eq!(snapshot.operation_samples[1].sequence, 2);
+        assert_eq!(snapshot.operation_samples[1].outcome, SolverProfileOperationOutcome::Cancelled);
+        state.set_config(SolverProfileConfig::default());
+        assert!(state.snapshot().operation_samples.is_empty());
+    }
+
+    #[test]
+    fn phases_reconcile_runner_time_without_fabricating_native_availability() {
+        let mut state = enabled(2);
+        state.record_antenna_operation(SolverProfileOperationOutcome::Completed,
+            100, Some(90), None, [10; 8], false);
+        state.record_antenna_operation(SolverProfileOperationOutcome::Failed,
+            7, None, None, [0; 8], false);
+        let samples = state.snapshot().operation_samples;
+        let completed = &samples[0];
+        assert_eq!(completed.operation_id, "antenna.closed_loop.inspect");
+        for (sample, expected) in completed.phases.iter().zip(ANTENNA_OPERATION_PHASES) {
+            assert_eq!(sample.id, expected.0);
+        }
+        assert_eq!(completed.phases[8].wall_time_ns, 20);
+        assert_eq!(completed.phases.iter().map(|phase| phase.wall_time_ns).sum::<u64>(), 100);
+        assert!(!completed.accounting_issue);
+        assert_eq!(samples[1].native_operator_wall_ns, None);
+        assert_eq!(samples[1].phases[8].wall_time_ns, 7);
+        assert!(samples[1].phases[..8].iter().all(|phase| phase.wall_time_ns == 0));
+    }
+
+    #[test]
+    fn receipt_validation_rejects_fabricated_fields_but_preserves_clock_warnings() {
+        let mut state = enabled(2);
+        state.record_antenna_operation(SolverProfileOperationOutcome::Completed,
+            100, Some(90), None, [10; 8], false);
+        let sample = state.snapshot().operation_samples.remove(0);
+        assert!(sample.validate().is_ok());
+        let mut corrupt = sample.clone();
+        corrupt.operation_id.push('x');
+        assert!(corrupt.validate().is_err());
+        let mut corrupt = sample.clone();
+        corrupt.phases.swap(0, 1);
+        assert!(corrupt.validate().is_err());
+        let mut corrupt = sample.clone();
+        corrupt.phases[0].label.push('x');
+        assert!(corrupt.validate().is_err());
+        for percent in [f64::NAN, f64::INFINITY, 11.0] {
+            let mut corrupt = sample.clone();
+            corrupt.phases[0].percent_of_total = percent;
+            assert!(corrupt.validate().is_err());
+        }
+        let mut corrupt = sample.clone();
+        corrupt.phases[8].wall_time_ns += 1;
+        assert!(corrupt.validate().is_err());
+        let mut corrupt = sample.clone();
+        corrupt.native_operator_wall_ns = None;
+        assert!(corrupt.validate().is_err());
+        state.record_antenna_operation(SolverProfileOperationOutcome::Failed,
+            1, Some(2), None, [u64::MAX; 8], false);
+        let mut warning = state.snapshot().operation_samples.remove(1);
+        assert!(warning.validate().is_ok());
+        warning.accounting_issue = false;
+        assert!(warning.validate().is_err());
+        let mut native_warning = sample;
+        native_warning.accounting_issue = true;
+        assert!(native_warning.validate().is_ok());
+    }
+
+    #[test]
+    fn invalid_phase_accounting_is_reported_without_overflow_or_forged_timing() {
+        let mut state = enabled(3);
+        state.record_antenna_operation(SolverProfileOperationOutcome::Failed,
+            100, Some(101), None, [0; 8], false);
+        state.record_antenna_operation(SolverProfileOperationOutcome::Failed,
+            100, Some(50), None, [10; 8], false);
+        state.record_antenna_operation(SolverProfileOperationOutcome::Failed,
+            u64::MAX, Some(u64::MAX), None, [u64::MAX; 8], false);
+        let samples = state.snapshot().operation_samples;
+        assert!(samples.iter().all(|sample| sample.accounting_issue));
+        assert_eq!(samples[2].phases[8].wall_time_ns, 0);
+        assert_eq!(samples[2].phases[0].wall_time_ns, u64::MAX);
+    }
+}
+
+#[cfg(test)]
+mod antenna_native_call_timing_tests {
+    use super::*;
+
+    #[test]
+    fn native_call_measurement_is_optional_nested_and_retained_on_failure() {
+        let mut state = SolverProfileState::new(SolverProfileConfig {
+            enabled: true, ..Default::default()
+        });
+        state.record_antenna_operation(SolverProfileOperationOutcome::Completed,
+            100, Some(60), Some(90), [5; 8], false);
+        let sample = state.snapshot().operation_samples.remove(0);
+        assert!(sample.validate().is_ok());
+        assert_eq!(sample.native_call_wall_ns, Some(90));
+        assert_eq!(sample.phases[8].wall_time_ns, 60);
+        let mut json = serde_json::to_value(&sample).unwrap();
+        json.as_object_mut().unwrap().remove("native_call_wall_ns");
+        let legacy: SolverProfileOperationSample = serde_json::from_value(json).unwrap();
+        assert_eq!(legacy.native_call_wall_ns, None);
+        assert!(legacy.validate().is_ok());
+        assert!(serde_json::to_value(legacy).unwrap().get("native_call_wall_ns").is_none());
+        state.record_antenna_operation(SolverProfileOperationOutcome::Failed,
+            100, None, Some(90), [0; 8], false);
+        let failed = state.snapshot().operation_samples.remove(1);
+        assert_eq!(failed.native_call_wall_ns, Some(90));
+        assert!(failed.validate().is_ok());
+        for (operator, call) in [(Some(91), 90), (None, 101)] {
+            state.record_antenna_operation(SolverProfileOperationOutcome::Failed,
+                100, operator, Some(call), [0; 8], false);
+            let mut warning = state.snapshot().operation_samples.pop().unwrap();
+            assert!(warning.accounting_issue);
+            assert!(warning.validate().is_ok());
+            warning.accounting_issue = false;
+            assert!(warning.validate().is_err());
+        }
     }
 }

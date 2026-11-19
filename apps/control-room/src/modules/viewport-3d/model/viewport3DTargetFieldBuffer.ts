@@ -1,3 +1,4 @@
+import { isTensorFrobeniusSurfaceField, normalizeTensorProjection, tensorProjectionOutputKind } from "@/kernel/api/tensorFieldProjection";
 import type {
   FieldVectorQuery,
   FieldVectorResponseMetadata,
@@ -10,6 +11,7 @@ import {
 } from "@/kernel/api/quantityIds";
 import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
+import { sessionScopedResourceKey } from "@/kernel/resources/sessionResourceIdentity";
 
 import type {
   Viewport3DFieldComponentDemand,
@@ -24,6 +26,7 @@ import {
 } from "./viewport3DFieldDomainCompatibility";
 
 export type Viewport3DFieldPayloadCapability =
+  | "tensor-complete"
   | "full-vector-complete"
   | "full-vector-sampled"
   | "scalar-complete"
@@ -31,6 +34,7 @@ export type Viewport3DFieldPayloadCapability =
 
 interface Viewport3DTargetFieldBufferBase {
   bufferId: string;
+  cacheResourceKey?: string | null;
   capability: Viewport3DFieldPayloadCapability;
   component: Exclude<Viewport3DFieldComponentDemand, "none">;
   componentCount: number;
@@ -212,6 +216,8 @@ export function buildViewport3DTargetFieldBuffer({
       requestScopeEpoch: validSessionIdentity?.requestScopeEpoch ?? null,
       topologyRevision,
     }),
+    cacheResourceKey: validSessionIdentity && resourceKey
+      ? sessionScopedResourceKey(validSessionIdentity, resourceKey) : null,
     capability,
     component,
     componentCount: fieldVector.nComp,
@@ -386,6 +392,7 @@ export function viewport3DTargetFieldBufferCanServeSurface(
   if (!targetFieldBufferHasSurfaceCompatibleIndexing(buffer, projectionMode)) {
     return false;
   }
+  if (buffer.capability === "tensor-complete") return colorMode === "magnitude" && isTensorFrobeniusSurfaceField(buffer.fieldVector);
   const vectorSurfaceCapable =
     buffer.capability === "full-vector-complete" ||
     (projectionMode !== "raw_nodal" &&
@@ -397,6 +404,8 @@ export function viewport3DTargetFieldBufferCanServeSurface(
   const scalarComponent = scalarComponentForColorMode(colorMode);
   if (!scalarComponent) return buffer.capability === "full-vector-complete";
   if (buffer.capability === "scalar-complete") {
+    if (buffer.fieldVector.nComp !== 1) return false;
+    if (tensorProjectionOutputKind(buffer.component) === "scalar" && colorMode === "magnitude") return true;
     return buffer.component === scalarComponent;
   }
   return (
@@ -427,11 +436,13 @@ function resolveTargetFieldBufferComponent(
   fieldVector: DecodedFieldVector,
   query: FieldVectorQuery,
 ): Exclude<Viewport3DFieldComponentDemand, "none"> {
+  const tensorProjection = normalizeTensorProjection(query.component);
+  if (tensorProjection) return tensorProjection;
   if (query.component === "x" || query.component === "y" || query.component === "z") {
     return query.component;
   }
   if (query.component === "magnitude") return "magnitude";
-  return fieldVector.nComp >= 3 ? "full" : "magnitude";
+  return fieldVector.nComp === 3 ? "full" : fieldVector.nComp === 1 ? "magnitude" : "full";
 }
 
 function resolveTargetFieldBufferCapability({
@@ -445,8 +456,10 @@ function resolveTargetFieldBufferCapability({
   sampled: boolean;
   synthetic: boolean;
 }): Viewport3DFieldPayloadCapability {
+  if (isTensorFrobeniusSurfaceField(fieldVector) && !sampled) return "tensor-complete";
   if (synthetic) return "synthetic-full-vector";
-  if (component !== "full" || fieldVector.nComp < 3) return "scalar-complete";
+  const spatialVector = component === "full" || tensorProjectionOutputKind(component) === "vector";
+  if (!spatialVector || fieldVector.nComp !== 3) return "scalar-complete";
   return sampled ? "full-vector-sampled" : "full-vector-complete";
 }
 

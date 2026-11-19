@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import errno
+import itertools
 import json
 import os
 from pathlib import Path
@@ -46,6 +47,10 @@ class _LoggerStdin:
 
 class _Logger:
     stdin = _LoggerStdin()
+
+    def poll(self):
+        # The control helper stays alive until the lease is finalized.
+        return None
 
     def wait(self, timeout):
         self.wait_timeout = timeout
@@ -149,6 +154,9 @@ assert docker_build_control.mirror_console(b"progress\\n") is False
         control.namespace = ""
         control.namespace_registry = None
         control.namespace_registry_sha256 = None
+        control._active_operation = None
+        # Helper identity pinning inspects Docker; this test covers console loss only.
+        control._pin_operation_helper = lambda _operation: "a" * 64
         control.helper_args = lambda *args, **kwargs: ["fake-control-helper"]
         control.space = lambda: {"available_bytes": 64 * 1024**3}
         control._line = Mock(side_effect=("READY", "LOGGED"))
@@ -191,7 +199,7 @@ assert docker_build_control.mirror_console(b"progress\\n") is False
             raise AssertionError(args)
 
         with patch.object(volume_dev, "docker_text", side_effect=docker_text), patch.object(
-            volume_dev.time, "monotonic", side_effect=(0.0, 1.0, 46.0, 46.0, 50.0)
+            volume_dev.time, "monotonic", side_effect=itertools.chain((0.0,), itertools.repeat(46.0))
         ), patch.object(volume_dev.time, "sleep"), patch.object(
             build_control.sys, "stdout", _BrokenStream()
         ):

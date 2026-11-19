@@ -86,6 +86,65 @@ def test_port_mode_rejects_reused_terminal_reference() -> None:
         )
 
 
+@pytest.mark.parametrize("weights", [(0.0, 0.0), (2.0, -2.0), (1.0, 0.0), (-3.0, 4.0)])
+def test_v3_observation_weights_round_trip_without_terminal_current_normalization(weights, monkeypatch) -> None:
+    import fullmag.world as world
+    from fullmag.runtime.script_builder import _render_antenna_port_mode_payload_line
+
+    mode = fullmag.AntennaPortMode(
+        id="closed_loop", source_object_id="antenna", current_transport_id="current",
+        schema_version="antenna_port_mode.v3",
+        normalization=fullmag.AntennaSourceCutRt0("source_cut"),
+        branches=tuple(fullmag.AntennaPortBranch(
+            id=part, inlet_terminal_ref=f"{part}_in", outlet_terminal_ref=f"{part}_out",
+            signed_weight=weight,
+        ) for part, weight in zip(("signal", "return"), weights)),
+    )
+    payload = mode.to_ir()
+    assert [branch["signed_weight"] for branch in payload["branches"]] == list(weights)
+    assert payload["normalization"] == {
+        "kind": "source_cut_rt0", "source_cut_ref": "source_cut", "orientation": "minus_outward",
+    }
+    assert payload["normalization_current_a"] == 1.0
+    monkeypatch.setattr(world._state, "_antenna_port_modes", [])
+    exec(_render_antenna_port_mode_payload_line(payload), {"fm": fullmag, "study": fullmag.study()})
+    assert len(world._state._antenna_port_modes) == 1
+    assert world._state._antenna_port_modes[0].to_ir() == payload
+
+
+@pytest.mark.parametrize("schema", ["antenna_port_mode.v2", "antenna_port_mode.v3"])
+@pytest.mark.parametrize("weight", [float("nan"), float("inf"), -float("inf")])
+def test_port_branch_weights_remain_finite_for_both_schemas(schema, weight) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        fullmag.AntennaPortMode(
+            id="port", source_object_id="antenna", current_transport_id="current",
+            schema_version=schema,
+            normalization=fullmag.AntennaSourceCutRt0("cut") if schema.endswith("v3") else None,
+            branches=(fullmag.AntennaPortBranch("signal", "signal_in", "signal_out", weight),
+                      fullmag.AntennaPortBranch("return", "return_in", "return_out", -1.0)),
+        )
+
+
+@pytest.mark.parametrize("patch, error", [
+    ({"normalization": None}, "typed source-cut"),
+    ({"normalization_current_a": 2.0}, "exactly 1 A"),
+    ({"schema_version": "antenna_port_mode.v2"}, "v2 cannot use source-cut"),
+    ({"branches": (fullmag.AntennaPortBranch("same", "a", "b", 0.0),
+                   fullmag.AntennaPortBranch("same", "c", "d", 0.0))}, "ids must be unique"),
+    ({"branches": (fullmag.AntennaPortBranch("signal", "a", "b", 0.0),
+                   fullmag.AntennaPortBranch("return", "a", "d", 0.0))}, "terminal references must be unique"),
+])
+def test_v3_observation_weights_preserve_source_identity_and_normalization_guards(patch, error) -> None:
+    arguments = dict(
+        id="port", source_object_id="antenna", current_transport_id="current",
+        schema_version="antenna_port_mode.v3", normalization=fullmag.AntennaSourceCutRt0("cut"),
+        branches=(fullmag.AntennaPortBranch("signal", "a", "b", 0.0),
+                  fullmag.AntennaPortBranch("return", "c", "d", 0.0)),
+    )
+    with pytest.raises(ValueError, match=error):
+        fullmag.AntennaPortMode(**{**arguments, **patch})
+
+
 def test_solved_drive_serializes_waveform_without_copying_field_basis() -> None:
     drive = fullmag.SolvedAntennaDrive(
         id="drive_1",

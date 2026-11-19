@@ -1,5 +1,4 @@
-import type { MeshBasicMaterialParameters } from "three";
-
+import { resolveViewport3DPresentationQuality } from "../viewport3dPresentation";
 import {
   DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES,
   type Viewport3DAppearancePreferences,
@@ -9,25 +8,27 @@ import type { Viewport3DVisualProfile } from "../viewport3dVisualProfile";
 type Viewport3DMaterialAppearance = Pick<
   Viewport3DAppearancePreferences,
   "lightingMode"
->;
+> & Partial<Pick<Viewport3DAppearancePreferences, "renderMode" | "materialRoughness" | "materialMetalness" | "softShadows">>;
 
 export interface Viewport3DMaterialProfile {
-  airSurface: Pick<
-    MeshBasicMaterialParameters,
-    | "toneMapped"
-  >;
-  magneticSurface: Pick<
-    MeshBasicMaterialParameters,
-    | "toneMapped"
-  > & {
+  airSurface: { toneMapped: boolean };
+  magneticSurface: {
+    presentation: {
+      roughness: number;
+      metalness: number;
+      shadows: boolean;
+    } | null;
     shadeStrength: number;
+    toneMapped: boolean;
   };
-  primitivePreview: Pick<
-    MeshBasicMaterialParameters,
-    | "toneMapped"
-  >;
+  primitivePreview: { toneMapped: boolean };
   uniformGeometry: {
     lit: boolean;
+    pbr: boolean;
+    roughness: number;
+    metalness: number;
+    shadows: boolean;
+    toneMapped: boolean;
   };
   featureEdges: {
     opacity: number;
@@ -65,21 +66,45 @@ export function resolveViewport3DMaterialProfile(
     DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES,
 ): Viewport3DMaterialProfile {
   const figureBoost = visualProfile.lighting === "figure" ? 1 : 0;
+  const fieldPresentationEnabled =
+    appearance.renderMode === "presentation" &&
+    appearance.lightingMode === "studio";
+  const materialRoughness = appearance.materialRoughness ?? 0.35;
+  const materialMetalness = appearance.materialMetalness ?? 0.5;
+  const geometryShadows =
+    appearance.renderMode === "presentation" &&
+    appearance.softShadows !== false &&
+    resolveViewport3DPresentationQuality(visualProfile.id).shadowMapSize > 0;
+  const presentationShadows =
+    fieldPresentationEnabled && geometryShadows;
+
   return {
     airSurface: {
       toneMapped: visualProfile.toneMapping !== "none",
     },
     magneticSurface: {
-      // Quantitative field colors are always kept independent of geometry light.
-      // Keep tone mapping out of data colors across quality profiles as well.
-      shadeStrength: 0,
-      toneMapped: false,
+      // Only studio Presentation changes field-surface brightness. Scientific
+      // and flat surfaces remain unlit and bypass tone mapping exactly.
+      presentation: fieldPresentationEnabled
+        ? {
+            roughness: materialRoughness,
+            metalness: materialMetalness,
+            shadows: presentationShadows,
+          }
+        : null,
+      shadeStrength: fieldPresentationEnabled ? 1 : 0,
+      toneMapped: fieldPresentationEnabled,
     },
     primitivePreview: {
       toneMapped: visualProfile.toneMapping !== "none",
     },
     uniformGeometry: {
       lit: appearance.lightingMode === "studio",
+      pbr: fieldPresentationEnabled,
+      roughness: materialRoughness,
+      metalness: materialMetalness,
+      shadows: geometryShadows,
+      toneMapped: false,
     },
     featureEdges: {
       opacity: Math.max(

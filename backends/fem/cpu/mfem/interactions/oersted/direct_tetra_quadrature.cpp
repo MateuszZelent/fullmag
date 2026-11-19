@@ -8,6 +8,8 @@
 #include <limits>
 #include <memory>
 #include <iomanip>
+#include <iostream>
+#include <locale>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -23,19 +25,23 @@ struct PreparedElement {
 };
 
 struct WorkBudget {
+    explicit WorkBudget(const DirectTetraQuadratureOptions &options)
+        : limits(DirectTetraQuadrature::ResolveWorkLimits(options)) {}
+
+    const DirectTetraQuadratureWorkLimits limits;
     std::uint64_t kernel_evaluations = 0;
     std::uint64_t ledger_leaf_visits = 0;
 
     void sample()
     {
-        if (kernel_evaluations >= DirectTetraQuadrature::maximum_kernel_evaluations) {
+        if (kernel_evaluations >= limits.maximum_kernel_evaluations) {
             throw std::runtime_error("kernel_evaluation_budget_exceeded");
         }
         ++kernel_evaluations;
     }
     void visit()
     {
-        if (ledger_leaf_visits >= DirectTetraQuadrature::maximum_ledger_leaf_visits) {
+        if (ledger_leaf_visits >= limits.maximum_ledger_leaf_visits) {
             throw std::runtime_error("ledger_leaf_visit_budget_exceeded");
         }
         ++ledger_leaf_visits;
@@ -93,17 +99,13 @@ DirectTetraQuadratureResult evaluate_prepared(
 void validate_pair_budget(std::uint64_t source_count, std::uint64_t target_count,
     const DirectTetraQuadratureOptions &options)
 {
-    if (options.base_quadrature_order < 2 || options.base_quadrature_order > 16 ||
-            options.maximum_subdivision_depth < 0 || options.maximum_subdivision_depth > 6 ||
-            !(std::isfinite(options.absolute_tolerance_apm) && options.absolute_tolerance_apm >= 0.0) ||
-            !(std::isfinite(options.relative_tolerance) && options.relative_tolerance >= 0.0) ||
-            source_count > DirectTetraQuadrature::maximum_final_leaves_per_target ||
-            target_count > 1'000'000 || options.maximum_source_target_pairs > 1'000'000) {
-        throw std::invalid_argument("direct tetrahedral Oersted options or cardinality are invalid");
+    (void)DirectTetraQuadrature::ResolveWorkLimits(options);
+    if (source_count > DirectTetraQuadrature::maximum_final_leaves_per_target ||
+            target_count > 1'000'000) {
+        throw std::invalid_argument("direct tetrahedral Oersted cardinality is invalid");
     }
-    if (options.maximum_source_target_pairs == 0 ||
-            (target_count != 0 && source_count >
-                options.maximum_source_target_pairs / target_count)) {
+    if (target_count != 0 && source_count >
+            options.maximum_source_target_pairs / target_count) {
         throw std::invalid_argument(
             "direct tetrahedral Oersted source-target pair budget exceeded");
     }
@@ -542,6 +544,67 @@ void reserve_bounded(std::vector<T> &values, std::size_t required)
     }
 }
 
+// Best-effort failure telemetry only; never change the exception or sample J/H.
+void emit_failure_leaves(const char *reason, const std::vector<Leaf> &leaves,
+    const Point &target, const DirectTetraQuadratureOptions &options) noexcept
+{
+    try {
+        std::array<const Leaf *, 3> top{};
+        std::size_t depth_limited = 0, unresolved = 0;
+        ScalarAccumulator depth_error;
+        for (const auto &leaf : leaves) {
+            if (leaf.needs_refine) ++unresolved;
+            if (leaf.depth >= options.maximum_subdivision_depth) {
+                ++depth_limited;
+                if (!leaf.needs_refine) depth_error.add(leaf.error);
+            }
+            for (std::size_t rank = 0; rank < top.size(); ++rank) {
+                if (top[rank] == nullptr || leaf.error > top[rank]->error ||
+                        (leaf.error == top[rank]->error && leaf.sequence < top[rank]->sequence)) {
+                    for (std::size_t next = top.size() - 1; next > rank; --next) {
+                        top[next] = top[next - 1];
+                    }
+                    top[rank] = &leaf;
+                    break;
+                }
+            }
+        }
+        std::ostringstream record;
+        record.imbue(std::locale::classic());
+        record << "[oersted_failure_v1] reason=";
+        for (std::size_t i = 0; i < 48 && reason[i] != '\0'; ++i) {
+            const char c = reason[i];
+            record << ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') || c == '_' || c == '-' ? c : '_');
+        }
+        record << std::setprecision(17) << "; target_m=(" << target[0] << ','
+               << target[1] << ',' << target[2] << "); leaves=" << leaves.size()
+               << "; depth_limited=" << depth_limited << "; unresolved=" << unresolved
+               << std::scientific << std::setprecision(6)
+               << "; depth_error_apm=" << depth_error.value << "; top_s_d_e_r=[";
+        bool first = true;
+        for (const auto *leaf : top) {
+            if (leaf == nullptr) continue;
+            Point effective_target{};
+            std::array<std::array<Point, 4>, 4> children{};
+            int count = 0;
+            const bool duffy = decompose_target_tetrahedron(leaf->vertices, target,
+                &effective_target, &children, &count);
+            if (!first) record << ';';
+            first = false;
+            // Classification is recomputed from retained geometry, not a failing child.
+            record << leaf->source_index << ',' << leaf->depth << ',' << leaf->error
+                   << ',' << (leaf->needs_refine ? 'U' : duffy ? 'D' : 'R');
+        }
+        record << ']';
+        // Keep room in the worker's 512-character failure prefix. Earlier stderr
+        // can still displace this additive record; it is not a durable field artifact.
+        std::cerr << record.str().substr(0, 479) << '\n';
+    } catch (...) {
+        // Diagnostics must not mask the original numerical/resource failure.
+    }
+}
+
 std::pair<Point, DirectTetraTargetDiagnostics> evaluate_target(
     const std::vector<PreparedElement> &elements,
     const Point &target,
@@ -655,6 +718,7 @@ std::pair<Point, DirectTetraTargetDiagnostics> evaluate_target(
             ++diagnostics.refined_pairs;
         }
     } catch (const std::exception &error) {
+        emit_failure_leaves(error.what(), leaves, target, options);
         ++diagnostics.unconverged_pair_count;
         std::ostringstream detail;
         detail << std::setprecision(17) << error.what() << "; target_m=("
@@ -686,6 +750,27 @@ std::array<Point, 4> element_vertices(const mfem::Mesh &mesh, int element)
 }
 
 } // namespace
+
+DirectTetraQuadratureWorkLimits DirectTetraQuadrature::ResolveWorkLimits(
+    const DirectTetraQuadratureOptions &options)
+{
+    if (options.base_quadrature_order < 2 || options.base_quadrature_order > 16 ||
+            options.maximum_subdivision_depth < 0 || options.maximum_subdivision_depth > 6 ||
+            !(std::isfinite(options.absolute_tolerance_apm) && options.absolute_tolerance_apm >= 0.0) ||
+            !(std::isfinite(options.relative_tolerance) && options.relative_tolerance >= 0.0)) {
+        throw std::invalid_argument("direct tetrahedral Oersted options are invalid");
+    }
+    if (options.maximum_source_target_pairs > 0 &&
+            options.maximum_source_target_pairs <= 1'000'000) {
+        return {maximum_kernel_evaluations, maximum_ledger_leaf_visits};
+    }
+    if (options.maximum_source_target_pairs == 4'000'000 &&
+            options.base_quadrature_order == 4 && options.maximum_subdivision_depth == 6 &&
+            options.absolute_tolerance_apm == 1.0e-9 && options.relative_tolerance == 1.0e-5) {
+        return {500'000'000, 500'000'000};
+    }
+    throw std::invalid_argument("direct tetrahedral Oersted work profile is invalid");
+}
 
 DirectTetraQuadratureResult DirectTetraQuadrature::Evaluate(
     const fullmag::fem::transport::ConservativeCurrentView &source,
@@ -776,7 +861,7 @@ DirectTetraQuadratureResult DirectTetraQuadrature::EvaluateField(
     validate_pair_budget(static_cast<std::uint64_t>(mesh.GetNE()),
         static_cast<std::uint64_t>(target_points.size()), options);
     const auto elements = prepare_source(mesh, rt0_field, options);
-    WorkBudget work;
+    WorkBudget work(options);
     return evaluate_prepared(elements, target_points, options, work);
 }
 
@@ -813,6 +898,10 @@ DirectTetraQuadratureDiagnostics DirectTetraQuadrature::ProjectField(
                 "direct tetrahedral Oersted projection requires tetrahedral targets");
         }
     }
+    // The volume profile is only for pointwise closed-loop inspection.
+    if (options.maximum_source_target_pairs > 1'000'000) {
+        throw std::invalid_argument("direct tetrahedral Oersted H1 projection requires a legacy work profile");
+    }
     // Freeze one source snapshot for all target points and Cartesian components.
     const auto elements = prepare_source(source_mesh, rt0_field, options);
 
@@ -843,7 +932,7 @@ DirectTetraQuadratureDiagnostics DirectTetraQuadrature::ProjectField(
     DirectTetraQuadratureDiagnostics diagnostics;
     mfem::Vector solution(scalar_dofs);
     mfem::Vector residual(scalar_dofs);
-    WorkBudget work;
+    WorkBudget work(options);
     for (int component = 0; component < 3; ++component) {
         DirectScalarCoefficient direct_component(
             elements, options, component, work);

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections.abc import Mapping
 import hashlib
 import json
 from pathlib import Path
@@ -33,7 +34,55 @@ def _inspect(*arguments, timeout=90):
     return records[0]
 
 
-def apply_saved_budget(control, document):
+def _docker_capacity():
+    return json.loads(docker_capture("info", "--format", "{{json .}}").stdout)
+
+
+def default_group_budget(capacity):
+    """Per-group defaults sized so three DEV groups fit in one Docker VM.
+
+    Compose limits are caps, not reservations: an idle group costs nothing and
+    a busy one is throttled by its own quota instead of stopping other groups.
+    """
+    cpus, memory_gib = int(capacity["NCPU"]), int(capacity["MemTotal"]) // GIB
+    return {
+        "FULLMAG_DEV_BACKEND_CPUS": max(2, min(8, cpus // 4)),
+        "FULLMAG_DEV_BACKEND_MEMORY_GIB": max(8, min(32, memory_gib // 6)),
+        "FULLMAG_DEV_FRONTEND_CPUS": max(2, min(4, cpus // 10)),
+        "FULLMAG_DEV_FRONTEND_MEMORY_GIB": max(8, min(16, memory_gib // 12)),
+    }
+
+
+def apply_group_budget(document, configured, capacity=None):
+    """Apply the static per-group budget from ``.env`` or the VM defaults.
+
+    The container quota, the native host profile and Cargo use one value, so
+    the group's own ledger never offers more than its container may use.
+    """
+    capacity = _docker_capacity() if capacity is None else capacity
+    budget = {**default_group_budget(capacity), **configured}
+    backend_cpus = budget["FULLMAG_DEV_BACKEND_CPUS"]
+    backend_memory = budget["FULLMAG_DEV_BACKEND_MEMORY_GIB"] * GIB
+    frontend_cpus = budget["FULLMAG_DEV_FRONTEND_CPUS"]
+    frontend_memory = budget["FULLMAG_DEV_FRONTEND_MEMORY_GIB"] * GIB
+    if backend_cpus < 2:
+        raise BuildControlError("FULLMAG_DEV_BACKEND_CPUS must be at least 2 for compute and preparation")
+    if backend_memory < 4 * GIB or frontend_memory < 8 * GIB:
+        raise BuildControlError("DEV budget needs at least 4 GiB for backend and 8 GiB for frontend")
+    if (max(backend_cpus, frontend_cpus) > capacity["NCPU"]
+            or max(backend_memory, frontend_memory) > capacity["MemTotal"]):
+        raise BuildControlError("DEV group budget exceeds Docker capacity "
+                                f"({capacity['NCPU']} CPUs, {capacity['MemTotal'] // GIB} GiB)")
+    backend, frontend = (document["services"][name] for name in ("backend", "frontend"))
+    backend.update(cpus=backend_cpus, mem_limit=backend_memory)
+    frontend.update(cpus=frontend_cpus, mem_limit=frontend_memory)
+    environment = backend.setdefault("environment", {})
+    environment["CARGO_BUILD_JOBS"] = str(min(backend_cpus, 64))
+    environment["FULLMAG_DOCKER_CPU_MILLIS"] = str(backend_cpus * 1000)
+    environment["FULLMAG_DOCKER_MEMORY_BYTES"] = str(backend_memory)
+
+
+def apply_saved_budget(control, document, *, superseded=False):
     """Apply only this control namespace's explicitly saved backend budget."""
     profile = control.read(PROFILE_PATH, optional=True)
     if profile is None:
@@ -60,12 +109,103 @@ def apply_saved_budget(control, document):
     if (type(memory) is not int or memory < GIB or type(cpus) is not int or cpus < 1
             or type(swap) is not int or (swap != -1 and swap < memory)):
         raise BuildControlError("Saved backend resource budget is invalid")
+    if superseded:
+        # Authenticate the historical receipt above even when its limits lose
+        # precedence to an exact stored-budget restore. Only effective limits
+        # participate in capacity admission and Compose rendering.
+        return
     backend = document["services"]["backend"]
-    capacity = json.loads(docker_capture("info", "--format", "{{json .}}").stdout)
+    capacity = _docker_capacity()
     if (memory < int(backend["mem_limit"]) or cpus < float(backend["cpus"])
             or memory > capacity["MemTotal"] or cpus > capacity["NCPU"]):
         raise BuildControlError("Saved backend budget is below the Compose baseline or above Docker capacity")
     backend.update(cpus=cpus, mem_limit=memory, memswap_limit=swap)
+    # The container quota, native host profile, and Cargo must use the same
+    # verified budget. Native CMake builds share Cargo's jobserver.
+    environment = backend.setdefault("environment", {})
+    environment["CARGO_BUILD_JOBS"] = str(min(cpus, 64))
+    environment["FULLMAG_DOCKER_CPU_MILLIS"] = str(cpus * 1000)
+    environment["FULLMAG_DOCKER_MEMORY_BYTES"] = str(memory)
+
+
+def authenticated_prepared_budget(control, *, maintenance=None, recovery=None, source_root=None):
+    """Read retained limits only through the live prepared admission context."""
+    if maintenance is None and recovery is None:
+        return None
+    from docker_volume_linux_supervision_stop import (
+        PREPARED_QUARANTINE, PREPARED_QUARANTINE_SCHEMA,
+        assert_prepared_maintenance_allowed, assert_prepared_start_allowed,
+    )
+    if maintenance is not None and recovery is not None:
+        raise BuildControlError("Prepared budget has conflicting admission contexts")
+    if maintenance is not None:
+        operation, request = maintenance
+        assert_prepared_maintenance_allowed(control, operation, request)
+        receipt = operation.get("receipt", {})
+        constraints = receipt.get("inputs", {}).get("prepared_unclaimed_quarantine")
+        if constraints is None:
+            return None
+        if receipt.get("unclaimed_cancellation_preflight", {}).get("prepared_unclaimed_quarantine") != constraints:
+            raise BuildControlError("Prepared budget differs from the witnessed maintenance preflight")
+    else:
+        assert_prepared_start_allowed(control)
+        constraints = recovery.get("constraints") if isinstance(recovery, Mapping) else None
+    raw = control.read_bytes(PREPARED_QUARANTINE)
+    record = json.loads(raw)
+    scope = record.get("scope", {})
+    if (record.get("schema") != PREPARED_QUARANTINE_SCHEMA
+            or any(scope.get(key) != value for key, value in (
+                ("compose_project", control.project), ("control_volume", control.volume),
+                ("control_namespace", control.namespace),
+                ("namespace_registry_sha256", control.namespace_registry_sha256),
+                ("source_root", source_root)))
+            or not isinstance(constraints, Mapping)
+            or constraints.get("schema") != PREPARED_QUARANTINE_SCHEMA
+            or constraints.get("target") != record.get("target")
+            or constraints.get("stop_journal_sha256") != record.get("stop_journal_sha256")
+            or (maintenance is not None and (record.get("state") != "cancellation-required"
+                or constraints.get("quarantine_sha256") != hashlib.sha256(raw).hexdigest()))
+            or (recovery is not None and (record.get("state") != "archived"
+                or record.get("cancellation_admission") != recovery))):
+        raise BuildControlError("Prepared budget has no matching live quarantine scope/admission")
+    budget = constraints.get("backend_budget")
+    if not isinstance(budget, Mapping) or set(budget) != {"Memory", "NanoCpus", "MemorySwap"}:
+        raise BuildControlError("Prepared backend resource budget is malformed")
+    memory, nano, swap = (budget[key] for key in ("Memory", "NanoCpus", "MemorySwap"))
+    if (type(memory) is not int or memory < 4 * GIB or memory % GIB
+            or type(nano) is not int or nano < 2 * 10**9 or nano % 10**9
+            or type(swap) is not int or (swap != -1 and swap < memory)):
+        raise BuildControlError("Prepared backend resource budget is invalid")
+    return {"cpus": nano // 10**9, "memory_bytes": memory, "memory_swap_bytes": swap}
+
+
+def apply_development_budget(control, document, configured, *, cold_budget_restore=None,
+                             source_root=None, capacity=None, prepared_maintenance=None,
+                             prepared_recovery_constraints=None):
+    """Render one budget, with the authenticated retained pin taking precedence."""
+    prepared = authenticated_prepared_budget(
+        control, maintenance=prepared_maintenance, recovery=prepared_recovery_constraints,
+        source_root=source_root,
+    )
+    if prepared is not None and cold_budget_restore is not None:
+        raise BuildControlError("Prepared budget cannot be combined with another retained restore")
+    restored = prepared
+    if cold_budget_restore is not None:
+        from docker_volume_cold_budget_restore import authenticated_budget
+        restored = authenticated_budget(control, document, cold_budget_restore, source_root=source_root)
+    if restored is not None:
+        configured = {**configured,
+            "FULLMAG_DEV_BACKEND_CPUS": restored["cpus"],
+            "FULLMAG_DEV_BACKEND_MEMORY_GIB": restored["memory_bytes"] // GIB}
+    apply_group_budget(document, configured, capacity=capacity)
+    if restored is None:
+        apply_saved_budget(control, document)
+    else:
+        apply_saved_budget(control, document, superseded=True)
+        if prepared is not None:
+            document["services"]["backend"]["memswap_limit"] = prepared["memory_swap_bytes"]
+        from docker_volume_cold_budget_restore import overlay_budget
+        overlay_budget(document, restored)
 
 
 def _assert_no_unresolved_increases(control, root):
@@ -125,7 +265,7 @@ try:
   value=json.loads(request.read_bytes())
   if value.get('pid')==pid and value.get('process_start_token')==token: raise RuntimeError('worker gate already started')
  print('PAUSED',flush=True)
- while select.select([sys.stdin],[],[],30)[0]:
+ while select.select([sys.stdin],[],[],float(sys.argv[3]))[0]:
   command=sys.stdin.readline().strip()
   if command=='ARM':
    armed=True; print('ARMED',flush=True)
@@ -157,11 +297,13 @@ finally: os.close(fd)
 
 
 @contextmanager
-def _pause_start(backend_id, probe):
+def _pause_start(backend_id, probe, *, pause_seconds=30):
     from docker_dev_host import docker_argv
+    if not 30 <= pause_seconds <= 600:
+        raise BuildControlError("Startup pause exceeds its bounded observation window")
     process = subprocess.Popen(docker_argv("exec", "-i", backend_id, "/usr/local/bin/python3",
                                "-I", "-B", "-u", "-c", _PAUSE_START,
-                               str(probe["pid"]), probe["start_token"]),
+                               str(probe["pid"]), probe["start_token"], str(pause_seconds)),
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     state = {"process": process, "issued": False, "resolved": False}
     try:

@@ -31,6 +31,13 @@ describe("inspectorActionState", () => {
     expect(inspectorActionState(session({ dirty: true, valid: false })).canApply).toBe(false);
   });
 
+  it("reports an in-flight commit even if its draft was already acknowledged", () => {
+    const state = inspectorActionState(session({ applying: true, dirty: false }));
+    expect(state.applyReason).toBe("Applying changes");
+    expect(state.canApply).toBe(false);
+    expect(state.canReset).toBe(false);
+  });
+
   it("keeps live viewport Reset honest without presenting Apply", () => {
     const state = inspectorActionState(
       session({ dirty: true, mode: "liveViewport" }),

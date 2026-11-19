@@ -4,9 +4,9 @@ use anyhow::{bail, Context, Result};
 use crate::process_environment::remove_local_compute_operator_token;
 use fullmag_session::{
     repository_path::checked_path,
-    host_resource_ledger::DockerNamespaceTeardownAttestation,
     runtime_service::{
         validate_descriptor, RuntimeServiceConfig, RuntimeServiceContainerRecoveryReceipt,
+        container_recovery_proof::RuntimeServiceContainerRecoveryProof,
         RuntimeServiceContainerRecoveryRequest, RuntimeServiceLaunchGuard,
         RuntimeServiceOwnerDescriptor, RuntimeServiceRecoveryReceipt,
         RuntimeServiceRecoveryRequest, RuntimeServiceState,
@@ -116,6 +116,56 @@ pub fn recover_unknown_empty(
     )
 }
 
+/// Read-only producer of a recovery evidence pin, using the same native gates
+/// that recovery will revalidate. No owner state or lease is changed.
+pub fn inspect_terminal_run_evidence(
+    configuration_path: &Path,
+    expected_configuration_sha256: &str,
+    run_id: &str,
+) -> Result<String> {
+    if expected_configuration_sha256.len() != 64
+        || !expected_configuration_sha256.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        bail!("terminal evidence requires a lowercase configuration SHA-256");
+    }
+    let (bytes, digest) = read_stable_container_recovery_document(
+        configuration_path, 64 * 1024, "terminal evidence configuration",
+    )?;
+    if digest != expected_configuration_sha256 {
+        bail!("terminal evidence configuration differs from its raw-byte pin");
+    }
+    let config: RuntimeServiceConfig = serde_json::from_slice(&bytes)
+        .context("parse terminal evidence configuration")?;
+    let store = fullmag_session::SessionStore::open_existing(config.store_root.clone())?;
+    config.inspect_terminal_run_evidence(&store, run_id)
+}
+
+/// Read-only v4 held-manual evidence. The old terminal evidence command is
+/// deliberately unchanged and continues to reject nonterminal tasks.
+pub fn inspect_held_manual_run_evidence(
+    configuration_path: &Path,
+    expected_configuration_sha256: &str,
+    run_id: &str,
+) -> Result<String> {
+    if expected_configuration_sha256.len() != 64
+        || !expected_configuration_sha256.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        bail!("held manual evidence requires a lowercase configuration SHA-256");
+    }
+    let (bytes, digest) = read_stable_container_recovery_document(
+        configuration_path, 64 * 1024, "held manual evidence configuration",
+    )?;
+    if digest != expected_configuration_sha256 {
+        bail!("held manual evidence configuration differs from its raw-byte pin");
+    }
+    let config: RuntimeServiceConfig = serde_json::from_slice(&bytes)
+        .context("parse held manual evidence configuration")?;
+    let store = fullmag_session::SessionStore::open_existing(config.store_root.clone())?;
+    config.inspect_held_manual_run_evidence(&store, run_id)
+}
+
 /// Execute the explicitly authorized recovery of one pinned stopped Docker
 /// namespace. The request and teardown attestation are read through bounded
 /// regular-file guards, reread unchanged, and passed to the native recovery
@@ -169,9 +219,9 @@ pub fn recover_container_empty(
     if request.config_sha256 != configuration_sha256 {
         bail!("container recovery configuration differs from the request pin");
     }
-    let attestation: DockerNamespaceTeardownAttestation =
+    let attestation: RuntimeServiceContainerRecoveryProof =
         serde_json::from_slice(&attestation_bytes).context("parse container recovery attestation")?;
-    attestation.validate_without_request()?;
+    attestation.validate_for_request(&request, &request_sha256)?;
     let attestation_sha256 = attestation.sha256()?;
     if attestation_sha256 != expected_attestation_sha256 {
         bail!("container recovery attestation differs from the operator SHA-256 pin");
@@ -204,7 +254,7 @@ pub fn recover_container_empty(
 
     let store = fullmag_session::SessionStore::open_existing(candidate.store_root.clone())?;
     let executor = fullmag_build_info::identity();
-    RuntimeServiceConfig::recover_container_empty(
+    RuntimeServiceConfig::recover_container_with_proof(
         &store,
         &candidate,
         &configuration_bytes,

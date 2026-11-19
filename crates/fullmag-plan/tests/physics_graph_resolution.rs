@@ -87,6 +87,7 @@ fn slonczewski_torque(id: &str, current_source: &str) -> SpinTorqueModuleIR {
         epsilon_prime: 0.0,
         free_layer_thickness_m: Some(1.0e-9),
         fixed_layer_position: None,
+        time_expression: None,
         realization: Some(SlonczewskiRealizationIR::ThinLayerHomogenized {
             realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
         }),

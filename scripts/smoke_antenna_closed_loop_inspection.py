@@ -2,6 +2,7 @@
 """Bounded real HTTP closed-loop inspection checks; no scientific qualification."""
 from __future__ import annotations
 import argparse
+from decimal import Decimal
 from hashlib import sha256
 import itertools
 import json
@@ -22,6 +23,7 @@ METADATA_BOUND = 64 << 10
 BINARY_BOUND = 16 << 20
 TOTAL_BOUND = 64 << 20
 CELL_BOUND = 4096
+SAMPLE_CELL_BOUND = 16384
 VERTEX_BOUND = 4 * CELL_BOUND
 HEX = re.compile(r"[0-9a-f]{64}")
 PIN = re.compile(r"sha256:[0-9a-f]{64}")
@@ -81,8 +83,10 @@ def validate_resource(resource, stage_id):
     require(m.get("signed_normalization_a") == current and m.get("scale_per_a") == 1 / current and finite(m["scale_per_a"]), "unsigned or unresolved per-A scale")
     require(all(finite(s.get(k)) for k in ("potential_jump_v", "measured_potential_jump_v", "gauge_mean_v", "charge_relative_residual", "max_paired_weak_flux_mismatch_a")) and 0 <= s["charge_relative_residual"] <= 1e-12, "invalid accepted charge scalars")
     require(isinstance(s.get("terminal_observation_currents"), dict) and all(finite(v) for v in s["terminal_observation_currents"].values()), "invalid observation currents")
-    n, c, t, h = (count(m.get(k), bound, k) for k, bound in (("vertex_count", VERTEX_BOUND), ("cell_count", CELL_BOUND), ("target_count", VERTEX_BOUND), ("sample_cell_count", CELL_BOUND)))
+    n, c, t, h = (count(m.get(k), bound, k) for k, bound in (("vertex_count", VERTEX_BOUND), ("cell_count", CELL_BOUND), ("target_count", VERTEX_BOUND), ("sample_cell_count", SAMPLE_CELL_BOUND)))
     f, w = count(m.get("face_count"), 4*c, "face_count"), count(m.get("weak_reaction_count"), n, "weak_reaction_count")
+    evidence_schema = m.get("direct_evidence_schema")
+    require(evidence_schema in ("fem_direct_oersted_evidence.v2", "fem_rt0_surface_evidence.v1"), "unknown direct evidence schema")
     specs = {
         "stable_vertex_ids": ("node_u64_le", "1", n*8), "vertex_xyz": ("node_xyz_f64_le", "m", n*24),
         "sample_xyz": ("sample_xyz_f64_le", "m", t*24), "sample_cells": ("sample_tet4_u32_le", "1", h*16),
@@ -93,7 +97,7 @@ def validate_resource(resource, stage_id):
         "cells": ("closed_loop_cell280_le", "SI", c*280), "faces": ("face_u64x3_f64_le", "A", f*32), "weak": ("paired_u64x2_f64x2_le", "A", w*32),
         **{key: ("canonical_named_fields_be_bits.v2", "1", None) for key in SCHEMAS},
         "certificate": ("canonical_balance_certificate.v1", "1", None), "authoring_receipt": ("utf8_json_input.v1", "1", None),
-        "direct_evidence": ("fem_direct_oersted_evidence.v2", "SI", 296+t*96),
+        "direct_evidence": (evidence_schema, "SI", 296+t*96 if evidence_schema == "fem_direct_oersted_evidence.v2" else None),
     }
     payloads = m.get("payloads")
     require(isinstance(payloads, dict) and set(payloads) == set(specs), "22-payload closure incomplete")
@@ -103,6 +107,7 @@ def validate_resource(resource, stage_id):
         require(isinstance(d, dict) and set(d) == {"path", "sha256", "byte_length", "layout", "unit"} and d["path"] == f"antenna/field_solutions/{m['solution_id']}/{key}.bin" and d["layout"] == layout and d["unit"] == unit and isinstance(d["sha256"], str) and HEX.fullmatch(d["sha256"]), f"{key} descriptor differs")
         count(d["byte_length"], BINARY_BOUND, key + " byte_length")
         require(size is None or size == d["byte_length"], f"{key} size differs")
+    require(evidence_schema != "fem_rt0_surface_evidence.v1" or payloads["direct_evidence"]["byte_length"] > 176, "surface evidence header or length")
     require(sum(d["byte_length"] for d in payloads.values()) <= TOTAL_BOUND, "aggregate payload bound exceeded")
     return m, digest
 
@@ -176,6 +181,83 @@ def doubles(data):
     return values
 
 
+def verify_field_evidence(m, payloads):
+    """Check retained transport bindings; canonical Rust owns numerical admission."""
+    evidence, s, n = payloads["direct_evidence"], m["source"], m["target_count"]
+    require(len(evidence) == m["payloads"]["direct_evidence"]["byte_length"] <= BINARY_BOUND, "evidence descriptor length differs")
+    require(len(payloads["sample_xyz"]) == len(payloads["h_raw"]) == n * 24, "evidence carrier length differs")
+    if m["direct_evidence_schema"] == "fem_direct_oersted_evidence.v2":
+        require(len(evidence) == 296+n*96 and evidence[:16] == b"FM-OEF1-Q3-V2\0\0\0" and evidence[16:80] == s["view_identity_digest"].encode() and evidence[80:144] == s["current_balance_certificate_digest"].encode(), "direct evidence source/certificate or length differs")
+        require(struct.unpack_from("<Q", evidence, 144)[0] == n and struct.unpack_from("<Q", evidence, 168)[0] == 0 and evidence[272:296] == struct.pack("<3d", s["source_current_a"], m["scale_per_a"], s["source_absolute_flux_a"]), "direct evidence target count/current/scale differs")
+        for i in range(n):
+            row = evidence[296+96*i:296+96*(i+1)]
+            require(row[:24] == payloads["sample_xyz"][24*i:24*(i+1)] and row[24:48] == payloads["h_raw"][24*i:24*(i+1)] and all(math.isfinite(v) for v in struct.unpack("<9d", row[:72])), "direct H/target sampling carrier differs")
+        return
+    require(m["direct_evidence_schema"] == "fem_rt0_surface_evidence.v1" and len(evidence) > 176 and evidence[:16] == b"FM-RT0-SURF-V1\0\0", "surface evidence header or schema")
+    require(struct.unpack_from("<Q", evidence, 16)[0] == len(evidence)-176, "surface exact evidence length")
+    require(evidence[24:48] == struct.pack("<3d", s["source_current_a"], s["source_absolute_flux_a"], m["scale_per_a"]) and evidence[48:112] == s["current_balance_certificate_digest"].encode(), "surface evidence current/certificate differs")
+    ordered = sha256(b"antenna_rt0_surface_ordered_targets.v1" + struct.pack("<Q", n) + payloads["sample_xyz"]).hexdigest()
+    require(evidence[112:176] == ordered.encode(), "surface ordered target digest differs")
+    snapshot = json_body(HttpResult(200, {"content-type": "application/json"}, evidence[176:]), 200)
+    require(snapshot.get("schema_version") == "fem_rt0_surface_snapshot.v1" and snapshot.get("operator_version") in ("fem_oersted_rt0_surface.inspection.v1", "fem_oersted_rt0_surface.mpfr128_160_rndn_etoff.inspection.v1") and snapshot.get("basis_version") == "fem_generic_affine_rt0.v1" and snapshot.get("inspection_only") is True and snapshot.get("error_certificate_available") is False, "surface snapshot versions or qualification differ")
+    require(snapshot.get("source_view_identity_digest") == s["view_identity_digest"] and snapshot.get("accepted_source_state_digest") == s["accepted_source_state_digest"], "surface accepted source differs")
+    policy = {key: snapshot[key] for key in ("policy_version", "limits", "tolerances")}
+    # Match closed_loop_public_inspection::inspection_view's thin named counters.
+    encoding = m.get("surface_counter_encoding")
+    require(encoding in (None, "named_work_kind.v1"), "surface counter encoding differs")
+    if encoding is not None:
+        names = ("source_target_pairs", "face_precision_passes", "whole_face_formulas",
+                 "signed_fan_panels", "exact_fraction_operations", "exact_integer_operations",
+                 "exact_comparisons", "real_divisions", "copied_input_bytes",
+                 "reserved_output_bytes", "sqrt_calls", "log_calls", "log1p_calls", "atan2_calls")
+        policy["limits"] = dict(policy["limits"])
+        for name in ("total", "per_target"):
+            counts = policy["limits"].get(name)
+            require(isinstance(counts, list) and len(counts) == len(names), "surface counter array differs")
+            policy["limits"][name] = dict(zip(names, counts))
+    require(policy == m["requested_intent"].get("surface_field_policy") == m["resolved_execution"].get("surface_field_policy"), "surface requested/resolved policy differs")
+    pending = [snapshot]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict): pending.extend(value.values())
+        elif isinstance(value, list): pending.extend(value)
+        elif isinstance(value, float): require(math.isfinite(value), "surface nonfinite JSON number")
+    def vector(values):
+        require(isinstance(values, list) and len(values) == 3 and all(finite(v) for v in values), "surface invalid vector")
+        return struct.pack("<3d", *values)
+    def decimal(value, nonnegative=False):
+        require(isinstance(value, str) and 0 < len(value) <= 4096 and re.fullmatch(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", value), "surface invalid decimal")
+        exponent = re.split("[eE]", value)
+        require(len(exponent) == 1 or -(1 << 31) <= int(exponent[1]) < (1 << 31), "surface decimal exponent bound")
+        number = Decimal(value)
+        require(number.is_finite() and (not nonnegative or number >= 0), "surface nonfinite or negative diagnostic")
+        return number
+    positions, targets = snapshot.get("targets_xyz_m"), snapshot.get("targets")
+    require(isinstance(positions, list) and isinstance(targets, list) and len(positions) == len(targets) == n, "surface target count differs")
+    for i, (position, target) in enumerate(zip(positions, targets)):
+        require(vector(position) == payloads["sample_xyz"][24*i:24*(i+1)] and vector(target["h_xyz_apm"]) == payloads["h_raw"][24*i:24*(i+1)], "surface H/target sampling carrier differs")
+        precisions = target["precisions"]
+        require(isinstance(precisions, list) and len(precisions) == 3 and type(target["binary64_requires_highprecision"]) is bool, "surface precision shape differs")
+        for index, precision in enumerate(precisions):
+            evaluated = precision["evaluated"]
+            require(type(evaluated) is bool, "surface precision flag differs")
+            numbers = [*precision["h_xyz_apm"], *precision["whole_h_xyz_apm"], *(precision[key] for key in ("sum_local_norm_apm", "cancellation", "maximum_face_cancellation"))]
+            require(isinstance(precision["h_xyz_apm"], list) and isinstance(precision["whole_h_xyz_apm"], list) and len(precision["h_xyz_apm"]) == len(precision["whole_h_xyz_apm"]) == 3, "surface precision vector differs")
+            if not evaluated:
+                reason = precision["refusal_reason"]
+                require(index == 0 and target["binary64_requires_highprecision"] and isinstance(reason, str) and 0 < len(reason) <= 4096 and "\0" not in reason and all(value == "" for value in numbers), "surface refused precision differs")
+                continue
+            require(precision["refusal_reason"] == "", "surface evaluated precision refusal")
+            for j, number in enumerate(numbers): decimal(number, j >= 6)
+        require(struct.pack("<3d", *(float(decimal(v)) for v in precisions[2]["h_xyz_apm"])) == payloads["h_raw"][24*i:24*(i+1)], "surface highprecision H rounding differs")
+        for key in ("precision_budget_apm", "local_precision_delta_apm", "local_formula_delta_apm", "local_formula_delta_80_apm"):
+            decimal(target[key], True)
+        if precisions[0]["evaluated"]:
+            decimal(target["binary64_roundoff_indicator_apm"], True)
+        else:
+            require(target["binary64_roundoff_indicator_apm"] == "", "surface refused binary roundoff")
+
+
 def decode_payloads(m, payloads):
     s, n, c = m["source"], m["vertex_count"], m["cell_count"]
     for key in ("vertex_xyz", "sample_xyz", "conductivity", "v_raw", "v_per_a", "j_center_raw", "j_center_per_a", "j_local_raw", "j_local_per_a", "h_raw", "h_per_a"):
@@ -246,12 +328,7 @@ def decode_payloads(m, payloads):
     weak = list(struct.iter_unpack("<2Q2d", payloads["weak"]))
     require(group(state, "paired_weak_reaction_count", m["weak_reaction_count"], [(k, 2) for k in ("minus_vertex_id", "plus_vertex_id", "minus_reaction_a_bits", "plus_reaction_a_bits")]) == [[*row[:2], bits(row[2]), bits(row[3])] for row in weak], "weak ledger/preimage differs")
     require(all(abs(a+b) <= 1e-18+1e-10*(abs(a)+abs(b)) for _, _, a, b in weak), "paired weak gate differs")
-    evidence = payloads["direct_evidence"]
-    require(evidence[:16] == b"FM-OEF1-Q3-V2\0\0\0" and evidence[16:80].decode() == s["view_identity_digest"] and evidence[80:144].decode() == s["current_balance_certificate_digest"], "direct evidence source/certificate differs")
-    require(struct.unpack_from("<Q", evidence, 144)[0] == m["target_count"] and struct.unpack_from("<Q", evidence, 168)[0] == 0 and evidence[272:296] == struct.pack("<3d", s["source_current_a"], m["scale_per_a"], s["source_absolute_flux_a"]), "direct evidence target count/current/scale differs")
-    for i in range(m["target_count"]):
-        row = evidence[296+96*i:296+96*(i+1)]
-        require(row[:24] == payloads["sample_xyz"][24*i:24*(i+1)] and row[24:48] == payloads["h_raw"][24*i:24*(i+1)] and all(math.isfinite(v) for v in struct.unpack("<9d", row[:72])), "direct H/target sampling carrier differs")
+    verify_field_evidence(m, payloads)
     # Full prepared-input, physical certificate and direct ledger admission is
     # performed by the API's canonical cold verifier, not this transport smoke.
     return {"source": s, "sample_carrier": m["sample_carrier"], "signed_normalization_a": m["signed_normalization_a"], "scale_per_a": m["scale_per_a"], "counts": {k:m[k] for k in ("vertex_count", "cell_count", "target_count", "sample_cell_count", "face_count", "weak_reaction_count")}, "payloads": m["payloads"], "content_digest": m["content_digest"], "requested_intent": m["requested_intent"], "resolved_execution": m["resolved_execution"]}

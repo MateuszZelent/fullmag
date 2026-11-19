@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { instanceTabVisibility } from "../layout/instanceTabVisibility";
 import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
 import {
   startAnalysisFieldOverlayPhaseAnimation,
@@ -45,6 +46,7 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    instanceTabVisibility.resetForTests();
   });
 
   it("advances phase only while eigen mode animation is active", () => {
@@ -299,6 +301,35 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
 
     handle.stop();
     expect(callbacks).toHaveLength(1);
+  });
+
+  it("cancels a browser frame when its instance tab is hidden on the host page", () => {
+    const callbacks: FrameRequestCallback[] = [];
+    const requestFrame = vi.fn((callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    const cancelFrame = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
+    vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+    const controller = new AnalysisFieldOverlayController();
+    setEigenOverlay(controller);
+    controller.update({ visualizationPhaseRad: 1.5 });
+
+    const handle = startAnalysisFieldOverlayPhaseAnimation(controller);
+    expect(requestFrame).toHaveBeenCalledTimes(1);
+
+    instanceTabVisibility.setVisible(false);
+
+    expect(cancelFrame).toHaveBeenCalledWith(1);
+    expect(controller.getSnapshot()).toMatchObject({
+      animation: { animatePhase: false },
+      visualizationPhaseRad: 1.5,
+    });
+
+    handle.stop();
+    instanceTabVisibility.setVisible(true);
+    expect(requestFrame).toHaveBeenCalledTimes(1);
   });
 
   it("uses frame timestamps for smooth browser animation and cancels the owned frame", () => {

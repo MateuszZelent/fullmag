@@ -5,6 +5,7 @@ import type {
   CommandOutcomeStatus,
 } from "../commands/commandTypes";
 import type { MeshBuildConfirmCommandId } from "../authoring/meshBuildConfirmation";
+import type { StudyComputeObservation } from "../commands/studyComputeObservations";
 import type { ModuleId, SlotId } from "../types";
 import type { LayoutState } from "../layout/layoutTypes";
 
@@ -131,6 +132,9 @@ export interface KernelEventMap {
     meshRevision: number | string;
     rendererId: string;
   };
+  "study:compute-observation": StudyComputeObservation & {
+    state: "started" | "rejected";
+  };
   "command:submitted": {
     commandId: string;
   };
@@ -145,6 +149,8 @@ export interface KernelEventMap {
    */
   "command:outcome": {
     backendCommandId: string | null;
+    clientIntentId: string | null;
+    clientIntentKind: string | null;
     commandId: string;
     feedback: CommandFeedbackOwner;
     invocationId: string;
@@ -171,6 +177,8 @@ export interface KernelEventMap {
     status: number | null;
   };
   "telemetry:scalar-sample": {
+    /** Scope accepted by the producing connection; null for an unscoped producer. */
+    requestScopeEpoch: string | null;
     revision: string | number;
     row: Record<string, number>;
     runId: string | null;

@@ -58,7 +58,7 @@ export function normalizeStoredPanelLayout(
   }
 
   const sizes = Object.values(layout);
-  if (sizes.some((value) => !Number.isFinite(value) || value <= 0)) {
+  if (sizes.some((value) => !Number.isFinite(value) || value < 0)) {
     return undefined;
   }
 

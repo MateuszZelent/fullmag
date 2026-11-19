@@ -21,6 +21,8 @@ from unittest import mock
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from docker_build_control import BuildControl
+from docker_script_output_mounts import OUTPUT_ROOT
 import docker_volume_post_build_generation as continuation
 import test_docker_volume_post_build_generation as generation_fixtures
 
@@ -65,10 +67,14 @@ class _Operation:
 
 
 class _Control:
+    path = staticmethod(BuildControl.path)
+    subpath = BuildControl.subpath
+
     project = generation_fixtures._Control.project
     volume = project + "-control"
     namespace = ""
     namespace_registry_sha256 = None
+    namespace_registry = None
     image = TOOLCHAIN_IMAGE
 
     def __init__(self, events: list[object]) -> None:
@@ -147,7 +153,7 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
     def _exercise_start(self, *, drift=False) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="fullmag-post-build-start-")
         self.addCleanup(temporary.cleanup)
-        source = Path(temporary.name)
+        source = Path(temporary.name).resolve(strict=True)
         fixture, metadata = self._metadata_fixture(source)
         events: list[object] = []
         control = _Control(events)
@@ -245,6 +251,7 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
             return original_prepare(*prepare_args, **prepare_kwargs)
 
         fake_script_mounts = types.ModuleType("docker_script_output_mounts")
+        fake_script_mounts.OUTPUT_ROOT = OUTPUT_ROOT
         fake_script_mounts.configure = lambda *_args, **_kwargs: None
         fake_script_mounts.validate = lambda *_args, **_kwargs: None
         fake_cgroup = types.ModuleType("docker_worker_cgroup")
@@ -252,6 +259,7 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
 
         import docker_dev
         import fullmag_docker_runtime as runtime
+        import docker_volume_cancelled_activation_guard as cancelled_guard
 
         with ExitStack() as stack:
             patches = [
@@ -259,6 +267,9 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
             ]
             import docker_volume_dev as dev
             patches.extend([
+                # These retained-start cases have no cancelled-activation
+                # recovery record; the optional control-volume read is absent.
+                mock.patch.object(cancelled_guard, "_read_control_bytes", return_value=None),
                 mock.patch.object(docker_dev, "_select_source", return_value=(source, {
                     "runtime_root": str(source), "storage_root": str(source),
                 })),
@@ -281,6 +292,9 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
                 mock.patch.object(docker_dev, "_verify_docker_gpu_access", return_value="cpu"),
                 mock.patch.object(docker_dev, "_assert_no_running_fullmag"),
                 mock.patch.object(runtime, "assert_loopback_port_available"),
+                mock.patch("docker_dev_defaults.configured_group_budget", return_value={}),
+                mock.patch("docker_volume_resources._docker_capacity",
+                           return_value={"NCPU": 40, "MemTotal": 196 * 1024 ** 3}),
                 mock.patch.object(dev, "local_volume", return_value={}),
                 mock.patch.object(dev.storage, "validate_path", side_effect=lambda value, *_args: Path(value)),
                 mock.patch.object(dev, "_session_host", return_value=host),
@@ -289,14 +303,16 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
                     ("2" * 64 if drift else hashlib.sha256(_control.records[continuation.CONFIG_RELATIVE]).hexdigest())
                 )),
                 mock.patch.object(dev, "_backend_cache", return_value={
+                    "project_id": "fullmag-project", "shared_package_subpath": "groups/" + "a" * 64,
                     "volume_names": [], "environment": {},
                     "overlay": {"services": {"backend": {"labels": {}, "volumes": []},
                                                  "frontend": {"volumes": []}}, "volumes": {}},
                 }),
                 mock.patch.object(dev, "_frontend", return_value=({}, "frontend-build")),
-                mock.patch.object(dev, "_host_ledger", return_value=({"environment": {}, "volumes": []}, {
-                    "maintenance_document": {}, "project_id": "fullmag-project",
-                    "mount_root": "/host-ledger", "backing_image": NEW_IMAGE,
+                # A new render uses the group's own ledger (ADR 0067).
+                mock.patch.object(dev, "_group_ledger", return_value=({"environment": {}, "volumes": []}, {
+                    "profile": "group-ledger-v1", "image_id": NEW_IMAGE,
+                    "compose_volume": {"name": "fullmag-dev-group-ledger-v1-test", "external": True},
                 })),
                 mock.patch.object(runtime, "_provisional_development_certificate", return_value=({"image_id": NEW_IMAGE}, {}, {})),
                 mock.patch.object(runtime, "_reuse_host_certificate", side_effect=host.reuse_certificate),
@@ -314,7 +330,7 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
                 mock.patch.object(dev, "_resolved_control_subpath", side_effect=lambda _control, service: service),
                 mock.patch.object(dev, "_reassert_operator_probe_environment"),
                 mock.patch.object(dev, "compose_capture", side_effect=compose_capture),
-                mock.patch.object(dev, "_start_compose_services", side_effect=lambda *_args: events.append("compose-start")),
+                mock.patch.object(dev, "_start_compose_services", side_effect=lambda *_args, **_kwargs: (events.append("compose-start") or ("b" * 64, "c" * 64))),
                 mock.patch.object(dev, "_finish", side_effect=finish),
                 mock.patch("docker_backend_volume_cache.validate_container"),
                 mock.patch.object(continuation, "prepare_start_binding", side_effect=prepare),

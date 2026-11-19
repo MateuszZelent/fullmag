@@ -31,6 +31,7 @@ if(FULLMAG_ENABLE_CUDA)
         gpu/cuda/runtime/device_info.cpp
         gpu/cuda/runtime/streams.cu
         gpu/cuda/runtime/adaptive_graph.cu
+        gpu/cuda/runtime/multilayer_bb.cu
         gpu/cuda/runtime/reductions_fp64.cu
         gpu/cuda/interactions/exchange_fp64.cu
         gpu/cuda/interactions/exchange_fp32.cu
@@ -88,8 +89,19 @@ file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/spin/checkpoint_code
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/layout_abi_v1.cpp" FDM_GPU_LAYOUT_SHA256)
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/checkpoint_abi_v1.cpp" FDM_GPU_CHECKPOINT_SHA256)
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/include/fullmag/fdm/transport/gpu_abi_v1.h" FDM_GPU_HEADER_SHA256)
+# DEV builds may narrow the CUDA targets to the local GPU.  An empty value keeps
+# the portable target list and the historical build identity unchanged.
+set(FULLMAG_FDM_CUDA_ARCHITECTURES "" CACHE STRING
+    "Optional CUDA targets for fullmag_fdm; empty keeps the portable list")
+if(FULLMAG_FDM_CUDA_ARCHITECTURES STREQUAL "")
+    set(fullmag_fdm_cuda_architectures "80;86;89;90")
+    set(fullmag_fdm_identity_architectures "${CMAKE_CUDA_ARCHITECTURES}")
+else()
+    set(fullmag_fdm_cuda_architectures "${FULLMAG_FDM_CUDA_ARCHITECTURES}")
+    set(fullmag_fdm_identity_architectures "${FULLMAG_FDM_CUDA_ARCHITECTURES}")
+endif()
 set(FDM_GPU_BUILD_FLAGS_IDENTITY
-    "cxx=${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION};cuda=${CMAKE_CUDA_COMPILER_ID}-${CMAKE_CUDA_COMPILER_VERSION};cxx_flags=${CMAKE_CXX_FLAGS};cuda_flags=${CMAKE_CUDA_FLAGS};arch=${CMAKE_CUDA_ARCHITECTURES}"
+    "cxx=${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION};cuda=${CMAKE_CUDA_COMPILER_ID}-${CMAKE_CUDA_COMPILER_VERSION};cxx_flags=${CMAKE_CXX_FLAGS};cuda_flags=${CMAKE_CUDA_FLAGS};arch=${fullmag_fdm_identity_architectures}"
 )
 string(REPLACE ";" "," FDM_GPU_BUILD_FLAGS_IDENTITY "${FDM_GPU_BUILD_FLAGS_IDENTITY}")
 string(SHA256 FDM_GPU_TRANSPORT_BUILD_DIGEST
@@ -178,9 +190,9 @@ if(FULLMAG_ENABLE_CUDA)
         )
     endif()
 
-    # Architecture targets: Ampere, Ada Lovelace, Hopper
+    # Architecture targets: Ampere, Ada Lovelace, Hopper (resolved above).
     set_target_properties(fullmag_fdm PROPERTIES
-        CUDA_ARCHITECTURES "80;86;89;90"
+        CUDA_ARCHITECTURES "${fullmag_fdm_cuda_architectures}"
     )
 
     target_link_libraries(fullmag_fdm PRIVATE

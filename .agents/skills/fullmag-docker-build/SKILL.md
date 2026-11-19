@@ -1,13 +1,13 @@
 ---
 name: fullmag-docker-build
-description: "Build or rebuild Fullmag from a selected checkout in its Docker Compose development group, with build data confined to persistent Docker volumes. Use for fresh-host builds, incremental backend restarts, frontend HMR, and build disk-usage or retention checks."
+description: "Build or rebuild Fullmag from a selected checkout in its Docker Compose development group, with build data confined to persistent Docker volumes. Use for fresh-host builds, backend rebuilds and package cache-hit restarts, frontend HMR, and build disk-usage or retention checks."
 ---
 
 # Fullmag — build DEV w wolumenach Docker
 
 Wynik: jedna grupa `fullmag-master` albo `fullmag-worktree-<worktree-id>`, dwie
-stałe usługi aplikacji, jeden wybrany readonly checkout i trwały przyrostowy
-cache. Aplikację buduje i uruchamia ten sam `backend`; Next/HMR działa w
+stałe usługi aplikacji, jeden wybrany readonly checkout i trwałe prywatne oraz
+współdzielone dane zgodnie z ich retencją. Aplikację buduje i uruchamia ten sam `backend`; Next/HMR działa w
 `frontend`. Zależności obrazu przygotowuje Compose/BuildKit dla tej samej grupy.
 
 ## Granica danych ustalona przez użytkownika
@@ -24,11 +24,56 @@ cache. Aplikację buduje i uruchamia ten sam `backend`; Next/HMR działa w
   ext4/xfs/btrfs; oba profile mają osobne dowody storage. WSL używa bieżącego
   endpointu Docker, a Windows contextu `desktop-linux`. Szczegóły i granice:
   [ADR 0064](../../../docs/adr/0064-docker-development-linux-wsl-host.md).
-- Cache ma przetrwać restart i zmianę źródeł. Nie usuwaj go dla zwykłego buildu.
-  Usunięcie kontenera nie usuwa named volumes ani obrazów/BuildKit.
+- W Linux/WSL każda symulacja ma własny `<stem>.py`, a sąsiedni `<stem>.zarr` i potrzebne PNG/PPTX,
+  checkpointy oraz provenance przechowuj na ext4 hoście WSL albo w samowystarczalnym Zarr. Wymagane dane do
+  interpretacji/wznowienia nie mogą mieć jedynej kopii w Dockerze; Windows tylko dla raportu jawnie wybranego
+  przez użytkownika.
+- `FULLMAG_SCRIPT_OUTPUT_DIRECTORY` z `.env` głównego checkoutu może udostępnić RW tylko wskazany istniejący
+  podkatalog przez `/opt/fullmag/script-output`; bind źródeł pozostaje RO. Nie udostępniaj całego checkoutu
+  RW.
+
+- Współdzielone cache zależności i pakiet current/rollback zachowują własną
+  retencję; prywatne compiler outputs podlegają ADR 0076. Usunięcie kontenera
+  nie usuwa named volumes ani obrazów/BuildKit.
   Wycofanie build-data grupy wymaga osobnej, precyzyjnej operacji.
   Wolumen nie jest quota ani gwarancją braku wzrostu: wymagane są pomiary,
   kontrola generacji i bezpieczna retencja.
+
+## Jeden prywatny volume grupy Docker DEV
+
+Daily DEV ma dokładnie jeden prywatny named volume na worktree/grupę Compose:
+istniejący, stabilnie nazwany `BuildControl.volume`. Nazwa nie zależy od
+toolchaina, profilu, dependency hash ani próby. Root zachowuje dotychczasowy
+control/lock/namespace; prywatne dane używają subpaths `private/backend`,
+`private/frontend` i `private/ledger`. Frontend montuje wyłącznie swój subpath,
+bez rootu control, backendu i ledgeru. Shared Cargo/pnpm/packages oraz obrazy i
+BuildKit pozostają współdzielone poza prywatnym volume. Fingerprint ABI/toolchain
+nadal warunkuje zgodność cache, nie tożsamość volume. Compiler outputs, cache-hit,
+failed generation i retencję pakietu opisuje sekcja 7 ADR 0076.
+Migracja dotyczy jednej zatrzymanej/drained grupy naraz; stare wolumeny zostają do archiwizacji i
+kontroli referencji. Root `BuildControl.volume` i ledger mogą zawierać unikalne rekordy
+control/owner/lock, więc nie uznawaj całego wolumenu za odtwarzalny cache. Przed retencją
+zinwentaryzuj i wyeksportuj wymagane rekordy; sprawdź, że dane i provenance potrzebne do
+interpretacji lub wznowienia są na WSL albo w samowystarczalnym Zarr, oraz potwierdź brak aktywnych
+zadań, konsumentów, lease i referencji. Zachowaj kwalifikowany receipt; nie usuwaj aktywnego
+lock/ledger, a receipt ani metadane nie omijają tej blokady. Ten kontrakt nie potwierdza
+implementacji: Compose, launcher, mounty i runtime pozostają **NOT VERIFIED** do sprawdzenia.
+Szczegóły i zakres supersession: [ADR 0076](../../../docs/adr/0076-single-private-volume-per-dev-group.md).
+
+## Lokalizacja nowych obrazów ext4 na tym hoście
+
+Decyzja użytkownika z 24.10.2026: nowe pliki obrazów ext4 (backing images)
+mają powstawać w `E:\git\storage` (WSL: `/mnt/e/git/storage`), zamiast
+w `storage/build-volumes` projektu. Jest to lokalizacja plików obrazów,
+nie mount linuksowego filesystemu ani zmiana storage danych użytkownika.
+Nie zmienia to obowiązku named volumes/BuildKit dla danych buildu Docker DEV.
+Przed utworzeniem obrazu sprawdź, czy właściwy launcher/resolver obsługuje
+wybraną lokalizację. Brak obsługi oznacza `NOT VERIFIED`; nie twórz obrazu
+w starej lokalizacji jako fallbacku. Ta instrukcja nie zmienia konfiguracji
+Dockera/WSL ani nie przenosi istniejących obrazów. Ich migracja wymaga
+osobnego planu i kontroli właścicieli, procesów oraz mountów.
+Historyczne ścieżki w audycie writerów opisują wcześniejszy stan kodu,
+a nie obowiązujące miejsce tworzenia nowych obrazów.
 
 ## Dobierz instrukcje do zadania
 
@@ -55,6 +100,24 @@ sprawdzić, jeśli źródła się zmieniły.
 
 ## Granica danych i retencja
 
+Polityka zachowuje bieżący pakiet i jeden zweryfikowany rollback do udanej
+publikacji nowego pakietu; nie usuwa ostatniego dobrego pakietu przed kompilacją.
+Cache backendu i frontendu wolno inwalidować wyłącznie w ich subpaths pod
+blokadą. `worktree-finish ... completed` może wykonać kwalifikowaną retencję
+dokładnego cache grupy i jej namespace pakietów; zachowuje root control,
+`private/ledger`, shared Cargo/pnpm i dane użytkownika. Nie usuwa całego
+`BuildControl.volume` jako skutku zwykłego cache cleanup. Aktualna implementacja
+automatycznej retencji i jednego volume pozostaje **NOT VERIFIED**. Szczegóły:
+[kontrakt retencji](../../../docs/guides/shared-build-storage.md) i
+[ADR 0076](../../../docs/adr/0076-single-private-volume-per-dev-group.md).
+
+Po publikacji, błędzie/anulowaniu etapu, zatrzymaniu po drain i zakończeniu
+zadania uzgodnij receipt oraz wykonaj dostępną kwalifikowaną retencję; preview
+nie zamyka cleanupu. Potwierdź pokrycie historycznych tożsamości i brak
+konsumentów; zachowaj aktywne piny i referencje, control/provenance oraz sesje
+i wyniki użytkownika. Starszy obraz lub konfiguracja nie dziedziczą automatyki
+nowego launchera; dowodem pozostaje receipt konkretnej próby.
+
 Buildowe zależności, cache Cargo/CMake/pnpm/Next, pakiety, logi i techniczne
 receipty aktywnej trasy są przypięte do named volumes grupy lub magazynu
 BuildKit. Nie zapisuj ich do storage Windows. Hostowe storage zachowuje
@@ -68,23 +131,16 @@ zapisu, ale same nie gwarantują ograniczonego zużycia dysku. Nie deklaruj
 pełnej kontroli retencji, dopóki brakujący mechanizm nie zostanie wdrożony i
 zweryfikowany. Nie używaj globalnego prune ani compose down -v.
 
-Kod retencji pakietów uruchamia sprzątanie po nowej, trwałej publikacji:
-zachowuje current, bezpośredni rollback i metadane, a usuwa tylko zweryfikowany
-ogon łańcucha pod blokadą oraz journalem. Cache hit pomija ten skan. Ręczny
-`docker-dev-package-retention` daje dry-run i kontrolowane recovery zatrzymanej
-grupy. Nie rozszerzaj tej polityki na cache, obrazy, wolumeny ani dane użytkownika.
-Sprawdź wersję obrazu i rzeczywisty report; fixture lub sam kod nie dowodzi
-odzyskania bajtów w działającej grupie.
+## Kontrakt trasy DEV i status wdrożenia
 
-## Wdrożona trasa DEV
-
-`docker-dev-toolchain`, `docker-dev-images`, `docker-dev` i `docker-dev-build`
-korzystają z `scripts/docker_build_control.py` oraz `scripts/docker_volume_dev.py`.
-Opis uruchomienia, pinów restartu/odtwarzania i budżetów znajduje się w
-[przewodniku DEV](../../../docs/guides/docker-volume-development.md).
-Historyczny audyt powyżej pozostaje dowodem stanu bazowego, a nie opisem
-bieżących zapisów tej trasy. Wyników release/CI/nauki nie przenoś na DEV ani
-odwrotnie. Sprawdź bieżące źródła i wynik konkretnej próby.
+Codzienne wejścia pozostają `docker-dev-toolchain`, `docker-dev-images`,
+`docker-dev` i `docker-dev-build` przez launchery w `scripts/`. Wymagana
+topologia jest opisana w [ADR 0076](../../../docs/adr/0076-single-private-volume-per-dev-group.md)
+i [przewodniku DEV](../../../docs/guides/docker-volume-development.md).
+Historyczny audyt writerów zachowuje swoje dowody, ale nie opisuje nowego
+kontraktu. Dopóki kod, Compose, mounty oraz receipts nie potwierdzą tej topologii
+w zarządzanym runtime, oznacz implementację jako **NOT VERIFIED**. Nie przenoś
+wyników release/CI/nauki na DEV ani odwrotnie.
 
 ## Wykonanie i dowody
 
@@ -104,9 +160,13 @@ odwrotnie. Sprawdź bieżące źródła i wynik konkretnej próby.
 4. Zapisz dowód poprawnego buildu i startu API. Sprawdź restart bez zmian,
    małą zmianę backendu oraz frontend HMR, mierząc rzeczywistą pracę i zajętość.
    Nie obiecuj stałego czasu ani kompilacji tylko jednego crate.
-5. Po etapie wykonaj kwalifikację retencji opisaną w procedurze. Zapisz wynik
-   w wolumenie; raportuj pozostawione generacje i powód. Nie stosuj globalnego
-   prune ani automatycznego usuwania wolumenów czy danych użytkownika.
+5. Po każdym zdarzeniu retencji wymienionym wyżej uzgodnij receipt dokładnej
+   próby i zastosuj kwalifikowaną retencję; zapisz receipt oraz inventory po
+   zmianie. Przed/po zmierz fizyczne użycie backing filesystemu Docker i C:
+   oddzielnie. Jeżeli helper nie obsługuje stanu albo historyczne namespace'y
+   pozostają nierozstrzygnięte, oznacz cleanup jako `blocked` i wypisz dokładne
+   cele. Nie zastępuj apply preview, globalnym prune, `compose down -v` ani
+   usuwaniem danych użytkownika.
 
 Odróżniaj: plan, audyt źródeł, strukturalny test mountów, build, API, HMR,
 wykonanie symulacji i pomiar odzyskanych bajtów. Brak dowodu oznacza

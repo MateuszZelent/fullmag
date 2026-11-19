@@ -24,7 +24,7 @@ describe("ComputeEnvironmentSettings probe state", () => {
     );
 
     expect(html).toContain("Latest available telemetry sample");
-    expect(html).toContain(new Date(sampledAt).toLocaleString());
+    expect(html).toContain(new Date(sampledAt).toLocaleString("en-US"));
     expect(html).toContain(`dateTime="${new Date(sampledAt).toISOString()}"`);
   });
 

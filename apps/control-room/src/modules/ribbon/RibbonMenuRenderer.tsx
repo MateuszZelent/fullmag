@@ -80,6 +80,7 @@ function renderNode(
           key={node.id}
           checked={node.checked}
           disabled={node.disabled}
+          title={node.tooltip}
           onCheckedChange={(checked) => {
             const next = Boolean(checked);
             if (node.commandId) {
@@ -94,6 +95,9 @@ function renderNode(
           onSelect={(event) => event.preventDefault()}
         >
           {node.label}
+          {node.disabled && node.tooltip ? (
+            <span className="fm-dropdown-reason">{node.tooltip}</span>
+          ) : null}
         </DropdownMenuCheckboxItem>
       );
 
@@ -106,6 +110,7 @@ function renderNode(
               <DropdownMenuRadioItem
                 key={`${node.id}:${item.value}`}
                 disabled={node.disabled || item.disabled}
+                title={item.tooltip}
                 value={item.value}
                 onSelect={() => {
                   if (item.value === node.value) return;
@@ -113,6 +118,9 @@ function renderNode(
                 }}
               >
                 {item.label}
+                {item.disabled && item.tooltip ? (
+                  <span className="fm-dropdown-reason">{item.tooltip}</span>
+                ) : null}
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
@@ -134,8 +142,11 @@ function renderNode(
     case "submenu":
       return (
         <DropdownMenuSub key={node.id}>
-          <DropdownMenuSubTrigger disabled={node.disabled}>
+          <DropdownMenuSubTrigger disabled={node.disabled} title={node.tooltip}>
             {node.label}
+            {node.disabled && node.tooltip ? (
+              <span className="fm-dropdown-reason">{node.tooltip}</span>
+            ) : null}
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
             <RibbonMenuRenderer nodes={node.nodes} onCommand={onCommand} />
@@ -211,6 +222,7 @@ function SliderMenuItem({
     draftState?.sourceValue === node.value ? draftState.value : node.value;
 
   const pct = ((draftValue - node.min) / (node.max - node.min)) * 100;
+  const valueText = `${Number.isInteger(node.step) ? Math.round(draftValue) : draftValue.toFixed(1)}${node.unit ?? ""}`;
 
   return (
     <div
@@ -219,13 +231,12 @@ function SliderMenuItem({
     >
       <div className="fm-dropdown-slider__header">
         <span className="fm-dropdown-slider__label">{node.label}</span>
-        <span className="fm-dropdown-slider__value">
-          {Number.isInteger(node.step) ? Math.round(draftValue) : draftValue.toFixed(1)}
-          {node.unit ?? ""}
-        </span>
+        <span className="fm-dropdown-slider__value">{valueText}</span>
       </div>
       <input
         type="range"
+        aria-label={node.label}
+        aria-valuetext={valueText}
         className="fm-dropdown-slider__track"
         min={node.min}
         max={node.max}
@@ -436,7 +447,7 @@ function TextMenuItem({
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           event.stopPropagation();
-          if (event.key === "Enter") {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
             event.preventDefault();
             commit();
           }

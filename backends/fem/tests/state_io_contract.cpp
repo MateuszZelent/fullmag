@@ -255,14 +255,65 @@ void torque_observable_is_computed_in_native_state_io() {
     check(std::abs(out[2] + 0.8) < 1e-12, "torque z component");
 }
 
+void torque_observable_uses_per_node_damping_field() {
+    fullmag::fem::Context ctx;
+    constexpr double mu0 = 1.2566370614359172953850573533118e-6;
+    ctx.mesh.n_nodes = 3;
+    ctx.mesh.magnetic_node_mask = {1u, 1u, 0u};
+    ctx.state.m_xyz = {
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 0.0, 0.0,
+    };
+    ctx.effective_field.h_xyz = {
+        0.0, 1.0 / mu0, 0.0,
+        0.0, 1.0 / mu0, 0.0,
+        0.0, 1.0 / mu0, 0.0,
+    };
+    ctx.material_fields.material.damping = 0.5;
+    ctx.material_fields.alpha_field = {0.0, 1.0, 0.5};
+
+    double out[9] = {};
+    std::string error;
+    check(
+        fullmag::fem::context_copy_field_f64(
+            ctx,
+            FULLMAG_FEM_OBSERVABLE_TORQUE,
+            out,
+            9,
+            error) == FULLMAG_FEM_OK,
+        "native torque observable copy with per-node damping should succeed");
+
+    check(std::abs(out[0]) < 1e-12, "alpha=0 torque x component");
+    check(std::abs(out[1]) < 1e-12, "alpha=0 torque y component");
+    check(std::abs(out[2] + 1.0) < 1e-12, "alpha=0 torque z component");
+    check(std::abs(out[3]) < 1e-12, "alpha=1 torque x component");
+    check(std::abs(out[4] - 0.5) < 1e-12, "alpha=1 torque y component");
+    check(std::abs(out[5] + 0.5) < 1e-12, "alpha=1 torque z component");
+    check(std::abs(out[6]) < 1e-12, "nonmagnetic torque x component");
+    check(std::abs(out[7]) < 1e-12, "nonmagnetic torque y component");
+    check(std::abs(out[8]) < 1e-12, "nonmagnetic torque z component");
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+    if (argc == 2 && std::string(argv[1]) == "--torque-only") {
+        torque_observable_is_computed_in_native_state_io();
+        torque_observable_uses_per_node_damping_field();
+        return 0;
+    }
+    if (argc != 1) {
+        std::fprintf(stderr, "usage: fem_state_io_contract [--torque-only]\n");
+        return 2;
+    }
+
     context_state_io_is_owned_by_runtime_module();
     observable_copy_prefers_visual_demag_and_effective_fields();
     linearization_copy_uses_llg_demag_and_effective_fields();
     upload_magnetization_updates_host_state_and_invalidates_runtime_caches();
     upload_rejects_zero_active_magnetization();
     torque_observable_is_computed_in_native_state_io();
+    torque_observable_uses_per_node_damping_field();
     return 0;
 }

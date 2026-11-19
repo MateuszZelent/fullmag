@@ -184,14 +184,16 @@ def abi_binding(receipt, cpu_hash, cuda_hash, facts):
                 type_source_sha256=TYPE_SOURCE_SHA256, facts=facts)
 
 
-def run_build(workspace, artifacts, receipt, run_stage):
+def run_build(workspace, artifacts, receipt, run_stage, *, run_probe=None, reference_root=None):
     """Called only from the operator-pinned trusted entrypoint for PROFILE."""
-    manifest = verify_source(SOURCE_ROOT, load_manifest(SOURCE_MANIFEST))
+    source_root = SOURCE_ROOT if reference_root is None else Path(reference_root)/"source"
+    source_manifest = SOURCE_MANIFEST if reference_root is None else Path(reference_root)/"source_manifest.json"
+    manifest = verify_source(source_root, load_manifest(source_manifest))
     for name, expected in TYPE_SOURCE_SHA256.items():
-        if digest(SOURCE_ROOT/name) != expected:
+        if digest(source_root/name) != expected:
             raise ValueError("BORIS CPU type source drift")
     source = workspace/"boris-cpu-source"
-    shutil.copytree(SOURCE_ROOT, source, copy_function=shutil.copyfile)
+    shutil.copytree(source_root, source, copy_function=shutil.copyfile)
     old_cpu = (source/"Boris/CompileFlags.h").read_bytes()
     cpu = overlay_flags(old_cpu, "COMPILECUDA", 1, 0)
     # Keep embedding for the existing public BORIS smoke scripts.
@@ -207,8 +209,15 @@ def run_build(workspace, artifacts, receipt, run_stage):
     inspector = shutil.which("readelf")
     if not compiler or not config or not inspector:
         raise ValueError("BORIS CPU requires installed g++, Python embed dev and readelf in pinned image")
+    def probe_output(command):
+        if run_probe is None:
+            return subprocess.check_output(command, timeout=30)
+        return run_probe(command, workspace=source, artifacts=artifacts,
+                         environment=dict(os.environ), timeout=30, check=True).stdout
     def flags(option):
-        result = subprocess.run([config, *option], capture_output=True, text=True, check=True, timeout=30)
+        result = (subprocess.run([config, *option], capture_output=True, text=True, check=True, timeout=30)
+                  if run_probe is None else run_probe([config, *option], workspace=source, artifacts=artifacts,
+                      environment=dict(os.environ), timeout=30, text=True, check=True))
         values = result.stdout.split()
         if any(cuda_toolchain_argument(value) for value in values):
             raise ValueError("BORIS Python toolchain unexpectedly includes CUDA")
@@ -219,20 +228,33 @@ def run_build(workspace, artifacts, receipt, run_stage):
     if not cpp:
         raise ValueError("BORIS C++ source list empty")
     includes=flags(["--includes"])
+    private_library = None
+    if reference_root is not None:
+        reference_root = Path(reference_root)
+        private_include = reference_root/"sdk/usr/include"
+        private_library = reference_root/"sdk/usr/lib/x86_64-linux-gnu"
+        if (not private_include.is_dir() or not private_library.is_dir()
+                or not (private_library/"libtbb.so").is_file()):
+            raise ValueError("BORIS admitted private dependency prefix is incomplete")
+        includes = ["-I"+str(private_include), *includes]
     if not any(arg.startswith("-I") and (Path(arg[2:])/"Python.h").is_file() for arg in includes):
         raise ValueError("BORIS pinned image lacks Python development headers")
     for library in ("libfftw3.so","libX11.so","libtbb.so"):
-        installed=subprocess.check_output([compiler,"-print-file-name="+library],timeout=30).decode().strip()
+        observed=probe_output([compiler,"-print-file-name="+library]).decode().strip()
+        installed=str(private_library/library) if private_library is not None and library=="libtbb.so" else observed
         if installed==library or not Path(installed).is_file():
             raise ValueError("BORIS pinned image lacks installed development library: "+library)
     commands = compile_commands(cpp, compiler=compiler, includes=includes, objects=objects)
-    receipt["toolchain"] = {"g++": subprocess.check_output([compiler,"--version"],timeout=30).decode("utf-8")[:4096],
-                            "python": subprocess.check_output(["python3","--version"],timeout=30).decode("utf-8")[:4096],
+    receipt["toolchain"] = {"g++": probe_output([compiler,"--version"]).decode("utf-8")[:4096],
+                            "python": probe_output(["python3","--version"]).decode("utf-8")[:4096],
                             "python_config":config,"readelf":inspector}
     environment = dict(os.environ)
     # Compiler/library search is image-owned, never inherited from job overrides.
     for name in ("CPATH","CPLUS_INCLUDE_PATH","LIBRARY_PATH","LD_PRELOAD"):
         environment.pop(name,None)
+    if reference_root is not None:
+        environment["LD_LIBRARY_PATH"] = str(private_library)+(os.pathsep+environment["LD_LIBRARY_PATH"] if environment.get("LD_LIBRARY_PATH") else "")
+        environment["PYTHONPATH"] = str(reference_root/"python")
     def stage(name, command):
         record = run_stage(name,command,workspace=source,artifacts=artifacts,environment=environment)
         receipt["stages"].append(record)
@@ -241,6 +263,8 @@ def run_build(workspace, artifacts, receipt, run_stage):
     for ordinal, command in enumerate(commands):
         stage(f"boris-cpu-compile-{ordinal:05d}", command)
     link_flags = ["-fopenmp", *flags(["--embed","--ldflags"]), "-ltbb", "-lfftw3", "-lX11"]
+    if private_library is not None:
+        link_flags.insert(0,"-L"+str(private_library))
     witness_source = source/"Boris/FullmagCpuAbiWitness.cpp"
     witness_source.write_bytes(ABI_SOURCE)
     witness_compile = compile_commands(["Boris/FullmagCpuAbiWitness.cpp"], compiler=compiler,

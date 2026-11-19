@@ -15,9 +15,9 @@ import re
 import sys
 
 import fullmag_storage as storage
-from docker_build_control import BuildControl, BuildControlError, bounded_capture, canonical, docker_capture, require_host, toolchain_configuration
+from docker_build_control import MAX_DOCUMENT_BYTES, BuildControl, BuildControlError, bounded_capture, canonical, docker_capture, require_host, toolchain_configuration
 from docker_compose_identity import compose_project_identity
-from docker_volume_accepted_reattach import _bundle_from_records, _control_bytes, _decode_json
+from docker_volume_accepted_reattach import MAX_CONTROL_RECORD_BYTES, _bundle_from_records, _control_bytes, _decode_json
 
 
 def _sha(raw):
@@ -41,21 +41,24 @@ def _record(control, relative, label):
     return raw, _decode_json(raw, label)
 
 
-def _publish_raw(control, relative, raw):
+def _publish_raw(control, relative, raw, *, helper_name=None, maximum=MAX_CONTROL_RECORD_BYTES):
     from docker_build_control import bounded_capture
+    if (type(maximum) is not int or not 0 < maximum <= MAX_DOCUMENT_BYTES
+            or not isinstance(raw, bytes) or len(raw) > maximum):
+        raise BuildControlError("Create-only raw archive exceeds its bounded record size")
     path = control.path(relative)
     parent = str(PurePosixPath(path).parent)
     script = (f"umask 027; mkdir -p '{parent}'; test \"$(readlink -f '{parent}')\" = '{parent}'; "
               f"test ! -e '{path}'; test ! -L '{path}'; tmp=$(mktemp '{parent}/.pre-ack.XXXXXXXX'); "
               "trap 'rm -f -- \"$tmp\"' EXIT; cat > \"$tmp\"; sync \"$tmp\"; "
               f"ln -T -- \"$tmp\" '{path}'; rm -- \"$tmp\"; sync '{parent}'")
-    result = bounded_capture(control.helper_args(script), data=raw, timeout=90)
-    if result.returncode or _control_bytes(control, relative) != raw:
+    result = bounded_capture(control.helper_args(script, name=helper_name), data=raw, timeout=90)
+    if result.returncode or _control_bytes(control, relative, maximum=maximum) != raw:
         raise BuildControlError("Create-only pre-ACK raw archive was not confirmed")
 
 
 def _released_snapshot(control, actual):
-    from docker_volume_capture_failure_reconcile import _mount_arg
+    from docker_volume_linux_supervision_stop import readonly_mount
     code = r'''import fcntl,hashlib,json,os,pathlib,re,stat,time
 root=pathlib.Path('/state/runs/docker-all/session-store'); ledger=pathlib.Path('/host-ledger/ledger')
 locks=[]
@@ -126,7 +129,7 @@ finally:
                             "--user", "65532:65532", "--memory", "96m", "--pids-limit", "24",
                             "--label", "com.docker.compose.project=" + control.project,
                             "--label", "com.docker.compose.service=pre-ack-readonly-probe",
-                            "--mount", _mount_arg(actual, "/state"), "--mount", _mount_arg(actual, "/host-ledger"),
+                            "--mount", readonly_mount(actual, "/state"), "--mount", readonly_mount(actual, "/host-ledger"),
                             "--entrypoint", "/usr/local/bin/python3", actual["Image"], "-B", "-c", code, timeout=90)
     if result.returncode or len(result.stdout)>1024*1024:
         raise BuildControlError("Fresh read-only released-state observation failed: " + result.stderr.decode(errors="replace")[-1024:])

@@ -80,6 +80,7 @@ export function transferablesForViewport3DFieldColorBuffer(
   addArrayBufferTransferable(transferables, buffer.colors.buffer);
   addArrayBufferTransferable(transferables, buffer.scalarValues?.buffer);
   addArrayBufferTransferable(transferables, buffer.vectorValues?.buffer);
+  for (const row of buffer.tensorRows ?? []) addArrayBufferTransferable(transferables, row.buffer);
   return transferables;
 }
 

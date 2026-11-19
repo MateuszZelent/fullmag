@@ -170,7 +170,7 @@ pub(crate) fn domain_meta_for_snapshot(snapshot: &SessionStateResponse) -> Domai
         },
         grid,
         element_type: is_fem
-            .then(|| snapshot.fem_mesh.as_ref().and_then(fem_element_type))
+            .then(|| snapshot.fem_mesh.as_deref().and_then(fem_element_type))
             .flatten(),
     }
 }
@@ -684,7 +684,7 @@ fn fdm_multilayer_layout_resource(
             .map(|artifact| (Some(artifact), None))
             .collect()
     };
-    let layers = correlated_layers
+    let mut layers = correlated_layers
         .into_iter()
         .enumerate()
         .map(|(index, (artifact_layer, plan_layer))| {
@@ -701,6 +701,19 @@ fn fdm_multilayer_layout_resource(
             )
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
+    if crate::live_authored_damping::publication_revision(snapshot).is_some() {
+        let alpha = snapshot.latest_fields.get("mat_alpha")
+            .filter(|field| crate::live_authored_damping::matches_publication(snapshot, field));
+        for layer in &mut layers {
+            layer.available_material_quantities.retain(|quantity| quantity != "mat_alpha");
+            layer.material_field_revisions.remove("mat_alpha");
+            if alpha.is_some() {
+                layer.available_material_quantities.push("mat_alpha".to_owned());
+                layer.material_field_revisions.insert("mat_alpha".to_owned(),
+                    snapshot.field_quantity_revisions.get("mat_alpha").copied().unwrap_or(1));
+            }
+        }
+    }
     let layout_fingerprint = artifact.or(backend_plan).and_then(|value| {
         serde_json::to_vec(value).ok().map(|bytes| {
             let mut hasher = Sha256::new();
@@ -1386,7 +1399,7 @@ fn optional_layer_array3_f64(
     })
 }
 
-fn parse_planned_native_active_mask(
+pub(super) fn parse_planned_native_active_mask(
     plan_layer: Option<&Value>,
     layer_id: &str,
     total_cells: u64,
@@ -1412,7 +1425,7 @@ fn parse_planned_native_active_mask(
     Ok(Some(mask))
 }
 
-fn validate_declared_mask_presence(
+pub(super) fn validate_declared_mask_presence(
     artifact_layer: Option<&Value>,
     plan_layer: Option<&Value>,
     layer_id: &str,
@@ -1436,7 +1449,7 @@ fn validate_declared_mask_presence(
     Ok(())
 }
 
-fn validate_declared_layer_counts(
+pub(super) fn validate_declared_layer_counts(
     artifact_layer: Option<&Value>,
     plan_layer: Option<&Value>,
     layer_id: &str,
@@ -1758,21 +1771,46 @@ pub async fn get_domain_topology(
     }
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
-            let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
-            let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
-            let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-                "domain-topology:{generation_id}:{topology_hash}:{}",
-                snapshot.mesh_revision,
-            ));
-            let mut response =
-                crate::router_v2::handlers::shared::conditional_fem_topology_response(
-                    &state, &headers, &etag, mesh,
-                )
-                .map_err(ApiError::conflict)?;
-            crate::router_v2::handlers::shared::insert_mesh_topology_hash_header(
-                &mut response,
-                &topology_hash,
-            );
+            let mesh = mesh.clone();
+            let mesh_revision = snapshot.mesh_revision;
+            let generation_id = mesh.generation_id.clone();
+            drop(guard);
+            let response_state = Arc::clone(&state);
+            // Hashing and encoding a large FEM domain must not occupy an
+            // async executor thread or keep the live-state read lock held.
+            let response = tokio::task::spawn_blocking(move || {
+                let topology_hash = mesh.topology_fingerprint().to_owned();
+                let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+                    "domain-topology:{}:{topology_hash}:{mesh_revision}",
+                    mesh.generation_id.as_deref().unwrap_or("no-generation"),
+                ));
+                let mut response =
+                    crate::router_v2::handlers::shared::conditional_fem_topology_response(
+                        &response_state, &headers, &etag, &mesh,
+                    )
+                    .map_err(ApiError::conflict)?;
+                crate::router_v2::handlers::shared::insert_mesh_topology_hash_header(
+                    &mut response,
+                    &topology_hash,
+                );
+                Ok::<_, ApiError>(response)
+            })
+            .await
+            .map_err(|error| ApiError::internal(format!("domain topology serialization failed: {error}")))??;
+            let current = state.current_live_state.read().await;
+            let snapshot = current.as_ref()
+                .ok_or_else(|| ApiError::conflict("domain disappeared during topology serialization"))?;
+            crate::ensure_current_live_request_context(
+                snapshot,
+                &request_context,
+                state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
+            )?;
+            if snapshot.mesh_revision != mesh_revision
+                || snapshot.fem_mesh.as_ref().map(|mesh| &mesh.generation_id)
+                    != Some(&generation_id)
+            {
+                return Err(ApiError::conflict("domain changed during topology serialization"));
+            }
             Ok(response)
         }
         None => Ok(StatusCode::NO_CONTENT.into_response()),

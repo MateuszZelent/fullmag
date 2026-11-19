@@ -31,6 +31,7 @@ services:
     user: "0:0"
     privileged: true
     pid: host
+    cgroup: ${FULLMAG_HOST_LEDGER_CGROUP_MODE:-private}
     network_mode: none
     restart: "no"
     read_only: true
@@ -51,6 +52,10 @@ services:
       FULLMAG_HOST_LEDGER_RUNTIME_UID: ${FULLMAG_HOST_LEDGER_RUNTIME_UID:-65532}
       FULLMAG_HOST_LEDGER_RUNTIME_GID: ${FULLMAG_HOST_LEDGER_RUNTIME_GID:-65532}
       FULLMAG_HOST_LEDGER_LOCK_WAIT_SECONDS: ${FULLMAG_HOST_LEDGER_LOCK_WAIT_SECONDS:-120}
+      FULLMAG_DOCKER_HOST_ID: ${FULLMAG_DOCKER_HOST_ID:?Resolved Docker daemon identity is required}
+      FULLMAG_HOST_LEDGER_PUBLISH_CAPACITY: ${FULLMAG_HOST_LEDGER_PUBLISH_CAPACITY:-0}
+      FULLMAG_HOST_LEDGER_DOCKER_CPU_COUNT: ${FULLMAG_HOST_LEDGER_DOCKER_CPU_COUNT:-}
+      FULLMAG_HOST_LEDGER_DOCKER_MEMORY_TOTAL_BYTES: ${FULLMAG_HOST_LEDGER_DOCKER_MEMORY_TOTAL_BYTES:-}
     volumes:
       # The exact daemon-visible source/target path is required by nsenter.
       - type: bind

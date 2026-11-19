@@ -8,7 +8,6 @@ import {
   ChevronsUpDown,
   RefreshCw,
   Search,
-  SlidersHorizontal,
 } from "lucide-react";
 
 import type {
@@ -16,6 +15,11 @@ import type {
   SolverProfileResource,
 } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import {
+  MESHING_BUILDS_CURRENT_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  SIMULATION_STAGES_EXECUTION_PATH,
+} from "@/kernel/api/apiPaths";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import type { EventBus } from "@/kernel/events/EventBus";
 import {
@@ -73,6 +77,7 @@ import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResource
 import { useObservationFrameListResource } from "@/kernel/resources/observationFrameResources";
 import { useCurrentTransportsResource } from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { matchesAirboxTopologyIdentity } from "@/kernel/resources/meshTopologyIdentity";
 import {
   usePlatformCapabilitiesResource,
   usePlatformHealthResource,
@@ -153,6 +158,7 @@ import {
 import type { ModelTreeMeshSnapshot } from "./explorerTypes";
 import { ExplorerTreeView } from "./ExplorerTreeView";
 import { ResultContextSelector } from "./ResultContextSelector";
+import { StudyResultHistory } from "./StudyResultHistory";
 import { useAnalysisFieldOverlayResultContext } from "./useAnalysisFieldOverlayResultContext";
 
 type TextureLoadNodeRequestedEvent =
@@ -387,6 +393,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   );
   const previousSelectedNodeId = useRef<string | null>(null);
   const lastRevealedSelectionPath = useRef<string | null>(null);
+  const parentWithoutAbsorbingBoundary = useRef<string | null>(null);
   const previousCurrentRunId = useRef<string | null>(null);
   const crossSections = useCrossSectionWorkspaceSelector(
     selectExplorerCrossSections,
@@ -496,6 +503,18 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       modelTabActive ? sessionStatusData : runtimeSessionStatus.data,
     ),
   });
+  const sharedCommandResources = useMemo(() => ({
+    [MESHING_BUILDS_CURRENT_PATH]: activeBuild.status === "ready" ? activeBuild.data : null,
+    [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: manifest.status === "ready" ? manifest.data : null,
+    [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.status === "ready" ? stageExecution.data : null,
+  }), [
+    activeBuild.data,
+    activeBuild.status,
+    manifest.data,
+    manifest.status,
+    stageExecution.data,
+    stageExecution.status,
+  ]);
   const activeHysteresisStageId = useMemo(
     () => activeHysteresisStageIdFromExecution(stageExecution.data),
     [stageExecution.data],
@@ -559,7 +578,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       ? []
       : resultContextRun.status === "ready" && resultContextRun.data
         ? [
-            "Selected run is not the current session run; run-scoped result resources are not published.",
+            "Live observation frames are available for the current run. Open a saved Study state to inspect this run's published final results.",
           ]
         : resultContextRun.status === "error"
           ? ["Selected result run could not be loaded."]
@@ -727,6 +746,42 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
         (modelSnapshot.objects ?? []).map((object) => object.id),
       ),
     });
+    const currentSceneRevision = modelResource.status === "ready"
+      ? revisionValue(modelResourceRecord?.revision ?? modelResourceRecord?.scene_revision)
+      : null;
+    const currentManifestParts = Array.isArray(manifest.data?.mesh_parts)
+      ? manifest.data.mesh_parts
+      : null;
+    const manifestSceneRevision = revisionValue(
+      manifest.data?.validated_for_scene_revision ?? manifest.data?.source_scene_revision,
+    );
+    const sceneRevisionMatches = currentSceneRevision !== null &&
+      manifestSceneRevision !== null &&
+      String(currentSceneRevision) === String(manifestSceneRevision);
+    const topologyIdentityMatches = matchesAirboxTopologyIdentity(
+      sessionStatusData,
+      manifest.data,
+    );
+    const outerBoundaryEvidenceStatus: NonNullable<
+      ModelTreeMeshSnapshot["outerBoundaryEvidenceStatus"]
+    > = manifest.status === "error" || modelResource.status === "error"
+      ? "error"
+      : manifest.status === "stale" || modelResource.status === "stale"
+        ? "stale"
+        : manifest.status === "loading" || modelResource.status === "loading"
+          ? "loading"
+          : manifest.status === "ready" && modelResource.status === "ready"
+            ? currentSceneRevision !== null && manifestSceneRevision !== null &&
+                !sceneRevisionMatches
+              ? "stale"
+              : topologyIdentityMatches && sceneRevisionMatches && currentManifestParts !== null
+                ? "verified"
+                : "unknown"
+            : "unknown";
+    const outerBoundaryPartCount = outerBoundaryEvidenceStatus === "verified" &&
+      currentManifestParts !== null
+      ? currentManifestParts.filter(isUniverseOuterBoundaryCarrier).length
+      : null;
     const mesh: ModelTreeMeshSnapshot = {
       activeBuildStatus: meshPipelineStatusIsActive(activeBuildStatus)
         ? activeBuildStatus
@@ -744,11 +799,12 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
         activeBuild.data?.last_build_error ??
         latestSuccessfulBuild.data?.last_build_error,
       manifestSourceSceneRevision: manifest.data?.source_scene_revision,
+      manifestValidatedSceneRevision: manifest.data?.validated_for_scene_revision,
       meshName: manifest.data?.mesh_name,
       meshRevision: meshSummary.data?.revision ?? manifest.data?.revision,
       objectSegmentCount: manifest.data?.object_segments?.length ?? null,
-      outerBoundaryPartCount:
-        manifest.data?.mesh_parts?.filter(isUniverseOuterBoundaryCarrier).length ?? null,
+      outerBoundaryEvidenceStatus,
+      outerBoundaryPartCount,
       partCount: manifest.data?.mesh_parts?.length ?? null,
       qualityStatus: qualityStatus(qualityGates.data?.gates),
       realizedSizeFieldCount:
@@ -968,6 +1024,47 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   }, [activeTab, baseNodes, kernel, nodes, selectedNodeId, selectedRef]);
 
   useEffect(() => {
+    if (!modelTabActive || selectedRef?.type !== "scene-object" ||
+      selectedRef.kind !== "object.magnetic-parameters") {
+      parentWithoutAbsorbingBoundary.current = null;
+      return;
+    }
+    if (modelResource.status !== "ready") return;
+    const parent = resolveCurrentExplorerSelectionNode(baseNodes, selectedRef.nodeId, selectedRef);
+    const key = JSON.stringify([modelResource.sessionScopeKey, selectedRef.nodeId]);
+    const wasAbsent = parentWithoutAbsorbingBoundary.current === key;
+    parentWithoutAbsorbingBoundary.current = null;
+    if (!parent) return;
+    if (!parent.children?.some((node) => node.kind === "object.absorbing-boundary")) {
+      parentWithoutAbsorbingBoundary.current = key;
+    } else if (wasAbsent) {
+      expandExplorerNodes("model", [parent.id]);
+    }
+  }, [baseNodes, modelResource.sessionScopeKey, modelResource.status, modelTabActive, selectedRef]);
+
+  useEffect(() => {
+    if (!modelTabActive || !selectedNodeId) return;
+    const boundarySelected = selectedRef?.type === "scene-object" &&
+      selectedRef.kind === "object.absorbing-boundary";
+    if (boundarySelected && modelResource.status !== "ready") return;
+    if (!boundarySelected && selectedRef?.type !== "airbox") return;
+    const currentNode = resolveCurrentExplorerSelectionNode(
+      baseNodes,
+      selectedNodeId,
+      selectedRef,
+      baseNodes,
+    );
+    if (!currentNode) {
+      if (boundarySelected) kernel.selection.clear("explorer");
+      return;
+    }
+    if (!boundarySelected && !currentNode.kind.startsWith("airbox.")) return;
+    const currentRef = selectionRefFromNode(currentNode);
+    if (selectionRefEquals(selectedRef, currentRef)) return;
+    selectExplorerNode(kernel, currentNode, "explorer");
+  }, [baseNodes, kernel, modelResource.status, modelTabActive, selectedNodeId, selectedRef]);
+
+  useEffect(() => {
     const unsubscribe = subscribeExplorerTextureLoadNodeRequested(
       kernel.bus,
       (event) => {
@@ -1012,12 +1109,16 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           onTabChange={setExplorerActiveTab}
         />
         {activeTab === "results" ? (
-          <ResultContextSelector
-            currentRunId={currentRunId}
-            knownRunIds={knownResultContextRunIds}
-            onChange={setExplorerResultContextRunId}
-            selectedRunId={resolvedResultContextRunId}
-          />
+          <>
+            <ResultContextSelector
+              currentRunId={currentRunId}
+              knownRunIds={knownResultContextRunIds}
+              onChange={setExplorerResultContextRunId}
+              selectedRunId={resolvedResultContextRunId}
+            />
+            <StudyResultHistory runId={resultContextIsCurrent ? undefined : resolvedResultContextRunId ?? undefined}
+              onPreviewRun={setExplorerResultContextRunId} />
+          </>
         ) : null}
         <AnalysisFieldOverlayContextNotice
           context={analysisFieldOverlayContext}
@@ -1035,17 +1136,55 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           }}
           rebindDisabledReason={rebindDisabledReason}
         />
-        <label className="fm-explorer-filter">
-          <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
-          <input
-            aria-label="Filter explorer"
-            value={filterText}
-            onChange={(event) => setExplorerFilterText(event.target.value)}
-            placeholder="Filter nodes..."
-            type="search"
-          />
-          <SlidersHorizontal size={13} aria-hidden="true" className="fm-explorer-filter__options-icon" />
-        </label>
+        {/* Tree actions share the filter row instead of a separate footer row. */}
+        <div className="fm-explorer-filter-row">
+          <label className="fm-explorer-filter">
+            <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
+            <input
+              aria-label="Filter explorer"
+              value={filterText}
+              onChange={(event) => setExplorerFilterText(event.target.value)}
+              placeholder="Filter nodes..."
+              type="search"
+            />
+          </label>
+          <div aria-label="Explorer tree actions" className="fm-explorer-toolbar" role="group">
+            <button
+              className="fm-explorer-toolbar__action"
+              aria-label="Expand all explorer nodes"
+              title="Expand All"
+              type="button"
+              onClick={() => {
+                expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+              }}
+            >
+              <ChevronsUpDown size={13} aria-hidden="true" />
+            </button>
+            <button
+              className="fm-explorer-toolbar__action"
+              aria-label="Collapse all explorer nodes"
+              title="Collapse All"
+              type="button"
+              onClick={() => {
+                collapseExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+              }}
+            >
+              <ChevronsDownUp size={13} aria-hidden="true" />
+            </button>
+            <button
+              className="fm-explorer-toolbar__action"
+              aria-label="Reset explorer filter and expand nodes"
+              title="Reset filter and expand nodes"
+              type="button"
+              onClick={() => {
+                setExplorerFilterText("");
+                expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+              }}
+            >
+              <RefreshCw size={13} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
         <ExplorerTreeView
           activeNodeId={selectedNodeId}
           expandedIds={expandedIds}
@@ -1056,47 +1195,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           sceneResourceData={
             modelResource.status === "ready" ? modelResource.data : null
           }
+          sharedCommandResources={sharedCommandResources}
           tabId={activeTab}
         />
-        <footer className="fm-explorer-toolbar">
-          <button
-            className="fm-explorer-toolbar__action"
-            aria-label="Expand all explorer nodes"
-            title="Expand All"
-            type="button"
-            onClick={() => {
-              expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
-            }}
-          >
-            <ChevronsUpDown size={13} aria-hidden="true" />
-            <span>Expand All</span>
-          </button>
-          <button
-            className="fm-explorer-toolbar__action"
-            aria-label="Collapse all explorer nodes"
-            title="Collapse All"
-            type="button"
-            onClick={() => {
-              collapseExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
-            }}
-          >
-            <ChevronsDownUp size={13} aria-hidden="true" />
-            <span>Collapse All</span>
-          </button>
-          <button
-            className="fm-explorer-toolbar__action"
-            aria-label="Refresh explorer"
-            title="Refresh"
-            type="button"
-            onClick={() => {
-              setExplorerFilterText("");
-              expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
-            }}
-          >
-            <RefreshCw size={13} aria-hidden="true" />
-            <span>Refresh</span>
-          </button>
-        </footer>
       </section>
     </WorkspaceRenderProfiler>
   );

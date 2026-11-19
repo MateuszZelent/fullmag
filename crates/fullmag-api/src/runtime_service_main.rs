@@ -1,6 +1,12 @@
 //! Native accepted-run service. UI is an attaching client, never its owner.
+#[path = "accepted_study_supervisor.rs"]
+mod accepted_study_supervisor;
 #[path = "compute_operator_env.rs"]
 mod compute_operator_env;
+mod failed_worker_recovery;
+mod failed_preclaim_cancellation;
+mod runtime_service_unclaimed_cancellation;
+mod claimed_worker_interruption;
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
     compute_node_snapshot::Reported,
@@ -162,7 +168,6 @@ async fn publish_compute_node_sample(
     .context("compute-node sampling worker failed")?
 }
 
-const MAX_CONSECUTIVE_SAMPLE_STORE_WRITER_BUSY: u32 = 5;
 const HOST_ADMISSION_DEFERRAL_BUDGET: Duration = Duration::from_secs(60);
 
 fn is_store_writer_busy(error: &anyhow::Error) -> bool {
@@ -171,9 +176,8 @@ fn is_store_writer_busy(error: &anyhow::Error) -> bool {
         .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
 }
 
-fn sample_store_writer_busy_within_budget(consecutive: &mut u32) -> bool {
+fn record_sample_store_writer_busy(consecutive: &mut u32) {
     *consecutive = consecutive.saturating_add(1);
-    *consecutive <= MAX_CONSECUTIVE_SAMPLE_STORE_WRITER_BUSY
 }
 
 fn host_admission_deferral_within_budget(deferred_at: &mut Option<Instant>, now: Instant) -> bool {
@@ -875,6 +879,14 @@ struct DockerHostProfile {
     host_identity: DockerHostIdentity,
     readiness: HostRuntimeReadiness,
     runtime_generation_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capacity_migration: Option<DockerHostCapacityTransition>,
+}
+
+#[derive(Debug, Serialize)]
+struct DockerHostCapacityTransition {
+    descriptor_sha256: String,
+    historical_policies: Vec<HostResourceLedgerPolicy>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -995,6 +1007,74 @@ fn required_observation<'a, T>(value: &'a fullmag_session::compute_node_snapshot
     }
 }
 
+fn docker_host_budget_override() -> Result<Option<(u64, u64)>> {
+    let (cpu_millis, memory_bytes) = match (
+        std::env::var_os("FULLMAG_DOCKER_CPU_MILLIS"),
+        std::env::var_os("FULLMAG_DOCKER_MEMORY_BYTES"),
+    ) {
+        (None, None) => return Ok(None),
+        (Some(cpu_millis), Some(memory_bytes)) => (cpu_millis, memory_bytes),
+        _ => bail!(
+            "FULLMAG_DOCKER_CPU_MILLIS and FULLMAG_DOCKER_MEMORY_BYTES must be set together"
+        ),
+    };
+    let parse_positive = |name: &str, value: OsString| -> Result<u64> {
+        let value = value
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("{name} must be a positive integer"))?;
+        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            bail!("{name} must be a positive integer");
+        }
+        let parsed = value
+            .parse::<u64>()
+            .with_context(|| format!("{name} must be a positive integer"))?;
+        if parsed == 0 {
+            bail!("{name} must be a positive integer");
+        }
+        Ok(parsed)
+    };
+    let cpu_millis = parse_positive("FULLMAG_DOCKER_CPU_MILLIS", cpu_millis)?;
+    if cpu_millis < 2000 || cpu_millis % 1000 != 0 {
+        bail!("FULLMAG_DOCKER_CPU_MILLIS requires at least two whole CPUs for separate compute and preparation placements");
+    }
+    Ok(Some((
+        cpu_millis,
+        parse_positive("FULLMAG_DOCKER_MEMORY_BYTES", memory_bytes)?,
+    )))
+}
+
+fn docker_host_capacity_migration_digest(
+    host_capacity_scope: bool,
+) -> Result<Option<String>> {
+    let Some(migration_digest) =
+        std::env::var_os("FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256")
+    else {
+        return Ok(None);
+    };
+    if !host_capacity_scope {
+        bail!("FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256 requires a validated Docker host capacity descriptor");
+    }
+    let migration_digest = migration_digest
+        .to_str()
+        .context("FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256 must be UTF-8")?;
+    if migration_digest.len() != 64
+        || !migration_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        bail!("FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256 must be a lowercase SHA-256 digest");
+    }
+    let descriptor_digest = std::env::var_os("FULLMAG_DOCKER_HOST_CAPACITY_SHA256")
+        .context("validated Docker host capacity is missing its descriptor digest")?;
+    let descriptor_digest = descriptor_digest
+        .to_str()
+        .context("FULLMAG_DOCKER_HOST_CAPACITY_SHA256 must be UTF-8")?;
+    if migration_digest != descriptor_digest {
+        bail!("FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256 must exactly match FULLMAG_DOCKER_HOST_CAPACITY_SHA256");
+    }
+    Ok(Some(descriptor_digest.to_owned()))
+}
+
 fn docker_host_cpu_placements(
     allowed_cpu_ids: &BTreeSet<u32>,
     total_cpu_millis: u64,
@@ -1044,6 +1124,13 @@ fn docker_host_cpu_placements(
 
 fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
     let args = parse_docker_host_init_args(args)?;
+    let host_capacity_scope =
+        fullmag_runtime_control::compute_node_probe::docker_host_capacity_is_configured()?;
+    let capacity_migration_descriptor_sha256 =
+        docker_host_capacity_migration_digest(host_capacity_scope)?;
+    if host_capacity_scope && args.ledger_root != PathBuf::from("/host-ledger/ledger") {
+        bail!("Docker root capacity requires the canonical shared /host-ledger/ledger");
+    }
     let fixture_readiness = std::env::var("FULLMAG_DOCKER_HOST_READINESS_FIXTURE")
         .ok()
         .is_some_and(|value| value == "1");
@@ -1091,28 +1178,77 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
         "OS-allowed CPU IDs",
     )?
     .clone();
-    let cpu_millis = *required_observation(
+    let host_cpu_millis = *required_observation(
         &provisional.cpu.effective_capacity_millis,
-        "effective CPU capacity",
+        "host CPU capacity",
     )?;
-    let memory_bytes = *required_observation(
+    let process_cpu = fullmag_runtime_control::compute_node_probe::current_process_cpu_capacity()?;
+    let consumer_cpu_ids: BTreeSet<u32> = if host_capacity_scope {
+        process_cpu
+            .allowed_cpu_ids
+            .intersection(&allowed_cpu_ids)
+            .copied()
+            .collect()
+    } else {
+        process_cpu.allowed_cpu_ids.clone()
+    };
+    let measured_cpu_millis = if host_capacity_scope {
+        process_cpu.cpu_millis.min(host_cpu_millis).min(
+            u64::try_from(consumer_cpu_ids.len())?
+                .checked_mul(1000)
+                .context("Docker consumer CPU mask capacity overflowed")?,
+        )
+    } else {
+        process_cpu.cpu_millis
+    };
+    let measured_memory_bytes = *required_observation(
         &provisional.memory.total_bytes,
         "total host memory",
     )?;
-    if cpu_millis == 0 || memory_bytes == 0 {
+    let consumer_memory_bytes = if host_capacity_scope {
+        fullmag_runtime_control::compute_node_probe::current_process_memory_capacity_bytes()?
+            .min(measured_memory_bytes)
+    } else {
+        measured_memory_bytes
+    };
+    if measured_cpu_millis == 0 || measured_memory_bytes == 0 {
         bail!("Docker host profile requires positive CPU and memory capacity");
     }
-    let cpu_millis = cpu_millis.min(4000);
-    let cpu_millis = if allowed_cpu_ids.is_empty() {
+    const API_MEMORY_HEADROOM_BYTES: u64 = 1024 * 1024 * 1024;
+    let budget_override = docker_host_budget_override()?;
+    let approved_budget = budget_override.is_some();
+    let (cpu_millis, memory_bytes) = if let Some((cpu_millis, full_memory_bytes)) = budget_override {
+        if cpu_millis > measured_cpu_millis {
+            bail!(
+                "approved Docker CPU budget {cpu_millis} milli-CPUs exceeds measured effective capacity {measured_cpu_millis}"
+            );
+        }
+        if full_memory_bytes <= API_MEMORY_HEADROOM_BYTES {
+            bail!(
+                "FULLMAG_DOCKER_MEMORY_BYTES must exceed 1 GiB of API headroom"
+            );
+        }
+        if full_memory_bytes > consumer_memory_bytes {
+            bail!(
+                "approved Docker memory budget {full_memory_bytes} bytes exceeds measured consumer capacity {consumer_memory_bytes}"
+            );
+        }
+        (cpu_millis, full_memory_bytes - API_MEMORY_HEADROOM_BYTES)
+    } else {
+        (
+            measured_cpu_millis.min(4000),
+            consumer_memory_bytes.min(7 * 1024 * 1024 * 1024),
+        )
+    };
+    let cpu_millis = if approved_budget || consumer_cpu_ids.is_empty() {
         cpu_millis
     } else {
         cpu_millis.min(
-            u64::try_from(allowed_cpu_ids.len())
+            u64::try_from(consumer_cpu_ids.len())
                 .unwrap_or(u64::MAX)
                 .saturating_mul(1000),
         )
     };
-    let memory_bytes = memory_bytes.min(7 * 1024 * 1024 * 1024);
     if cpu_millis == 0 || memory_bytes == 0 {
         bail!("Docker host profile has no bounded CPU or memory capacity");
     }
@@ -1166,8 +1302,16 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
         revision: 1,
         owner_epoch: 1,
         total_budget: FmsResourceBudget {
-            cpu_millis,
-            memory_bytes,
+            cpu_millis: if host_capacity_scope {
+                host_cpu_millis
+            } else {
+                cpu_millis
+            },
+            memory_bytes: if host_capacity_scope {
+                measured_memory_bytes
+            } else {
+                memory_bytes
+            },
             gpu_memory_bytes: 0,
             storage_bytes,
         },
@@ -1195,6 +1339,49 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
             std::env::var_os("FULLMAG_STATE_ROOT").map(PathBuf::from),
         )?
         .context("Docker host initialization requires explicit FULLMAG_STATE_ROOT")?;
+    let policy = if capacity_migration_descriptor_sha256.is_some() {
+        let (existing, pins) = fullmag_runtime_control::retry_store_writer_busy(|| {
+            HostResourceLedger::inspect_capacity_migration_for_application(
+                &application_state_root,
+                &args.ledger_root,
+                &policy,
+            )
+        })?;
+        let existing_policy = existing.policy().clone();
+        let mut next_policy = policy.clone();
+        next_policy.revision = existing_policy.revision;
+        if next_policy == existing_policy {
+            existing_policy
+        } else {
+            next_policy.revision = existing_policy
+                .revision
+                .checked_add(1)
+                .context("Docker host capacity policy revision overflowed")?;
+            let (_migrated, receipt) = fullmag_runtime_control::retry_store_writer_busy(|| {
+                existing.migrate_capacity_with_readiness(
+                    next_policy.clone(),
+                    persisted_readiness.clone(),
+                    &pins,
+                )
+            })?;
+            eprintln!(
+                "{}",
+                serde_json::to_string(&receipt)
+                    .context("serialize Docker host capacity migration receipt")?
+            );
+            next_policy
+        }
+    } else if host_capacity_scope {
+        fullmag_runtime_control::retry_store_writer_busy(|| {
+            HostResourceLedger::bind_measured_capacity_policy_for_application(
+                &application_state_root,
+                &args.ledger_root,
+                policy.clone(),
+            )
+        })?
+    } else {
+        policy
+    };
     let policy_diagnostic = serde_json::to_string(&policy)
         .context("serialize probed Docker host policy")?;
     let ledger = fullmag_runtime_control::retry_store_writer_busy(|| {
@@ -1254,26 +1441,45 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
     };
     let cpu_offer_id = "docker-all.compute.cpu".to_owned();
     let prep_offer_id = "docker-all.preparation.cpu".to_owned();
-    let offer_cpu_millis = cpu_millis.min(1000).max(1);
-    let offer_memory = memory_bytes.min(1024 * 1024 * 1024).max(1);
-    let cpu_offer_cpu_millis = cpu_millis
-        .saturating_sub(offer_cpu_millis)
-        .min(3000);
+    let (offer_cpu_millis, offer_memory) = if approved_budget {
+        // Split whole CPUs so rounding both disjoint placements cannot require
+        // more CPU IDs than the approved container allocation provides.
+        (((cpu_millis / 1000 / 4).max(1)) * 1000, (memory_bytes / 4).max(1))
+    } else {
+        (
+            cpu_millis.min(1000).max(1),
+            memory_bytes.min(1024 * 1024 * 1024).max(1),
+        )
+    };
+    let cpu_offer_cpu_millis = if approved_budget {
+        cpu_millis.saturating_sub(offer_cpu_millis)
+    } else {
+        cpu_millis.saturating_sub(offer_cpu_millis).min(3000)
+    };
     if cpu_offer_cpu_millis == 0 {
         bail!(
             "Docker host profile requires positive bounded compute CPU capacity after its preparation allocation"
         );
     }
-    let cpu_offer_memory = memory_bytes.min(6 * 1024 * 1024 * 1024).max(1);
+    let cpu_offer_memory = if approved_budget {
+        memory_bytes.saturating_sub(offer_memory)
+    } else {
+        memory_bytes.min(6 * 1024 * 1024 * 1024).max(1)
+    };
+    if cpu_offer_memory == 0 {
+        bail!(
+            "Docker host profile requires positive compute memory after its preparation allocation"
+        );
+    }
     let (compute_cpu_ids, preparation_cpu_ids) = docker_host_cpu_placements(
-        &policy.allowed_cpu_ids,
+        &consumer_cpu_ids,
         cpu_millis,
         cpu_offer_cpu_millis,
         offer_cpu_millis,
     )?;
-    let offer_budget = |gpu_memory_bytes| FmsResourceBudget {
-        cpu_millis: offer_cpu_millis,
-        memory_bytes: offer_memory,
+    let offer_budget = |cpu_millis, memory_bytes, gpu_memory_bytes| FmsResourceBudget {
+        cpu_millis,
+        memory_bytes,
         gpu_memory_bytes,
         storage_bytes,
     };
@@ -1300,7 +1506,11 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
         compute_resources.push(FmsSchedulerResourceOffer {
             resource_id: resource_id.clone(),
             kind: FmsResourceKind::Gpu,
-            budget: offer_budget(*vram),
+            budget: offer_budget(
+                if approved_budget { cpu_offer_cpu_millis } else { offer_cpu_millis },
+                if approved_budget { cpu_offer_memory } else { offer_memory },
+                *vram,
+            ),
         });
         compute_placements.insert(
             resource_id,
@@ -1312,7 +1522,7 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
     }
     let preparation_resources = vec![FmsPreparationResourceOffer {
         resource_id: prep_offer_id.clone(),
-        budget: offer_budget(0),
+        budget: offer_budget(offer_cpu_millis, offer_memory, 0),
     }];
     let host_execution = RuntimeServiceHostExecution {
         schema_version: RUNTIME_SERVICE_HOST_EXECUTION_SCHEMA_V1.into(),
@@ -1355,6 +1565,15 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
             Vec::new()
         }
     };
+    let capacity_migration = match capacity_migration_descriptor_sha256 {
+        Some(descriptor_sha256) => Some(DockerHostCapacityTransition {
+            descriptor_sha256,
+            historical_policies: fullmag_runtime_control::retry_store_writer_busy(|| {
+                ledger.capacity_policy_history()
+            })?,
+        }),
+        None => None,
+    };
     let profile = DockerHostProfile {
         schema_version: match args.device_access {
             DockerHostDeviceAccess::Cpu => "fullmag.docker-host-profile.v2",
@@ -1379,6 +1598,7 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
         },
         readiness: persisted_readiness,
         runtime_generation_sha256,
+        capacity_migration,
     };
     let bytes = serde_json::to_vec(&profile)?;
     if bytes.len() > 256 * 1024 {
@@ -2064,6 +2284,8 @@ fn cancel_failed_no_spawn(args: impl Iterator<Item = OsString>) -> Result<()> {
     {
         bail!("failed no-spawn cancellation found a worker process exit receipt");
     }
+    fullmag_runtime_control::ensure_admitted_task_coordinator_genesis(&store, &claim)
+        .context("recover exact pre-Prepare admission genesis for no-spawn cancellation")?;
     let recovered = fullmag_runtime_control::recover_coordinator(&store, &claim)?;
     if recovered
         .events
@@ -2078,7 +2300,7 @@ fn cancel_failed_no_spawn(args: impl Iterator<Item = OsString>) -> Result<()> {
         | fullmag_application::CoordinatorPhase::Running
         | fullmag_application::CoordinatorPhase::Stopping => Some(
             fullmag_runtime_control::retry_store_writer_busy(|| {
-                fullmag_runtime_control::request_accepted_task_stop(
+                fullmag_runtime_control::request_failed_no_spawn_task_stop(
                     &store,
                     &run_id,
                     &request.identity.task_id,
@@ -2321,11 +2543,29 @@ fn run() -> Result<()> {
         Some(value) if value == OsString::from("--initialize-docker-host") => {
             initialize_docker_host(args)
         }
+        Some(value) if value == OsString::from("--fail-reaped-worker") => {
+            failed_worker_recovery::run(args)
+        }
+        Some(value) if value == OsString::from("--complete-reaped-worker-archive") => {
+            failed_worker_recovery::run_completion(args)
+        }
+        Some(value) if value == OsString::from("--cancel-failed-preclaim") => {
+            failed_preclaim_cancellation::run(args)
+        }
         Some(value) if value == OsString::from("--cancel-failed-no-spawn") => {
             cancel_failed_no_spawn(args)
         }
+        Some(value) if value == OsString::from("--cancel-unclaimed") => {
+            runtime_service_unclaimed_cancellation::cancel_unclaimed(args)
+        }
         Some(value) if value == OsString::from("--prepare-orphan-teardown") => {
             run_orphan_teardown(OrphanTeardownPhase::Prepare, args)
+        }
+        Some(value) if value == OsString::from("--prepare-claimed-interruption") => {
+            claimed_worker_interruption::run(false, args)
+        }
+        Some(value) if value == OsString::from("--complete-claimed-interruption") => {
+            claimed_worker_interruption::run(true, args)
         }
         Some(value) if value == OsString::from("--recover-orphan-after-teardown") => {
             run_orphan_teardown(OrphanTeardownPhase::Recover, args)
@@ -2337,7 +2577,7 @@ fn run() -> Result<()> {
             }
             run_service(path)
         }
-        _ => bail!("usage: fullmag-runtime-service --config <absolute-json-path> | --cancel-failed-no-spawn --config <absolute-json-path> --request <absolute-json-path> | --prepare-orphan-teardown --config <absolute-json-path> --request <absolute-json-path> | --recover-orphan-after-teardown --config <absolute-json-path> --request <absolute-json-path> --attestation <absolute-json-path> | --initialize-docker-host --ledger-root <absolute-path> --store-root <absolute-path> [--device-access cpu|gpu] [--native-fem-readiness <absolute-json-path>] [--host-id <stable-id>]")
+        _ => bail!("usage: fullmag-runtime-service --complete-reaped-worker-archive --config <absolute-json-path> --request <original-absolute-json-path> --request-sha256 <sha256> --completion <absolute-json-path> --completion-sha256 <sha256> [--verify-only] | --fail-reaped-worker --config <absolute-json-path> --request <absolute-json-path> --request-sha256 <sha256> [--verify-only] | --config <absolute-json-path> | --cancel-failed-no-spawn --config <absolute-json-path> --request <absolute-json-path> | --cancel-unclaimed --config <absolute-json-path> --request <absolute-json-path> | --prepare-orphan-teardown --config <absolute-json-path> --request <absolute-json-path> | --recover-orphan-after-teardown --config <absolute-json-path> --request <absolute-json-path> --attestation <absolute-json-path> | --initialize-docker-host --ledger-root <absolute-path> --store-root <absolute-path> [--device-access cpu|gpu] [--native-fem-readiness <absolute-json-path>] [--host-id <stable-id>]")
     }
 }
 
@@ -2620,11 +2860,11 @@ fn run_service(path: PathBuf) -> Result<()> {
                             inventory_owner = sample_owner;
                         }
                         Err(error) => {
-                            if is_store_writer_busy(&error)
-                                && sample_store_writer_busy_within_budget(
-                                    &mut consecutive_busy_samples,
-                                )
-                            {
+                            if is_store_writer_busy(&error) {
+                                // A competing writer cannot invalidate the
+                                // service owner. The scheduler independently
+                                // gates every new admission on a fresh sample.
+                                record_sample_store_writer_busy(&mut consecutive_busy_samples);
                                 tracing::warn!(
                                     error = ?error,
                                     consecutive_busy_samples,
@@ -2707,19 +2947,11 @@ fn run_service(path: PathBuf) -> Result<()> {
                                 tracing::debug!(%reason, "host compute-node admission deferred");
                             }
                             Err(error) if is_store_writer_busy(&error) => {
-                                if !host_admission_deferral_within_budget(
-                                    &mut admission_deferred_at,
-                                    Instant::now(),
-                                ) {
-                                    admission_unknown = true;
-                                    owner.publish(
-                                        RuntimeServiceState::Unknown,
-                                        generations.map(|p| p.0),
-                                        generations.map(|p| p.1),
-                                        children.describe(),
-                                    )?;
-                                    bail!("host compute-node admission observation failed: {error:#}");
-                                }
+                                // Contention is not evidence of a failed owner.
+                                // Reservations still require a fresh snapshot;
+                                // keep validating pools and publishing liveness.
+                                // Do not consume the separate stale/topology
+                                // observation budget without an observation.
                                 tracing::warn!(error = ?error, "host admission observation deferred while the ledger writer is busy");
                             }
                             Err(error) => {
@@ -2979,12 +3211,15 @@ mod tests {
     }
 
     #[test]
-    fn sample_writer_busy_budget_allows_five_cycles_only() {
+    fn sample_writer_busy_counter_is_diagnostic_and_saturates() {
         let mut consecutive = 0;
-        for _ in 0..MAX_CONSECUTIVE_SAMPLE_STORE_WRITER_BUSY {
-            assert!(sample_store_writer_busy_within_budget(&mut consecutive));
+        for _ in 0..6 {
+            record_sample_store_writer_busy(&mut consecutive);
         }
-        assert!(!sample_store_writer_busy_within_budget(&mut consecutive));
+        assert_eq!(consecutive, 6);
+        consecutive = u32::MAX;
+        record_sample_store_writer_busy(&mut consecutive);
+        assert_eq!(consecutive, u32::MAX);
     }
 
     #[test]

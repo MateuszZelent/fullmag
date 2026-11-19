@@ -1836,6 +1836,11 @@ pub(super) fn solve_native_m1_snapshot(
                     potential_v: value_v,
                 }
             }
+            ResolvedSpinBoundaryConditionIR::HomogeneousSpinPotentialGradient => {
+                return Err(run_error(
+                    "native_m1_v1 does not support homogeneous spin-potential gradient; fallback is forbidden",
+                ));
+            }
             ResolvedSpinBoundaryConditionIR::SpecifiedOutwardFlux { .. } => {
                 return Err(run_error(
                     "native_m1_v1 does not support specified spin flux; fallback is forbidden",

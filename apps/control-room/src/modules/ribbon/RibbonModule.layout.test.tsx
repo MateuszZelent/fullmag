@@ -9,7 +9,9 @@ import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { LayoutController } from "@/kernel/layout/LayoutController";
 import {
   findElement,
+  findElements,
   installSimulationPreparationTestDom,
+  TestElement,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
@@ -21,6 +23,42 @@ import {
   RIBBON_COMMANDS,
 } from "./ribbonCommands";
 import RibbonModule from "./RibbonModule";
+
+const RIBBON_TOOLBAR_ITEM_SELECTOR =
+  'button[data-ribbon-toolbar-item="true"]:not(:disabled), .fm-ribbon-action-shell[data-disabled-reason]';
+
+function installRibbonToolbarQuerySelectorAll(): () => void {
+  const prototype = TestElement.prototype;
+  const previous = Object.getOwnPropertyDescriptor(prototype, "querySelectorAll");
+  Object.defineProperty(prototype, "querySelectorAll", {
+    configurable: true,
+    value(this: TestElement, selector: string) {
+      if (selector !== RIBBON_TOOLBAR_ITEM_SELECTOR) {
+        return [] as unknown as NodeListOf<Element>;
+      }
+      return findElements(
+        this,
+        (element) =>
+          element !== this &&
+          ((element.tagName === "BUTTON" &&
+            element.getAttribute("data-ribbon-toolbar-item") === "true" &&
+            !element.disabled) ||
+            ((element.getAttribute("class") ?? "")
+              .split(/\s+/)
+              .includes("fm-ribbon-action-shell") &&
+              element.hasAttribute("data-disabled-reason"))),
+      ) as unknown as NodeListOf<Element>;
+    },
+  });
+
+  return () => {
+    if (previous) {
+      Object.defineProperty(prototype, "querySelectorAll", previous);
+    } else {
+      Reflect.deleteProperty(prototype, "querySelectorAll");
+    }
+  };
+}
 
 vi.mock(
   "@/kernel/resources/geometryLifecycleResources",
@@ -115,6 +153,8 @@ vi.mock(
 describe("RibbonModule layout-driven active actions", () => {
   it("refreshes Chart, 3D, and Chart + 3D highlights when viewport composition changes", async () => {
     const dom = installSimulationPreparationTestDom();
+    const restoreToolbarQuerySelectorAll =
+      installRibbonToolbarQuerySelectorAll();
     const container = dom.document.createElement("div");
     dom.document.body.appendChild(container);
 
@@ -200,6 +240,7 @@ describe("RibbonModule layout-driven active actions", () => {
       ]).toEqual(["false", "false", "true"]);
     } finally {
       await act(async () => root.unmount());
+      restoreToolbarQuerySelectorAll();
       dom.restore();
     }
   });

@@ -126,3 +126,59 @@ Oddzielny dowód stanowi rzeczywisty start API/native ownera na zachowanym
 storage. Build i fixture nie kwalifikują stabilności, GPU ani fizyki. Do uzyskania
 dowodów status pozostaje **NOT VERIFIED**. Wycofanie launchera pozostawia rekordy
 jako historię; nie usuwa konfiguracji, ownera ani lease.
+
+## Odrębny checkpoint anulowania przed API — 21.10.2026
+
+`stop-pre-api-start` dotyczy wyłącznie własnego startu `fullmag-master`, który
+opublikował pakiet i nadal czyta historyczny rollback przed bramką cgroup/API.
+Nie jest rozszerzeniem wariantu API exit101 ani drugim certyfikatem pre-ACK.
+Domyślnie wykonuje odczytowy podgląd. Zastosowanie wymaga jawnego `--apply`.
+
+Pod lease bieżącej operacji i podległym mutexem sprawdza jej uwierzytelniony
+helper, dokładną inkarnację, jedyny proces `backend_dev.py start`, brak jego
+dzieci i jeden deskryptor O_RDONLY historycznego artefaktu. Po wstrzymaniu
+przypiętego procesu ponownie potwierdza ten stan oraz brak requestu bieżącej
+bramki cgroup. Zachowuje create-only intent i wysyła raz SIGTERM/SIGCONT przez
+pidfd. Nie dotyka skompilowanego pakietu, backupów ani aktywacji symulacji.
+
+Receipt `stopped-confirmed` wymaga faktycznego exited143/non-OOM/PID0 tej samej
+inkarnacji oraz niezmienionego pierwszego pre-ACK proof, Failed ownera,
+process-tree, natywnej konfiguracji, held katalogu bez start_release i dowodów
+zwolnionych zasobów. Pierwotny kontroler sam obserwuje wyjście, zapisuje własny
+terminal i zwalnia własny lease; komenda nie robi tego za niego. Wynik nieznany
+blokuje następną próbę zamiast ponowienia sygnału albo resetu ownera.
+Po potwierdzonym zgonie `--finalize` pozwala ponownie dowieść tego samego
+stopped namespace i domknąć przerwaną publikację receipt pod osobnym lease;
+nie ponawia sygnału. Receipt wiąże raw SHA intentu i jego niezmienne pola.
+Utrata hostowego polecenia po ARM może pozostawić sam start w SIGSTOP jeszcze
+przed publikacją intentu. Odrębne `--resume-unissued` wymaga aktywnego oryginalnego
+kontrolera, własnego mutexu, świeżego checkpointu oraz dwukrotnie potwierdzonego
+braku zarówno intentu, jak i nazwanego helpera publikacji. Dopiero wtedy może
+wznowić przypięty PID; obecny lub nieznany publisher/intent wyklucza SIGCONT.
+
+Hostowy konsument ponownie sprawdza stopped incarnation i wszystkie piny.
+Przenosi dokładnie istniejący kontekst pierwszego pre-ACK. Ponieważ natywna
+konfiguracja nie została zmieniona, nie emituje post-build generation proof.
+Wariant101 i zwykłe restarty zachowują dotychczasowe bramki. Nowy runtime nadal
+waliduje aktualny pakiet, storage, istniejący accepted proof i tworzy ownera
+zwykłym service-ensure. Brak testów w tej sesji wynika z jawnej decyzji użytkownika;
+odbiór tego nowego checkpointu pozostaje NOT VERIFIED przed rzeczywistym apply.
+
+### Restart zakończony błędem capture, bez API
+
+`checkpoint-pre-api-failure` obserwuje wyłącznie już zatrzymaną inkarnację
+exit2/non-OOM/PID0. Nie zatrzymuje i nie uruchamia usługi. Osobny discriminant
+`observe-capture-failure` wiąże dokładne timestampowane stdout/stderr z
+StartedAt/FinishedAt. Istniejący validator capture-only wyklucza ukończony
+capture, build, pakowanie, handoff, gate, API i native runtime. Logi są zachowane
+w control volume; konsument ponownie porównuje je z istniejącym kontenerem,
+a po usunięciu kontenera korzysta z dokładnego archiwum i zamkniętego proof
+recreation. Przerwana publikacja może zostać domknięta przez `--finalize`,
+bez sygnału i bez ponowienia aktywacji.
+
+Niezmienione piny pierwszego pre-ACK, ownera/process/config i held runu są
+sprawdzane przed i po obserwacji pod nowym lease. Nie jest to certyfikat
+nowego błędu API, successful drain ani zamiana starego journalu. Wariant
+`cancel-retention` nadal wymaga exit143; capture-only wymaga odrębnie exit2
+i jego własnych logów. Dopiero tak zwalidowany `PreApiContext` pozwala użyć
+istniejącego pierwszego kontekstu pre-ACK przy standardowej recreation.

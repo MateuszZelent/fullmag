@@ -60,7 +60,7 @@ export function MicrostripGeometryEditor({ objectId, scene, status, refetch }: P
   const draftKey = `${sessionScopeKey ?? "unconfirmed"}|${objectId}`;
   const geometry = antennaLayoutGeometry(scene, objectId);
   const serverDimensions = geometry ? antennaLayoutDimensionDraft(geometry) : {};
-  const serverCircuit = geometry ? microstripCircuitDraft(geometry, scene, objectId) : { enabled: false, parameters: {}, potentialJumpV: "" };
+  const serverCircuit = geometry ? microstripCircuitDraft(geometry, scene, objectId) : { enabled: false, parameters: {}, potentialJumpV: "", sourceCutOffsetM: "", sourceCutNormal: "positive_axis" };
   const sourceGeometry = geometry ? microstripCircuitSourceKey(geometry, scene, objectId) : "";
   const [localState, setLocalState] = useState<LocalDraft | null>(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
@@ -192,8 +192,17 @@ export function MicrostripGeometryEditor({ objectId, scene, status, refetch }: P
         <fieldset className="fm-antenna-circuit-part">
           <legend>Voltage source</legend>
           <FormField inline={false} label="Inlet source-cut potential jump" unit="V" value={circuit.potentialJumpV}
-            hint="V⁺ − V⁻ in the object-local z frame. A new cut uses the positive-axis normal at the clearance center; an existing cut keeps its plane and normal."
+            hint="V⁺ − V⁻ across the inlet source cut, oriented by the selected normal."
             onChange={(event) => update(stations, { ...circuit, potentialJumpV: event.currentTarget.value })} />
+          <FormField inline={false} label="Inlet source-cut local z offset" unit="m" value={circuit.sourceCutOffsetM}
+            hint="Object-local z; strictly inside the signal/return clearance. A new cut starts at the clearance midpoint."
+            onChange={(event) => update(stations, { ...circuit, sourceCutOffsetM: event.currentTarget.value })} />
+          <FormField inline={false} type="select" label="Inlet source-cut normal" value={circuit.sourceCutNormal}
+            hint="The normal defines the plus/minus sides of the potential jump."
+            onChange={(event) => update(stations, { ...circuit, sourceCutNormal: event.currentTarget.value })}>
+            <option value="positive_axis">Positive local z</option>
+            <option value="negative_axis">Negative local z</option>
+          </FormField>
         </fieldset>
         {(["inlet", "outlet"] as const).map(end => <fieldset className="fm-antenna-circuit-part" key={end}>
           <legend>{end === "inlet" ? "Inlet connection" : "Outlet connection"}</legend>

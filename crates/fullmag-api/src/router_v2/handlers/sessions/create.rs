@@ -41,21 +41,21 @@ pub async fn create(
     let _transition = state.current_live_session_transition.lock().await;
     let replacing = state.current_live_state.read().await.is_some();
     if replacing && !request.replace_current {
-        return Err(ApiError {
-            status: StatusCode::CONFLICT,
-            code: None,
-            message: "an active local session already exists; set replace_current to replace it"
-                .to_string(),
-            diagnostics: Vec::new(),
-        });
+        return Err(ApiError::conflict_with_code(
+            "session_already_active",
+            "an active local session already exists; set replace_current to replace it",
+        ));
     }
     if replacing {
         reset_current_live_session_resources(&state).await;
     }
-    state
-        .current_live_session_epoch
-        .fetch_add(1, Ordering::Relaxed);
-    *state.current_live_state.write().await = Some(snapshot.clone());
+    {
+        let mut current = state.current_live_state.write().await;
+        state
+            .current_live_session_epoch
+            .fetch_add(1, Ordering::AcqRel);
+        *current = Some(snapshot.clone());
+    }
 
     let display_revision = state.current_display_selection.read().await.revision;
     let realtime_state =
@@ -99,10 +99,15 @@ pub async fn create(
 fn validated_execution(
     request: &CreateSessionRequest,
 ) -> Result<SessionExecutionResource, ApiError> {
-    let supported_backend = matches!(request.backend.as_str(), "fdm" | "fem");
-    if !supported_backend || request.device != "cpu" || request.precision != "double" {
+    if fullmag_runner::scratch_authoring_capabilities(
+        &request.backend,
+        &request.device,
+        &request.precision,
+    )
+    .is_none()
+    {
         return Err(ApiError::bad_request(
-            "supported scratch execution is exactly fdm|fem with cpu device and double precision",
+            "supported scratch execution is fdm|fem cpu double or fdm gpu single|double",
         ));
     }
     Ok(SessionExecutionResource {
@@ -233,12 +238,16 @@ fn scratch_snapshot(
         solver_profile: None,
         fem_mesh: None,
     });
-    snapshot.capabilities = fullmag_runner::scratch_authoring_capabilities(&execution.backend);
+    snapshot.capabilities = fullmag_runner::scratch_authoring_capabilities(
+        &execution.backend,
+        &execution.device,
+        &execution.precision,
+    );
     snapshot.metadata = Some(json!({
         "requested_execution": execution,
         "effective_execution": execution,
         "fallback": null,
-    }));
+    }).into());
     snapshot.scene_document = Some(scene_document);
     snapshot
 }

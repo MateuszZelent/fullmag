@@ -362,6 +362,24 @@ pub struct LivePublisherDiagnosticsResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SolverProfileOperationResource {
+    /// Immutable configuration that produced this operation sample. The
+    /// enclosing resource config may describe a later admission request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_config: Option<SolverProfileCommandConfig>,
+    pub sequence: u64,
+    pub operation_id: String,
+    pub outcome: String,
+    pub total_wall_time_ns: u64,
+    pub native_operator_wall_ns: Option<u64>,
+    /// Entire native ABI call, containing the surface operator duration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_call_wall_ns: Option<u64>,
+    pub phases: Vec<SolverProfilePhaseResource>,
+    pub accounting_issue: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SolverProfileResource {
     pub revision: u64,
     pub state: String,
@@ -371,6 +389,8 @@ pub struct SolverProfileResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threading: Option<SolverProfileThreadingResource>,
     pub latest_samples: Vec<SolverProfileStepSampleResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operation_samples: Vec<SolverProfileOperationResource>,
     pub aggregates: SolverProfileAggregatesResource,
     #[serde(default)]
     pub rates: SolverRateDiagnosticsResource,
@@ -460,6 +480,7 @@ impl Default for SolverProfileResource {
             preview_3d_disabled: false,
             threading: None,
             latest_samples: Vec::new(),
+            operation_samples: Vec::new(),
             aggregates: SolverProfileAggregatesResource::default(),
             rates: SolverRateDiagnosticsResource::default(),
             overhead: SolverProfileOverheadDiagnosticsResource::default(),
@@ -649,4 +670,43 @@ fn default_sample_every() -> u64 {
 
 fn default_max_samples() -> usize {
     128
+}
+
+/// Bounded automatic run telemetry. GPU samples describe the whole device.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RunPerformancePointResource {
+    pub elapsed_monotonic_ns: u64,
+    pub step_index: Option<u64>,
+    /// Process CPU utilization; can exceed 100 percent for multiple cores.
+    pub cpu_percent: Option<f64>,
+    pub rss_bytes: Option<u64>,
+    pub gpu_percent: Option<f64>,
+    pub gpu_memory_bytes: Option<u64>,
+    pub gpu_power_watts: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RunPerformanceResource {
+    pub revision: String,
+    pub state: String,
+    pub reason: Option<String>,
+    pub run_id: Option<String>,
+    pub task_id: Option<String>,
+    pub step_id: Option<String>,
+    pub attempt_id: Option<String>,
+    pub ownership_epoch: Option<u64>,
+    pub sample_sequence: u64,
+    pub elapsed_monotonic_ns: u64,
+    pub first_step_index: Option<u64>,
+    pub step_index: Option<u64>,
+    pub unique_step_callback_records: u64,
+    pub rows_dropped: u64,
+    pub collection_overhead_ns: Option<u64>,
+    pub latest_step_wall_ns: Option<u64>,
+    pub latest_rejected_attempts: Option<u64>,
+    pub latest_evaluate_host_wall_ns: Option<u64>,
+    pub gpu_scope: String,
+    pub gpu_unavailable_reason: Option<String>,
+    #[schema(max_items = 120)]
+    pub points: Vec<RunPerformancePointResource>,
 }

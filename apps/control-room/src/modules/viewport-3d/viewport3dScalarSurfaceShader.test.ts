@@ -1,3 +1,4 @@
+import { SCALAR_COLOR_PALETTE_ITEMS } from "@/shared/visualization/scalarColorPalette";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -54,6 +55,28 @@ function complexBuffer(): ScalarColorBuffer {
 }
 
 describe("viewport3dScalarSurfaceShader", () => {
+  it("updates every selectable palette in place with a distinct shader branch", () => {
+    const buffer = scalarBuffer([0, 1]);
+    const material = createScalarSurfaceShaderMaterial(buffer, {
+      depthTest: true, depthWrite: true, opacity: 1, polygonOffset: false,
+      polygonOffsetFactor: 0, polygonOffsetUnits: 0, side: 0, transparent: false,
+    });
+    const program = material.fragmentShader;
+    const version = material.version;
+    const ids = new Set<number>();
+    for (const { value } of SCALAR_COLOR_PALETTE_ITEMS) {
+      updateScalarSurfaceShaderMaterial(material, { ...buffer, colorPalette: value }, 1);
+      const id = material.uniforms.fmPaletteId.value as number;
+      expect(id).toBeGreaterThanOrEqual(0);
+      expect(program).toContain(`if (fmPaletteId == ${id})`);
+      expect(ids.has(id)).toBe(false);
+      ids.add(id);
+      expect(material.fragmentShader).toBe(program);
+      expect(material.version).toBe(version);
+    }
+    material.dispose();
+  });
+
   it("validates whether scalar shader color buffer can be applied", () => {
     expect(canApplyScalarShaderColorBuffer(scalarBuffer([0, 1, 2]), 3)).toBe(true);
     expect(

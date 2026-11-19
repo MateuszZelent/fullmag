@@ -36,6 +36,7 @@ MUTABLE_MOUNTS = frozenset({"/state", "/host-ledger"})
 ENVIRONMENT_NAMES = frozenset({
     "FULLMAG_SESSION_STORAGE_PROFILE", "FULLMAG_RUNTIME_IMAGE_ID",
     "FULLMAG_HOST_LEDGER_PROFILE", "FULLMAG_HOST_LEDGER_PROJECT_ID",
+    "FULLMAG_HOST_LEDGER_ROOT", "FULLMAG_GROUP_LEDGER_HOST_ID",
     "FULLMAG_DOCKER_HOST_ID", "FULLMAG_DOCKER_HOST_EXECUTION",
     "FULLMAG_WINDOWS_CONTAINER_MANAGED", "FULLMAG_REPO_ROOT",
     "FULLMAG_STATE_ROOT", "FULLMAG_STATE_DIR", "FULLMAG_PROJECT_STORAGE_ROOT",
@@ -219,7 +220,19 @@ def maintenance_compose(target: Mapping[str, Any], project: str,
     for destination in sorted((READONLY_MOUNTS | MUTABLE_MOUNTS) & mounts.keys()):
         mount = mounts[destination]
         read_only = preflight or destination in READONLY_MOUNTS
-        if mount.get("Type") == "volume":
+        if mount.get("Type") == "volume" and destination == "/host-ledger":
+            # ADR 0067: a DEV group's own ledger volume, never a host path.
+            import docker_group_ledger as group_ledger
+            target_environment = dict(entry.partition("=")[::2]
+                               for entry in target["Config"].get("Env", []))
+            require(group_ledger.is_group_ledger_mount(mount)
+                    and group_ledger.is_group_ledger_backend(target_environment)
+                    and mount.get("Driver") == "local",
+                    "recovery ledger volume is not this group's own ledger")
+            volumes.append({"type": "volume", "source": mount["Name"],
+                            "target": destination, "read_only": read_only,
+                            "volume": {"nocopy": True}})
+        elif mount.get("Type") == "volume":
             require(destination == "/opt/fullmag/package" and backend_cache is not None,
                     "v2 recovery requires the typed backend volume cache proof")
             _validate_backend_volume_cache_target(target, backend_cache)

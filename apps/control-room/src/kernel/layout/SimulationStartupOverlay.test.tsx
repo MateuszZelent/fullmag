@@ -151,7 +151,7 @@ function statusResource(
 }
 
 describe("SimulationStartupOverlay", () => {
-  it("shows while the session status resource is loading", () => {
+  it("holds the startup gate without a window while the session status loads", () => {
     const state = resolveSimulationStartupOverlayState({
       data: null,
       error: null,
@@ -163,8 +163,13 @@ describe("SimulationStartupOverlay", () => {
     expect(state).toMatchObject({
       detail: "Connecting to the local simulation backend.",
       isVisible: true,
+      kind: "syncing",
       title: "Preparing simulation",
     });
+    expect(shouldRefreshSimulationStartupStatus(state)).toBe(true);
+    expect(
+      renderToStaticMarkup(<SimulationStartupOverlayView state={state} />),
+    ).toBe("");
   });
 
   it("shows explicit startup phases from the backend status", () => {
@@ -344,8 +349,14 @@ describe("SimulationStartupOverlay", () => {
       ),
       { ...statusResource(), status: "stale" },
       20_000,
+      // Only a transport disruption (or failed refresh) makes a retained
+      // snapshot stale; a refetch in flight alone does not.
+      true,
     );
-    expect(shouldRefreshSimulationStartupStatus(staleReady)).toBe(true);
+    // Ready is terminal, so a disruption afterwards neither reopens the
+    // window nor keeps the startup gate or its polling alive.
+    expect(staleReady).toMatchObject({ isVisible: false, kind: "stale" });
+    expect(shouldRefreshSimulationStartupStatus(staleReady)).toBe(false);
   });
 
   it("renders option A with determinate progress, ordered stages, and a visible log", () => {

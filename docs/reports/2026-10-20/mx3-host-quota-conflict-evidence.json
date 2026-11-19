@@ -1,0 +1,19 @@
+{
+  "observed_at": "2026-10-21T00:37:47.528708+00:00",
+  "backend_container_id": "f7c035fd8bbc54ea022f1bd22137e69165bb6e31fe1f9bbfbd0c9f510033dae5",
+  "resume_attempt": "a0019546f54c42dda7ec0024fdebc5d7",
+  "resume_terminal_sha256": "258a9a912c8204fd1d25529b264180dcd1d7c9005e5e571611616f36c1e505f6",
+  "build_receipt_sha256": "db864d1bd9411efd6272291ab6d8b3962d79dbd6156e1d3b179dd76ef6ec74eb",
+  "snapshot_sha256": "fd8b3a134cba86d16727ffe43842eaec86116f49369931a58a355fde1084a61d",
+  "old_quota_millis": 4000,
+  "new_quota_millis": 16000,
+  "old_inventory_sha256": "ede15957a5e6fbc441c777bc53323f02299e3eeff71a93439f85ee7da0a42b6e",
+  "recomputed_old_matches": true,
+  "only_quota_changed_inventory_sha256": "a0fe375e7713662e09cdf184cf665874f18b24580ab53461f2a1c52b8b276a6f",
+  "matches_rejected_native_probe": true,
+  "ledger_sha256": "3112bce5b3b7cfc3bec141c01692443224951ba8a055a26aad57789a5c9b43d3",
+  "released_reservation_count": 14,
+  "active_inventory_owner_absence_verified": false,
+  "runtime_mutations": "managed resume only; no ledger migration, owner reset, retry04 or Solve",
+  "verification": "Actual accepted-store bootstrap passed; later host policy initialization failed before API. Mesh/UI NOT VERIFIED. No tests."
+}

@@ -13,46 +13,23 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "docker" / "all-in-one"))
 import backend_dev as backend
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import docker_package_retention as launcher_retention
 
 
 @unittest.skipIf(os.name == "nt", "Linux container symlink contract")
 class BackendPackageTests(unittest.TestCase):
-    def test_retention_group_plan_hash_matches_launcher_canonical_bytes(self):
-        backend_plan = "a" * 64
-        inputs = "b" * 64
-        self.assertEqual(
-            backend._retention_group_plan_sha256(backend_plan, inputs),
-            launcher_retention._group_plan_sha256(backend_plan, inputs),
-        )
-
-    def test_first_retention_report_write_creates_missing_control_record(self):
-        with tempfile.TemporaryDirectory() as directory:
-            control = Path(directory) / "control"
-            control.mkdir()
-            original_root = backend.BACKEND_CONTROL_ROOT
-            backend.BACKEND_CONTROL_ROOT = control
-            try:
-                path = control / backend.PACKAGE_RETENTION_REPORT_NAME
-                self.assertFalse(path.exists())
-                backend._write_bound_json(
-                    path,
-                    {
-                        "schema": backend.PACKAGE_RETENTION_OPERATION_SCHEMA,
-                        "state": "applied",
-                    },
-                    "backend package retention report",
-                )
-                self.assertEqual(
-                    json.loads(path.read_text(encoding="utf-8")),
-                    {
-                        "schema": backend.PACKAGE_RETENTION_OPERATION_SCHEMA,
-                        "state": "applied",
-                    },
-                )
-            finally:
-                backend.BACKEND_CONTROL_ROOT = original_root
+    def setUp(self):
+        control = tempfile.TemporaryDirectory()
+        self.addCleanup(control.cleanup)
+        root = Path(control.name)
+        for name, path in {
+            "CONTROL_ROOT": root,
+            "BACKEND_CONTROL_ROOT": root / "backend",
+            "PROVENANCE_PATH": root / "backend" / "runtime-provenance.json",
+            "CACHE_RECEIPT_PATH": root / "backend" / backend.PACKAGE_CACHE_RECEIPT_NAME,
+        }.items():
+            patcher = patch.object(backend, name, path)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     @staticmethod
     def _capsule(source_digest, files):
@@ -633,6 +610,47 @@ class BackendPackageTests(unittest.TestCase):
             finally:
                 backend.PACKAGE_ROOT = original_package_root
 
+    def test_serve_exports_receipt_source_identity_for_mesh_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output, records = self._published_package(root)
+            _, manifest = self._live_manifest(root)
+            receipt = self._receipt_for_manifest(records, manifest, self._toolchain_fixture())
+            backend._write_json(output / "backend-build-receipt.json", receipt, "test receipt")
+            for inherited in (None, "e" * 64):
+                with (
+                    self.subTest(inherited=inherited),
+                    patch.object(backend, "PACKAGE_ROOT", output),
+                    patch.dict(os.environ, {}, clear=True),
+                    patch("worker_cgroup_gate.wait_for_delegation", return_value={"state": "ready"}),
+                    patch.object(backend.os, "execvpe") as handoff,
+                ):
+                    if inherited is not None:
+                        os.environ["FULLMAG_SOURCE_SNAPSHOT_SHA256"] = inherited
+                    self.assertEqual(backend._serve([]), 0)
+                    environment = handoff.call_args.args[2]
+                    self.assertEqual(environment.get("FULLMAG_SOURCE_SNAPSHOT_SHA256"), "d" * 64)
+                    self.assertEqual(environment.get("FULLMAG_SOURCE_GIT_COMMIT"), "a" * 40)
+                    self.assertEqual(environment.get("FULLMAG_SOURCE_WORKTREE_STATE"), "clean")
+
+    def test_serve_rejects_inconsistent_source_identity_before_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output, records = self._published_package(root)
+            _, manifest = self._live_manifest(root)
+            receipt = self._receipt_for_manifest(records, manifest, self._toolchain_fixture())
+            receipt["source"]["source_snapshot_sha256"] = "e" * 64
+            backend._write_json(output / "backend-build-receipt.json", receipt, "test receipt")
+            with (
+                patch.object(backend, "PACKAGE_ROOT", output),
+                patch.dict(os.environ, {}, clear=True),
+                patch("worker_cgroup_gate.wait_for_delegation", return_value={"state": "ready"}),
+                patch.object(backend.os, "execvpe") as handoff,
+            ):
+                with self.assertRaisesRegex(backend.BackendBuildError, "source snapshot"):
+                    backend._serve([])
+                handoff.assert_not_called()
+
     def test_development_compose_selects_receipt_validated_backend_start(self):
         repository = Path(__file__).resolve().parents[1]
         development_compose = (repository / "compose.dev.yaml").read_text(encoding="utf-8")
@@ -664,14 +682,10 @@ class BackendPackageTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             output, records = self._published_package(Path(directory))
+            _, source_manifest = self._live_manifest(Path(directory))
             backend._write_json(
                 output / "backend-build-receipt.json",
-                {
-                    "schema": backend.RECEIPT_SCHEMA,
-                    "state": "succeeded",
-                    "execution_lanes": {lane: {} for lane in backend.LANES},
-                    "artifacts": records,
-                },
+                self._receipt_for_manifest(records, source_manifest, self._toolchain_fixture()),
                 "test backend build receipt",
             )
             original_package_root = backend.PACKAGE_ROOT
@@ -828,11 +842,6 @@ class BackendPackageTests(unittest.TestCase):
                     ),
                     patch.object(
                         backend,
-                        "_run_automatic_package_retention",
-                        side_effect=lambda *args: events.append(("retention", args)) or {},
-                    ),
-                    patch.object(
-                        backend,
                         "_serve",
                         side_effect=lambda extra: events.append(("serve", extra)) or 0,
                     ),
@@ -848,7 +857,7 @@ class BackendPackageTests(unittest.TestCase):
                     self.assertEqual(backend.main(command), 0)
                 self.assertEqual(
                     [event[0] for event in events],
-                    ["prepare", "provenance", "retention", "serve"] * 2,
+                    ["prepare", "provenance", "serve"] * 2,
                 )
                 prepare_args = events[0][1]
                 self.assertEqual(
@@ -875,8 +884,7 @@ class BackendPackageTests(unittest.TestCase):
                 self.assertEqual(prepare_args[5], prepare_args[2])
                 self.assertTrue(prepare_args[5].name.startswith(".backend-package-candidate-"))
                 self.assertEqual(events[1][1], package)
-                self.assertEqual(events[2][1][0], package)
-                self.assertEqual(events[3][1], [])
+                self.assertEqual(events[2][1], [])
                 self.assertNotEqual((package / "bin/fullmag-bin").read_bytes(), b"package\n")
                 backups = sorted(
                     (
@@ -940,10 +948,6 @@ class BackendPackageTests(unittest.TestCase):
                     patch.object(backend, "_prepare_locked") as prepare,
                     patch.object(backend, "_rotate_package") as rotate,
                     patch.object(backend, "_publish_runtime_provenance") as publish,
-                    patch.object(
-                        backend,
-                        "_run_automatic_package_retention",
-                    ) as automatic_retention,
                     patch.object(backend, "_serve", return_value=0) as serve,
                 ):
                     self.assertEqual(
@@ -954,7 +958,6 @@ class BackendPackageTests(unittest.TestCase):
                 space_preflight.assert_not_called()
                 rotate.assert_not_called()
                 publish.assert_called_once_with(package)
-                automatic_retention.assert_not_called()
                 serve.assert_called_once_with([])
                 self.assertFalse(
                     list(
@@ -1174,428 +1177,6 @@ class BackendPackageTests(unittest.TestCase):
                 package, "retention fixture current after cleanup", exclude_development_control=True
             )
 
-    def test_retention_maintenance_dry_run_is_read_only_and_cas_pinned(self):
-        with tempfile.TemporaryDirectory() as directory:
-            package, control, _toolchain = self._rotated_package_fixture(
-                Path(directory), versions=3
-            )
-            current = backend._validated_package(
-                package, "retention fixture current", exclude_development_control=True
-            )
-            before = {
-                str(path.relative_to(package)): path.read_bytes()
-                for path in package.rglob("*")
-                if path.is_file()
-            }
-            plan = backend._retain_package_backups(
-                package,
-                control,
-                current[0],
-                current[1],
-                dry_run=True,
-                maintenance=True,
-            )
-            after = {
-                str(path.relative_to(package)): path.read_bytes()
-                for path in package.rglob("*")
-                if path.is_file()
-            }
-            self.assertEqual(before, after)
-            self.assertEqual(plan["state"], "planned")
-            self.assertEqual(plan["current_receipt_sha256"], backend._sha256_bytes(current[1]))
-            self.assertEqual(len(plan["obsolete_backups"]), 2)
-            self.assertEqual(plan["archives"]["prune"], "deferred")
-            self.assertEqual(plan["archives"]["would_remove"], 0)
-            allocation = plan["allocation"]
-            self.assertEqual(allocation["scope"], "obsolete-backup-trees")
-            self.assertEqual(allocation["unit"], "filesystem-allocated-bytes")
-            self.assertEqual(
-                allocation["allocated_bytes_before"],
-                sum(target["allocated_bytes"] for target in allocation["targets"]),
-            )
-            self.assertEqual(
-                {target["name"] for target in allocation["targets"]},
-                {backup["name"] for backup in plan["obsolete_backups"]},
-            )
-            self.assertTrue(
-                all(
-                    isinstance(target["allocated_bytes"], int)
-                    and target["allocated_bytes"] >= 0
-                    for target in allocation["targets"]
-                )
-            )
-            for backup in plan["obsolete_backups"]:
-                self.assertRegex(backup["receipt_sha256"], r"^[0-9a-f]{64}$")
-                self.assertRegex(backup["rotation_sha256"], r"^[0-9a-f]{64}$")
-                self.assertRegex(backup["artifact_manifest_sha256"], r"^[0-9a-f]{64}$")
-                self.assertRegex(backup["children_sha256"], r"^[0-9a-f]{64}$")
-            changed = json.loads(json.dumps(plan))
-            changed["obsolete_backups"][0]["receipt_sha256"] = "0" * 64
-            self.assertNotEqual(
-                backend._retention_plan_sha256(plan),
-                backend._retention_plan_sha256(changed),
-            )
-
-    def test_retention_maintenance_apply_preserves_retired_archives(self):
-        with tempfile.TemporaryDirectory() as directory:
-            package, control, _toolchain = self._rotated_package_fixture(
-                Path(directory), versions=10
-            )
-            current = backend._validated_package(
-                package, "retention fixture current", exclude_development_control=True
-            )
-            archive_root = control / backend.PACKAGE_RETENTION_ARCHIVE_DIRNAME
-            plan = backend._retain_package_backups(
-                package,
-                control,
-                current[0],
-                current[1],
-                maintenance=True,
-            )
-            self.assertEqual(plan["state"], "applied")
-            self.assertEqual(plan["archives"]["prune"], "deferred")
-            self.assertEqual(plan["archives"]["removed"], 0)
-            measurement_after = backend._retention_scope_after(
-                control, plan["allocation"]
-            )
-            self.assertEqual(measurement_after["allocated_bytes_after"], 0)
-            self.assertLessEqual(
-                measurement_after["allocated_bytes_after"],
-                plan["allocation"]["allocated_bytes_before"],
-            )
-            self.assertEqual(
-                len(list((control / backend.PACKAGE_BACKUPS_DIRNAME).glob(".backend-package-backup-*"))),
-                1,
-            )
-            self.assertEqual(len(list(archive_root.glob(".backend-package-backup-*"))), 9)
-
-    def test_automatic_retention_runs_only_after_publication_and_keeps_archive_evidence(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            package, control, _toolchain = self._rotated_package_fixture(root, versions=3)
-            current = backend._validated_package(
-                package, "automatic retention current", exclude_development_control=True
-            )
-            backend_control = root / "backend-control"
-            backend_control.mkdir()
-            original_control_root = backend.BACKEND_CONTROL_ROOT
-            backend.BACKEND_CONTROL_ROOT = backend_control
-            try:
-                stderr = io.StringIO()
-                with redirect_stderr(stderr):
-                    report = backend._run_automatic_package_retention(
-                        package, control, current[0], current[1]
-                    )
-            finally:
-                backend.BACKEND_CONTROL_ROOT = original_control_root
-            self.assertIsNotNone(report)
-            self.assertEqual(report["state"], "applied")
-            self.assertEqual(len(report["obsolete_backups"]), 2)
-            self.assertEqual(
-                len(list((control / backend.PACKAGE_BACKUPS_DIRNAME).glob(".backend-package-backup-*"))),
-                1,
-            )
-            self.assertEqual(
-                len(list((control / backend.PACKAGE_RETENTION_ARCHIVE_DIRNAME).glob(".backend-package-backup-*"))),
-                2,
-            )
-            self.assertFalse((control / backend.PACKAGE_RETENTION_JOURNAL_NAME).exists())
-            self.assertTrue(
-                (backend_control / backend.PACKAGE_RETENTION_REPORT_NAME).is_file()
-            )
-            self.assertRegex(
-                stderr.getvalue(),
-                r"phase=retention state=complete mode=automatic files=2 bytes=\d+ duration_ms=\d+",
-            )
-
-    def test_start_recovers_interrupted_automatic_retention_before_cache_hit(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            package, control, toolchain = self._rotated_package_fixture(root, versions=3)
-            build_root = root / "build"
-            build_root.mkdir()
-            manifest_path = root / "retention-3.json"
-            current = backend._validated_package(
-                package,
-                "interrupted automatic retention current",
-                exclude_development_control=True,
-            )
-            plan = backend._retain_package_backups(
-                package,
-                control,
-                current[0],
-                current[1],
-                dry_run=True,
-                maintenance=True,
-            )
-            plan_sha256 = backend._retention_plan_sha256(plan)
-            journal = backend._retention_journal_document(
-                package,
-                plan,
-                plan_sha256,
-                None,
-                None,
-                backend._filesystem_available_bytes(
-                    package, "interrupted automatic retention filesystem fixture"
-                ),
-            )
-            backend._write_retention_journal(control, journal)
-            backend_control = root / "backend-control"
-            backend_control.mkdir()
-            provenance = backend_control / "runtime-provenance.json"
-            provenance.write_bytes(b'{"state":"previous"}\n')
-            original_package_root = backend.PACKAGE_ROOT
-            original_control_root = backend.BACKEND_CONTROL_ROOT
-            original_provenance_path = backend.PROVENANCE_PATH
-            backend.PACKAGE_ROOT = package
-            backend.BACKEND_CONTROL_ROOT = backend_control
-            backend.PROVENANCE_PATH = provenance
-            try:
-                with (
-                    patch.dict(
-                        os.environ,
-                        {"FULLMAG_BACKEND_CARGO_PROFILE": "backend-dev"},
-                    ),
-                    patch.object(
-                        backend,
-                        "_toolchain_identity",
-                        return_value=(toolchain["image_id"], toolchain),
-                    ),
-                    patch.object(
-                        backend,
-                        "_capture_start_manifest",
-                        return_value=manifest_path,
-                    ),
-                    patch.object(backend, "_prepare_locked") as prepare,
-                    patch.object(backend, "_publish_runtime_provenance"),
-                    patch.object(
-                        backend,
-                        "_run_automatic_package_retention",
-                    ) as automatic_retention,
-                    patch.object(backend, "_serve", return_value=0) as serve,
-                ):
-                    command = ["start", "--build-root", str(build_root)]
-                    self.assertEqual(backend.main(command), 0)
-                    self.assertEqual(backend.main(command), 0)
-                prepare.assert_not_called()
-                automatic_retention.assert_not_called()
-                self.assertEqual(serve.call_count, 2)
-            finally:
-                backend.PACKAGE_ROOT = original_package_root
-                backend.BACKEND_CONTROL_ROOT = original_control_root
-                backend.PROVENANCE_PATH = original_provenance_path
-            self.assertFalse(
-                (control / backend.PACKAGE_RETENTION_JOURNAL_NAME).exists()
-            )
-            self.assertEqual(
-                len(
-                    list(
-                        (control / backend.PACKAGE_BACKUPS_DIRNAME).glob(
-                            ".backend-package-backup-*"
-                        )
-                    )
-                ),
-                1,
-            )
-            self.assertEqual(
-                len(
-                    list(
-                        (control / backend.PACKAGE_RETENTION_ARCHIVE_DIRNAME).glob(
-                            ".backend-package-backup-*"
-                        )
-                    )
-                ),
-                2,
-            )
-            self.assertTrue(
-                (backend_control / backend.PACKAGE_RETENTION_REPORT_NAME).is_file()
-            )
-
-    def test_start_keeps_group_bound_retention_journal_on_explicit_path(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            package, control, _toolchain = self._rotated_package_fixture(root, versions=3)
-            build_root = root / "build"
-            build_root.mkdir()
-            current = backend._validated_package(
-                package,
-                "bound retention current",
-                exclude_development_control=True,
-            )
-            plan = backend._retain_package_backups(
-                package,
-                control,
-                current[0],
-                current[1],
-                dry_run=True,
-                maintenance=True,
-            )
-            plan_sha256 = backend._retention_plan_sha256(plan)
-            operation_inputs_sha256 = "a" * 64
-            journal = backend._retention_journal_document(
-                package,
-                plan,
-                plan_sha256,
-                operation_inputs_sha256,
-                backend._retention_group_plan_sha256(
-                    plan_sha256, operation_inputs_sha256
-                ),
-                backend._filesystem_available_bytes(
-                    package, "bound retention filesystem fixture"
-                ),
-            )
-            backend._write_retention_journal(control, journal)
-            original_package_root = backend.PACKAGE_ROOT
-            backend.PACKAGE_ROOT = package
-            try:
-                with (
-                    patch.dict(
-                        os.environ,
-                        {"FULLMAG_BACKEND_CARGO_PROFILE": "backend-dev"},
-                    ),
-                    patch.object(backend, "_prepare_locked") as prepare,
-                    patch.object(backend, "_serve", return_value=0) as serve,
-                ):
-                    self.assertEqual(
-                        backend.main(["start", "--build-root", str(build_root)]),
-                        2,
-                    )
-                prepare.assert_not_called()
-                serve.assert_not_called()
-            finally:
-                backend.PACKAGE_ROOT = original_package_root
-            self.assertTrue(
-                (control / backend.PACKAGE_RETENTION_JOURNAL_NAME).is_file()
-            )
-
-    def test_automatic_retention_recovery_keeps_backups_on_current_drift(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            package, control, _toolchain = self._rotated_package_fixture(root, versions=3)
-            current = backend._validated_package(
-                package,
-                "drifted automatic retention current",
-                exclude_development_control=True,
-            )
-            plan = backend._retain_package_backups(
-                package,
-                control,
-                current[0],
-                current[1],
-                dry_run=True,
-                maintenance=True,
-            )
-            plan_sha256 = backend._retention_plan_sha256(plan)
-            journal = backend._retention_journal_document(
-                package,
-                plan,
-                plan_sha256,
-                None,
-                None,
-                backend._filesystem_available_bytes(
-                    package, "drifted automatic retention filesystem fixture"
-                ),
-            )
-            backend._write_retention_journal(control, journal)
-            receipt_path = package / "backend-build-receipt.json"
-            receipt_path.write_bytes(receipt_path.read_bytes() + b"\n")
-            before = sorted(
-                path.name
-                for path in (control / backend.PACKAGE_BACKUPS_DIRNAME).iterdir()
-            )
-            backend_control = root / "backend-control"
-            backend_control.mkdir()
-            original_control_root = backend.BACKEND_CONTROL_ROOT
-            backend.BACKEND_CONTROL_ROOT = backend_control
-            try:
-                with self.assertRaisesRegex(
-                    backend.BackendBuildError,
-                    "package changed while retention recovery was pending",
-                ):
-                    backend._recover_automatic_retention_journal(
-                        package, control, journal
-                    )
-            finally:
-                backend.BACKEND_CONTROL_ROOT = original_control_root
-            after = sorted(
-                path.name
-                for path in (control / backend.PACKAGE_BACKUPS_DIRNAME).iterdir()
-            )
-            self.assertEqual(after, before)
-            self.assertTrue(
-                (control / backend.PACKAGE_RETENTION_JOURNAL_NAME).is_file()
-            )
-
-    def test_retention_journal_recovery_finishes_exact_obsolete_chain(self):
-        with tempfile.TemporaryDirectory() as directory:
-            package, control, _toolchain = self._rotated_package_fixture(
-                Path(directory), versions=3
-            )
-            current = backend._validated_package(
-                package, "retention journal current", exclude_development_control=True
-            )
-            plan = backend._retain_package_backups(
-                package,
-                control,
-                current[0],
-                current[1],
-                dry_run=True,
-                maintenance=True,
-            )
-            plan_sha256 = backend._retention_plan_sha256(plan)
-            operation_inputs_sha256 = "b" * 64
-            group_plan_sha256 = backend._retention_group_plan_sha256(
-                plan_sha256, operation_inputs_sha256
-            )
-            journal = backend._retention_journal_document(
-                package,
-                plan,
-                plan_sha256,
-                operation_inputs_sha256,
-                group_plan_sha256,
-                backend._filesystem_available_bytes(
-                    package, "retention journal filesystem fixture"
-                ),
-            )
-            backend._write_retention_journal(control, journal)
-            original_control_root = backend.BACKEND_CONTROL_ROOT
-            backend.BACKEND_CONTROL_ROOT = control
-            try:
-                report = backend._recover_retention_journal(
-                    package,
-                    control,
-                    journal,
-                    expected_plan_sha256=plan_sha256,
-                    expected_operation_inputs_sha256=operation_inputs_sha256,
-                    expected_group_plan_sha256=group_plan_sha256,
-                )
-            finally:
-                backend.BACKEND_CONTROL_ROOT = original_control_root
-            self.assertEqual(report["state"], "applied")
-            self.assertFalse(
-                (control / backend.PACKAGE_RETENTION_JOURNAL_NAME).exists()
-            )
-            self.assertEqual(
-                len(
-                    list(
-                        (control / backend.PACKAGE_BACKUPS_DIRNAME).glob(
-                            ".backend-package-backup-*"
-                        )
-                    )
-                ),
-                1,
-            )
-            self.assertEqual(
-                len(
-                    list(
-                        (control / backend.PACKAGE_RETENTION_ARCHIVE_DIRNAME).glob(
-                            ".backend-package-backup-*"
-                        )
-                    )
-                ),
-                2,
-            )
-
     def test_retention_bounds_archive_history_without_copying_retired_logs(self):
         with tempfile.TemporaryDirectory() as directory:
             package, control, _toolchain = self._rotated_package_fixture(
@@ -1722,17 +1303,17 @@ class BackendPackageTests(unittest.TestCase):
             current = backend._validated_package(
                 package, "retention fixture current", exclude_development_control=True
             )
-            original_remove = backend._remove_owned_tree
             failed = False
 
-            def fail_first_backup_delete(path):
+            def fail_first_backup_retirement(source, target, backup_name):
                 nonlocal failed
-                if path.name.startswith(".backend-package-backup-") and not failed:
+                if not failed:
                     failed = True
-                    raise backend.BackendBuildError("injected backup delete failure")
-                return original_remove(path)
+                    raise backend.BackendBuildError("injected backup retirement failure")
+                return original_rename(source, target, backup_name)
 
-            with patch.object(backend, "_remove_owned_tree", side_effect=fail_first_backup_delete):
+            original_rename = backend._rename_backup_to_tombstone
+            with patch.object(backend, "_rename_backup_to_tombstone", side_effect=fail_first_backup_retirement):
                 with self.assertRaises(backend.BackendBuildError):
                     backend._retain_package_backups(package, control, current[0], current[1])
             self.assertEqual(
@@ -2111,9 +1692,9 @@ class BackendPackageTests(unittest.TestCase):
                     patch.object(backend, "_publish_runtime_provenance"),
                     patch.object(
                         backend,
-                        "_run_automatic_package_retention",
-                        return_value={"scope_allocated_bytes_delta": 0},
-                    ) as automatic_retention,
+                        "_retain_package_backups",
+                        side_effect=backend.BackendBuildError("retention state is unknown"),
+                    ) as retain,
                     patch.object(backend, "_serve", return_value=0) as serve,
                 ):
                     with redirect_stderr(stderr):
@@ -2122,9 +1703,12 @@ class BackendPackageTests(unittest.TestCase):
                             0,
                         )
                 prepare.assert_called_once()
-                automatic_retention.assert_called_once()
+                retain.assert_not_called()
                 serve.assert_called_once_with([])
-                self.assertNotIn("reason=outside-startup", stderr.getvalue())
+                self.assertIn(
+                    "phase=retention state=deferred reason=outside-startup",
+                    stderr.getvalue(),
+                )
                 self.assertNotEqual(
                     (package / "bin/fullmag-bin").read_bytes(), b"package\n"
                 )
@@ -2347,6 +1931,32 @@ class BackendPackageTests(unittest.TestCase):
                     "host certificate and owner marker differ",
                 ):
                     backend._wait_for_windows_folder_attestation(provenance, receipt_sha256)
+
+    def test_host_attestation_read_racing_an_in_place_write_is_pending(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host_path = Path(directory) / "windows-folder-host.json"
+            host_path.write_text('{"schema": "x"}\n', encoding="utf-8")
+            with patch.object(
+                backend,
+                "_read_json",
+                side_effect=backend.BackendBuildError(
+                    "Windows-folder host attestation changed while reading"
+                ),
+            ):
+                self.assertIsNone(
+                    backend._read_optional_storage_attestation(
+                        host_path, "Windows-folder host attestation"
+                    )
+                )
+            with patch.object(
+                backend,
+                "_read_json",
+                side_effect=backend.BackendBuildError("Windows-folder host attestation is not one file"),
+            ):
+                with self.assertRaises(backend.BackendBuildError):
+                    backend._read_optional_storage_attestation(
+                        host_path, "Windows-folder host attestation"
+                    )
 
     def test_windows_folder_development_gate_retries_restart_flag_publication_race(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3305,6 +2915,18 @@ class BackendPackageTests(unittest.TestCase):
                             ).exists()
                         )
 
+    def test_recovery_archive_is_preserved_by_package_root_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "package"
+            control = backend._ensure_package_development_root(package)
+            archive = control / backend.PACKAGE_QUARANTINE_DIRNAME
+            archive.mkdir()
+            payload = archive / "preserved-evidence"
+            payload.write_bytes(b"retained publication")
+            self.assertEqual(backend._ensure_package_development_root(package), control)
+            self.assertEqual(payload.read_bytes(), b"retained publication")
+
+
     def test_successful_make_log_is_copied_then_external_log_is_retired(self):
         with tempfile.TemporaryDirectory() as directory:
             package, build_root, candidate, log_path = self._failed_make_fixture(
@@ -3852,6 +3474,9 @@ class BackendPackageTests(unittest.TestCase):
             candidate.mkdir()
             marker = candidate / backend.PACKAGE_CANDIDATE_MARKER
             backend._write_candidate_marker(candidate, package, build_root, state="building")
+            # A candidate holding only known Make output is discarded as an
+            # interrupted build; unknown content keeps it fail-closed.
+            (candidate / "operator-notes.txt").write_bytes(b"keep")
             with self.assertRaises(backend.BackendBuildError):
                 backend._reject_partial_package_candidates(package, control, build_root)
             self.assertTrue(marker.is_file())
@@ -4175,6 +3800,23 @@ class BackendPackageTests(unittest.TestCase):
                 Path(first_environment["FULLMAG_FDM_NATIVE_BUILD_ROOT"]),
                 Path(first_environment["FULLMAG_FEM_NATIVE_BUILD_ROOT"]),
             )
+
+
+class LiveSourceCopyErrorTests(unittest.TestCase):
+    def test_live_source_copy_preserves_io_error_with_normalized_inventory_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.rs"
+            source.write_bytes(b"source")
+            entry = backend._source_manifest_inventory(
+                BackendPackageTests._capsule("a" * 64, {"source.rs": b"source"})
+            )["source.rs"]
+            with patch.object(backend.os, "read", side_effect=OSError("source read failed")):
+                with self.assertRaisesRegex(
+                    backend.BackendBuildError,
+                    "cannot synchronize live source source.rs: source read failed",
+                ):
+                    backend._copy_live_regular_file(source, root / "shadow/source.rs", "source.rs", entry)
 
 
 if __name__ == "__main__":

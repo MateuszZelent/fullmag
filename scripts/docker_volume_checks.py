@@ -1,5 +1,8 @@
 """Run interpreted control checks in the selected DEV service or offline helper."""
 import argparse
+import ast
+import hashlib
+import stat
 import json
 import re
 import shlex
@@ -9,16 +12,73 @@ import sys
 
 import fullmag_storage as storage
 from docker_build_control import (
-    BuildControl, BuildControlError, ControlOutcomeUnknown, bounded_capture, canonical, docker_capture, mirror_console,
+    BuildControl, BuildControlError, ControlOutcomeUnknown, bounded_capture, canonical, docker_capture, mirror_console, require_host,
 )
 from docker_compose_identity import compose_project_identity, validate_source_labels
 
 
 BASE_IMPLEMENTATIONS = ('docker_build_control', 'docker_volume_dev', 'docker_volume_activate',
-                        'docker_volume_stop_failed', 'docker_volume_checks')
-OPTIONAL_IMPLEMENTATIONS = ('docker_volume_activation_reconcile', 'docker_volume_accepted_reattach',
+                        'docker_volume_stop_failed', 'docker_volume_checks',
+                        'docker_shared_build_storage', 'docker_backend_volume_cache',
+                        'docker_volume_cache_maintenance', 'docker_cache_retirement', 'docker_worktree_finish')
+OPTIONAL_IMPLEMENTATIONS = ('docker_diagnostic_source_checks', 'docker_volume_preowner_probe_stop',
+                            'docker_group_storage', 'docker_helper_source', 'docker_volume_activation_reconcile', 'docker_volume_accepted_reattach',
+                            'docker_activation_history_policy', 'docker_activation_history_reader', 'docker_activation_history_storage',
+                            'docker_activation_history', 'docker_activation_history_inventory',
+                            'docker_activation_history_admission', 'docker_activation_history_output',
                             'docker_volume_pre_admission_recreate', 'docker_volume_pre_admission_selector',
-                            'docker_volume_pending_continuation')
+                            'docker_volume_pending_continuation', 'docker_volume_native_init_successor',
+                            'docker_volume_drained_successor', 'docker_volume_reconcile',
+                            'docker_volume_prestart_recovery', 'docker_volume_terminal_prestart_recovery',
+                            'docker_volume_network_failure_reconcile')
+
+
+_ORACLE_WHEEL_ROOT = Path('/opt/fullmag/control/verification')
+_ORACLE_WHEEL_NAME = 'mpmath-1.3.0-py3-none-any.whl'
+
+
+def _oracle_wheel_binding(source, reference):
+    if reference is None:
+        return None
+    if not isinstance(reference, str) or any(char in reference for char in '\0\r\n:'):
+        raise BuildControlError('Oracle wheel reference is invalid')
+    path = PurePosixPath(reference)
+    if (str(path) != reference or '..' in path.parts
+            or not path.is_relative_to(_ORACLE_WHEEL_ROOT)
+            or path.name != _ORACLE_WHEEL_NAME):
+        raise BuildControlError('Oracle wheel must be a canonical group verification reference')
+    pin_source = Path(source) / 'scripts/antenna_triangle_surface_oracle.py'
+    try:
+        raw = pin_source.read_bytes()
+        pins = [ast.literal_eval(node.value) for node in ast.parse(raw).body
+                if isinstance(node, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id == 'WHEEL_SHA'
+                        for target in node.targets)]
+    except (OSError, SyntaxError, ValueError, TypeError) as error:
+        raise BuildControlError('Oracle wheel source pin is unavailable') from error
+    if len(pins) != 1 or not isinstance(pins[0], str) or re.fullmatch(r'[0-9a-f]{64}', pins[0]) is None:
+        raise BuildControlError('Oracle wheel source pin is invalid')
+    return {'path': reference, 'sha256': pins[0], 'source_sha256': hashlib.sha256(raw).hexdigest()}
+
+
+def _verify_oracle_wheel(binding, source=Path('/opt/fullmag/source')):
+    if not isinstance(binding, dict) or _oracle_wheel_binding(source, binding.get('path')) != binding:
+        raise BuildControlError('Oracle wheel binding differs from the selected source')
+    path = Path(binding['path'])
+    try:
+        if path.resolve(strict=True) != path:
+            raise BuildControlError('Oracle wheel path is not canonical')
+        before = path.stat()
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 2 * 1024 * 1024:
+            raise BuildControlError('Oracle wheel must be a bounded regular file')
+        data = path.read_bytes()
+        after = path.stat()
+    except OSError as error:
+        raise BuildControlError('Oracle wheel is unavailable') from error
+    identity = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    if identity(before) != identity(after) or hashlib.sha256(data).hexdigest() != binding['sha256']:
+        raise BuildControlError('Oracle wheel digest or identity differs')
+    return {**binding, 'file_identity': identity(after)}
 
 
 def _validate_offline_result(value, modules, *, implementations=BASE_IMPLEMENTATIONS):
@@ -53,16 +113,52 @@ def _validate_offline_result(value, modules, *, implementations=BASE_IMPLEMENTAT
     return value
 
 
-def _offline_checks(control, selected, observed, modules):
+def _initial_offline_image(receipt, document, identity, attempt):
+    inputs = receipt.get('inputs', {})
+    image = inputs.get('image_id')
+    if (receipt.get('phase') != 'development'
+            or receipt.get('attempt') != attempt
+            or receipt.get('compose_project') != identity['project_name']
+            or inputs.get('source_root') != identity['source_root']
+            or inputs.get('source_worktree_id') != identity['worktree_id']
+            or inputs.get('source_project_id') != identity['project_id']
+            or document.get('name') != identity['project_name']
+            or document.get('services', {}).get('backend', {}).get('image') != image
+            or not isinstance(image, str)
+            or re.fullmatch(r'sha256:[0-9a-f]{64}', image) is None):
+        raise BuildControlError('Initial offline checks require the selected attempt and immutable Compose image')
+    return image
+
+
+def _offline_checks(control, selected, observed, modules, *, initial_attempt=None):
     """Verify source contracts without starting a stopped application service.
 
     The short helper is part of the selected Compose group. It has no network,
     daemon socket, GPU, or user-data mount. Only its control volume is writable.
     """
-    if observed.get('State', {}).get('Running') is not False:
-        raise BuildControlError('Offline checks require a stopped selected backend')
-    validate_source_labels(observed, control.identity)
-    image = observed.get('Image')
+    initial_binding = None
+    if initial_attempt is not None:
+        if observed is not None or re.fullmatch(r'[0-9a-f]{32}', initial_attempt) is None:
+            raise BuildControlError('Initial offline checks require an explicit attempt without a backend')
+        for service in ('backend', 'frontend'):
+            consumers = docker_capture('ps', '--all', '--quiet', '--filter',
+                'label=com.docker.compose.project=' + control.project, '--filter',
+                'label=com.docker.compose.service=' + service).stdout.strip()
+            if consumers:
+                raise BuildControlError('Initial offline checks require absent application services')
+        root = 'development/attempts/' + initial_attempt
+        receipt_raw = control.read_bytes(root + '/receipt.json')
+        compose_raw = control.read_bytes(root + '/compose.json')
+        image = _initial_offline_image(json.loads(receipt_raw), json.loads(compose_raw),
+                                       control.identity, initial_attempt)
+        initial_binding = {'attempt': initial_attempt,
+            'receipt_sha256': hashlib.sha256(receipt_raw).hexdigest(),
+            'compose_sha256': hashlib.sha256(compose_raw).hexdigest()}
+    else:
+        if observed.get('State', {}).get('Running') is not False:
+            raise BuildControlError('Offline checks require a stopped selected backend')
+        validate_source_labels(observed, control.identity)
+        image = observed.get('Image')
     if not isinstance(image, str) or re.fullmatch(r'sha256:[0-9a-f]{64}', image) is None:
         raise BuildControlError('Offline checks require the immutable retained backend image')
     images = json.loads(docker_capture('image', 'inspect', image).stdout)
@@ -108,7 +204,8 @@ print(json.dumps({'exit_code':result.returncode if before==after else 2,'source_
     # Interpreted Python contracts need more headroom than a shell-only probe.
     arguments[arguments.index('--memory') + 1] = '256m'
     receipt = {'schema': 'fullmag.volume-dev-offline-interpreted-checks.v1',
-               'container_id': observed['Id'], 'image_id': image,
+               'container_id': observed['Id'] if observed is not None else None, 'image_id': image,
+               'initial_attempt_binding': initial_binding,
                'compose_project': control.project, 'modules': modules,
                'helper_container': helper_name, 'state': 'starting',
                'runtime_qualification': 'NOT VERIFIED'}
@@ -136,26 +233,676 @@ print(json.dumps({'exit_code':result.returncode if before==after else 2,'source_
     return receipt['exit_code']
 
 
+FRONTEND_APP = '/state/development/workspace/apps/control-room'
+IMPORT_FILES = (
+    'src/kernel/persistence/ScriptProjectActivation.ts',
+    'src/kernel/persistence/ScriptProjectActivation.test.ts',
+    'src/kernel/persistence/ProjectDocumentController.ts',
+    'src/kernel/persistence/ProjectDocumentController.test.ts',
+    'src/modules/start/StartScreen.tsx',
+    'src/modules/start/model/scriptProject.ts',
+    'src/modules/start/model/pythonImport.ts',
+    'src/modules/start/model/pythonImport.test.ts',
+    'src/modules/start/model/importFormats.ts',
+    'src/modules/start/model/importFormats.test.ts',
+    'src/modules/start/sections/ImportSection.tsx',
+    'src/modules/start/sections/ImportSection.test.tsx',
+    'src/modules/start/ui/CreateProjectAction.tsx',
+    'src/modules/start/ui/CreateProjectAction.test.tsx',
+    'src/kernel/layout/shellCommands.ts',
+    'src/kernel/layout/shellCommands.test.ts',
+    'next.config.ts',
+    'next.config.test.ts',
+)
+IMPORT_TESTS = (
+    'src/kernel/persistence/ScriptProjectActivation.test.ts',
+    'src/kernel/persistence/ProjectDocumentController.test.ts',
+    'src/modules/start/model/pythonImport.test.ts',
+    'src/modules/start/model/importFormats.test.ts',
+    'src/modules/start/sections/ImportSection.test.tsx',
+    'src/modules/start/ui/CreateProjectAction.test.tsx',
+    'src/kernel/layout/shellCommands.test.ts',
+    'next.config.test.ts',
+)
+FRONTEND_COMMANDS = (
+    ('prepare', ('/bin/mkdir', '-p', '/state/development/cache/tsbuildinfo', '/state/development/tmp')),
+    ('typecheck', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'typecheck')),
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                *IMPORT_TESTS, '--pool=threads', '--maxWorkers=1')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint', *IMPORT_FILES, '--max-warnings=0')),
+)
+
+
+STL_FILES = (*IMPORT_FILES,
+    'src/kernel/api/transportLimits.ts',
+    'src/kernel/api/ControlRoomApi.ts', 'src/kernel/api/ControlRoomApi.test.ts',
+    'src/kernel/api/apiPaths.ts', 'src/kernel/api/apiTypes.ts',
+    'src/kernel/authoring/geometryLifecycleCommandContributions.ts',
+    'src/kernel/authoring/importedStlImport.ts', 'src/kernel/authoring/importedStlImport.test.ts',
+    'src/modules/viewport-3d/viewport3dResources.ts',
+    'src/modules/viewport-3d/viewport3dImportedSurfaceModel.ts',
+    'src/modules/viewport-3d/viewport3dImportedSurfaceModel.test.ts',
+    'src/modules/viewport-3d/viewport3dPrimitiveModel.ts',
+    'src/modules/viewport-3d/layers/PrimitiveObjectLayerModel.ts',
+    'src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts',
+)
+STL_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('api-hygiene', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:api-hygiene')),
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                '--pool=threads', '--maxWorkers=2')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'lint')),
+)
+
+
+ANTENNA_FILES = (
+    'src/modules/inspector/panels/antenna/MicrostripGeometryEditorModel.ts',
+    'src/modules/inspector/panels/antenna/MicrostripGeometryEditor.tsx',
+    'src/modules/inspector/panels/antenna/MicrostripGeometryEditorModel.test.ts',
+    'src/kernel/authoring/geometryLifecycleCommandContributions.test.ts',
+)
+ANTENNA_TESTS = (ANTENNA_FILES[2], ANTENNA_FILES[3])
+ANTENNA_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                *ANTENNA_TESTS, '--pool=threads', '--maxWorkers=1')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint', *ANTENNA_FILES, '--max-warnings=0')),
+)
+
+
+FIELD_MAP_TESTS = (
+    'src/kernel/visualization/planarSectionModel.test.ts',
+    'src/kernel/visualization/VisualizationRegistrySyncController.test.ts',
+    'src/modules/inspector/visualization/PlanarVisualizationSection.test.tsx',
+    'src/modules/field-map/components/PlanarSectionStrip.test.tsx',
+    'src/modules/field-map/components/PlanarColorLegend.test.tsx',
+    'src/modules/field-map/model/planarFieldComposition.test.ts',
+    'src/modules/field-map/model/planarCompositionBuffers.test.ts',
+    'src/modules/field-map/components/PlanarCompositionBuffers.test.tsx',
+    'src/modules/field-map/renderer/PlanarOverlaySurface.test.tsx',
+    'src/modules/field-map/renderer/PlanarSurface.test.tsx',
+    'src/modules/field-map/fieldMapCaptureRegistry.test.ts',
+    'src/modules/field-map/fieldMapPngCapture.test.ts',
+    'src/modules/field-map/fieldMapCommands.test.ts',
+    'src/modules/field-map/fieldMapExport.test.ts',
+    'src/modules/inspector/visualization/planarTargetFieldProfile.test.ts',
+    'src/modules/inspector/visualization/PlanarTargetFieldSection.test.tsx',
+    'src/kernel/api/fieldQueryIdentity.test.ts',
+    'src/kernel/resources/planarFieldResources.test.ts',
+    'src/kernel/visualization/planarPresentationProjection.test.ts',
+    'src/modules/field-map/components/FieldMapToolbar.test.tsx',
+    'src/modules/field-map/model/fieldMapDataPlan.test.ts',
+    'src/modules/field-map/FieldMapModule.test.tsx',
+    'src/modules/inspector/visualization/VisualizationViewContext.test.ts',
+)
+FIELD_MAP_FILES = (
+    'src/kernel/visualization/planarSectionModel.ts',
+    'src/kernel/visualization/VisualizationRegistrySyncController.ts',
+    'src/modules/field-map/components/PlanarSectionStrip.tsx',
+    'src/modules/field-map/components/PlanarColorLegend.tsx',
+    'src/modules/field-map/model/planarFieldComposition.ts',
+    'src/modules/field-map/model/planarCompositionFrame.ts',
+    'src/modules/field-map/model/planarCompositionBuffers.ts',
+    'src/modules/field-map/components/PlanarCompositionSurface.tsx',
+    'src/modules/field-map/components/PlanarCompositionBuffers.tsx',
+    'src/modules/field-map/renderer/PlanarOverlaySurface.tsx',
+    'src/modules/field-map/renderer/PlanarSurface.tsx',
+    'src/modules/field-map/renderer/usePlanarSurfaceRenderer.ts',
+    'src/modules/field-map/fieldMapCaptureRegistry.ts',
+    'src/modules/field-map/fieldMapPngCapture.ts',
+    'src/modules/field-map/fieldMapCommands.ts',
+    'src/modules/field-map/fieldMapExport.ts',
+    'src/modules/field-map/model/fieldMapEvidence.ts',
+    'src/modules/inspector/visualization/PlanarVisualizationSection.tsx',
+    'src/modules/inspector/visualization/DefaultPlanarSourceSection.tsx',
+    'src/modules/inspector/visualization/PlanarTargetFieldSection.tsx',
+    'src/modules/inspector/visualization/planarTargetFieldProfile.ts',
+    'src/kernel/api/apiTypes.ts',
+    'src/kernel/api/fieldQueryIdentity.ts',
+    'src/kernel/resources/planarFieldResources.ts',
+    'src/kernel/visualization/planarCapabilities.ts',
+    'src/kernel/visualization/planarPresentationProjection.ts',
+    'src/modules/field-map/components/FieldMapToolbar.tsx',
+    'src/modules/field-map/model/fieldMapDataPlan.ts',
+    'src/modules/field-map/FieldMapModule.tsx',
+    'src/modules/inspector/visualization/VisualizationViewContext.ts',
+    *FIELD_MAP_TESTS,
+)
+FIELD_MAP_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                *FIELD_MAP_TESTS, '--pool=threads', '--maxWorkers=1')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                *FIELD_MAP_FILES, '--max-warnings=0')),
+)
+FIELD_MAP_SOURCE_SCOPE = 'frontend-field-map-source'
+
+
+AIRBOX_TESTS = (
+    'src/modules/inspector/panels/airbox/AirboxInspectorLanePanel.test.tsx',
+    'src/modules/inspector/panels/airbox/FdmMultilayerAirboxTargetPanel.test.tsx',
+    'src/modules/inspector/panels/airbox/fdmMultilayerAirboxTargetInspectorModel.test.ts',
+    'src/shared/domain/mesh/fdmMultilayerAirboxTarget.test.ts',
+    'src/modules/viewport-3d/viewport3dMultilayerDomainAdapter.test.ts',
+)
+AIRBOX_FILES = (
+    'src/modules/inspector/panels/airbox/AirboxInspectorLanePanel.tsx',
+    'src/modules/inspector/panels/airbox/FdmMultilayerAirboxTargetPanel.tsx',
+    'src/modules/inspector/panels/airbox/fdmMultilayerAirboxTargetInspectorModel.ts',
+    'src/shared/domain/mesh/fdmMultilayerAirboxTarget.ts',
+    'src/modules/viewport-3d/viewport3dDomainAdapter.ts',
+    *AIRBOX_TESTS,
+)
+AIRBOX_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                *AIRBOX_TESTS, '--pool=threads', '--maxWorkers=1')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                *AIRBOX_FILES, '--max-warnings=0')),
+)
+
+
+CAMERA_TESTS = (
+    'src/modules/viewport-3d/orientation/cameraOrientation.test.ts',
+    'src/modules/viewport-3d/orientation/orientationCameraGesture.test.ts',
+    'src/modules/viewport-3d/layers/CameraControls.test.ts',
+    'src/modules/viewport-3d/layers/viewport3DCameraGesture.test.ts',
+    'src/modules/viewport-3d/layers/Viewport3DScene.test.ts',
+)
+CAMERA_FILES = (
+    'src/modules/viewport-3d/orientation/cameraOrientation.ts',
+    'src/modules/viewport-3d/orientation/orientationCameraGesture.ts',
+    'src/modules/viewport-3d/orientation/OrientationHudLayer.tsx',
+    'src/modules/viewport-3d/orientation/ViewCube3DBox.tsx',
+    'src/modules/viewport-3d/layers/CameraControls.tsx',
+    'src/modules/viewport-3d/layers/viewport3DCameraGesture.ts',
+    'src/modules/viewport-3d/layers/Viewport3DScene.tsx',
+    *CAMERA_TESTS,
+)
+CAMERA_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                *CAMERA_TESTS, '--pool=threads', '--maxWorkers=1')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                *CAMERA_FILES, '--max-warnings=0')),
+)
+
+
+VISUALIZATION_FILES = (
+    'src/kernel/visualization/ObjectVisualizationController.ts',
+    'src/kernel/visualization/ObjectVisualizationController.test.ts',
+    'src/shared/domain/physics/objectMagneticModel.ts',
+    'src/kernel/visualization/primitiveSurfaceColor.ts',
+    'src/modules/field-map/FieldMapModule.tsx',
+    'src/modules/inspector/panels/ObjectGeneralPanel.tsx',
+    'src/modules/inspector/panels/region/ObjectRegionMagneticParametersPanel.tsx',
+    'src/modules/viewport-3d/Viewport3DModule.tsx',
+    'src/modules/viewport-3d/viewport3dPrimitiveModel.ts',
+    'src/modules/viewport-3d/layers/PrimitiveObjectLayerModel.ts',
+    'src/modules/inspector/panels/ObjectVisualizationPanel.tsx',
+    'src/modules/inspector/panels/ObjectVisualizationPanelModel.ts',
+    'src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx',
+    'src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts',
+    'src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts',
+)
+# Type checking and source gates do not compile or execute native unit tests.
+VISUALIZATION_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    *((f'eslint-{index:02}', ('/usr/bin/env', 'NODE_OPTIONS=--max-old-space-size=4096',
+                '/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                source, '--max-warnings=0')) for index, source in enumerate(VISUALIZATION_FILES, 1)),
+    ('architecture', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:architecture-hygiene')),
+    ('api-hygiene', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:api-hygiene')),
+)
+
+
+TELEMETRY_FILES = (
+    'src/modules/footer/FooterTelemetry.tsx',
+    'src/modules/footer/FooterTelemetry.test.ts',
+    'src/modules/footer/FooterTelemetry.refresh.test.tsx',
+    'src/modules/viewport-3d/viewport3dRefreshCountdown.ts',
+    'src/modules/viewport-3d/viewport3dRefreshCountdown.test.ts',
+)
+# Source checks remain available when compiling unit tests is disabled.
+TELEMETRY_SOURCE_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                *TELEMETRY_FILES, '--max-warnings=0')),
+    ('architecture', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:architecture-hygiene')),
+    ('api-hygiene', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:api-hygiene')),
+)
+TELEMETRY_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('vitest-focused', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                       *TELEMETRY_FILES[1:], '--pool=threads', '--maxWorkers=1')),
+    ('lint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'lint')),
+    ('vitest-full', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                    '--pool=threads', '--maxWorkers=2')),
+    ('architecture', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:architecture-hygiene')),
+    ('api-hygiene', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:api-hygiene')),
+)
+
+
+
+PERFORMANCE_FILES = (
+    'src/modules/footer/AutomaticPerformancePanel.tsx',
+    'src/modules/footer/automaticPerformanceModel.ts',
+    'src/modules/footer/automaticPerformanceModel.test.ts',
+    'src/modules/footer/FooterDiagnostics.tsx',
+    'src/kernel/api/ControlRoomApi.ts',
+    'src/kernel/api/apiPaths.ts',
+    'src/kernel/api/apiTypes.ts',
+    'src/kernel/resources/studyRuntimeResources.ts',
+    'src/shared/domain/analysis/chartSeries.ts',
+    'src/shared/domain/analysis/chartCursorPoint.ts',
+    'src/shared/analysis-charts/interactiveChartModel.ts',
+    'src/kernel/resources/studyRuntimeResources.test.ts',
+    'src/kernel/resources/ResourceRuntimeStore.ts',
+    'src/kernel/resources/ResourceRuntimeStore.test.ts',
+)
+# Production source typecheck excludes unit/spec targets; no Vitest build.
+PERFORMANCE_SOURCE_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                *PERFORMANCE_FILES, '--max-warnings=0')),
+    ('architecture', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:architecture-hygiene')),
+    ('api-hygiene', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:api-hygiene')),
+)
+
+PERFORMANCE_TEST_FILES = (
+    *PERFORMANCE_FILES,
+    'src/modules/footer/FooterTelemetry.tsx',
+    'src/modules/footer/FooterTelemetry.test.ts',
+    'src/modules/footer/FooterTelemetry.performance.test.ts',
+    'src/modules/footer/footerPerformanceProgress.ts',
+    'src/modules/footer/FooterTelemetry.refresh.test.tsx',
+    'src/kernel/realtime/RealtimeInvalidationBridge.ts',
+    'src/kernel/realtime/RealtimeInvalidationBridge.test.ts',
+)
+PERFORMANCE_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                'src/modules/footer/automaticPerformanceModel.test.ts',
+                'src/modules/footer/FooterTelemetry.test.ts',
+                'src/modules/footer/FooterTelemetry.performance.test.ts',
+                'src/modules/footer/FooterTelemetry.refresh.test.tsx',
+                'src/kernel/resources/studyRuntimeResources.test.ts',
+                'src/kernel/resources/ResourceRuntimeStore.test.ts',
+                'src/kernel/realtime/RealtimeInvalidationBridge.test.ts',
+                '--pool=threads', '--maxWorkers=1')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                *PERFORMANCE_TEST_FILES, '--max-warnings=0')),
+    *PERFORMANCE_SOURCE_COMMANDS[-2:],
+)
+
+
+def _field_map_source_services(control, selected, identity, codegen):
+    """Admit the exact existing DEV services for source-only field-map checks."""
+    if (identity.get('project_name') != control.project
+            or identity.get('source_root') != str(selected)):
+        raise codegen.CodegenError('Frontend source checks require the exact selected Compose group and checkout')
+
+    expected_labels = {
+        'com.docker.compose.project': control.project,
+        'org.fullmag.compose.project': control.project,
+        'org.fullmag.source.project-id': identity.get('project_id'),
+        'org.fullmag.source.worktree-id': identity.get('worktree_id'),
+        'org.fullmag.source.checkout-kind': identity.get('checkout_kind'),
+    }
+    if any(not isinstance(value, str) or not value for value in expected_labels.values()):
+        raise codegen.CodegenError('Selected Compose source identity labels are incomplete')
+
+    def require_running_healthy(service, state):
+        health = state.get('Health')
+        if (state.get('Running') is not True or state.get('Status') != 'running'
+                or type(state.get('Pid')) is not int
+                or state['Pid'] <= 0 or state.get('Paused') is not False
+                or state.get('Restarting') is not False or state.get('Dead') is not False
+                or state.get('OOMKilled') is not False or not isinstance(health, dict)
+                or health.get('Status') != 'healthy'):
+            raise codegen.CodegenError(f'{service} source-check service must be running and healthy')
+
+    services = {}
+    for service in ('backend', 'frontend'):
+        listed = docker_capture('ps', '--all', '--quiet', '--no-trunc', '--filter',
+            'label=com.docker.compose.project=' + control.project, '--filter',
+            'label=com.docker.compose.service=' + service).stdout.decode('utf-8', 'strict').split()
+        if len(listed) != 1 or re.fullmatch(r'[0-9a-f]{64}', listed[0]) is None:
+            raise codegen.CodegenError(
+                f'Frontend source checks require exactly one identified {service} container in the selected group')
+        identifier = listed[0]
+        document = codegen._inspect(identifier)
+        if document.get('Id') != identifier:
+            raise codegen.CodegenError(f'{service} inspected container identity differs')
+        state = document.get('State')
+        if not isinstance(state, dict):
+            raise codegen.CodegenError(f'{service} has no inspected runtime state')
+
+        running = state.get('Running')
+        if service == 'frontend' or running is True:
+            require_running_healthy(service, state)
+            _verified_id, document = codegen._running_service(
+                control.project, service, identity, selected)
+            if document.get('Id') != identifier:
+                raise codegen.CodegenError(f'{service} inspected container identity changed during selection')
+            state = document.get('State')
+            if not isinstance(state, dict):
+                raise codegen.CodegenError(f'{service} has no inspected runtime state')
+            require_running_healthy(service, state)
+        elif service == 'backend' and running is False:
+            if (state.get('Status') != 'exited' or type(state.get('Pid')) is not int
+                    or state['Pid'] != 0 or type(state.get('ExitCode')) is not int
+                    or state['ExitCode'] != 0 or state.get('Paused') is not False
+                    or state.get('Restarting') is not False or state.get('Dead') is not False
+                    or state.get('OOMKilled') is not False):
+                raise codegen.CodegenError(
+                    'Stopped backend source checks require exited state, PID 0, and exit code 0')
+            labels = codegen._labels(document)
+            if any(labels.get(key) != value for key, value in expected_labels.items()):
+                raise codegen.CodegenError('Stopped backend labels do not match the selected checkout')
+            validate_source_labels(document, identity)
+            codegen._validate_mounts(document, service)
+            source_root = codegen._environment(document).get('FULLMAG_SOURCE_HOST_ROOT')
+            source_mount = codegen._mount_for(document, '/opt/fullmag/source')
+            if (not source_root
+                    or codegen._path_identity(source_root) != codegen._path_identity(str(selected))
+                    or not codegen._source_mount_matches_selected(source_mount.get('Source'), selected)):
+                raise codegen.CodegenError('Stopped backend source binding differs from the selected checkout')
+        else:
+            raise codegen.CodegenError(f'{service} source-check service has an invalid running state')
+
+        labels = codegen._labels(document)
+        if any(labels.get(key) != value for key, value in expected_labels.items()):
+            raise codegen.CodegenError(f'{service} labels do not match the selected checkout')
+        services[service] = (identifier, document)
+    return services
+
+
+def _field_map_source_state(document):
+    state = document['State']
+    health = state.get('Health')
+    return {
+        'status': state.get('Status'),
+        'running': state.get('Running'),
+        'pid': state.get('Pid'),
+        'exit_code': state.get('ExitCode'),
+        'started_at': state.get('StartedAt'),
+        'finished_at': state.get('FinishedAt'),
+        'oom_killed': state.get('OOMKilled'),
+        'paused': state.get('Paused'),
+        'restarting': state.get('Restarting'),
+        'dead': state.get('Dead'),
+        'health_status': health.get('Status') if isinstance(health, dict) else None,
+    }
+
+
+def _field_map_source_mount_identity(document):
+    mounts = document.get('Mounts')
+    host_config = document.get('HostConfig')
+    host_mounts = host_config.get('Mounts') if isinstance(host_config, dict) else None
+    if not isinstance(mounts, list) or (host_mounts is not None and not isinstance(host_mounts, list)):
+        raise BuildControlError('Source checks require complete inspected service mount identities')
+    value = {'mounts': mounts, 'host_config_mounts': host_mounts or []}
+    raw = json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('utf-8')
+    return {'sha256': hashlib.sha256(raw).hexdigest(), **value}
+
+
+def _field_map_source_bindings(values, codegen):
+    result = {}
+    for service, (_identifier, document) in values.items():
+        source_env_name = 'FULLMAG_SOURCE_HOST_ROOT' if service == 'backend' else 'FULLMAG_SOURCE_ROOT'
+        targets = ['/opt/fullmag/source', '/opt/fullmag/source-git'] if service == 'backend' else ['/opt/fullmag/source']
+        bindings = {'environment_root': codegen._environment(document).get(source_env_name)}
+        for target in targets:
+            mount = codegen._mount_for(document, target)
+            bindings[target] = {key: mount.get(key) for key in
+                                ('Type', 'Name', 'Source', 'Destination', 'Driver', 'Mode', 'RW', 'Propagation')}
+        result[service] = bindings
+    return result
+
+
+MATERIAL_TESTS = (
+    'src/shared/domain/material/materialLibrary.test.ts',
+    'src/kernel/api/ControlRoomApi.materialLibrary.test.ts',
+    'src/kernel/resources/materialLibraryResources.test.tsx',
+    'src/kernel/layout/MaterialLibraryDialog.test.tsx',
+    'src/kernel/layout/AppMenuBar.test.ts',
+    'src/modules/inspector/panels/ObjectMaterialPanelModel.test.ts',
+    'src/modules/inspector/panels/ObjectMaterialPanel.dom.test.tsx',
+    'src/modules/inspector/panels/ObjectMaterialPanel.catalog.dom.test.tsx',
+)
+MATERIAL_FILES = (
+    'src/shared/domain/material/materialLibrary.ts',
+    'src/kernel/api/ControlRoomApi.ts',
+    'src/kernel/api/apiTypes.ts',
+    'src/kernel/api/apiPaths.ts',
+    'src/kernel/resources/materialLibraryResources.ts',
+    'src/kernel/layout/MaterialLibraryDialog.tsx',
+    'src/kernel/layout/appMenuModel.tsx',
+    'src/modules/inspector/panels/ObjectMaterialPanel.tsx',
+    'src/modules/inspector/panels/ObjectMaterialPanelModel.ts',
+    *MATERIAL_TESTS,
+)
+MATERIAL_COMMANDS = (
+    FRONTEND_COMMANDS[0],
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                *MATERIAL_TESTS, '--pool=threads', '--maxWorkers=1')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint', *MATERIAL_FILES, '--max-warnings=0')),
+)
+
+
+MATERIAL_FULL_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('lint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'lint')),
+    ('vitest-full', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                     '--pool=threads', '--maxWorkers=2')),
+    ('architecture', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:architecture-hygiene')),
+    ('api-hygiene', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:api-hygiene')),
+)
+
+
+def frontend_import_checks(control, selected, identity, *, scope='frontend-import'):
+    import hashlib
+    import time
+    import docker_dev_codegen as codegen
+    if scope not in ('frontend-materials', 'frontend-materials-full', 'frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
+        raise BuildControlError('Unknown frontend verification scope')
+    source_files, commands = {
+        'frontend-materials': (MATERIAL_FILES, MATERIAL_COMMANDS),
+        'frontend-materials-full': (MATERIAL_FILES, MATERIAL_FULL_COMMANDS),
+        'frontend-stl': (STL_FILES, STL_COMMANDS),
+        'frontend-import': (IMPORT_FILES, FRONTEND_COMMANDS),
+        'frontend-antenna': (ANTENNA_FILES, ANTENNA_COMMANDS),
+        'frontend-field-map': (FIELD_MAP_FILES, FIELD_MAP_COMMANDS),
+        FIELD_MAP_SOURCE_SCOPE: (FIELD_MAP_FILES, FIELD_MAP_COMMANDS),
+        'frontend-airbox': (AIRBOX_FILES, AIRBOX_COMMANDS),
+        'frontend-camera': (CAMERA_FILES, CAMERA_COMMANDS),
+        'frontend-visualization': (VISUALIZATION_FILES, VISUALIZATION_COMMANDS),
+        'frontend-telemetry': (TELEMETRY_FILES, TELEMETRY_COMMANDS),
+        'frontend-telemetry-source': (TELEMETRY_FILES, TELEMETRY_SOURCE_COMMANDS),
+        'frontend-performance-source': (PERFORMANCE_FILES, PERFORMANCE_SOURCE_COMMANDS),
+        'frontend-performance': (PERFORMANCE_TEST_FILES, PERFORMANCE_COMMANDS),
+        'frontend-telemetry-focused': (TELEMETRY_FILES, (*TELEMETRY_COMMANDS[:3],
+            ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                        *TELEMETRY_FILES, '--max-warnings=0')))),
+    }[scope]
+    source_only_field_map = scope == FIELD_MAP_SOURCE_SCOPE
+    receipt = {'schema': f'fullmag.volume-dev-{scope}-checks.v1', 'scope': scope,
+               'compose_project': control.project, 'state': 'running', 'commands': [],
+               'source_head': storage.git(selected, 'rev-parse', 'HEAD'),
+               'driver_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    if source_only_field_map or scope == 'frontend-materials':
+        receipt.update(runtime_qualification='NOT VERIFIED',
+                       qualification='source-only; no API or runtime commands or proof')
+    root = f'verification/{scope}-checks'
+    if scope in ('frontend-stl', 'frontend-materials', 'frontend-materials-full'):
+        # Keep every failed/passed attempt and its logs; retries must not
+        # overwrite the evidence they are intended to explain.
+        import uuid
+        root += '/attempts/' + uuid.uuid4().hex
+        receipt['receipt_path'] = root + '/receipt.json'
+        control.write(f'verification/{scope}-checks/current.json', {
+            'schema': 'fullmag.frontend-check-attempt-ref.v1',
+            'receipt_path': receipt['receipt_path'],
+        })
+    def services():
+        if source_only_field_map:
+            return _field_map_source_services(control, selected, identity, codegen)
+        result = {}
+        for name in ('backend', 'frontend'):
+            _identifier, document = codegen._running_service(control.project, name, identity, selected)
+            # Telemetry source checks need the healthy frontend; the pinned backend
+            # may still be compiling in its persistent service. This proves no runtime.
+            if (name == 'frontend' or scope not in ('frontend-telemetry', 'frontend-telemetry-focused', 'frontend-materials')) and document.get('State', {}).get('Health', {}).get('Status') != 'healthy':
+                raise codegen.CodegenError('Frontend checks require healthy existing services')
+            result[name] = (document['Id'], document)
+        return result
+    def service_pins(values):
+        result = {}
+        for name, (identifier, document) in values.items():
+            pin = {**codegen._service_identity(identifier, document),
+                   'started_at': document['State']['StartedAt']}
+            if source_only_field_map:
+                pin.update(state=_field_map_source_state(document),
+                           labels=dict(codegen._labels(document)),
+                           mount_identity=_field_map_source_mount_identity(document))
+            result[name] = pin
+        return result
+    def input_hashes():
+        files = (*source_files, 'scripts/typecheck-control-room.mjs', 'tsconfig.typecheck.json',
+                 'tsconfig.json', 'next.config.ts', 'next.config.test.ts', 'vitest.config.ts', 'eslint.config.mjs', 'package.json',
+                 'src/kernel/api/generated/openapi-v2.json', 'src/kernel/api/generated/openapi-v2-types.ts',
+                 'src/kernel/api/generated/openapi-v2-client.ts', 'src/kernel/api/generated/openapi-v2-paths.ts')
+        return {name: hashlib.sha256((selected / 'apps/control-room' / name).read_bytes()).hexdigest() for name in files}
+    try:
+        before = services()
+        pins = receipt['services_before'] = service_pins(before)
+        volumes = codegen._inspect_technical_volumes(control.project, before['backend'][1], before['frontend'][1])
+        receipt['technical_volumes'] = volumes
+        if source_only_field_map:
+            receipt['technical_volumes_before'] = volumes
+            source_bindings_before = _field_map_source_bindings(before, codegen)
+            receipt['source_bindings_before'] = source_bindings_before
+            backend_state = _field_map_source_state(before['backend'][1])
+            receipt['backend_state_before'] = {
+                'status': backend_state['status'], 'running': backend_state['running'],
+                'pid': backend_state['pid'], 'exit_code': backend_state['exit_code'],
+                'qualification': 'running-healthy' if backend_state['running'] else 'stopped-clean-maintenance',
+            }
+        inputs = receipt['selected_frontend_input_hashes'] = input_hashes()
+        import docker_development_inputs as frontend_inputs
+        port = int(codegen._environment(before['frontend'][1])['FULLMAG_FRONTEND_HOST_PORT'])
+        metadata = frontend_inputs.describe(selected, port)
+        receipt['frontend_source_view_before'] = frontend_inputs.frontend_view(
+            before['frontend'][0], selected, port, inputs=metadata)
+        for name, arguments in commands:
+            item = {'name': name, 'arguments': list(arguments), 'state': 'running'}
+            receipt['commands'].append(item)
+            started = time.monotonic()
+            # Reuse codegen's existing fixed frontend executor. All mutable paths stay in its named volume.
+            command = ('/usr/bin/flock', '-n', '/state/development/cache/.fullmag-frontend-import-checks.lock',
+                '/usr/bin/env', 'FULLMAG_FRONTEND_ROOT=/state/development/cache', 'FULLMAG_NEXT_DIST_DIR=.next',
+                'TMPDIR=/state/development/tmp', 'TMP=/state/development/tmp', 'TEMP=/state/development/tmp',
+                'CI=1', 'FULLMAG_TEST_SOURCE_ROOT=/opt/fullmag/source', *arguments)
+            try:
+                timeout = 1800 if scope == 'frontend-materials-full' and name in {'lint', 'vitest-full'} else 600
+                stdout, stderr = codegen._run_frontend(before['frontend'][0], command, timeout=timeout,
+                                                       stdout_limit=1024 * 1024)
+                for stream, raw in (('stdout', stdout), ('stderr', stderr)):
+                    relative = root + '/' + name + '.' + stream + '.log'
+                    control.write_bytes(relative, raw)
+                    item[stream] = {'path': relative, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+                item.update(state='succeeded', exit_code=0)
+            except codegen.CodegenError as error:
+                # A timed-out Docker exec may still own the per-command flock; never continue or retry it.
+                unknown = bool(error.reconciliation_required)
+                raw = str(error).encode('utf-8')
+                control.write_bytes(root + '/' + name + '.error.log', raw[:65536])
+                for stream, output in (('stdout', error.stdout), ('stderr', error.stderr)):
+                    relative = root + '/' + name + '.' + stream + '.log'
+                    control.write_bytes(relative, output)
+                    item[stream] = {'path': relative, 'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
+                item.update(state='outcome-unknown' if unknown else 'failed', exit_code=error.exit_code,
+                            error=str(error)[:4096], error_log_truncated=len(raw)>65536,
+                            reconciliation_required=unknown)
+                if unknown or name == 'prepare':
+                    break
+            finally:
+                item['duration_ms'] = round((time.monotonic()-started)*1000)
+        after = services()
+        after_pins = service_pins(after)
+        after_volumes = codegen._inspect_technical_volumes(
+            control.project, after['backend'][1], after['frontend'][1])
+        if source_only_field_map:
+            receipt['services_after'] = after_pins
+            receipt['technical_volumes_after'] = after_volumes
+            source_bindings_after = _field_map_source_bindings(after, codegen)
+            receipt['source_bindings_after'] = source_bindings_after
+            after_state = _field_map_source_state(after['backend'][1])
+            receipt['backend_state_after'] = {
+                'status': after_state['status'], 'running': after_state['running'],
+                'pid': after_state['pid'], 'exit_code': after_state['exit_code'],
+                'qualification': 'running-healthy' if after_state['running'] else 'stopped-clean-maintenance',
+            }
+        if (after_pins != pins or after_volumes != volumes or input_hashes() != inputs
+                or (source_only_field_map and source_bindings_after != source_bindings_before)):
+            raise codegen.CodegenError('Services, technical volumes or selected frontend inputs changed during checks')
+        if frontend_inputs.describe(selected, port)['files'] != metadata['files']:
+            raise codegen.CodegenError('Selected frontend metadata changed during checks')
+        receipt['frontend_source_view_after'] = frontend_inputs.frontend_view(
+            after['frontend'][0], selected, port, inputs=metadata)
+        if not source_only_field_map:
+            receipt['services_after'] = after_pins
+        unknown = any(item.get('reconciliation_required') for item in receipt['commands'])
+        receipt.update(state='outcome-unknown' if unknown else 'succeeded' if all(
+            item['state']=='succeeded' for item in receipt['commands']) and len(receipt['commands'])==len(commands)
+            else 'failed', exit_code=2 if unknown else 0 if all(item['state']=='succeeded' for item in receipt['commands']) else 1)
+    except Exception as error:
+        unknown = bool(getattr(error, 'reconciliation_required', False)) or any(
+            item.get('reconciliation_required') for item in receipt['commands'])
+        receipt.update(state='outcome-unknown' if unknown else 'failed', exit_code=2 if unknown else 1,
+                       error=str(error)[:4096], reconciliation_required=unknown)
+    control.write(root + '/receipt.json', receipt)
+    print(json.dumps(receipt, indent=2))
+    return receipt['exit_code']
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-root', type=Path, required=True)
+    parser.add_argument('--oracle-wheel', help='Explicit registered mpmath wheel in the group verification volume (all scope only)')
     parser.add_argument('--offline', action='store_true', help='Run interpreted checks in a private group helper when backend is stopped')
+    parser.add_argument('--initial-attempt', help='Pinned pre-service development attempt for offline checks')
     parser.add_argument('--modules', nargs='+', help='Explicit unittest modules (offline mode only)')
+    parser.add_argument('--scope', choices=('gpu-temperature-contracts', 'material-library-contracts', 'material-library-python-contracts', 'authoring-contracts', 'time-expression-contracts', 'stl-api-contracts', 'live-observation-contracts', 'accepted-runtime-ownership-contracts', 'fem-live-control-contracts', 'fem-response-codec-contracts', 'fem-response-input-contracts', 'fem-response-preparation-contracts', 'fem-response-preparer-contracts', 'fem-response-descriptor-contracts', 'fem-response-worker-contracts', 'fem-preparation-contracts', 'stl-classification-contracts', 'stl-meshing-contracts', 'all', 'source-capture', 'activation-history', 'frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-materials', 'frontend-materials-full', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'), default='all')
     args = parser.parse_args()
+    if args.initial_attempt is not None and not args.offline:
+        raise BuildControlError('--initial-attempt requires --offline')
+    if args.oracle_wheel is not None and (args.offline or args.scope != 'all'):
+        raise BuildControlError('Oracle wheel is supported only for live all checks')
     if args.offline:
-        if sys.platform != 'win32':
-            raise BuildControlError('Offline Docker checks require native Windows Python')
+        if args.scope != 'all':
+            raise BuildControlError('Offline module checks cannot combine with a service-specific scope')
+        require_host()
         if not args.modules or len(args.modules) > 32 or any(re.fullmatch(r'test_[A-Za-z0-9_]+', module) is None for module in args.modules):
             raise BuildControlError('Offline checks require 1-32 explicit test modules')
     elif args.modules:
         raise BuildControlError('--modules requires the explicit --offline mode')
     selected = args.source_root.resolve(strict=True)
+    oracle_dependency = _oracle_wheel_binding(selected, args.oracle_wheel)
     identity = compose_project_identity(storage.resolve_layout(selected, 'docker-all-gpu'))
     from docker_build_control import toolchain_configuration
     configured = toolchain_configuration(selected, identity)
     helper = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
     control = BuildControl(identity, helper)
     control.prepare()
+    if args.scope in ('gpu-temperature-contracts', 'material-library-contracts', 'material-library-python-contracts', 'authoring-contracts', 'time-expression-contracts', 'stl-api-contracts', 'live-observation-contracts', 'accepted-runtime-ownership-contracts', 'fem-live-control-contracts', 'fem-response-codec-contracts', 'fem-response-input-contracts', 'fem-response-preparation-contracts', 'fem-response-preparer-contracts', 'fem-response-descriptor-contracts', 'fem-response-worker-contracts', 'fem-preparation-contracts', 'stl-classification-contracts', 'stl-meshing-contracts'):
+        from docker_authoring_contract_checks import run
+        return run(control, selected, identity, scope=args.scope)
+    if args.scope in ('frontend-materials', 'frontend-materials-full', 'frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
+        return frontend_import_checks(control, selected, identity, scope=args.scope)
+    if args.initial_attempt is not None:
+        return _offline_checks(control, selected, None, args.modules, initial_attempt=args.initial_attempt)
     ids = docker_capture('ps', *(['--all'] if args.offline else []), '--quiet', '--no-trunc', '--filter', 'label=com.docker.compose.project='+control.project,
                          '--filter', 'label=com.docker.compose.service=backend').stdout.decode().split()
     if len(ids) != 1:
@@ -169,21 +916,79 @@ def main():
     mounts = [m for m in observed.get('Mounts', []) if m['Destination']=='/build']
     if len(mounts)!=1 or mounts[0]['Type']!='volume':
         raise BuildControlError('Checks require the persistent build volume')
-    script = '''import os, pathlib, subprocess, sys
+    if oracle_dependency is not None:
+        control_mounts = [mount for mount in observed.get('Mounts', [])
+                          if mount['Destination'] == '/opt/fullmag/control']
+        if (len(control_mounts) != 1 or control_mounts[0]['Type'] != 'volume'
+                or control_mounts[0].get('Name') != control.volume):
+            raise BuildControlError('Oracle wheel requires the selected group control volume')
+    script = '''import json, os, pathlib, subprocess, sys
 pathlib.Path('/build/verification-tmp').mkdir(exist_ok=True)
 environment = {key:value for key,value in os.environ.items() if not key.startswith('FULLMAG_')}
 environment.update(TMPDIR='/build/verification-tmp', PYTHONDONTWRITEBYTECODE='1', HOME='/build/verification-tmp/home', USER='fullmag-checks', LOGNAME='fullmag-checks')
 pathlib.Path(environment['HOME']).mkdir(exist_ok=True)
-command=[sys.executable,'-B','-m','unittest','test_docker_dev_defaults','test_docker_dev_owned_control','test_docker_dev_codegen','test_docker_volume_activate','test_docker_volume_container_recovery','test_docker_volume_stop_unadmitted','test_docker_volume_dev_runtime_state','test_docker_runtime_control_volume','test_docker_container_runtime_recovery','test_runtime_service_recovery_busy_retry','test_docker_backend_volume_cache','test_bootstrap_docker_toolchain','test_docker_compose_identity','test_docker_host_ledger','test_docker_volume_receipts','test_docker_dev_host','test_docker_volume_wsl','test_docker_wsl_bind','test_linux_native_host','test_linux_native_probe','test_docker_python_no_test_build','test_mfem_cuda_fast_compile','test_docker_frontend_dev','test_docker_dev_browser_qa','test_docker_development_inputs_linux','test_docker_backend_dev','test_docker_backend_live_source','test_docker_candidate_retirement','test_docker_startup_script','test_backend_volume_cache_maintenance','test_docker_cpu_access','test_docker_dev_storage','test_docker_dev_image_context','test_docker_dev_recreate','test_docker_volume_pre_admission_recreate','test_docker_volume_pre_admission_selector','test_docker_volume_pre_admission_integration','test_docker_volume_post_build_generation','test_docker_volume_post_build_integration','test_docker_volume_pending_continuation','test_docker_volume_pending_resume','test_docker_prestart_resume','test_docker_frontend_cache','test_docker_frontend_cache_named_volume','test_fullmag_docker_runtime','test_docker_orphan_recovery','test_recover_docker_orphan','test_just_orphan_recovery_shell']
-sys.exit(subprocess.call(command,cwd='/opt/fullmag/source/scripts',env=environment))
+oracle_binding = json.loads(sys.argv[2]) if len(sys.argv) > 2 else None
+if oracle_binding is not None:
+    from docker_volume_checks import _verify_oracle_wheel
+    oracle_before = _verify_oracle_wheel(oracle_binding)
+    environment['PYTHONPATH'] = oracle_binding['path'] + (os.pathsep + environment['PYTHONPATH'] if environment.get('PYTHONPATH') else '')
+command=[sys.executable,'-B','-m','unittest','test_docker_dev_defaults','test_docker_dev_up','test_docker_dev_owned_control','test_docker_dev_codegen','test_docker_volume_activate','test_docker_volume_reconcile','test_docker_volume_network_failure_reconcile','test_docker_activation_preflight','test_antenna_rt0_surface_oracle','test_docker_volume_container_recovery','test_docker_volume_stop_unadmitted','test_docker_volume_dev_runtime_state','test_docker_runtime_control_volume','test_docker_container_runtime_recovery','test_runtime_service_recovery_busy_retry','test_docker_backend_volume_cache','test_bootstrap_docker_toolchain','test_docker_toolchain_host_inputs','test_docker_compose_identity','test_docker_host_ledger','test_docker_group_ledger','test_docker_volume_receipts','test_docker_volume_device_access','test_docker_volume_retained_device_lifecycle','test_docker_volume_native_init_successor','test_docker_dev_host','test_docker_volume_wsl','test_docker_wsl_bind','test_linux_native_host','test_linux_native_probe','test_docker_python_no_test_build','test_mfem_cuda_fast_compile','test_docker_frontend_dev','test_docker_dev_browser_qa','test_docker_development_inputs_linux','test_docker_backend_dev','test_docker_dev_fast_loop','test_docker_backend_live_source','test_docker_candidate_retirement','test_docker_startup_script','test_backend_volume_cache_maintenance','test_docker_cpu_access','test_docker_dev_storage','test_docker_dev_image_context','test_docker_dev_recreate','test_docker_volume_pre_admission_recreate','test_docker_volume_pre_admission_selector','test_docker_volume_pre_admission_integration','test_docker_volume_post_build_generation','test_docker_volume_post_build_integration','test_docker_volume_pending_continuation','test_docker_volume_pending_resume','test_docker_native_failed_recreate','test_docker_prestart_resume','test_docker_frontend_cache','test_docker_frontend_cache_named_volume','test_fullmag_docker_runtime','test_docker_orphan_recovery','test_recover_docker_orphan','test_just_orphan_recovery_shell','test_docker_volume_checks','test_docker_shared_build_storage','test_backend_shared_store','test_backend_shared_integration','test_backend_shared_recovery','test_backend_group_retirement','test_backend_compiler_cache','test_docker_cache_retirement','test_docker_worktree_finish','test_backend_auto_maintenance','test_docker_helper_source','test_backend_package_backup_retirement']
+if sys.argv[1] == 'frontend-tools':
+    command = [sys.executable, '-B', '-m', 'unittest', 'test_docker_dev_codegen', 'test_docker_volume_checks', 'test_docker_volume_frontend_recovery', 'test_docker_volume_dev_runtime_state', 'test_docker_volume_receipts', 'test_docker_dev_browser_qa']
+if sys.argv[1] in ('all', 'activation-history'):
+    history_modules = ['test_docker_activation_history_policy', 'test_docker_activation_history_reader',
+        'test_docker_activation_history_storage', 'test_docker_activation_history_inventory', 'test_docker_activation_history_cli',
+        'test_docker_activation_history_admission', 'test_docker_activation_history_output', 'test_docker_activation_history_references']
+    if sys.argv[1] == 'activation-history':
+        command = [sys.executable, '-B', '-m', 'unittest', *history_modules,
+            'test_docker_volume_activate', 'test_docker_volume_activation_reconcile',
+            'test_docker_volume_receipts', 'test_docker_volume_pre_admission_selector',
+            'test_docker_build_control_cache_admission', 'test_docker_volume_checks', 'test_docker_helper_source',
+            'test_docker_activation_preflight', 'test_docker_isolated_snapshot_namespace',
+            'test_docker_dev_reconcile_helper_output_failure', 'test_docker_dev_release_unknown_activation',
+            'test_docker_volume_accepted_reattach', 'test_docker_live_retirement', 'test_docker_retirement_refusal',
+            'test_docker_volume_cancelled_activation', 'test_docker_volume_cancelled_activation_guard',
+            'test_docker_volume_dev_cancelled_activation', 'test_docker_volume_empty_quarantine',
+            'test_docker_volume_interrupted_fresh_archive', 'test_docker_volume_linux_supervision_stop',
+            'test_docker_volume_preparation_abort_archive']
+    else:
+        command.extend(history_modules)
+if sys.argv[1] == 'network-failure':
+    command = [sys.executable, '-B', '-m', 'unittest', 'test_docker_volume_network_failure_reconcile', 'test_docker_volume_checks']
+if sys.argv[1] == 'empty-authoring':
+    command = [sys.executable, '-B', '-m', 'unittest', 'test_docker_volume_receipts', 'test_docker_saved_authoring_history', 'test_docker_preclaim_cancelled_restart', 'test_docker_volume_prestart_recovery', 'test_docker_volume_checks']
+if sys.argv[1] == 'field-only':
+    environment.update(PYTHONPATH='/opt/fullmag/source/packages/fullmag-py/src', FULLMAG_TEST_TEMP_ROOT='/build/verification-tmp')
+    result = subprocess.call([sys.executable, '-B', '-m', 'unittest', 'discover',
+        '-s', '/opt/fullmag/source/packages/fullmag-py/tests', '-p', 'test_antenna_field_only_nonmagnetic.py', '-v'],
+        cwd='/opt/fullmag/source', env=environment)
+else:
+    result = subprocess.call(command,cwd='/opt/fullmag/source/scripts',env=environment) if sys.argv[1] in ('all', 'activation-history', 'frontend-tools', 'network-failure', 'empty-authoring') else 0
+if result == 0 and sys.argv[1] not in ('field-only', 'activation-history', 'frontend-tools', 'network-failure', 'empty-authoring'):
+    result = subprocess.call([sys.executable, '-B', '/opt/fullmag/source/scripts/verify_accepted_source_scene_capture.py',
+                              '--fullmag-root', '/opt/fullmag/source/packages/fullmag-py/src/fullmag',
+                              '--output-dir', '/build/verification-tmp'], env=environment)
+if oracle_binding is not None and _verify_oracle_wheel(oracle_binding) != oracle_before:
+    raise RuntimeError('Oracle wheel changed during checks')
+sys.exit(result)
 '''
     result = docker_capture('exec', '--workdir', '/opt/fullmag/source/scripts', ids[0],
-                           '/usr/local/bin/python3', '-B', '-c', script, allow_failure=True, timeout=180)
+                           '/usr/local/bin/python3', '-B', '-c', script, args.scope,
+                           *([json.dumps(oracle_dependency, sort_keys=True)] if oracle_dependency is not None else []),
+                           allow_failure=True, timeout=900)
     receipt={'schema':'fullmag.volume-dev-interpreted-checks.v1','exit_code':result.returncode,
-             'container_id':ids[0], 'image_id':observed['Image'], 'compose_project':control.project,
+             'scope':args.scope, 'container_id':ids[0], 'image_id':observed['Image'], 'compose_project':control.project,
              'stdout':result.stdout.decode('utf-8','replace'), 'stderr':result.stderr.decode('utf-8','replace')}
-    control.write('verification/interpreted-checks.json',receipt)
-    print(receipt['stdout']+receipt['stderr'])
+    if oracle_dependency is not None:
+        receipt['oracle_dependency'] = oracle_dependency
+    control.write('verification/interpreted-activation-history-checks.json' if args.scope == 'activation-history' else
+                  'verification/interpreted-empty-authoring-checks.json' if args.scope == 'empty-authoring' else
+                  'verification/interpreted-network-failure-checks.json' if args.scope == 'network-failure' else
+                  'verification/interpreted-frontend-tools-checks.json' if args.scope == 'frontend-tools' else
+                  'verification/interpreted-checks.json' if args.scope == 'all' else
+                  'verification/interpreted-field-only-checks.json' if args.scope == 'field-only' else
+                  'verification/interpreted-source-capture-checks.json',receipt)
+    print(receipt['stderr'] if args.scope == 'frontend-tools' else receipt['stdout']+receipt['stderr'])
     return result.returncode
 
 

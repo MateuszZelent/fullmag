@@ -1,18 +1,21 @@
 "use client";
 
-import { Save } from "lucide-react";
+import { AlertCircle, Play, Save } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { Button } from "@/shared/ui/Button";
 import type { SceneResource } from "@/kernel/api/apiTypes";
 
 import { FieldRow } from "../../primitives/FieldRow";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
+import { focusFirstInvalid } from "../../primitives/fieldErrorAnnouncer";
+import { FormField } from "../../primitives/FormField";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { StudyProgressBar } from "../StudyProgressBar";
 import {
   StudyStageDraftEditor,
 } from "../StudyPipelineSection";
-import type { StudyStageDraft } from "../StudyStageAuthoringModel";
+import { isEditablePipelineStage, type StudyStageDraft } from "../StudyStageAuthoringModel";
 import type { StudyStageModel } from "../StudyInspectorPanelModel";
 
 export type FrequencyDomainAuthoringView =
@@ -48,6 +51,7 @@ export interface StageInspectorFrameProps {
   onCommit: () => void;
   onUpdateDraft: (patch: Partial<StudyStageDraft>) => void;
   pipelineDrafts?: readonly StudyStageDraft[];
+  pipelineDraftDirty?: boolean;
   requestedBackend?: string;
   requestedDevice?: string;
   requestedMode?: string;
@@ -55,7 +59,15 @@ export interface StageInspectorFrameProps {
   runRuntimeCommand?: (commandId: string, input?: unknown) => void;
   runtimeCommandDisabledReason?: (commandId: string) => string | null;
   stage: StudyStageModel | null;
+  stageLaunch?: {
+    disabledReason: string | null;
+    feedback: { failed: boolean; message: string } | null;
+    initialStateControl?: ReactNode;
+    label: string;
+    onRun: () => void;
+  };
   stageExecutionRevision: number | null;
+  textureAuthoring?: ReactNode;
   validation: readonly { message: string; severity: "error" | "warning" }[];
 }
 
@@ -71,15 +83,19 @@ export function StageInspectorFrame({
   kindLabel,
   onCommit,
   onUpdateDraft,
+  pipelineDraftDirty,
   requestedBackend,
   requestedDevice,
   requestedMode,
   stage,
+  stageLaunch,
   stageExecutionRevision,
+  textureAuthoring,
   validation,
 }: StageInspectorFrameProps) {
   const hasDraftErrors = validation.some((issue) => issue.severity === "error");
   const isExpectedDraft = draft?.kind === expectedKind;
+  const pipelineReadOnly = Boolean(draft?.pipelineNodeId) && !isEditablePipelineStage(draft);
   const stageKind = (stage?.kind ?? expectedKind).toLowerCase();
   const stageStatus = (stage?.status ?? "draft").toLowerCase();
   const activeStageStatuses = [
@@ -153,23 +169,45 @@ export function StageInspectorFrame({
 
       <InspectorGroup title="Authoring" badge={kindLabel}>
         {draft && isExpectedDraft ? (
-          <StudyStageDraftEditor
-            algorithmsAvailable={algorithmsAvailable}
-            demagEnabled={demagEnabled}
-            draft={draft}
-            index={draftIndex}
-            requestedBackend={requestedBackend}
-            requestedDevice={requestedDevice}
-            requestedMode={requestedMode}
-            view={authoringView}
-            validation={validation}
-            onUpdate={onUpdateDraft}
-          />
+          <fieldset
+            className="m-0 min-w-0 border-0 p-0"
+            disabled={pipelineReadOnly}
+          >
+            {pipelineReadOnly && draft.kind !== "unsupported" && draft.kind !== "antenna_field_solve" ? (
+              <div className="fm-study-stage-note">
+                Canonical pipeline stage (read-only). The configuration is shown
+                as authored in the study pipeline.
+              </div>
+            ) : null}
+            {draft.kind === "run" || draft.kind === "relax" ? (
+              <FormField
+                checked={draft.stageEnabled !== false}
+                disabled={authoringBusy}
+                label="Include this stage in Study"
+                hint={draft.pipelineAncestorsEnabled === false ? "A parent group is disabled." : undefined}
+                type="checkbox"
+                onChange={(event) => onUpdateDraft({ stageEnabled: event.target.checked })}
+              />
+            ) : null}
+            <StudyStageDraftEditor
+              algorithmsAvailable={algorithmsAvailable}
+              demagEnabled={demagEnabled}
+              draft={draft}
+              index={draftIndex}
+              requestedBackend={requestedBackend}
+              requestedDevice={requestedDevice}
+              requestedMode={requestedMode}
+              view={authoringView}
+              validation={validation}
+              onUpdate={onUpdateDraft}
+            />
+          </fieldset>
         ) : (
           <div className="fm-study-stage-empty">
             Selected tree node does not match the current study draft.
           </div>
         )}
+        {isExpectedDraft && !pipelineReadOnly ? textureAuthoring : null}
         {authoringFeedback ? (
           <FeedbackBanner
             kind={authoringFeedback.kind}
@@ -178,7 +216,8 @@ export function StageInspectorFrame({
         ) : null}
         <div className="fm-inspector-toolbar">
           <Button
-            disabled={authoringBusy || hasDraftErrors || !draft || !isExpectedDraft || Boolean(draft.pipelineNodeId)}
+            disabled={authoringBusy || hasDraftErrors || !draft || !isExpectedDraft || pipelineReadOnly ||
+              (Boolean(draft.pipelineNodeId) && !pipelineDraftDirty)}
             size="sm"
             type="button"
             variant="primary"
@@ -187,8 +226,42 @@ export function StageInspectorFrame({
             <Save size={13} aria-hidden="true" />
             {authoringBusy ? "Saving" : "Save stage"}
           </Button>
+          {hasDraftErrors && draft && !authoringBusy ? (
+            <Button
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={(event) => focusFirstInvalid(event.currentTarget.closest(".fm-inspector"))}
+            >
+              <AlertCircle size={13} aria-hidden="true" /> Show first error
+            </Button>
+          ) : null}
         </div>
       </InspectorGroup>
+
+      {stageLaunch ? (
+        <InspectorGroup title="Execution">
+          {stageLaunch.initialStateControl}
+          <div className="fm-inspector-toolbar">
+            <Button
+              disabled={stageLaunch.disabledReason !== null}
+              size="sm"
+              title={stageLaunch.disabledReason ?? undefined}
+              type="button"
+              onClick={stageLaunch.onRun}
+            >
+              <Play size={13} aria-hidden="true" />
+              {stageLaunch.label}
+            </Button>
+          </div>
+          {stageLaunch.disabledReason ? <p role="status">{stageLaunch.disabledReason}</p> : null}
+          {stageLaunch.feedback?.failed ? (
+            <FeedbackBanner kind="error" message={stageLaunch.feedback.message} />
+          ) : stageLaunch.feedback ? (
+            <p role="status">{stageLaunch.feedback.message}</p>
+          ) : null}
+        </InspectorGroup>
+      ) : null}
 
       <InspectorGroup
         title="Telemetry & Results"

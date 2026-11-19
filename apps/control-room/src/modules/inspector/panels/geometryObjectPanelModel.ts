@@ -218,6 +218,18 @@ function lengthScale(values: readonly number[]): { scale: number; unit: string }
   return { scale: 1e9, unit: "nm" };
 }
 
+function formatDimension(value: number, scale: number): string {
+  const scaled = value * scale;
+  if (!Number.isFinite(scaled)) return String(scaled);
+  if (scaled === 0) return "0.0";
+
+  const rounded = Number(scaled.toPrecision(6));
+  const text = String(rounded);
+  return Number.isInteger(rounded) && !/[eE]/.test(text)
+    ? `${text}.0`
+    : text;
+}
+
 function formatDimensions(geometry: JsonRecord | null): string {
   const params = asRecord(geometry?.geometry_params);
   const size =
@@ -227,7 +239,7 @@ function formatDimensions(geometry: JsonRecord | null): string {
     boundsSize(geometry);
   if (!size?.length) return "unresolved";
   const { scale, unit } = lengthScale(size);
-  return `${size.map((value) => (value * scale).toFixed(1)).join(" x ")} ${unit}`;
+  return `${size.map((value) => formatDimension(value, scale)).join(" x ")} ${unit}`;
 }
 
 function archWaveguideSize(params: JsonRecord | null): number[] | null {

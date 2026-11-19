@@ -1,3 +1,5 @@
+import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+
 import type {
   FdmMultilayerAirboxRenderView,
 } from "../viewport3dDomainAdapter";
@@ -37,5 +39,26 @@ export function resolveFdmMultilayerAirboxBoundsOverlay(
     boundsVisible: view.settings.boundsVisible,
     fullWireframeVisible: view.settings.wireframeVisible,
     targetId: view.target.id,
+  };
+}
+
+/**
+ * Before the runtime publishes the target-only Airbox carrier (for example a
+ * prepared session awaiting Compute), the Airbox extent is the authored
+ * Universe box. It is used only while no carrier view exists, so a published
+ * carrier always wins and the two extents are never mixed.
+ */
+export function resolveFdmMultilayerAuthoredAirboxBoundsOverlay(
+  carrierView: Pick<FdmMultilayerAirboxRenderView, "domain"> | null,
+  authoredUniverseBounds: Viewport3DBounds | null,
+  settings: Pick<VisualizationTargetSettings, "boundsVisible" | "visible" | "wireframeVisible">,
+): FdmMultilayerAirboxBoundsOverlayModel | null {
+  if (carrierView || !authoredUniverseBounds || !settings.visible) return null;
+  if (!settings.boundsVisible && !settings.wireframeVisible) return null;
+  return {
+    bounds: authoredUniverseBounds,
+    boundsVisible: settings.boundsVisible,
+    fullWireframeVisible: settings.wireframeVisible,
+    targetId: "airbox",
   };
 }

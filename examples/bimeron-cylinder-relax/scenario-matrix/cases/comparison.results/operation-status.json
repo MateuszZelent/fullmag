@@ -1,0 +1,31 @@
+{
+  "updated_at": "2026-11-05T13:20:00.936175+00:00",
+  "case_count": 12,
+  "cases_started": 0,
+  "cases_completed": 0,
+  "state": "runtime_tests",
+  "group": "fullmag-master",
+  "port": 3342,
+  "frontend": "stopped",
+  "old_test_helper": "closed with preserved receipts",
+  "requested_execution": {
+    "backend": "fdm",
+    "device": "gpu",
+    "precision": "double",
+    "fallback_cpu": false
+  },
+  "max_steps": 3000,
+  "source_commit": "b2896445fef381a2f912f675c4418579caa7deaf",
+  "candidate": ".backend-package-candidate-dvskp5jb",
+  "candidate_receipt_sha256": "60b8a886bdd3206f22a67c48b4be76433170a3a151fc8a212cee995aaa9e4fc7",
+  "source_snapshot_sha256": "4c5c0596ac7d631b1bc3e50d6721ea855af1eb48c65ecbe92d1c3a4dcccd8eba",
+  "native_tests": {
+    "session": {
+      "passed": 6,
+      "failed": 0
+    },
+    "api": "pending"
+  },
+  "output_layout": "cases/<script_stem>.py + cases/<script_stem>.zarr on WSL",
+  "runtime_qualification": "NOT VERIFIED"
+}

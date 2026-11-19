@@ -3073,6 +3073,103 @@ fn accepted_relax_handoff_from_completed_stage_with_exact_artifacts(
     .map_err(|error| anyhow!(error.to_string()))
 }
 
+// This value follows the physical continuation, independently of preview state.
+// A missing value never proves that a continued state has empty frozen history.
+struct HeadlessFrozenContinuation {
+    lifecycle: fullmag_runner::constraints::FrozenOutputLifecycleV1,
+    source_plan: Option<fullmag_ir::ResolvedFrozenSpinsPlanIR>,
+    source_stage_id: String,
+    source_grid: fullmag_ir::FdmGridCertificateIR,
+}
+
+fn headless_frozen_grid(plan: &fullmag_ir::FdmPlanIR) -> Result<&fullmag_ir::FdmGridCertificateIR> {
+    let certificate = plan.grid_certificate.as_ref()
+        .context("headless frozen continuation requires its resolved grid certificate")?;
+    certificate.validate_against_masks(plan.active_mask.as_deref(), &plan.region_mask)
+        .map_err(|error| anyhow!(error))?;
+    if certificate.counts != plan.grid.cells
+        || certificate.origin_m.map(f64::to_bits) != plan.origin_m.map(f64::to_bits)
+        || certificate.cell_m.map(f64::to_bits) != plan.cell_size.map(f64::to_bits)
+    {
+        bail!("headless frozen continuation grid certificate differs from the physical plan");
+    }
+    Ok(certificate)
+}
+
+fn same_headless_frozen_grid(left: &fullmag_ir::FdmGridCertificateIR, right: &fullmag_ir::FdmGridCertificateIR) -> bool {
+    left.grid_fingerprint == right.grid_fingerprint
+        && left.region_legend_fingerprint == right.region_legend_fingerprint
+        && left.region_legend == right.region_legend
+        && left.object_ids == right.object_ids
+}
+
+fn read_headless_frozen_terminal(
+    artifact_dir: &Path,
+    plan: &fullmag_ir::FdmPlanIR,
+    result: &fullmag_runner::RunResult,
+    context: &fullmag_runner::constraints::FrozenStageContextV1,
+    stage_id: &str,
+) -> Result<HeadlessFrozenContinuation> {
+    let path = artifact_dir.join("solver/frozen_output_lifecycle.v1.json");
+    let mut bytes = Vec::new();
+    fs::File::open(&path)
+        .with_context(|| format!("missing terminal frozen lifecycle {}", path.display()))?
+        .take(64 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 64 * 1024 * 1024 {
+        bail!("terminal frozen lifecycle exceeds its decode budget");
+    }
+    let lifecycle = fullmag_runner::constraints::FrozenOutputLifecycleV1::decode(&bytes)
+        .map_err(|error| anyhow!(error.message))?;
+    // Scalar samples can coalesce near the endpoint. Their last timestamp
+    // does not replace the exact terminal clock emitted by the solver owner.
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct TerminalClock {
+        schema_version: String,
+        terminal_step: u64,
+        terminal_time_s: f64,
+        #[serde(rename = "outputs")]
+        _outputs: serde::de::IgnoredAny,
+        #[serde(rename = "origin_s")]
+        _origin_s: serde::de::IgnoredAny,
+        #[serde(rename = "scalar_cursors")]
+        _scalar_cursors: serde::de::IgnoredAny,
+        #[serde(rename = "field_cursors")]
+        _field_cursors: serde::de::IgnoredAny,
+        #[serde(rename = "default_scalar_trace")]
+        _default_scalar_trace: serde::de::IgnoredAny,
+    }
+    let mut clock_bytes = Vec::new();
+    fs::File::open(artifact_dir.join("solver/terminal_output_coverage.v1.json"))?
+        .take(4 * 1024 * 1024 + 1).read_to_end(&mut clock_bytes)?;
+    if clock_bytes.len() > 4 * 1024 * 1024 {
+        bail!("terminal output coverage exceeds its metadata budget");
+    }
+    let clock: TerminalClock = serde_json::from_slice(&clock_bytes)?;
+    if clock.schema_version != "fullmag.runner.terminal_output_coverage.v1" {
+        bail!("terminal frozen lifecycle has an unsupported clock owner");
+    }
+    lifecycle.validate(
+        plan.frozen_spins.as_ref(),
+        fullmag_runner::ObservationClock {
+            accepted_step: clock.terminal_step,
+            time_seconds: clock.terminal_time_s,
+            dt_seconds: lifecycle.frozen_spins.as_ref().map(|child| child.dt).filter(|dt| *dt > 0.0),
+        },
+        &result.final_magnetization,
+    ).map_err(|error| anyhow!(error.message))?;
+    if lifecycle.frozen_activation_set != context.prepared_activation_set {
+        bail!("terminal frozen lifecycle differs from its prepared stage entry");
+    }
+    Ok(HeadlessFrozenContinuation {
+        lifecycle,
+        source_plan: plan.frozen_spins.clone(),
+        source_stage_id: stage_id.to_string(),
+        source_grid: headless_frozen_grid(plan)?.clone(),
+    })
+}
+
 fn replace_continuation_after_synthetic_stage(
     continuation_magnetization: &mut Option<Vec<[f64; 3]>>,
     continuation_source: &mut Option<ContinuationSource>,
@@ -3700,7 +3797,60 @@ fn scene_problem_patch_from_mesh_options(
     Ok(Some(patch))
 }
 
+fn rebind_body_mesh_assets(
+    assets: &mut [fullmag_ir::FemMeshAssetIR],
+    previous_magnets: &[MagnetIR],
+    previous_regions: &[RegionIR],
+    patch: &SceneProblemPatch,
+) -> Result<()> {
+    fn geometry_by_owner<'a>(
+        magnets: &'a [MagnetIR],
+        regions: &'a [RegionIR],
+    ) -> std::collections::BTreeMap<&'a str, &'a str> {
+        magnets
+            .iter()
+            .filter_map(|magnet| {
+                let owner = magnet.object_id.as_deref().unwrap_or(&magnet.name);
+                let region = regions.iter().find(|region| region.name == magnet.region)?;
+                Some((owner, region.geometry.as_str()))
+            })
+            .collect()
+    }
+
+    // The materializer names body assets by geometry. The authoring patch can
+    // name the same geometry by the object's immutable ID instead.
+    let previous = geometry_by_owner(previous_magnets, previous_regions);
+    let next = geometry_by_owner(&patch.magnets, &patch.regions);
+    let mut names = std::collections::BTreeMap::new();
+    for (owner, old_geometry) in previous {
+        if let Some(&new_geometry) = next.get(owner) {
+            if names
+                .insert(old_geometry, new_geometry)
+                .is_some_and(|seen| seen != new_geometry)
+            {
+                bail!("body mesh asset '{old_geometry}' has conflicting destination geometries");
+            }
+        }
+    }
+    for asset in assets {
+        if let Some(name) = names.get(asset.geometry_name.as_str()) {
+            asset.geometry_name = (*name).to_owned();
+        }
+    }
+    Ok(())
+}
+
 fn apply_scene_problem_patch(problem: &mut ProblemIR, patch: &SceneProblemPatch) -> Result<()> {
+    if let Some(assets) = &mut problem.geometry_assets {
+        if assets.fem_domain_mesh_asset.is_none() && !assets.fem_mesh_assets.is_empty() {
+            rebind_body_mesh_assets(
+                &mut assets.fem_mesh_assets,
+                &problem.magnets,
+                &problem.regions,
+                patch,
+            )?;
+        }
+    }
     problem.geometry.entries = patch.geometry_entries.clone();
     problem.regions = patch.regions.clone();
     problem.materials = patch.materials.clone();
@@ -7208,6 +7358,7 @@ struct PausedInteractiveStage {
     command: SessionCommand,
     source_kind: String,
     checkpoint_ref: Option<String>,
+    checkpoint_resume_error: Option<String>,
     waveform_origin_time_s: f64,
     requires_exact_waveform_clock: bool,
 }
@@ -7326,6 +7477,17 @@ impl fullmag_session::CheckpointSnapshotProvider for PauseCheckpointProvider {
     }
 }
 
+fn checkpoint_resume_error_for_backend_plan(backend_plan: &BackendPlanIR) -> Option<String> {
+    match backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            fullmag_runner::validate_fdm_transport_checkpoint_resume_support(fdm)
+                .err()
+                .map(|error| error.message)
+        }
+        _ => None,
+    }
+}
+
 fn capture_pause_checkpoint(
     run_id: &str,
     step: Option<&fullmag_runner::StepStats>,
@@ -7333,6 +7495,9 @@ fn capture_pause_checkpoint(
     backend_plan: &BackendPlanIR,
     stage_artifact_dir: &Path,
 ) -> Result<fullmag_session::CaptureResult> {
+    if let Some(error) = checkpoint_resume_error_for_backend_plan(backend_plan) {
+        bail!("{error}");
+    }
     let store_root = runtime_state_root(&repo_root())
         .join("local-live")
         .join("session-store");
@@ -8822,6 +8987,46 @@ fn execute_synthetic_stage_with_interrupt(
                 message: format!("Added regional field drive {}", drive.id),
             })
         }
+        ResolvedScriptStageAction::AddMaskFieldDrive { drive } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "add_mask_field_drive",
+                    "drive": drive,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!("Added mask antenna {}", drive.id),
+            })
+        }
+        ResolvedScriptStageAction::UpdateMaskFieldDrive {
+            drive_id,
+            term,
+            mask_parameters,
+            time_parameters,
+        } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "update_mask_field_drive",
+                    "drive_id": drive_id,
+                    "term": term,
+                    "mask_parameters": mask_parameters,
+                    "time_parameters": time_parameters,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!("Updated mask antenna {}", drive_id),
+            })
+        }
         ResolvedScriptStageAction::RemoveFieldDrive { drive_id } => {
             let vectors =
                 current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
@@ -9956,6 +10161,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         );
     }
 
+    // All physical predecessors must export history before the first active
+    // constraint or M3 stage; an earlier unconstrained Relax is not M-only.
+    let headless_frozen_lifecycle_required = args.headless && stage_execution_plans.iter().any(|execution| {
+        matches!(&execution.backend_plan, BackendPlanIR::Fdm(plan)
+            if plan.frozen_spins.is_some() || plan.spin_transport_plans.iter()
+                .any(|transport| transport.fdm_cpu_double_transient.is_some()))
+    });
+    let mut headless_frozen_continuation: Option<HeadlessFrozenContinuation> = None;
+    let mut headless_has_physical_predecessor = false;
     let stage_count = stages.len();
     let mut aggregated_steps = Vec::<fullmag_runner::StepStats>::new();
     let mut step_offset = 0u64;
@@ -11079,7 +11293,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         continuation_certified_fields = None;
                     }
                     if grid_refresh_command_id.is_some() {
-                        let payload = live_workspace.grid_refresh_snapshot()?;
+                        let payload = live_workspace.grid_refresh_snapshot(remesh_succeeded)?;
                         let publisher_scope = crate::control_room::live_publisher_scope::LivePublisherScope::new(&session_id);
                         anyhow::ensure!(publisher_scope.is_bound()?, "grid refresh requires its attached publisher scope");
                         sync_current_live_snapshot(&session_id, &payload, &publisher_scope)?;
@@ -11749,6 +11963,25 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 ResolvedScriptStageAction::AntennaExternalLeadInspection { .. }
                     | ResolvedScriptStageAction::AntennaClosedLoopInspection { .. }
             ) {
+                if matches!(action, ResolvedScriptStageAction::LoadState { .. }) {
+                    headless_has_physical_predecessor = true;
+                }
+                let frozen_grid_matches = match (headless_frozen_continuation.as_ref(), &execution_plan.backend_plan) {
+                    (Some(source), BackendPlanIR::Fdm(plan)) =>
+                        same_headless_frozen_grid(&source.source_grid, headless_frozen_grid(plan)?),
+                    (Some(_), _) => false,
+                    (None, _) => true,
+                };
+                let preserves_frozen_source = frozen_grid_matches
+                    && !matches!(action, ResolvedScriptStageAction::LoadState { .. })
+                    && continuation_magnetization.as_deref().is_some_and(|previous| {
+                        previous.len() == synthetic_outcome.magnetization.len()
+                            && previous.iter().flatten().zip(synthetic_outcome.magnetization.iter().flatten())
+                                .all(|(left, right)| left.to_bits() == right.to_bits())
+                    });
+                if !preserves_frozen_source {
+                    headless_frozen_continuation = None;
+                }
                 replace_continuation_after_synthetic_stage(
                     &mut continuation_magnetization,
                     &mut continuation_source,
@@ -11811,12 +12044,67 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             )
         });
         publish_frozen_spins_runtime_status_for_execution_plan(&live_workspace, &execution_plan)?;
+        let headless_frozen_context = if headless_frozen_lifecycle_required {
+            if let BackendPlanIR::Fdm(target) = &execution_plan.backend_plan {
+                let runtime = fullmag_runner::resolve_planned_runtime_engine(&stage.ir, &execution_plan)
+                    .map_err(|error| anyhow!(error.message))?;
+                if runtime.engine_id != "fdm_cpu_reference" {
+                    bail!("headless frozen continuation requires the explicit FDM CPU reference realization");
+                }
+                let target_grid = headless_frozen_grid(target)?;
+                let (previous, child, source_stage, source_plan) = match headless_frozen_continuation.as_ref() {
+                    Some(source) => {
+                        if !same_headless_frozen_grid(&source.source_grid, target_grid) {
+                            bail!("headless frozen continuation changed its resolved topology without a qualified lifecycle transfer");
+                        }
+                        let previous_m = continuation_magnetization.as_deref()
+                            .context("headless frozen lifecycle lost its physical state input")?;
+                        if previous_m.len() != target.initial_magnetization.len()
+                            || previous_m.iter().flatten().zip(target.initial_magnetization.iter().flatten())
+                                .any(|(left, right)| left.to_bits() != right.to_bits())
+                        {
+                            bail!("headless frozen continuation materialized a different state input");
+                        }
+                        (
+                            source.lifecycle.frozen_activation_set.clone(),
+                            source.lifecycle.frozen_spins.clone(),
+                            Some(source.source_stage_id.clone()),
+                            source.source_plan.as_ref(),
+                        )
+                    },
+                    None if !headless_has_physical_predecessor => {
+                        // Configuration-only synthetic actions can materialize
+                        // authored M before the first solve. They are not a
+                        // physical predecessor and cannot introduce a new M.
+                        if let Some(authored_m) = continuation_magnetization.as_deref() {
+                            if authored_m.len() != target.initial_magnetization.len()
+                                || authored_m.iter().flatten().zip(target.initial_magnetization.iter().flatten())
+                                    .any(|(left, right)| left.to_bits() != right.to_bits())
+                            {
+                                bail!("fresh authored root changed its state before frozen admission");
+                            }
+                        }
+                        (fullmag_runner::constraints::FrozenSpinsActivationSet::default(), None, None, None)
+                    },
+                    None => bail!("headless frozen continuation has an M-only predecessor without a complete lifecycle binding"),
+                };
+                Some(fullmag_runner::constraints::FrozenStageContextV1::prepare_stage_entry(
+                    previous, child, source_stage, current_stage_id.clone(),
+                    target.frozen_spins.as_ref(), source_plan != target.frozen_spins.as_ref(),
+                ).map_err(|error| anyhow!(error.message))?)
+            } else {
+                if headless_frozen_continuation.is_some() {
+                    bail!("headless frozen continuation cannot cross into a different backend without a qualified lifecycle transfer");
+                }
+                None
+            }
+        } else { None };
         let mut stage_result = match if use_live_callback {
             if supports_dynamic_live_preview(&execution_plan.backend_plan) {
                 let mut live_cadence = LiveProgressCadence::default();
                 let display_selection = || display_selection_handle.display_selection_snapshot();
                 let interrupt_signal = display_selection_handle.running_interrupt_signal();
-                fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity_and_autosave_root(
+                fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity_and_autosave_root_and_frozen_stage_context(
                     &stage.ir,
                     &execution_plan,
                     stage_fem_mesh_asset.as_ref().map(|asset| &asset.identity),
@@ -11828,6 +12116,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     Some(interrupt_signal.as_ref()),
                     !args.headless && !preview_3d_disabled,
                     Some(&current_stage_id),
+                    headless_frozen_context.as_ref().map(|context| (
+                        context,
+                        headless_frozen_continuation.as_ref().and_then(|source| source.source_plan.as_ref()),
+                    )),
                     |update| {
                         let callback_start = solver_profile_callback_start(&live_workspace);
                         let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
@@ -12172,6 +12464,21 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             live_workspace.force_publish_latest_scalar_row();
         }
 
+        headless_has_physical_predecessor = true;
+        // The runner has completed its normal writer drain and artifact owner.
+        // Capture only the terminal accepted lifecycle, before replacing M.
+        if let Some(context) = headless_frozen_context.as_ref() {
+            if stage_result.status == fullmag_runner::RunStatus::Completed && !stage_failed {
+                let BackendPlanIR::Fdm(plan) = &execution_plan.backend_plan else {
+                    bail!("headless frozen terminal has no FDM source plan");
+                };
+                headless_frozen_continuation = Some(read_headless_frozen_terminal(
+                    &current_stage_artifact_dir, plan, &stage_result, context, &current_stage_id,
+                )?);
+            } else {
+                headless_frozen_continuation = None;
+            }
+        }
         let offset_steps = offset_step_stats(&stage_result.steps, step_offset, runner_time_offset);
         let completed_step = offset_steps.last().map(|last| last.step);
         if let Some(last) = offset_steps.last() {
@@ -12396,6 +12703,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         command,
                         source_kind: stage.entrypoint_kind.clone(),
                         checkpoint_ref: None,
+                        checkpoint_resume_error: checkpoint_resume_error_for_backend_plan(
+                            &execution_plan.backend_plan,
+                        ),
                         waveform_origin_time_s: stage
                             .ir
                             .problem_meta
@@ -12748,6 +13058,17 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
             let mut frozen_replan_resume_label = None;
             let command = if command.kind == "apply_frozen_spins" {
+                if let Some(error) = paused_stage
+                    .as_ref()
+                    .and_then(|paused| paused.checkpoint_resume_error.as_deref())
+                {
+                    live_workspace.push_command_log(
+                        &command.command_id,
+                        "error",
+                        format!("Frozen Spins paused-stage resume rejected: {error}"),
+                    );
+                    continue;
+                }
                 if let Some(paused) = paused_stage.take() {
                     let resumed = match bind_frozen_spins_replan_to_paused_command(
                         paused.command,
@@ -12931,6 +13252,19 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 break;
             }
 
+            if matches!(typed_cmd, Some(fullmag_runner::LiveControlCommand::Resume)) {
+                if let Some(error) = paused_stage
+                    .as_ref()
+                    .and_then(|paused| paused.checkpoint_resume_error.as_deref())
+                {
+                    live_workspace.push_command_log(
+                        &command.command_id,
+                        "error",
+                        format!("Checkpoint resume rejected: {error}"),
+                    );
+                    continue;
+                }
+            }
             if matches!(typed_cmd, Some(fullmag_runner::LiveControlCommand::Resume))
                 && paused_stage
                     .as_ref()
@@ -13880,6 +14214,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         checkpoint_ref: pause_checkpoint
                             .as_ref()
                             .map(|capture| capture.checkpoint.checkpoint_id.clone()),
+                        checkpoint_resume_error: checkpoint_resume_error_for_backend_plan(
+                            &execution_plan.backend_plan,
+                        ),
                         waveform_origin_time_s: stage
                             .ir
                             .problem_meta
@@ -13907,8 +14244,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     live_workspace.push_log(
                         "system",
                         format!(
-                            "Interactive command {} paused — use resume to continue",
+                            "Interactive command {} paused — {}",
                             command_kind_label,
+                            if paused_stage
+                                .as_ref()
+                                .is_some_and(|paused| paused.checkpoint_resume_error.is_some())
+                            {
+                                "exact checkpoint resume is unsupported; stop this stage to start a new run"
+                            } else {
+                                "use resume to continue"
+                            },
                         ),
                     );
                 } else {
@@ -18676,6 +19021,7 @@ mod tests {
             interfacial_dmi: None,
             bulk_dmi: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             ..Default::default()
         })
     }
@@ -18836,6 +19182,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
             charge_transport_plans: vec![],
@@ -18980,6 +19327,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
             charge_transport_plans: vec![],
@@ -19119,6 +19467,7 @@ mod tests {
             },
             planar_monitors: Vec::new(),
             field_drives: Vec::new(),
+            mask_field_drives: Vec::new(),
             current_modules: Vec::new(),
             antenna_port_modes: Vec::new(),
             antenna_field_solve_stages: Vec::new(),
@@ -20790,6 +21139,59 @@ mod tests {
             dind_field: None,
             dbulk_field: None,
         }
+    }
+
+    #[test]
+    fn scene_patch_rebinds_fem_mesh_assets_by_object_identity() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let region = |name: &str, geometry: &str| RegionIR {
+            name: name.into(),
+            geometry: geometry.into(),
+        };
+        let magnet = |owner: &str, name: &str, region: &str| MagnetIR {
+            object_id: Some(owner.into()),
+            name: name.into(),
+            region: region.into(),
+            material: "Py".into(),
+            initial_magnetization: None,
+            absorbing_boundary: None,
+        };
+        let asset = |geometry: &str, source: &str| fullmag_ir::FemMeshAssetIR {
+            geometry_name: geometry.into(),
+            mesh_source: Some(source.into()),
+            mesh: None,
+        };
+        problem.regions = vec![
+            region("r-left", "left_geom"),
+            region("r-right", "right_geom"),
+        ];
+        problem.magnets = vec![
+            magnet("a", "left", "r-left"),
+            magnet("b", "right", "r-right"),
+        ];
+        problem.geometry_assets = Some(GeometryAssetsIR {
+            fem_mesh_assets: vec![
+                asset("right_geom", "right.mesh"),
+                asset("left_geom", "left.mesh"),
+            ],
+            fdm_grid_assets: vec![],
+            fem_domain_mesh_asset: None,
+        });
+        let patch = SceneProblemPatch {
+            geometry_entries: vec![],
+            materials: problem.materials.clone(),
+            regions: vec![region("b", "b"), region("a", "a")],
+            magnets: vec![magnet("b", "b", "b"), magnet("a", "a", "a")],
+            object_regions: vec![],
+            universe: None,
+            fdm: None,
+            runtime_selection: None,
+        };
+        super::apply_scene_problem_patch(&mut problem, &patch).unwrap();
+        assert_eq!(
+            problem.geometry_assets.unwrap().fem_mesh_assets,
+            vec![asset("b", "right.mesh"), asset("a", "left.mesh")]
+        );
     }
 
     #[test]

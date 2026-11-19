@@ -10,6 +10,7 @@ import {
 
 function materializationApi({
   sourceSceneRevision = 17,
+  validatedSceneRevision = undefined as number | undefined,
   status = "ready" as "ready" | "running",
 } = {}) {
   const preparation = vi.fn(async () => ({
@@ -19,6 +20,7 @@ function materializationApi({
   const scene = vi.fn(async () => ({ revision: 17 }));
   const sharedDomainManifest = vi.fn(async () => ({
     source_scene_revision: sourceSceneRevision,
+    validated_for_scene_revision: validatedSceneRevision,
   }));
   const materializePreparation = vi.fn(async () => ({
     disposition: "accepted" as const,
@@ -101,6 +103,21 @@ describe("Live preparation materialization", () => {
     );
   });
 
+  it("uses the server's current-scene validation after a compatible FEM model edit", async () => {
+    const fixture = materializationApi({
+      sourceSceneRevision: 16,
+      validatedSceneRevision: 17,
+    });
+
+    const outcome = await materializeCurrentLivePreparation(fixture.context, {
+      expectedSceneRevision: 17,
+      requireCurrentSharedDomainMesh: true,
+    });
+
+    expect(outcome.kind).toBe("materialized");
+    expect(fixture.materializePreparation).toHaveBeenCalledOnce();
+  });
+
   it("fails closed when the shared-domain mesh belongs to another scene revision", async () => {
     const fixture = materializationApi({ sourceSceneRevision: 16 });
 
@@ -112,6 +129,31 @@ describe("Live preparation materialization", () => {
     expect(outcome).toMatchObject({ kind: "rejected" });
     expect(fixture.materializePreparation).not.toHaveBeenCalled();
     expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("keeps an already receipted preparation instead of re-planning it", async () => {
+    const fixture = materializationApi();
+    const receipt = {
+      payload_sha256: "c".repeat(64),
+      plan_fingerprint: `sha256:${"d".repeat(64)}`,
+      preparation_id: "prep-current",
+      run_id: "run-current",
+      schema_version: "preparation_receipt.v1",
+    };
+    fixture.preparation.mockResolvedValueOnce({
+      preparation_id: "prep-current",
+      receipt,
+      status: "ready",
+    } as never);
+
+    const outcome = await materializeCurrentLivePreparation(fixture.context, {
+      expectedSceneRevision: 17,
+      requireCurrentSharedDomainMesh: true,
+    });
+
+    expect(outcome).toEqual({ kind: "already-prepared", receipt });
+    expect(fixture.sharedDomainManifest).toHaveBeenCalled();
+    expect(fixture.materializePreparation).not.toHaveBeenCalled();
   });
 
   it("does not materialize while the Live preparation is still running", async () => {

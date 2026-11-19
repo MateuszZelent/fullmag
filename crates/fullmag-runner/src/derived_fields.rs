@@ -4,10 +4,25 @@ pub(crate) fn compute_torque_field(
     damping: f64,
     precession_enabled: bool,
 ) -> Vec<[f64; 3]> {
+    compute_torque_field_with_damping(
+        magnetization,
+        effective_field,
+        |_| damping,
+        precession_enabled,
+    )
+}
+
+pub(crate) fn compute_torque_field_with_damping(
+    magnetization: &[[f64; 3]],
+    effective_field: &[[f64; 3]],
+    mut damping_at: impl FnMut(usize) -> f64,
+    precession_enabled: bool,
+) -> Vec<[f64; 3]> {
     magnetization
         .iter()
         .zip(effective_field.iter())
-        .map(|(m, h)| {
+        .enumerate()
+        .map(|(index, (m, h))| {
             let b = [crate::MU0 * h[0], crate::MU0 * h[1], crate::MU0 * h[2]];
             let mx_b = [
                 m[1] * b[2] - m[2] * b[1],
@@ -20,6 +35,7 @@ pub(crate) fn compute_torque_field(
                 m[0] * mx_b[1] - m[1] * mx_b[0],
             ];
             if precession_enabled {
+                let damping = damping_at(index);
                 let scale = -1.0 / (1.0 + damping * damping);
                 [
                     scale * (mx_b[0] + damping * mx_mx_b[0]),

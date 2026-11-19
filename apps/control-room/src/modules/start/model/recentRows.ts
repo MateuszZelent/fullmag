@@ -172,7 +172,7 @@ export function sortFields(row: RecentRow): SortFields {
 
 // Case-insensitive, accent-sensitive, digits compared as numbers: "Run 2"
 // before "run 10", "Éclair" next to "eclair" but not equal to it.
-const NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "accent" });
+const NAME_COLLATOR = new Intl.Collator("en-US", { numeric: true, sensitivity: "accent" });
 
 /** Descending numeric compare; a missing value sorts after every present one. */
 function byDescending(a: number | undefined, b: number | undefined): number {

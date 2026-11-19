@@ -414,6 +414,7 @@ PYTHON_API_REFERENCE_PAGES = {
     "python-api/runtime/runtime-selection.md",
     "python-api/runtime/backend-policy.md",
     "python-api/runtime/simulation.md",
+    "python-api/runtime/live-session.md",
     "python-api/runtime/results.md",
     "python-api/runtime/artifacts.md",
     "python-api/runtime/provenance.md",
@@ -569,7 +570,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     *_section("python-api/dynamics", "Dynamics", ("llg", "integrators", "adaptive-timestep", "field-refresh"), "the Python API dynamics reference"),
     *_section("python-api/studies", "Studies", ("time-evolution", "relaxation", "hysteresis", "eigenmodes", "frequency-response"), "the Python API studies reference"),
     *_section("python-api/outputs", "Outputs", ("fields-and-scalars", "quantities", "modes-and-spectra", "dispersion-and-response", "snapshots", "autosave"), "the Python API outputs reference"),
-    *_section("python-api/runtime", "Runtime", ("runtime-selection", "backend-policy", "simulation", "results", "artifacts", "provenance"), "the Python API runtime reference"),
+    *_section("python-api/runtime", "Runtime", ("runtime-selection", "backend-policy", "simulation", "live-session", "results", "artifacts", "provenance"), "the Python API runtime reference"),
     _reference(
         "physics/index.md",
         "Physics reference",

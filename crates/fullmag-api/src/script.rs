@@ -2,13 +2,17 @@
 
 use crate::error::ApiError;
 use crate::types::*;
+use fullmag_application::script_source_capture::{
+    material_catalog_input, runtime_helper_loads_authored_script, MATERIAL_CATALOG_UNAVAILABLE,
+};
 use fullmag_authoring::{
     scene_document_problem_projection, scene_document_to_script_builder, SceneDocument, StudyPlan,
     ScriptBuilderState,
 };
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read};
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, Output, Stdio};
 use std::sync::Arc;
@@ -16,8 +20,21 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const BOUNDED_PYTHON_HELPER_TIMEOUT: Duration = Duration::from_secs(30);
+// Source capture hashes the complete bounded runtime closure before and after
+// export and separately revalidates every file; it is not a single DSL render.
+const BOUNDED_SOURCE_CAPTURE_TIMEOUT: Duration = Duration::from_secs(90);
+/// Code of a bounded helper that hit its deadline and was killed and reaped.
+pub(crate) const PYTHON_HELPER_TIMEOUT_CODE: &str = "python_helper_timeout";
 const BOUNDED_PYTHON_HELPER_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const BOUNDED_PYTHON_HELPER_LOG_LIMIT: u64 = 1024 * 1024;
+const STREAMED_PYTHON_HELPER_LINE_LIMIT: usize = 16 * 1024;
+const STREAMED_PYTHON_HELPER_STDERR_LIMIT: usize = 128 * 1024;
+const STREAMED_PYTHON_HELPER_TRUNCATION_MARKER: &str = "[earlier helper stderr truncated]\n";
+const STREAMED_PYTHON_HELPER_STDERR_TAIL_LIMIT: usize =
+    STREAMED_PYTHON_HELPER_STDERR_LIMIT - STREAMED_PYTHON_HELPER_TRUNCATION_MARKER.len();
+const STREAMED_PYTHON_PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
+const PYTHON_PROGRESS_LABEL_LIMIT: usize = 256;
+const PYTHON_PROGRESS_MESSAGE_LIMIT: usize = 1024;
 
 pub(crate) fn repo_root() -> PathBuf {
     if let Some(root) = std::env::current_exe().ok().and_then(|executable| {
@@ -497,6 +514,75 @@ pub(crate) fn render_scene_document_via_python_helper_bounded(
     )
 }
 
+/// A private canonical export retained until accepted preparation has copied
+/// and reverified the immutable shared source capture.
+pub(crate) struct GeneratedAcceptedSceneSource {
+    directory: PathBuf,
+    pub(crate) path: PathBuf,
+    pub(crate) scene_sha256: String,
+    pub(crate) source_sha256: String,
+    pub(crate) byte_count: usize,
+}
+
+impl Drop for GeneratedAcceptedSceneSource {
+    fn drop(&mut self) {
+        // Remove only our exact generated entry and empty private directory.
+        // Never recursively delete workspace/user assets.
+        let _ = fs::remove_file(&self.path);
+        let _ = fs::remove_dir(&self.directory);
+    }
+}
+
+/// Render the captured UI scene through the ordinary public Python exporter.
+/// This is geometry-light authoring, not preparation, profile binding or Submit.
+pub(crate) fn render_accepted_scene_source_bounded(
+    repo_root: &Path,
+    workspace_root: &Path,
+    scene_document: &SceneDocument,
+) -> Result<GeneratedAcceptedSceneSource, ApiError> {
+    fs::create_dir_all(workspace_root)
+        .map_err(|error| ApiError::internal(format!("prepare canonical source workspace: {error}")))?;
+    let workspace_root = fs::canonicalize(workspace_root)
+        .map_err(|error| ApiError::internal(format!("resolve canonical source workspace: {error}")))?;
+    let directory = workspace_root.join(format!("accepted-scene-source-{}", uuid_v4_hex()));
+    fs::create_dir(&directory)
+        .map_err(|error| ApiError::internal(format!("create private canonical source directory: {error}")))?;
+    let mut source = GeneratedAcceptedSceneSource {
+        path: directory.join("source.py"),
+        directory,
+        scene_sha256: String::new(),
+        source_sha256: String::new(),
+        byte_count: 0,
+    };
+    let response = render_scene_document_via_python_helper_bounded(
+        repo_root, &source.directory, &source.path, scene_document,
+    )?;
+    if !response.written || response.bytes_written == 0 {
+        return Err(ApiError::unprocessable_with_code(
+            "accepted_ui_source_missing", "canonical UI export did not produce executable source",
+        ));
+    }
+    // Use the shared bounded capture budget; a generated source is not an
+    // alternative route around the accepted-source transport limits.
+    let bytes = fullmag_session::repository_path::read_bounded_regular_file(
+        &source.directory, "source.py",
+        fullmag_application::script_source_capture::METADATA_LIMIT,
+    ).map_err(|error| ApiError::unprocessable_with_code(
+        "accepted_ui_source_invalid", format!("canonical UI source is not a bounded regular file: {error}"),
+    ))?;
+    if response.bytes_written != bytes.len() {
+        return Err(ApiError::conflict_with_code(
+            "accepted_ui_source_changed", "canonical UI export byte count changed before capture",
+        ));
+    }
+    let scene = serde_json::to_value(scene_document)
+        .map_err(|error| ApiError::internal(format!("encode captured UI scene: {error}")))?;
+    source.scene_sha256 = fullmag_session::canonical_json_sha256(&scene);
+    source.source_sha256 = fullmag_session::hex_sha256(&bytes);
+    source.byte_count = bytes.len();
+    Ok(source)
+}
+
 /// Persistence may keep an authoring-valid scene with no enabled physics.
 /// Such a document has no executable source yet; runtime synchronization stays strict.
 pub(crate) fn try_render_scene_document_for_persistence(
@@ -598,6 +684,79 @@ fn render_scene_document_via_python_helper_with_policy(
     })
 }
 
+/// The ready antennas of `fullmag.antennas` (function, summary, arguments),
+/// read from the Python registry.
+pub(crate) fn ready_antennas_via_python_helper(repo_root: &Path) -> Result<Value, ApiError> {
+    let helper_args = vec![
+        "-m".to_string(),
+        "fullmag.runtime.helper".to_string(),
+        "ready-antennas".to_string(),
+    ];
+    let output = run_python_helper(repo_root, &helper_args)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ApiError::internal(format!(
+            "python ready-antenna registry helper failed: {}",
+            stderr.trim()
+        )));
+    }
+    serde_json::from_slice::<Value>(&output.stdout).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to deserialize the ready-antenna registry: {error}"
+        ))
+    })
+}
+
+/// The mask terms of one ready-antenna call (`fullmag.antennas.rebuild`): the
+/// function is called again in Python with the given arguments. A rejected
+/// call (unknown antenna or argument, bad value) is a 400.
+pub(crate) fn rebuild_ready_antenna_terms_via_python_helper(
+    repo_root: &Path,
+    function: &str,
+    arguments: &std::collections::BTreeMap<String, f64>,
+) -> Result<Vec<fullmag_ir::MaskTermIR>, ApiError> {
+    let arguments_json = serde_json::to_string(arguments).map_err(|error| {
+        ApiError::bad_request(format!("invalid ready-antenna arguments: {error}"))
+    })?;
+    let helper_args = vec![
+        "-m".to_string(),
+        "fullmag.runtime.helper".to_string(),
+        "rebuild-ready-antenna".to_string(),
+        "--function".to_string(),
+        function.to_string(),
+        "--arguments-json".to_string(),
+        arguments_json,
+    ];
+    let output = run_python_helper(repo_root, &helper_args)?;
+    if output.status.code() == Some(3) {
+        let message = serde_json::from_slice::<Value>(&output.stdout)
+            .ok()
+            .and_then(|value| value.get("message").and_then(Value::as_str).map(str::to_string))
+            .unwrap_or_else(|| "the ready antenna rejected the call".to_string());
+        return Err(ApiError::bad_request(format!(
+            "ready_antenna_rejected: {message}"
+        )));
+    }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ApiError::internal(format!(
+            "python ready-antenna helper failed: {}",
+            stderr.trim()
+        )));
+    }
+    #[derive(serde::Deserialize)]
+    struct Terms {
+        terms: Vec<fullmag_ir::MaskTermIR>,
+    }
+    serde_json::from_slice::<Terms>(&output.stdout)
+        .map(|value| value.terms)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "failed to deserialize the ready-antenna terms: {error}"
+            ))
+        })
+}
+
 pub(crate) fn load_scene_document_state(
     repo_root: &Path,
     _workspace_root: &Path,
@@ -672,12 +831,21 @@ pub(crate) fn scene_document_to_authored_problem_ir(
     scene_document: &SceneDocument,
     requested_execution: &fullmag_application::RequestedExecution,
 ) -> Result<fullmag_ir::ProblemIR, ApiError> {
-    capture_authored_scene(
-        repo_root,
-        workspace_root,
-        scene_document,
-        requested_execution,
-        SceneCaptureKind::ProblemIr,
+    scene_document_to_authored_problem_ir_with_asset_root(
+        repo_root, workspace_root, None, scene_document, requested_execution,
+    )
+}
+
+pub(crate) fn scene_document_to_authored_problem_ir_with_asset_root(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+) -> Result<fullmag_ir::ProblemIR, ApiError> {
+    capture_authored_scene_with_asset_root(
+        repo_root, workspace_root, asset_root, scene_document, requested_execution,
+        SceneCaptureKind::ProblemIr, None,
     )
 }
 
@@ -719,6 +887,26 @@ pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root(
     requested_execution: &fullmag_application::RequestedExecution,
     study: &StudyPlan,
 ) -> Result<Vec<fullmag_application::StudyStepExecutionInput>, ApiError> {
+    scene_document_to_study_execution_inputs_with_asset_root_and_progress(
+        repo_root,
+        workspace_root,
+        asset_root,
+        scene_document,
+        requested_execution,
+        study,
+        None,
+    )
+}
+
+pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root_and_progress(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    study: &StudyPlan,
+    progress_sender: Option<&tokio::sync::mpsc::Sender<PythonHelperProgress>>,
+) -> Result<Vec<fullmag_application::StudyStepExecutionInput>, ApiError> {
     requested_execution
         .validate()
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
@@ -728,36 +916,65 @@ pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root(
         asset_root,
         scene_document,
         requested_execution,
+        progress_sender,
     )?;
+    study_execution_inputs_from_stages(&stages, scene_document, study)
+}
+
+/// Keep the authored tree available for sequential materialization. Its
+/// configuration nodes have already taken effect in each resulting ProblemIR
+/// by the time a worker sees that physical input.
+pub(crate) fn select_scene_pipeline_tasks(study: &mut StudyPlan) {
+    use fullmag_authoring::StudyStepKind;
+    if study.source_pipeline_version.is_none() {
+        return;
+    }
+    for step in &mut study.steps {
+        if matches!(&step.kind, StudyStepKind::Group { .. })
+            || matches!(&step.kind, StudyStepKind::Primitive { stage_kind }
+                if stage_kind.is_pipeline_input_configuration())
+        {
+            step.enabled = false;
+        }
+    }
+}
+
+fn study_execution_inputs_from_stages(
+    stages: &[fullmag_application::script_stage_contract::ResolvedScriptStage],
+    scene_document: &SceneDocument,
+    study: &StudyPlan,
+) -> Result<Vec<fullmag_application::StudyStepExecutionInput>, ApiError> {
     let enabled_steps = study.steps.iter().filter(|step| step.enabled);
+    let flat_input = if study.source_pipeline_version.is_none() && enabled_steps.clone().count() == 1 {
+        match stages {
+            [stage] if stage.action.is_none() => Some(stage),
+            _ => None,
+        }
+    } else {
+        None
+    };
     enabled_steps
         .map(|step| {
             let matches = stages
                 .iter()
                 .filter(|stage| stage.action.is_none())
                 .filter(|stage| {
-                    stage
-                        .provenance
-                        .as_ref()
-                        .is_some_and(|provenance| provenance.authored_step_id == step.step_id)
+                    if let Some(provenance) = &stage.provenance {
+                        provenance.authored_step_id == step.step_id
+                    } else {
+                        study.source_pipeline_version.is_none()
+                            && stage.ir.problem_meta.runtime_metadata.get("active_stage_id")
+                                .and_then(Value::as_str) == Some(step.step_id.as_str())
+                    }
                 })
                 .collect::<Vec<_>>();
             let stage = if matches.len() == 1 {
                 matches[0]
-            } else if stages.len() == 1 && matches.is_empty() {
-                // A flat scene has no authored stage provenance.  Its one
-                // solver input is still the canonical source for the one-step
-                // StudyPlan projection.
-                stages.first().ok_or_else(|| {
-                    ApiError::unprocessable(
-                        "accepted study execution has no authored solver stage",
-                    )
-                })?
             } else if matches.is_empty() {
-                return Err(ApiError::unprocessable(format!(
+                flat_input.ok_or_else(|| ApiError::unprocessable(format!(
                     "accepted study step `{}` has no authored solver stage",
                     step.step_id
-                )));
+                )))?
             } else {
                 return Err(ApiError::unprocessable(format!(
                     "accepted study step `{}` expands to multiple solver stages",
@@ -778,6 +995,32 @@ pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root(
             })
         })
         .collect()
+}
+
+pub(crate) fn try_reuse_live_geometry_for_study(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    study: &StudyPlan,
+    asset: &fullmag_ir::FemDomainMeshAssetIR,
+    provenance: &Value,
+) -> Result<Option<Vec<fullmag_application::StudyStepExecutionInput>>, ApiError> {
+    if !crate::live_geometry_mesh_build::can_qualify_live_geometry_reuse(scene, asset) {
+        return Ok(None);
+    }
+    let config = scene_document_to_authored_script_config_with_asset_root(
+        repo_root, workspace_root, asset_root, scene, requested_execution,
+    )?;
+    let stages = materialize_scene_document_stages(config)?;
+    let mut inputs = study_execution_inputs_from_stages(&stages, scene, study)?;
+    if !crate::live_geometry_mesh_build::bind_reused_geometry_to_inputs(
+        repo_root, scene, asset, provenance, &mut inputs,
+    )? {
+        return Ok(None);
+    }
+    Ok(Some(inputs))
 }
 
 /// Capture actual authored stage IR/actions through the same Python helper as
@@ -821,13 +1064,15 @@ fn scene_document_to_prepared_stages_with_asset_root(
     asset_root: Option<&Path>,
     scene_document: &SceneDocument,
     requested_execution: &fullmag_application::RequestedExecution,
+    progress_sender: Option<&tokio::sync::mpsc::Sender<PythonHelperProgress>>,
 ) -> Result<Vec<fullmag_application::script_stage_contract::ResolvedScriptStage>, ApiError> {
-    let config = scene_document_to_prepared_script_config_with_asset_root(
+    let config = scene_document_to_prepared_script_config_with_asset_root_and_progress(
         repo_root,
         workspace_root,
         asset_root,
         scene_document,
         requested_execution,
+        progress_sender,
     )?;
     materialize_scene_document_stages(config)
 }
@@ -874,13 +1119,61 @@ pub(crate) fn scene_document_to_prepared_script_config_with_asset_root(
     scene_document: &SceneDocument,
     requested_execution: &fullmag_application::RequestedExecution,
 ) -> Result<fullmag_application::script_stage_contract::ScriptExecutionConfig, ApiError> {
-    capture_authored_scene_with_asset_root(
+    scene_document_to_prepared_script_config_with_asset_root_and_progress(
+        repo_root,
+        workspace_root,
+        asset_root,
+        scene_document,
+        requested_execution,
+        None,
+    )
+}
+
+fn scene_document_to_prepared_script_config_with_asset_root_and_progress(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    progress_sender: Option<&tokio::sync::mpsc::Sender<PythonHelperProgress>>,
+) -> Result<fullmag_application::script_stage_contract::ScriptExecutionConfig, ApiError> {
+    capture_authored_scene_with_asset_root_and_progress(
         repo_root,
         workspace_root,
         asset_root,
         scene_document,
         requested_execution,
         SceneCaptureKind::PreparedExecutionConfig,
+        None,
+        progress_sender,
+    )
+}
+
+/// Internal accepted-preparation handoff; the profile was bound by Rust before native geometry.
+pub(crate) fn scene_document_to_bound_prepared_script_config_with_asset_root(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    bound_problem: &fullmag_ir::ProblemIR,
+) -> Result<fullmag_application::script_stage_contract::ScriptExecutionConfig, ApiError> {
+    capture_authored_scene_with_asset_root(
+        repo_root, workspace_root, asset_root, scene_document, requested_execution,
+        SceneCaptureKind::PreparedExecutionConfig, Some(bound_problem),
+    )
+}
+
+pub(crate) fn scene_document_to_authored_script_config_with_asset_root(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+) -> Result<fullmag_application::script_stage_contract::ScriptExecutionConfig, ApiError> {
+    capture_authored_scene_with_asset_root(
+        repo_root, workspace_root, asset_root, scene_document, requested_execution,
+        SceneCaptureKind::ExecutionConfig, None,
     )
 }
 
@@ -927,6 +1220,7 @@ fn capture_authored_scene<T: serde::de::DeserializeOwned>(
         scene_document,
         requested_execution,
         kind,
+        None,
     )
 }
 
@@ -937,6 +1231,29 @@ fn capture_authored_scene_with_asset_root<T: serde::de::DeserializeOwned>(
     scene_document: &SceneDocument,
     requested_execution: &fullmag_application::RequestedExecution,
     kind: SceneCaptureKind,
+    bound_problem: Option<&fullmag_ir::ProblemIR>,
+) -> Result<T, ApiError> {
+    capture_authored_scene_with_asset_root_and_progress(
+        repo_root,
+        workspace_root,
+        asset_root,
+        scene_document,
+        requested_execution,
+        kind,
+        bound_problem,
+        None,
+    )
+}
+
+fn capture_authored_scene_with_asset_root_and_progress<T: serde::de::DeserializeOwned>(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    kind: SceneCaptureKind,
+    bound_problem: Option<&fullmag_ir::ProblemIR>,
+    progress_sender: Option<&tokio::sync::mpsc::Sender<PythonHelperProgress>>,
 ) -> Result<T, ApiError> {
     requested_execution
         .validate()
@@ -946,7 +1263,13 @@ fn capture_authored_scene_with_asset_root<T: serde::de::DeserializeOwned>(
     std::fs::create_dir_all(workspace_root)
         .map_err(|error| ApiError::internal(format!("failed to prepare workspace: {error}")))?;
 
+    let pinned_scene = crate::imported_geometry_sources::snapshot_pinned_stl_sources(
+        repo_root, workspace_root, asset_root, scene_document,
+    )?;
+    let scene_document = &pinned_scene;
+
     let scene_path = workspace_root.join(format!("preparation-scene-{}.json", uuid_v4_hex()));
+    let _scene_guard = TemporaryFileGuard(scene_path.clone());
     let scene_body = serde_json::to_vec(scene_document).map_err(|error| {
         ApiError::internal(format!(
             "failed to serialize preparation SceneDocument: {error}"
@@ -977,15 +1300,45 @@ fn capture_authored_scene_with_asset_root<T: serde::de::DeserializeOwned>(
         asset_root.unwrap_or(workspace_root).display().to_string(),
     ];
     kind.append_preparation_args(&mut helper_args);
-    let output = run_python_helper(repo_root, &helper_args);
+    let bound_guard = bound_problem.map(|problem| {
+        let snapshot: fullmag_ir::MaterializedExecutionRequestIR = serde_json::from_value(
+            problem.problem_meta.runtime_metadata.get("execution_materialization").cloned()
+                .ok_or_else(|| ApiError::unprocessable("accepted preparation requires bound execution"))?,
+        ).map_err(|error| ApiError::unprocessable(error.to_string()))?;
+        fullmag_application::validate_execution_materialization(&snapshot)
+            .map_err(ApiError::unprocessable)?;
+        let guard = TemporaryFileGuard(workspace_root.join(format!("bound-preparation-{}.json", uuid_v4_hex())));
+        let bytes = serde_json::to_vec(problem).map_err(|error| ApiError::internal(error.to_string()))?;
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err(ApiError::unprocessable("bound preparation handoff exceeds 8 MiB"));
+        }
+        fs::write(&guard.0, bytes).map_err(|error| ApiError::internal(error.to_string()))?;
+        Ok::<_, ApiError>(guard)
+    }).transpose()?;
+    if let Some(guard) = &bound_guard {
+        helper_args.extend(["--accepted-preparation-json".into(), guard.0.display().to_string()]);
+    }
+    let output = match progress_sender {
+        Some(sender) => run_python_helper_with_progress(repo_root, &helper_args, sender),
+        None => run_python_helper(repo_root, &helper_args),
+    };
     let _ = std::fs::remove_file(&scene_path);
     let output = output?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        // Preparation summaries are bounded. Put the Python exception before
+        // the traceback so the UI retains the cause rather than only frames.
+        let details = if stderr.contains("Traceback (most recent call last)") {
+            let cause = stderr.lines().rev().find(|line| !line.trim().is_empty())
+                .unwrap_or("Python helper failed").chars().take(1024).collect::<String>();
+            format!("{}\n{}", cause.trim(), stderr.trim())
+        } else {
+            stderr.trim().to_string()
+        };
         return Err(ApiError::bad_request(format!(
             "SceneDocument could not be lowered to {}: {}",
             kind.label(),
-            stderr.trim()
+            details
         )));
     }
 
@@ -1052,6 +1405,15 @@ pub(crate) fn python_workspace_root(root: &Path) -> PathBuf {
 enum PythonHelperOutputPolicy<'a> {
     Capture,
     Bounded { workspace_root: &'a Path },
+    Progress {
+        sender: &'a tokio::sync::mpsc::Sender<PythonHelperProgress>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PythonHelperProgress {
+    pub label: String,
+    pub message: String,
 }
 
 pub(crate) fn run_python_helper(repo_root: &Path, args: &[String]) -> Result<Output, ApiError> {
@@ -1072,6 +1434,33 @@ pub(crate) fn run_python_helper_bounded(
     )
 }
 
+fn resolve_fem_mesh_cache_dir(
+    configured: Option<PathBuf>,
+    default: impl FnOnce() -> Result<PathBuf, ApiError>,
+) -> Result<PathBuf, ApiError> {
+    let Some(path) = configured else {
+        return default();
+    };
+    if path.as_os_str().is_empty() || !path.is_absolute() {
+        return Err(ApiError::internal(
+            "FULLMAG_FEM_MESH_CACHE_DIR must be a non-empty absolute path",
+        ));
+    }
+    Ok(path)
+}
+
+fn run_python_helper_with_progress(
+    repo_root: &Path,
+    args: &[String],
+    sender: &tokio::sync::mpsc::Sender<PythonHelperProgress>,
+) -> Result<Output, ApiError> {
+    run_python_helper_with_policy(
+        repo_root,
+        args,
+        PythonHelperOutputPolicy::Progress { sender },
+    )
+}
+
 fn run_python_helper_with_policy(
     repo_root: &Path,
     args: &[String],
@@ -1084,15 +1473,32 @@ fn run_python_helper_with_policy(
     let pythonpath = real_root.join("packages").join("fullmag-py").join("src");
     let packaged_site_packages = real_root.join("python").join("site-packages");
     let python_extension_root = real_root.join(".fullmag").join("local");
-    let fem_mesh_cache_dir = state_root(&real_root)?
-        .join("local")
-        .join("cache")
-        .join("fem_mesh_assets");
+    let fem_mesh_cache_dir = resolve_fem_mesh_cache_dir(
+        std::env::var_os("FULLMAG_FEM_MESH_CACHE_DIR").map(PathBuf::from),
+        || {
+            Ok(state_root(&real_root)?
+                .join("local")
+                .join("cache")
+                .join("fem_mesh_assets"))
+        },
+    )?;
     let inherited_pythonpath = std::env::var("PYTHONPATH").ok();
     {
         let mut command = python_command(repo_root)?;
-        command.args(args);
-        command.env("PYTHONUNBUFFERED", "1");
+        command.args(args).stdin(Stdio::null());
+        if runtime_helper_loads_authored_script(args) {
+            if let Some(snapshot) = material_catalog_snapshot() {
+                let input = material_catalog_input(&snapshot)
+                    .map_err(|error| ApiError::internal(error.to_string()))?;
+                command.arg("--material-catalog-stdin").stdin(Stdio::from(input));
+            }
+        }
+        // Large mesh exports use stdout as a JSON data channel. Keep it
+        // buffered; progress events already flush stderr explicitly.
+        command.env_remove("PYTHONUNBUFFERED");
+        if matches!(policy, PythonHelperOutputPolicy::Progress { .. }) {
+            command.env("FULLMAG_PROGRESS", "1");
+        }
         command.env("FULLMAG_FEM_MESH_CACHE_DIR", &fem_mesh_cache_dir);
         let mut python_paths = Vec::new();
         if pythonpath.is_dir() {
@@ -1133,8 +1539,204 @@ fn run_python_helper_with_policy(
                     Err(BoundedHelperError::Started(error)) => Err(error),
                 }
             }
+            PythonHelperOutputPolicy::Progress { sender } => {
+                run_progress_python_helper(command, sender).map_err(|error| {
+                    ApiError::internal(format!("Python helper progress capture failed: {error}"))
+                })
+            }
         }
     }
+}
+
+fn run_progress_python_helper(
+    mut command: ProcessCommand,
+    sender: &tokio::sync::mpsc::Sender<PythonHelperProgress>,
+) -> io::Result<Output> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let Some(mut stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(io::Error::other("Python helper stdout pipe was unavailable"));
+    };
+    let Some(stderr) = child.stderr.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(io::Error::other("Python helper stderr pipe was unavailable"));
+    };
+
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.read_to_end(&mut bytes);
+        (result, bytes)
+    });
+    let sender = sender.clone();
+    let stderr_reader = thread::spawn(move || read_progress_stderr(stderr, sender));
+
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(error);
+        }
+    };
+    let stdout_result = stdout_reader
+        .join()
+        .map_err(|_| io::Error::other("Python helper stdout reader panicked"));
+    let stderr_result = stderr_reader
+        .join()
+        .map_err(|_| io::Error::other("Python helper stderr reader panicked"));
+    let (stdout_read_result, stdout) = stdout_result?;
+    let stderr = stderr_result??;
+    stdout_read_result?;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn read_progress_stderr(
+    stderr: impl Read,
+    sender: tokio::sync::mpsc::Sender<PythonHelperProgress>,
+) -> io::Result<Vec<u8>> {
+    let mut reader = BufReader::new(stderr);
+    let mut stderr_tail = VecDeque::with_capacity(STREAMED_PYTHON_HELPER_STDERR_TAIL_LIMIT);
+    let mut stderr_bytes = 0usize;
+    let mut stderr_truncated = false;
+    let mut last_sent = None;
+    let mut pending = None;
+    let mut receiver_closed = false;
+
+    while let Some((line, truncated)) = read_bounded_progress_line(&mut reader)? {
+        stderr_bytes = stderr_bytes.saturating_add(line.len());
+        stderr_truncated |= truncated || stderr_bytes > STREAMED_PYTHON_HELPER_STDERR_TAIL_LIMIT;
+        append_bounded_stderr_tail(
+            &mut stderr_tail,
+            &line,
+            STREAMED_PYTHON_HELPER_STDERR_TAIL_LIMIT,
+        );
+
+        if truncated || receiver_closed {
+            continue;
+        }
+        let Some(progress) = parse_python_progress_line(&line) else {
+            continue;
+        };
+        let ready_to_send = last_sent
+            .is_none_or(|last: Instant| last.elapsed() >= STREAMED_PYTHON_PROGRESS_INTERVAL);
+        if ready_to_send {
+            // The stderr reader must always drain the child pipe. If the
+            // bounded UI queue is full, keep only the newest event and retry
+            // on a later event or at EOF rather than blocking the helper.
+            match sender.try_send(progress) {
+                Ok(()) => {
+                    last_sent = Some(Instant::now());
+                    pending = None;
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Full(progress)) => {
+                    pending = Some(progress);
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    receiver_closed = true;
+                    pending = None;
+                }
+            }
+        } else {
+            pending = Some(progress);
+        }
+    }
+
+    if !receiver_closed {
+        if let Some(progress) = pending {
+            let _ = sender.try_send(progress);
+        }
+    }
+    let mut retained = Vec::with_capacity(STREAMED_PYTHON_HELPER_STDERR_LIMIT);
+    if stderr_truncated {
+        retained.extend_from_slice(STREAMED_PYTHON_HELPER_TRUNCATION_MARKER.as_bytes());
+    }
+    retained.extend(stderr_tail);
+    Ok(retained)
+}
+
+fn append_bounded_stderr_tail(tail: &mut VecDeque<u8>, bytes: &[u8], limit: usize) {
+    if bytes.len() >= limit {
+        tail.clear();
+        tail.extend(bytes[bytes.len() - limit..].iter().copied());
+        return;
+    }
+    let overflow = tail.len().saturating_add(bytes.len()).saturating_sub(limit);
+    for _ in 0..overflow {
+        tail.pop_front();
+    }
+    tail.extend(bytes.iter().copied());
+}
+
+fn read_bounded_progress_line(
+    reader: &mut impl BufRead,
+) -> io::Result<Option<(Vec<u8>, bool)>> {
+    let mut line = Vec::with_capacity(256);
+    let mut truncated = false;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok((!line.is_empty()).then_some((line, truncated)));
+        }
+        let count = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |index| index + 1);
+        let remaining = STREAMED_PYTHON_HELPER_LINE_LIMIT.saturating_sub(line.len());
+        let retained = count.min(remaining);
+        line.extend_from_slice(&available[..retained]);
+        truncated |= retained < count;
+        let line_complete = available.get(count.saturating_sub(1)) == Some(&b'\n');
+        reader.consume(count);
+        if line_complete {
+            return Ok(Some((line, truncated)));
+        }
+    }
+}
+
+fn parse_python_progress_line(line: &[u8]) -> Option<PythonHelperProgress> {
+    let line = String::from_utf8_lossy(line);
+    let payload = line
+        .trim_end_matches(['\r', '\n'])
+        .strip_prefix("[fullmag-progress] ")?;
+    let (label, message) = if let Some(json) = payload.strip_prefix("json:") {
+        let value: Value = serde_json::from_str(json).ok()?;
+        let message = value.get("message")?.as_str()?.trim().to_owned();
+        let label = value
+            .get("progress_label")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| message.clone());
+        (label, message)
+    } else {
+        let message = payload.trim().to_owned();
+        (message.clone(), message)
+    };
+    if message.is_empty() {
+        return None;
+    }
+    Some(PythonHelperProgress {
+        label: bounded_progress_text(&label, PYTHON_PROGRESS_LABEL_LIMIT),
+        message: bounded_progress_text(&message, PYTHON_PROGRESS_MESSAGE_LIMIT),
+    })
+}
+
+fn bounded_progress_text(value: &str, max_chars: usize) -> String {
+    let mut bounded = value.chars().take(max_chars).collect::<String>();
+    if value.chars().count() > max_chars {
+        bounded.push_str("...");
+    }
+    bounded
 }
 
 enum BoundedHelperError {
@@ -1154,9 +1756,18 @@ impl Drop for BoundedHelperLogGuard {
     }
 }
 
-fn run_bounded_python_helper(
-    mut command: ProcessCommand,
-    workspace_root: &Path,
+fn run_bounded_python_helper(command: ProcessCommand, workspace_root: &Path) -> Result<Output, BoundedHelperError> {
+    run_bounded_python_helper_with_limit(command, workspace_root, BOUNDED_PYTHON_HELPER_LOG_LIMIT)
+}
+
+fn run_bounded_python_helper_with_limit(
+    command: ProcessCommand, workspace_root: &Path, maximum: u64,
+) -> Result<Output, BoundedHelperError> {
+    run_bounded_python_helper_with_budget(command, workspace_root, maximum, BOUNDED_PYTHON_HELPER_TIMEOUT)
+}
+
+fn run_bounded_python_helper_with_budget(
+    mut command: ProcessCommand, workspace_root: &Path, maximum: u64, budget: Duration,
 ) -> Result<Output, BoundedHelperError> {
     let (stdout, stderr, logs) = match create_bounded_helper_logs(workspace_root) {
         Ok(logs) => logs,
@@ -1164,17 +1775,14 @@ fn run_bounded_python_helper(
     };
     let stdout_path = logs.stdout_path.clone();
     let stderr_path = logs.stderr_path.clone();
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
+    command.stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return Err(BoundedHelperError::Spawn(error)),
     };
-    let deadline = Instant::now() + BOUNDED_PYTHON_HELPER_TIMEOUT;
+    let deadline = Instant::now() + budget;
     let status = loop {
-        if let Err(error) = bounded_helper_log_size(&stdout_path, &stderr_path) {
+        if let Err(error) = bounded_helper_log_size_with_limit(&stdout_path, &stderr_path, maximum) {
             let cleanup = stop_bounded_helper(&mut child);
             return Err(BoundedHelperError::Started(combine_bounded_error(
                 "Python helper log inspection failed",
@@ -1188,12 +1796,15 @@ fn run_bounded_python_helper(
                 let now = Instant::now();
                 if now >= deadline {
                     let cleanup = stop_bounded_helper(&mut child);
-                    return Err(BoundedHelperError::Started(
-                        bounded_helper_failure_with_cleanup(
-                            "Python helper exceeded the 30 second deadline",
-                            cleanup,
-                        ),
-                    ));
+                    let reaped = cleanup.is_ok();
+                    let mut error = bounded_helper_failure_with_cleanup(
+                        &format!("Python helper exceeded the {} second deadline", budget.as_secs()),
+                        cleanup,
+                    );
+                    if reaped {
+                        error.code = Some(PYTHON_HELPER_TIMEOUT_CODE.to_string());
+                    }
+                    return Err(BoundedHelperError::Started(error));
                 }
                 let remaining = deadline.saturating_duration_since(now);
                 thread::sleep(std::cmp::min(
@@ -1211,16 +1822,16 @@ fn run_bounded_python_helper(
             }
         }
     };
-    if let Err(error) = bounded_helper_log_size(&stdout_path, &stderr_path) {
+    if let Err(error) = bounded_helper_log_size_with_limit(&stdout_path, &stderr_path, maximum) {
         return Err(BoundedHelperError::Started(ApiError::internal(format!(
             "Python helper log inspection failed after exit: {error}"
         ))));
     }
-    let stdout = match read_bounded_helper_log(&stdout_path) {
+    let stdout = match read_bounded_helper_log_with_limit(&stdout_path, maximum) {
         Ok(bytes) => bytes,
         Err(error) => return Err(BoundedHelperError::Started(error)),
     };
-    let stderr = match read_bounded_helper_log(&stderr_path) {
+    let stderr = match read_bounded_helper_log_with_limit(&stderr_path, maximum) {
         Ok(bytes) => bytes,
         Err(error) => return Err(BoundedHelperError::Started(error)),
     };
@@ -1269,16 +1880,16 @@ fn create_bounded_helper_logs(
     ))
 }
 
-fn bounded_helper_log_size(stdout_path: &Path, stderr_path: &Path) -> Result<u64, ApiError> {
+fn bounded_helper_log_size_with_limit(stdout_path: &Path, stderr_path: &Path, maximum: u64) -> Result<u64, ApiError> {
     let stdout_size = bounded_helper_log_metadata(stdout_path, "stdout")?;
     let stderr_size = bounded_helper_log_metadata(stderr_path, "stderr")?;
     let combined = stdout_size
         .checked_add(stderr_size)
         .ok_or_else(|| ApiError::internal("Python helper log size overflow"))?;
-    if combined > BOUNDED_PYTHON_HELPER_LOG_LIMIT {
+    if combined > maximum {
         return Err(ApiError::internal(format!(
             "Python helper output exceeded the {} byte combined log limit",
-            BOUNDED_PYTHON_HELPER_LOG_LIMIT
+            maximum
         )));
     }
     Ok(combined)
@@ -1298,18 +1909,18 @@ fn bounded_helper_log_metadata(path: &Path, stream: &str) -> Result<u64, ApiErro
     Ok(metadata.len())
 }
 
-fn read_bounded_helper_log(path: &Path) -> Result<Vec<u8>, ApiError> {
+fn read_bounded_helper_log_with_limit(path: &Path, maximum: u64) -> Result<Vec<u8>, ApiError> {
     bounded_helper_log_metadata(path, "captured")?;
     let mut file = File::open(path).map_err(|error| {
         ApiError::internal(format!("failed to read bounded Python helper log: {error}"))
     })?;
     let mut bytes = Vec::new();
-    file.take(BOUNDED_PYTHON_HELPER_LOG_LIMIT + 1)
+    file.take(maximum + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| {
             ApiError::internal(format!("failed to read Python helper log: {error}"))
         })?;
-    if bytes.len() as u64 > BOUNDED_PYTHON_HELPER_LOG_LIMIT {
+    if bytes.len() as u64 > maximum {
         return Err(ApiError::internal(
             "Python helper log exceeded the bounded read limit",
         ));
@@ -1362,6 +1973,47 @@ mod tests {
     use axum::http::StatusCode;
 
     #[test]
+    fn generated_accepted_source_guard_removes_only_its_private_entry() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().join("owned-source");
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("source.py");
+        fs::write(&path, b"import fullmag as fm\n").unwrap();
+        let neighbor = workspace.path().join("user.py");
+        fs::write(&neighbor, b"# user source\n").unwrap();
+        let guard = GeneratedAcceptedSceneSource {
+            directory: directory.clone(), path: path.clone(),
+            scene_sha256: "a".repeat(64), source_sha256: "b".repeat(64), byte_count: 21,
+        };
+        assert!(guard.path.is_file());
+        drop(guard);
+        assert!(!path.exists());
+        assert!(!directory.exists());
+        assert_eq!(fs::read(neighbor).unwrap(), b"# user source\n");
+    }
+
+    #[test]
+    fn fem_mesh_cache_path_honors_only_nonempty_absolute_overrides() {
+        let workspace = tempfile::tempdir().expect("create cache-path test workspace");
+        let configured = workspace.path().join("build-cache");
+        let fallback = workspace.path().join("state-cache");
+
+        assert_eq!(
+            resolve_fem_mesh_cache_dir(Some(configured.clone()), || Ok(fallback.clone()))
+                .expect("absolute configured cache path is accepted"),
+            configured,
+        );
+        assert_eq!(
+            resolve_fem_mesh_cache_dir(None, || Ok(fallback.clone()))
+                .expect("absent override uses the state-root fallback"),
+            fallback,
+        );
+        assert!(resolve_fem_mesh_cache_dir(Some(PathBuf::new()), || Ok(PathBuf::new())).is_err());
+        assert!(resolve_fem_mesh_cache_dir(Some("relative-cache".into()), || Ok(PathBuf::new()))
+            .is_err());
+    }
+
+    #[test]
     fn geometry_materialization_is_explicit_and_only_uses_execution_config_export() {
         for (kind, command, prepared) in [
             (SceneCaptureKind::ProblemIr, "export-scene-ir", false),
@@ -1377,6 +2029,279 @@ mod tests {
                 prepared,
             );
         }
+    }
+
+
+    #[test]
+    fn accepted_closed_loop_binds_profile_before_source_geometry_and_preserves_provenance() {
+        let root = repo_root();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut scene = load_scene_document_state(
+            &root, workspace.path(), &root.join("examples/fem_antenna_closed_loop_nonmagnetic.py"),
+        ).unwrap();
+        let Some(fullmag_authoring::StudyPipelineNode::Primitive(node)) =
+            scene.study.study_pipeline.as_mut().unwrap().nodes.first_mut() else {
+                panic!("closed-loop example must begin with its explicit solve");
+            };
+        node.id = "authored-inspection-alias".into();
+        let profile = fullmag_application::legacy_live_execution_profile();
+        scene.study.execution_profile = Some(profile.clone());
+        let request = fullmag_application::RequestedExecution {
+            backend: "fem".into(), device: "cpu".into(),
+            precision: "double".into(), mode: "strict".into(), minimum_resources: None,
+        };
+        let reference = fullmag_authoring::StudyExecutionProfileReference {
+            profile_id: profile.profile_id.clone(), version: profile.version.clone(),
+        };
+        // This is the actual UI renderer/bootstrap, not the original Python IR.
+        let light = scene_document_to_authored_script_config_with_asset_root(
+            &root, workspace.path(), None, &scene, &request,
+        ).unwrap();
+        let selection = &light.ir.problem_meta.runtime_metadata["runtime_selection"];
+        assert_eq!(selection["device"], "auto");
+        assert!(selection.as_object().unwrap().contains_key("cpu_threads"));
+        assert!(selection["cpu_threads"].is_null());
+        let migration = fullmag_application::migrate_legacy_live_execution(
+            &light.ir, &request, fullmag_ir::ExecutionOriginKindIR::Study,
+            "live.scene.study.legacy_execution.inspect_loop",
+        ).unwrap();
+        let layers = vec![migration.layer];
+        let bind = |problem| fullmag_application::materialize_captured_study_input(
+            "script-base", problem, &reference, layers.clone(),
+            |id, version| {
+                assert_eq!(id, profile.profile_id);
+                assert_eq!(version, profile.version);
+                Ok(profile.clone())
+            },
+        ).unwrap();
+        let bound = bind(light.ir);
+        let selection = &bound.problem.problem_meta.runtime_metadata["runtime_selection"];
+        assert_eq!(selection["device"], "cpu");
+        assert!(selection.as_object().unwrap().contains_key("cpu_threads"));
+        assert!(selection["cpu_threads"].is_null());
+        // The old order still changes device Auto to CPU after source preparation.
+        let old = scene_document_to_prepared_script_config_with_asset_root(
+            &root, workspace.path(), None, &scene, &request,
+        ).unwrap();
+        let mut old = old;
+        old.ir = bind(old.ir).problem;
+        let rejected = fullmag_application::materialize_script_pipeline_with_output_policy_bounded(
+            old, fullmag_ir::configure_project_autosave_policy, 16,
+        ).err().expect("preparation before binding must reproduce the actual digest failure");
+        assert!(format!("{rejected:#}").contains("prepared source authored input digest"));
+
+        let missing_budget = request.for_problem(&bound.problem).unwrap_err();
+        assert!(missing_budget.to_string().contains(
+            "compute_resources requires requested_execution.minimum_resources (run_spec.v2)"));
+        let mut preparation_constraints = request.clone();
+        // The default bound resource request uses Auto threads and no reservations.
+        preparation_constraints.minimum_resources = Some(fullmag_application::RequestedResourceBudget {
+            cpu_millis: 1_000, memory_bytes: 1, gpu_memory_bytes: 0, storage_bytes: 1,
+        });
+        let prepared_request = preparation_constraints.for_problem(&bound.problem).unwrap();
+        assert!(request.minimum_resources.is_none());
+        assert_eq!(prepared_request.minimum_resources, preparation_constraints.minimum_resources);
+        let mut prepared = scene_document_to_bound_prepared_script_config_with_asset_root(
+            &root, workspace.path(), None, &scene, &prepared_request, &bound.problem,
+        ).unwrap();
+        assert_eq!(
+            prepared.ir.problem_meta.runtime_metadata["runtime_selection"],
+            bound.problem.problem_meta.runtime_metadata["runtime_selection"],
+        );
+        let rebound = bind(prepared.ir);
+        assert_eq!(rebound.execution, bound.execution);
+        assert_eq!(
+            rebound.problem.problem_meta.runtime_metadata["execution_materialization"],
+            serde_json::to_value(&bound.execution).unwrap(),
+        );
+        prepared.ir = rebound.problem;
+        let compiled = fullmag_application::materialize_script_pipeline_with_output_policy_bounded(
+            prepared.clone(), fullmag_ir::configure_project_autosave_policy, 16,
+        ).expect("unchanged canonical planner must accept the bound producer digest");
+        assert_eq!(compiled.executions.len(), 1);
+        let stage = &compiled.executions[0].stage;
+        assert!(stage.ir.magnets.is_empty());
+        assert!(matches!(stage.action,
+            Some(fullmag_application::script_stage_contract::ResolvedScriptStageAction::AntennaClosedLoopInspection { .. })));
+        assert_eq!(
+            stage.ir.problem_meta.runtime_metadata["execution_materialization"],
+            serde_json::to_value(&bound.execution).unwrap(),
+        );
+        assert!(!fs::read_dir(workspace.path()).unwrap().any(|entry|
+            entry.unwrap().file_name().to_string_lossy().starts_with("bound-preparation-")));
+
+        // Exercise the complete accepted compiler and catalog, not only stage expansion.
+        let generated = render_accepted_scene_source_bounded(&root, workspace.path(), &scene).unwrap();
+        let capture = capture_startup_script_scene(&root, workspace.path(), &generated.path, false).unwrap();
+        let accepted = fullmag_application::compile_accepted_closed_loop_pipeline(
+            prepared, "study:closed-loop-full-acceptance".into(), scene.revision,
+            reference.clone(), layers.clone(), capture.manifest.clone(),
+            |id, version| {
+                assert_eq!(id, profile.profile_id);
+                assert_eq!(version, profile.version);
+                Ok(profile.clone())
+            },
+            fullmag_ir::configure_project_autosave_policy,
+        ).expect("typed standalone closed-loop selection must reach accepted catalog");
+        let lowered = fullmag_plan::lower_study_plan_with_catalog(
+            &accepted.study, &accepted.catalog,
+        ).expect("accepted closed-loop catalog must replan without an LLG carrier");
+        assert_eq!(lowered.steps.len(), 1);
+        let entry = &accepted.catalog.entries()[0];
+        let selected = entry.problem();
+        assert_eq!(selected.problem_meta.runtime_metadata["active_stage_id"], "authored-inspection-alias");
+        let fullmag_ir::StudyIR::AntennaFieldSolve { selection: Some(selection), sampling } =
+            &selected.study else { panic!("accepted physical selection must remain typed"); };
+        assert_eq!(selection.stage_id, "inspect_loop");
+        let stage_id = selection.stage_id.clone();
+        let port_id = selection.port_mode_id.clone();
+        let output_id = "loop_inspection";
+        let closed_identity = |problem: &fullmag_ir::ProblemIR| {
+            match fullmag_plan::validate_closed_loop_operation(
+                problem, &stage_id, &port_id, output_id,
+            ).unwrap() {
+                fullmag_plan::AntennaFieldSolveExecutionPlan::ClosedLoopInspection {
+                    input, requested_execution, output_id,
+                } => (input, requested_execution, output_id),
+                _ => panic!("expected the exact closed-loop operation"),
+            }
+        };
+        let expected = closed_identity(selected);
+        let mut multiple = selected.clone();
+        let mut other_definition = multiple.antenna_field_solve_stages[0].clone();
+        other_definition.id = "other-physical-solve".into();
+        other_definition.outputs[0].id = "other-inspection-output".into();
+        multiple.antenna_field_solve_stages.push(other_definition);
+        assert_eq!(closed_identity(&multiple), expected);
+
+        let mut legacy = selected.clone();
+        legacy.study = fullmag_ir::StudyIR::FieldOnly { sampling: sampling.clone() };
+        legacy.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!(stage_id));
+        assert_eq!(closed_identity(&legacy), expected);
+        for (wrong_stage, wrong_port) in [
+            ("other-physical-solve", port_id.as_str()), (stage_id.as_str(), "wrong-port"),
+        ] {
+            let mut wrong = multiple.clone();
+            wrong.study = fullmag_ir::StudyIR::AntennaFieldSolve {
+                selection: Some(fullmag_ir::AntennaFieldSolveSelectionIR {
+                    stage_id: wrong_stage.into(), port_mode_id: wrong_port.into(),
+                }), sampling: sampling.clone(),
+            };
+            assert!(fullmag_plan::validate_closed_loop_operation(
+                &wrong, &stage_id, &port_id, output_id,
+            ).is_err());
+        }
+        let mut ambiguous = multiple.clone();
+        ambiguous.study = fullmag_ir::StudyIR::AntennaFieldSolve {
+            selection: None, sampling: sampling.clone(),
+        };
+        assert!(fullmag_plan::validate_closed_loop_operation(
+            &ambiguous, &stage_id, &port_id, output_id,
+        ).is_err());
+        let magnetic = fullmag_ir::ProblemIR::bootstrap_example();
+        let mut llg = selected.clone();
+        llg.study = magnetic.study.clone();
+        assert!(fullmag_plan::validate_closed_loop_operation(
+            &llg, &stage_id, &port_id, output_id,
+        ).is_err());
+        let magnetic_value = serde_json::to_value(&magnetic).unwrap();
+        for field in ["magnets", "materials", "energy_terms"] {
+            let mut value = serde_json::to_value(selected).unwrap();
+            value[field] = magnetic_value[field].clone();
+            let wrong = serde_json::from_value(value).unwrap();
+            assert!(fullmag_plan::validate_closed_loop_operation(
+                &wrong, &stage_id, &port_id, output_id,
+            ).is_err());
+        }
+        let mut wrong_target = selected.clone();
+        wrong_target.antenna_field_solve_stages[0].field_sampling_domain =
+            fullmag_ir::FieldTargetIR::Object { object_id: "missing-sampling-target".into() };
+        assert!(fullmag_plan::validate_closed_loop_operation(
+            &wrong_target, &stage_id, &port_id, output_id,
+        ).is_err());
+        assert!(fullmag_plan::validate_closed_loop_operation(
+            selected, &stage_id, &port_id, "wrong-output",
+        ).is_err());
+        capture.verify_unchanged().unwrap();
+    }
+
+    #[test]
+    fn accepted_scene_keeps_configuration_and_reset_on_the_correct_physical_input() {
+        let root = repo_root();
+        let workspace = tempfile::tempdir().unwrap();
+        let source = workspace.path().join("configured_study.py");
+        std::fs::write(&source, r#"import fullmag as fm
+study = fm.study("ordered-configuration")
+study.engine("fdm")
+body = study.geometry(fm.Box(10e-9, 10e-9, 5e-9), name="film")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.01
+body.m = fm.texture.uniform(1, 0, 0)
+study.stages.add_run(stage_id="before", until=1e-12)
+study.stages.tableautosave(5e-14, quantities=["mx", "my"], stage_id="table")
+body.m = fm.texture.uniform(0, 1, 0)
+study.stages.add_run(stage_id="after", until=1e-12)
+"#).unwrap();
+        let scene = load_scene_document_state(&root, workspace.path(), &source).unwrap();
+        let defaults = fullmag_authoring::StudyPlanMigrationDefaults {
+            model: fullmag_authoring::StudyModelReference {
+                model_id: "model:configuration".into(), version: "1".into(),
+            },
+            solver_config: fullmag_authoring::StudySolverConfigReference {
+                preset_id: "solver:configuration".into(), version: "1".into(),
+            },
+            discretization: fullmag_authoring::StudyDiscretizationReference {
+                recipe_id: "mesh:configuration".into(), version: "1".into(),
+            },
+            execution_profile: fullmag_authoring::StudyExecutionProfileReference {
+                profile_id: "exec:configuration".into(), version: "1".into(),
+            },
+        };
+        let mut study = fullmag_authoring::scene_document_to_study_plan(
+            &scene, "study:configuration", scene.revision, &defaults,
+        ).unwrap();
+        select_scene_pipeline_tasks(&mut study);
+        assert!(!study.steps.iter().find(|step| step.step_id == "table").unwrap().enabled);
+        let requested = fullmag_application::RequestedExecution {
+            backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
+            mode: "strict".into(), minimum_resources: None,
+        };
+        let stages = scene_document_to_authored_stages(
+            &root, workspace.path(), &scene, &requested,
+        ).unwrap();
+        let inputs = study_execution_inputs_from_stages(&stages, &scene, &study).unwrap();
+        let [before, after] = inputs.as_slice() else { panic!("expected two solver inputs") };
+        assert_eq!(before.step_id, "before");
+        assert_eq!(after.step_id, "after");
+        assert!(before.problem.study.sampling().table_autosave.is_none());
+        assert_eq!(
+            after.problem.study.sampling().table_autosave.as_ref().unwrap().sample_period_s,
+            Some(5e-14),
+        );
+        for (input, direction) in [(before, [1, 0, 0]), (after, [0, 1, 0])] {
+            let magnet = serde_json::to_value(&input.problem.magnets[0]).unwrap();
+            assert_eq!(
+                magnet["initial_magnetization"]["preset_params"]["direction"],
+                serde_json::json!(direction),
+            );
+        }
+        fullmag_application::bind_scene_study_physical_state_flow(
+            &mut study, scene.study.study_pipeline.as_ref(), &inputs,
+        ).unwrap();
+        let before = study.steps.iter().find(|step| step.step_id == "before").unwrap();
+        let after = study.steps.iter().find(|step| step.step_id == "after").unwrap();
+        assert_eq!(after.completion_dependencies, vec![before.step_id.clone()]);
+        assert!(after.inputs.is_empty(), "the full reset does not inherit the previous state");
+
+        // A canonical authored target must not borrow another input, even
+        // when that input is the only solver stage the producer returned.
+        let only_before = stages.iter().find(|stage| {
+            stage.provenance.as_ref().is_some_and(|source| source.authored_step_id == "before")
+        }).unwrap();
+        assert!(study_execution_inputs_from_stages(
+            std::slice::from_ref(only_before), &scene, &study,
+        ).is_err());
     }
 
     #[test]
@@ -2037,4 +2962,54 @@ study.stages.add_eigenmodes(count=4)
             "study pipeline should deserialize change_device primitive stage"
         );
     }
+}
+
+fn material_catalog_snapshot() -> Option<Vec<u8>> {
+    let snapshot = fullmag_workspace::material_catalog::read_published_material_versions()
+        .map_err(anyhow::Error::from)
+        .and_then(|versions| {
+            if versions.is_empty() {
+                return Ok(None);
+            }
+            serde_json::to_vec(&versions).map(Some).map_err(anyhow::Error::from)
+        });
+    snapshot.unwrap_or_else(|error| {
+        tracing::warn!(%error, "Shared material catalog is unavailable");
+        Some(MATERIAL_CATALOG_UNAVAILABLE.to_vec())
+    })
+}
+
+/// Bounded, environment-isolated executor for the shared immutable capture producer.
+/// Capture has no geometry/cache environment; meshing remains a separate one-shot preparation.
+pub(crate) fn capture_startup_script_scene(
+    repo_root: &Path, workspace_root: &Path, script_path: &Path,
+    include_run_config: bool,
+) -> Result<fullmag_application::script_source_capture::CapturedScriptSource, ApiError> {
+    let real_root = python_workspace_root(repo_root);
+    let authored = real_root.join("packages/fullmag-py/src/fullmag");
+    let fullmag = if authored.is_dir() { authored } else { real_root.join("python/site-packages/fullmag") };
+    let fullmag = fs::canonicalize(fullmag).map_err(|error| ApiError::internal(format!("capture runtime root: {error}")))?;
+    let catalog = material_catalog_snapshot();
+    fullmag_application::script_source_capture::capture_authored_script(script_path, &fullmag,
+        &fullmag_application::script_source_capture::CaptureOptions {
+            scene_only: true,
+            include_run_config,
+            material_catalog: catalog.as_deref(),
+            ..Default::default()
+        },
+        |args, maximum, input| {
+            let interpreter = resolve_python(repo_root).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let mut command = interpreter.command(&real_root).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            command.env_clear();
+            if let Some(parent) = interpreter.path.parent() { command.env("PATH", parent); }
+            command.env("PYTHONHASHSEED", "0").env("PYTHONDONTWRITEBYTECODE", "1");
+            command.args(args).stdin(input.map(Stdio::from).unwrap_or_else(Stdio::null));
+            run_bounded_python_helper_with_budget(
+                command, workspace_root, u64::try_from(maximum)?, BOUNDED_SOURCE_CAPTURE_TIMEOUT,
+            )
+                .map_err(|error| match error {
+                    BoundedHelperError::Spawn(error) => anyhow::anyhow!("source capture spawn: {error}"),
+                    BoundedHelperError::Started(error) => anyhow::anyhow!(error.to_string()),
+                })
+        }).map_err(|error| ApiError::unprocessable_with_code("accepted_script_capture_invalid", format!("immutable startup source capture failed: {error:#}")))
 }

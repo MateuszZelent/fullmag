@@ -272,12 +272,14 @@ impl StudyExecutionPlan {
                         "lowered union DAG violates topological order".into(),
                     ));
                 }
-                if step.enabled
-                    && step.completion_dependencies.contains(dependency)
-                    && !self.steps[*position].enabled
-                {
+                let executable_dependency = step.completion_dependencies.contains(dependency)
+                    || step.inputs.iter().any(|input| matches!(
+                        &input.source, fullmag_authoring::StudyInputSource::StepOutput { step_id, .. }
+                            if step_id == dependency
+                    ));
+                if step.enabled && executable_dependency && !self.steps[*position].enabled {
                     return Err(StudyLoweringError::Contract(
-                        "enabled completion dependency targets a disabled step".into(),
+                        "enabled executable dependency targets a disabled step".into(),
                     ));
                 }
             }
@@ -357,7 +359,9 @@ where
         let step = steps_by_id.get(step_id.as_str()).ok_or_else(|| {
             StudyLoweringError::Contract(format!("topological step `{step_id}` is missing"))
         })?;
-        for input in &step.inputs {
+        // Disabled definitions retain their authoring edges for provenance.
+        // Only executable consumers need executable dependency sources.
+        for input in step.inputs.iter().filter(|_| step.enabled) {
             if let fullmag_authoring::StudyInputSource::StepOutput {
                 step_id: source_step,
                 ..
@@ -393,12 +397,18 @@ where
                     step.step_id
                 )));
             }
-            Some(
-                lower_problem_plan(&problem).map_err(|error| StudyLoweringError::Planner {
-                    step_id: step.step_id.clone(),
-                    reasons: error.reasons,
-                })?,
-            )
+            let execution = lower_problem_plan(&problem).map_err(|error| StudyLoweringError::Planner {
+                step_id: step.step_id.clone(),
+                reasons: error.reasons,
+            })?;
+            if let Some(overlay) = &step.initial_state_overlay {
+                crate::study_magnetization_overlay_mask(&problem, &execution, overlay.scopes())
+                    .map_err(|error| StudyLoweringError::Planner {
+                        step_id: step.step_id.clone(),
+                        reasons: error.reasons,
+                    })?;
+            }
+            Some(execution)
         };
 
         lowered_steps.push(StudyStepExecutionPlan {
@@ -448,8 +458,13 @@ where
 
 /// Replan the typed physical operation; a carrier alone cannot choose inspection vs basis.
 pub fn validate_closed_loop_operation(problem: &ProblemIR, stage_id: &str, port_mode_id: &str, output_id: &str) -> Result<crate::AntennaFieldSolveExecutionPlan, StudyLoweringError> {
-    if !matches!(problem.study, fullmag_ir::StudyIR::FieldOnly { .. }) {
-        return Err(StudyLoweringError::Contract("closed-loop inspection requires FieldOnly without magnetic state".into()));
+    let selected_nonmagnetic_study = matches!(&problem.study, fullmag_ir::StudyIR::FieldOnly { .. })
+        || matches!(&problem.study,
+            fullmag_ir::StudyIR::AntennaFieldSolve { selection: Some(selection), .. }
+                if selection.stage_id == stage_id && selection.port_mode_id == port_mode_id);
+    if !selected_nonmagnetic_study {
+        return Err(StudyLoweringError::Contract(
+            "closed-loop inspection requires FieldOnly or an exactly selected nonmagnetic AntennaFieldSolve".into()));
     }
     let carrier = lower_problem_plan(problem).map_err(|error| StudyLoweringError::Planner { step_id: stage_id.into(), reasons: error.reasons })?;
     if !matches!(&carrier.backend_plan, fullmag_ir::BackendPlanIR::AntennaFieldOnly(plan) if plan.stage_id == stage_id && plan.port_mode_id == port_mode_id) {

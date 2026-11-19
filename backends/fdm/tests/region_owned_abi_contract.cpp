@@ -94,30 +94,47 @@ void exchange_pair_descriptors_are_public_abi() {
           "fullmag_fdm_plan_desc must carry exchange_pair_count");
 }
 
-void region_lut_capacity_is_explicit_and_fail_closed() {
+void region_ids_are_unbounded_and_lut_is_retired() {
     const std::string header =
         read_text_file(repo_root() / "native" / "include" / "fullmag_fdm.h");
     const std::string source = read_text_file(repo_root() / "backends" / "fdm" / "api" / "c_api.cpp");
 
-    check(header.find("FULLMAG_FDM_MAX_REGION_ID") != std::string::npos,
-          "FDM ABI must expose the non-background region-id limit");
-    check(source.find("fdm_region_lut_capacity_exceeded") != std::string::npos,
-          "native FDM must reject region ids before LUT access");
-    check(source.find("plan->region_mask[index] > FULLMAG_FDM_MAX_REGION_ID") != std::string::npos,
-          "native FDM must validate every uploaded region-mask value");
+    check(header.find("FULLMAG_FDM_MAX_REGION_ID") == std::string::npos &&
+              header.find("FULLMAG_FDM_MAX_EXCHANGE_REGIONS") == std::string::npos,
+          "FDM ABI must not publish a region-id limit");
+    check(header.find("FULLMAG_FDM_EXCHANGE_OPERATOR_FACES") != std::string::npos &&
+              header.find("const double *exchange_face_x_plus;") != std::string::npos,
+          "FDM ABI must carry per-connection exchange coefficients in the v2 tail");
+    check(source.find("fdm_exchange_lut_retired") != std::string::npos,
+          "native FDM must reject the retired region-pair table instead of ignoring it");
+    check(source.find("fdm_exchange_pair_unspecified_retired") != std::string::npos,
+          "legacy UNSPECIFIED with a region mask must not silently re-couple regions");
+    check(source.find("plan->enable_exchange != 0 && ctx->has_region_mask && !exchange_operator.faces") !=
+              std::string::npos,
+          "the legacy UNSPECIFIED gate must apply only while exchange runs");
+    check(source.find("fdm_region_lut_capacity_exceeded") == std::string::npos,
+          "native FDM must not cap region ids");
 }
 
-void native_backend_fails_fast_for_unimplemented_cellwise_material_fields() {
+void native_backend_validates_cellwise_ms_and_alpha() {
     const std::string source = read_text_file(repo_root() / "backends" / "fdm" / "api" / "c_api.cpp");
 
-    check(source.find("has_cellwise_material_field") != std::string::npos,
-          "native FDM backend must detect cellwise material fields explicitly");
-    check(source.find("planner/runtime materialization must keep this path capability-gated") != std::string::npos,
-          "native FDM backend must fail fast instead of silently dropping cellwise material fields");
-    check(source.find("plan->ms_field_len != 0") != std::string::npos,
-          "native FDM backend must reject non-zero ms_field_len even when pointer is null");
-    check(source.find("plan->dbulk_field_len != 0") != std::string::npos,
-          "native FDM backend must reject non-zero dbulk_field_len even when pointer is null");
+    check(source.find("has_cellwise_dmi_field") != std::string::npos &&
+              source.find("plan->dbulk_field_len != 0") != std::string::npos,
+          "native FDM backend must keep rejecting cellwise DMI fields");
+    check(source.find("{\"ms_field\", plan->ms_field, plan->ms_field_len, true}") != std::string::npos,
+          "native FDM backend must validate ms_field length and positivity on active cells");
+    check(source.find("{\"alpha_field\", plan->alpha_field, plan->alpha_field_len, false}") !=
+              std::string::npos,
+          "native FDM backend must validate alpha_field length and range");
+    check(source.find("fdm_cuda_heterogeneous_material_unsupported:") != std::string::npos,
+          "native FDM backend must fail closed for unsupported heterogeneous combinations");
+    check(source.find("fdm_cuda_heterogeneous_material_unsupported:gpu_transport") !=
+              std::string::npos,
+          "a GPU transport binding attached after create must hit the material gate");
+    check(source.find("a_field_requires_exchange_faces") != std::string::npos &&
+              source.find("cellwise_values_equal_scalar(") != std::string::npos,
+          "native FDM backend must reject a variable a_field that arrives without FACES");
 }
 
 void reviewed_gpu_abi_proof_is_semantic_and_strict() {
@@ -150,8 +167,8 @@ int main() {
     region_owned_material_fields_are_public_abi();
     complete_plan_descriptor_is_versioned_and_checked();
     exchange_pair_descriptors_are_public_abi();
-    region_lut_capacity_is_explicit_and_fail_closed();
-    native_backend_fails_fast_for_unimplemented_cellwise_material_fields();
+    region_ids_are_unbounded_and_lut_is_retired();
+    native_backend_validates_cellwise_ms_and_alpha();
     reviewed_gpu_abi_proof_is_semantic_and_strict();
     std::printf("region-owned FDM ABI contract OK\n");
     return 0;

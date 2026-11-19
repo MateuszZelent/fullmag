@@ -5,6 +5,7 @@
 //! not a conversion performed by this adapter.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use fullmag_quantities::{quantity_spec, QuantityComponent, QuantityLocation, QuantityShape};
 use fullmag_runner::FemMeshPayload;
@@ -16,7 +17,7 @@ use super::field_resolution::{
     fem_nodal_visualization_projection_allowed, field_value_count_matches_current_domain,
     flatten_current_field_values, is_fdm_snapshot, json_field_grid, json_field_value_count,
 };
-use crate::artifacts::read_json_artifact_value;
+use crate::artifacts::{read_json_artifact_value, try_resolve_artifact_path};
 use crate::error::ApiError;
 use crate::router_v2::handlers::sessions::status::{
     domain_generation_revision, fdm_grid_geometry, fdm_grid_shape,
@@ -128,7 +129,13 @@ pub(crate) enum SpatialFieldCarrier<'a> {
         cell_size_m: Option<[f64; 3]>,
         grid_fingerprint: Option<String>,
         membership: Option<FdmCellMembership>,
+        /// Exact loader error when membership could not be resolved; non-domain
+        /// targets report it instead of a generic missing-membership error.
+        membership_error: Option<String>,
         multilayer_scope: Option<FdmMultilayerScopeCarrier<'a>>,
+        /// Cells that carry a value; `None` means every cell. Uncovered cells
+        /// are outside every planar target, `domain` included.
+        coverage: Option<Vec<bool>>,
     },
     FemNodes {
         topology: &'a FemMeshPayload,
@@ -152,6 +159,8 @@ pub(crate) enum SpatialFieldCarrier<'a> {
         cell_size_m: [f64; 3],
         grid_revision: u64,
         carrier_fingerprint: String,
+        /// Airbox cells whose centres are outside all active native layers.
+        air_membership: Arc<[bool]>,
     },
     FdmNativeLayerCells {
         layer_id: String,
@@ -269,6 +278,67 @@ pub(crate) fn full_field_publication_carrier_identity(
     Some(identity)
 }
 
+/// An authored multilayer field is a concatenation of native layer carriers.
+/// Its aggregate identity binds that partition and ordering without claiming
+/// that the flattened payload lives on the common convolution grid.
+pub(crate) fn authored_multilayer_publication_carrier_identity(
+    field: &ResolvedSpatialField<'_>,
+) -> Option<FieldPublicationCarrierIdentity> {
+    let SpatialFieldCarrier::FdmCells {
+        cells,
+        multilayer_scope: Some(scope),
+        ..
+    } = &field.carrier
+    else {
+        return None;
+    };
+    let (fingerprint, point_count) = multilayer_native_carrier_fingerprint(scope.artifact_layout)?;
+    let cell_count = cells.iter().try_fold(1u64, |count, axis| {
+        count.checked_mul(u64::from(*axis))
+    })?;
+    if point_count != cell_count {
+        return None;
+    }
+    Some(FieldPublicationCarrierIdentity {
+        scope_kind: "full".to_owned(),
+        scope_id: None,
+        carrier_id: format!("fdm-multilayer:{fingerprint}:full"),
+        carrier_fingerprint: fingerprint.clone(),
+        topology_hash: fingerprint,
+    })
+}
+
+pub(crate) fn multilayer_native_carrier_fingerprint(
+    layout: &serde_json::Value,
+) -> Option<(String, u64)> {
+    if layout.get("backend")?.as_str()? != "fdm_multilayer" {
+        return None;
+    }
+    let layers = layout.get("layers")?.as_array()?;
+    let mut expected_offset = 0u64;
+    let mut native_carriers = Vec::with_capacity(layers.len());
+    for layer in layers {
+        let layer_id = layer.get("layer_id")?.as_str()?;
+        let grid_fingerprint = layer.get("native_grid_fingerprint")?.as_str()?;
+        let offset = layer.get("value_offset")?.as_u64()?;
+        let count = layer.get("value_count")?.as_u64()?;
+        if layer_id.is_empty()
+            || !canonical_sha256(grid_fingerprint)
+            || offset != expected_offset
+            || count == 0
+        {
+            return None;
+        }
+        expected_offset = offset.checked_add(count)?;
+        native_carriers.push((layer_id, grid_fingerprint, count));
+    }
+    if native_carriers.is_empty() {
+        return None;
+    }
+    let binding = serde_json::to_vec(&("fdm-multilayer-native-carriers.v1", native_carriers)).ok()?;
+    Some((format!("sha256:{:x}", Sha256::digest(binding)), expected_offset))
+}
+
 impl ResolvedSpatialField<'static> {
     pub(crate) fn from_artifact_samples(
         quantity_id: &str, values: Vec<f64>,
@@ -276,6 +346,9 @@ impl ResolvedSpatialField<'static> {
         quantity_revision: u64,
     ) -> Result<Self, ApiError> {
         let spec = quantity_spec(quantity_id).ok_or_else(|| ApiError::not_found("unknown artifact quantity"))?;
+        if carrier.sample_carrier.is_some() && quantity_id != "H_ant" {
+            return Err(ApiError::conflict("verified H sampling descriptor cannot describe a conductor field"));
+        }
         carrier.validate(values.len(), spec.n_comp as usize)?;
         if values.iter().any(|value| !value.is_finite()) {return Err(ApiError::conflict("nonfinite artifact field payload"));}
         let field = Self {
@@ -351,6 +424,7 @@ impl ResolvedSpatialField<'static> {
         cells: [u32; 3],
         origin_m: [f64; 3],
         cell_size_m: [f64; 3],
+        air_membership: Vec<bool>,
         carrier_fingerprint: String,
         quantity_revision: u64,
         grid_revision: u64,
@@ -404,6 +478,7 @@ impl ResolvedSpatialField<'static> {
                 cell_size_m,
                 grid_revision,
                 carrier_fingerprint,
+                air_membership: air_membership.into(),
             },
         };
         field.validate_contract()?;
@@ -469,7 +544,9 @@ impl ResolvedSpatialField<'_> {
                 cell_size_m,
                 grid_fingerprint,
                 membership,
+                membership_error: _,
                 multilayer_scope,
+                coverage,
             } => {
                 validate_grid_count(*cells, local_count, &self.quantity_id)?;
                 if origin_m.is_some() != cell_size_m.is_some()
@@ -483,6 +560,9 @@ impl ResolvedSpatialField<'_> {
                         .as_ref()
                         .is_some_and(|membership| membership.cell_membership.len() != local_count)
                     || (membership.is_some() && grid_fingerprint.is_none())
+                    || coverage
+                        .as_ref()
+                        .is_some_and(|coverage| coverage.len() != local_count)
                     || multilayer_scope.is_some_and(|scope| {
                         scope
                             .artifact_layout
@@ -543,12 +623,14 @@ impl ResolvedSpatialField<'_> {
                 cell_size_m,
                 grid_revision,
                 carrier_fingerprint,
+                air_membership,
             } => {
                 validate_grid_count(*cells, local_count, &self.quantity_id)?;
                 if origin_m.iter().any(|value| !value.is_finite())
                     || cell_size_m
                         .iter()
                         .any(|value| !value.is_finite() || *value <= 0.0)
+                    || air_membership.len() != local_count
                     || *grid_revision == 0
                     || carrier_fingerprint.is_empty()
                 {
@@ -613,6 +695,9 @@ pub(crate) fn resolve_fdm_multilayer_native_layer_field(
             component_count,
         )
         .map(Some);
+    }
+    if quantity_id == "mat_alpha" && crate::live_authored_damping::publication_revision(snapshot).is_some() {
+        return Err(ApiError::not_found("edited damping awaits a qualified native layer layout"));
     }
     let Some(layout) = metadata.get("artifact_layout").filter(|layout| {
         layout.get("backend").and_then(serde_json::Value::as_str) == Some("fdm_multilayer")
@@ -1356,6 +1441,43 @@ pub(crate) fn native_layer_membership_generation_id(
     Ok(format!("sha256:{:x}", Sha256::digest(payload)))
 }
 
+/// Plan-derived native membership of one multilayer layer, checked only
+/// against the artifact-layout identity. The plan is the realization the solver
+/// ran, so sampling the live field does not wait for the persisted mask copy.
+pub(crate) fn planned_fdm_multilayer_native_layer_membership(
+    snapshot: &SessionStateResponse,
+    requested_layer_id: &str,
+) -> Result<Option<FdmNativeLayerMembershipCarrier>, ApiError> {
+    let Some(metadata) = snapshot.metadata.as_ref() else {
+        return Ok(None);
+    };
+    let Some(plan_layer) = planned_native_layer(metadata, requested_layer_id)? else {
+        return Ok(None);
+    };
+    let carrier = planned_native_layer_membership(snapshot, plan_layer)?;
+    if let Some(artifact_layer) = persisted_native_layer(snapshot, &carrier.layer_id)? {
+        cross_check_planned_layer_identity(&carrier, artifact_layer)?;
+    }
+    Ok(Some(carrier))
+}
+
+/// Persisted copy of an artifact the execution-plan layout already declares.
+/// The plan is the authority and the runner writes this copy from its private
+/// attempt output, so a live run declares it before the run artifact root
+/// holds it: an absent copy is not yet published, a present one must parse.
+fn published_planned_layer_artifact(
+    snapshot: &SessionStateResponse,
+    relative_path: &str,
+) -> Result<Option<serde_json::Value>, ApiError> {
+    let Some(artifact_dir) = current_artifact_dir(snapshot) else {
+        return Ok(None);
+    };
+    if try_resolve_artifact_path(&artifact_dir, relative_path)?.is_none() {
+        return Ok(None);
+    }
+    read_json_artifact_value(&artifact_dir, relative_path).map(Some)
+}
+
 fn persisted_native_layer<'a>(
     snapshot: &'a SessionStateResponse,
     layer_id: &str,
@@ -1465,15 +1587,15 @@ fn cross_check_planned_membership(
             "multilayer FDM membership mask and legend refer to different artifacts",
         ));
     }
-    let artifact_dir = current_artifact_dir(snapshot).ok_or_else(|| {
-        ApiError::conflict("declared native multilayer membership has no artifact root")
-    })?;
-    let payload = read_json_artifact_value(&artifact_dir, membership_path).map_err(|_| {
+    let Some(payload) = published_planned_layer_artifact(snapshot, membership_path).map_err(|_| {
         ApiError::conflict(format!(
-            "declared native membership artifact is missing or corrupt for layer '{}'",
+            "declared native membership artifact is corrupt for layer '{}'",
             carrier.layer_id
         ))
-    })?;
+    })?
+    else {
+        return Ok(());
+    };
     validate_layer_payload_identity(
         &payload,
         "fdm_multilayer_region_membership.v1",
@@ -1563,18 +1685,16 @@ fn cross_check_planned_material(
     else {
         return Ok(());
     };
-    let artifact_dir = current_artifact_dir(snapshot).ok_or_else(|| {
-        ApiError::conflict(format!(
-            "declared multilayer material field '{quantity_id}' has no artifact root"
-        ))
-    })?;
     let material_path = required_string(descriptor, "artifact_path", "material descriptor")?;
-    let payload = read_json_artifact_value(&artifact_dir, material_path).map_err(|_| {
+    let Some(payload) = published_planned_layer_artifact(snapshot, material_path).map_err(|_| {
         ApiError::conflict(format!(
-            "declared multilayer material field '{quantity_id}' artifact is missing or corrupt for layer '{}'",
+            "declared multilayer material field '{quantity_id}' artifact is corrupt for layer '{}'",
             carrier.layer_id
         ))
-    })?;
+    })?
+    else {
+        return Ok(());
+    };
     validate_layer_payload_identity(
         &payload,
         "fdm_multilayer_material_field.v1",
@@ -1641,25 +1761,22 @@ fn resolve_planned_native_layer_field(
             )));
         }
     };
-    let material = layer.get("material").ok_or_else(|| {
-        ApiError::conflict(format!(
-            "layer '{}' has no material contract",
-            membership.layer_id
-        ))
-    })?;
-    if material.get(material_key).is_none() {
-        return Err(ApiError::not_found(format!(
-            "quantity_not_materialized: field '{quantity_id}' has no native array for layer '{}'",
-            membership.layer_id
-        )));
-    }
-    let values = strict_finite_values(
-        material,
-        material_key,
-        membership.membership.cell_membership.len(),
-        quantity_id,
-    )?;
-    cross_check_planned_material(snapshot, &membership, quantity_id, spec.unit, &values)?;
+    let count = membership.membership.cell_membership.len();
+    let values = if quantity_id == "mat_alpha" && crate::live_authored_damping::publication_revision(snapshot).is_some() {
+        crate::live_authored_damping::native_layer_values(snapshot, &membership.layer_id, count)?
+    } else {
+        let material = layer.get("material").ok_or_else(|| ApiError::conflict(format!(
+            "layer '{}' has no material contract", membership.layer_id)))?;
+        if material.get(material_key).is_none() {
+            return Err(ApiError::not_found(format!(
+                "quantity_not_materialized: field '{quantity_id}' has no native array for layer '{}'",
+                membership.layer_id)));
+        }
+        let values = strict_finite_values(material, material_key, count, quantity_id)?;
+        cross_check_planned_material(snapshot, &membership, quantity_id, spec.unit, &values)?;
+        values
+    };
+
     let value_hash = hash_f64_values(&values);
     let field_generation = format!(
         "sha256:{:x}",
@@ -2358,7 +2475,10 @@ fn resolve_spatial_field_metadata<'a>(
         let (origin_m, cell_size_m) = fdm_grid_geometry(snapshot)
             .map(|(origin, spacing)| (Some(origin), Some(spacing)))
             .unwrap_or((None, None));
-        let membership = load_resolved_fdm_membership(snapshot).ok();
+        let (membership, membership_error) = match load_resolved_fdm_membership(snapshot) {
+            Ok(membership) => (Some(membership), None),
+            Err(error) => (None, Some(error.to_string())),
+        };
         let multilayer_scope = snapshot.metadata.as_ref().and_then(|metadata| {
             let artifact_layout = metadata.get("artifact_layout")?;
             let execution_plan = metadata.get("execution_plan")?;
@@ -2380,14 +2500,20 @@ fn resolve_spatial_field_metadata<'a>(
             cell_size_m,
             grid_fingerprint,
             membership: membership.as_ref().map(FdmCellMembership::from),
+            membership_error,
             multilayer_scope,
+            coverage: None,
         }
     } else {
         let mesh = snapshot.fem_mesh.as_ref().ok_or_else(|| {
             ApiError::conflict(format!("field '{quantity_id}' has no FEM topology carrier"))
         })?;
-        let topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
-        match spec.location {
+        let topology_fingerprint = mesh.topology_fingerprint().to_owned();
+        let location = if matches!(source_kind, SpatialFieldSourceKind::Materialized)
+            && super::field_resolution::current_fem_damping_uses_nodes(snapshot, quantity_id) {
+            QuantityLocation::Node
+        } else { spec.location };
+        match location {
             QuantityLocation::Cell
                 if matches!(source_kind, SpatialFieldSourceKind::Materialized | SpatialFieldSourceKind::Preview)
                     && point_count == mesh.nodes.len()
@@ -2650,6 +2776,7 @@ mod tests {
             [1, 1, 1],
             [0.0, 0.0, 0.0],
             [1.0e-9, 1.0e-9, 1.0e-9],
+            vec![true],
             "airbox-grid-7".to_string(),
             11,
             4,
@@ -2664,6 +2791,7 @@ mod tests {
             cell_size_m,
             grid_revision,
             carrier_fingerprint,
+            air_membership,
         } = &field.carrier
         else {
             panic!("H_demag should preserve the validated Airbox carrier");
@@ -2673,6 +2801,7 @@ mod tests {
         assert_eq!(*cell_size_m, [1.0e-9, 1.0e-9, 1.0e-9]);
         assert_eq!(*grid_revision, 4);
         assert_eq!(carrier_fingerprint, "airbox-grid-7");
+        assert_eq!(air_membership.as_ref(), &[true]);
         assert_eq!(field.quantity_id, "H_demag");
         assert_eq!(field.quantity_kind, QuantityShape::VectorField);
         assert_eq!(field.canonical_unit, "A/m");
@@ -2689,6 +2818,7 @@ mod tests {
             [1, 1, 1],
             [0.0, 0.0, 0.0],
             [1.0e-9, 1.0e-9, 1.0e-9],
+            vec![true],
             "airbox-grid-7".to_string(),
             11,
             4,
@@ -2726,7 +2856,9 @@ mod tests {
                 cell_size_m: Some(cell_size_m),
                 grid_fingerprint: None,
                 membership: None,
+                membership_error: None,
                 multilayer_scope: None,
+                coverage: None,
             },
         }
     }

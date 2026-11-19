@@ -1,6 +1,8 @@
 import type { FieldVectorResponseMetadata } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
+import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
+
 import { buildFdmFieldIndexResolver } from "./fdmFieldIndexing";
 
 type FieldResponseDomainIdentity = Pick<
@@ -11,6 +13,8 @@ type FieldResponseDomainIdentity = Pick<
 export interface Viewport3DFieldDomainIdentity {
   discretization?: "fdm" | "fem";
   domainGenerationId: string | null;
+  /** Published sample location for the current live FEM damping field. */
+  liveDampingLocation?: string | null;
   gridShape?: readonly [number, number, number] | null;
   meshTopologyHash: string | null;
   meshTopologyRevision: string | null;
@@ -22,6 +26,7 @@ export type Viewport3DFieldDomainCompatibility =
   | { reason: "fmvp-v2-legacy"; status: "degraded" }
   | {
       reason:
+        | "damping-location-mismatch"
         | "duplicate-node-index"
         | "domain-generation-mismatch"
         | "domain-generation-unknown"
@@ -40,6 +45,7 @@ type Viewport3DFieldDomainMismatchReason = Extract<
 >["reason"];
 
 const FIELD_DOMAIN_MISMATCH_TEXT: Record<Viewport3DFieldDomainMismatchReason, string> = {
+  "damping-location-mismatch": "live FEM damping requires a field published at mesh nodes",
   "domain-generation-mismatch":
     "the field was computed for a different domain generation than the one shown",
   "domain-generation-unknown":
@@ -111,6 +117,16 @@ export function resolveViewport3DFieldVectorForDomain({
     : fieldVector;
 }
 
+// Undefined means the caller is displaying a source outside the live FEM field catalog.
+// Null means the current catalog has no damping descriptor.
+export function liveFemDampingLocationMismatch(
+  quantityId: string | undefined,
+  location: string | null | undefined,
+): boolean {
+  return location !== undefined && location !== "node" && quantityId !== undefined &&
+    resolveCanonicalQuantityId(quantityId) === "mat_alpha";
+}
+
 export function resolveViewport3DFieldDomainCompatibility({
   domain,
   field,
@@ -127,9 +143,12 @@ export function resolveViewport3DFieldDomainCompatibility({
     | "nodeIndices"
     | "pointCount"
   > &
-    Partial<Pick<DecodedFieldVector, "grid" | "nComp">>;
+    Partial<Pick<DecodedFieldVector, "grid" | "nComp" | "quantityId">>;
   responseDomainGenerationId?: string | null;
 }): Viewport3DFieldDomainCompatibility {
+  if (domain.discretization === "fem" && liveFemDampingLocationMismatch(field.quantityId, domain.liveDampingLocation)) {
+    return { reason: "damping-location-mismatch", status: "mismatch" };
+  }
   if (field.formatVersion === 3) {
     if (!field.domainGenerationId || !domain.domainGenerationId) {
       return { reason: "domain-generation-unknown", status: "mismatch" };
@@ -223,7 +242,7 @@ export function resolveViewport3DFieldDomainCompatibility({
     : { reason: "compatible", status: "compatible" };
 }
 
-function canonicalMeshTopologyHash(value: string): string {
+export function canonicalMeshTopologyHash(value: string): string {
   const match = /^(?:sha256:)?([0-9a-f]{64})$/i.exec(value);
   return match?.[1]?.toLowerCase() ?? value;
 }

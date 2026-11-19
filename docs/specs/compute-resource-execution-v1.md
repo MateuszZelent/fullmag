@@ -192,6 +192,33 @@ przyszłości, błąd odczytu i brak pomiaru dają jawny `unavailable` z reason,
 nigdy świeżą próbkę ani wartość zero. Ten sam limit obowiązuje przy późniejszym
 admission; odczyt inventory nie tworzy ani nie rezerwuje allocation.
 
+**Brak obserwacji partycji GPU (decyzja 22.10.2026).** Gdy `nvidia-smi` nie
+raportuje trybu MIG (`N/A`, np. GPU konsumenckie pod WSL), `full_device`
+potwierdza osobna, ograniczona sonda NVML (5 s). Pod konkurencją kilku grup
+DEV o jeden GPU sonda może przekroczyć termin albo nie zwrócić rekordu. Taki
+wynik `inconclusive` (`deadline_expired`, `unavailable`, `invalid_record`,
+`incomplete_evidence`) jest brakiem obserwacji, nie dowodem zmiany topologii.
+Jeżeli poprzednia opublikowana próbka tego samego `node_id` i `boot_id`
+wiązała ten sam UUID z tym samym PCI ID jako `full_device`, a `nvidia-smi` nie
+raportuje jawnie `Enabled`, próbka publikuje partycję jako
+`unavailable(probe_failed)` z `last_known: full_device`. Skrót inventory
+(liczony z wartości znanej, także `last_known`) pozostaje równy polityce,
+więc próbka jest publikowana, świeżość trwa, a serwis nie traci admission
+CPU. Admission GPU pozostaje zamknięte (§5.2: `last_known` partycji nie otwiera
+admission) do czasu, gdy kolejna sonda znów potwierdzi `full_device`; nie ma
+cichego przejścia GPU→CPU, bo żądanie GPU jest odrzucane, a nie przekierowane.
+Ciepłe odzyskanie po nieudanym `nvidia-smi` akceptuje taką partycję jako
+trwałą tożsamość, ponieważ wiążą ją sprawdzane tam skróty gotowości.
+Dodatni wynik nie-pełnego urządzenia (NVML `NotFullDevice` albo `nvidia-smi`
+`Enabled`), nowy lub nigdy niepotwierdzony GPU, inny UUID/PCI, inny boot oraz
+`invalid_uuid`/`unsupported_platform` zachowują `unknown` i nadal od razu
+zamykają publikację (fail-closed). Publikacja nie jest odraczana: odroczenie
+utrzymywałoby starszy dowód `full_device` także przy prawdziwej zmianie MIG.
+Gotowość natywna (`discover_nvidia_gpus(None)`) nigdy nie dziedziczy partycji.
+Źródła: `compute_node_probe.rs` (`retain_unconfirmed_full_device_partition`),
+`nvml_gpu_partition.rs`; regresja źródłowa
+`scripts/test_compute_node_nvml_partition_retention_source.py`.
+
 `compute_node_snapshot.v2` zawiera `host_owner_id` i `host_owner_epoch` dla
 wyłącznego producenta próbki fizycznego hosta, zakotwiczonego we wspólnym root
 `HostResourceLedger`. Pola te pozostają oddzielne od `RuntimeServiceOwner`,

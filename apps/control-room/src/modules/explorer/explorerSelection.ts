@@ -17,6 +17,8 @@ import { parsePinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
 import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
 import type { ExplorerNode } from "./explorerTypes";
+import { legacyStatusFacets } from "./builders/explorerNodeState";
+import { MASK_FIELD_DRIVE_MODULE_KIND } from "./builders/physicsGraphTree";
 
 type StudyStageSelectionKind = Extract<
   SelectionRef,
@@ -283,12 +285,10 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     node.kind === "airbox.visualization.debug"
   ) {
     return {
-      ...(node.availability ? { availability: node.availability } : {}),
+      ...airboxStateFacets(node),
       ...(node.contractGap !== undefined ? { contractGap: node.contractGap } : {}),
-      ...(node.executionState ? { executionState: node.executionState } : {}),
       kind: node.kind,
       nodeId: node.id,
-      ...(node.resourceState ? { resourceState: node.resourceState } : {}),
       type: "airbox",
       visualizationTargetId: "airbox",
     };
@@ -478,6 +478,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "object.region.diagnostics" ||
       node.kind === "object.region-magnetic-texture" ||
       node.kind === "object.magnetic-parameters" ||
+      node.kind === "object.absorbing-boundary" ||
       node.kind === "object.magnetic-texture" ||
       node.kind === "object.magnetic-texture.asset" ||
       node.kind === "object.magnetic-texture.load" ||
@@ -522,6 +523,12 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "airbox.root" ||
       node.kind === "airbox.multilayer.target";
     return {
+      ...airboxStateFacets(node),
+      ...(node.contractGap !== undefined
+        ? { contractGap: node.contractGap }
+        : node.statusReason
+          ? { contractGap: node.statusReason }
+          : {}),
       kind: node.kind,
       nodeId: node.id,
       type: "airbox",
@@ -741,6 +748,15 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
         type: "physics-field-drive",
       };
     }
+    if (node.physicsModuleKind === MASK_FIELD_DRIVE_MODULE_KIND) {
+      return {
+        fieldDriveId: node.physicsModuleId,
+        fieldDriveKind: "mask",
+        kind: "physics.field-drive",
+        nodeId: node.id,
+        type: "physics-field-drive",
+      };
+    }
     return {
       kind: "physics.module",
       nodeId: node.id,
@@ -792,6 +808,9 @@ export function resolveCurrentExplorerSelectionNode(
 ): ExplorerNode | null {
   const selected = findExplorerNode(nodes, selectedNodeId);
   if (selected) return selected;
+  if (ref?.type === "scene-object" && ref.kind === "object.absorbing-boundary") {
+    return findExplorerNode(currentTree, `model:object:${ref.objectId}:magnetic-parameters`);
+  }
   if (ref?.type !== "postprocessing") return null;
   // A definition selection is tied to an immutable owner identity. If that
   // owner is no longer in the current snapshot, never silently retarget the
@@ -907,4 +926,18 @@ export function selectExplorerNode(
     },
     source,
   );
+}
+
+// Airbox nodes publish one mesh-derived status; the inspector reads the three
+// state facets, so derive them from that status unless the node states them.
+function airboxStateFacets(node: ExplorerNode) {
+  const derived = node.status ? legacyStatusFacets(node.status) : null;
+  const availability = node.availability ?? derived?.availability;
+  const executionState = node.executionState ?? derived?.executionState;
+  const resourceState = node.resourceState ?? derived?.resourceState;
+  return {
+    ...(availability ? { availability } : {}),
+    ...(executionState ? { executionState } : {}),
+    ...(resourceState ? { resourceState } : {}),
+  };
 }

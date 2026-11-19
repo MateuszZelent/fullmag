@@ -18,6 +18,10 @@ const ribbonModuleSource = readFileSync(
   join(process.cwd(), "src/modules/ribbon/RibbonModule.tsx"),
   "utf8",
 );
+const footerModuleSource = readFileSync(
+  join(process.cwd(), "src/modules/footer/FooterModule.tsx"),
+  "utf8",
+);
 const footerTelemetrySource = readFileSync(
   join(process.cwd(), "src/modules/footer/FooterTelemetry.tsx"),
   "utf8",
@@ -46,7 +50,7 @@ describe("session status subscription performance contracts", () => {
     for (const source of [
       explorerModuleSource,
       ribbonModuleSource,
-      footerTelemetrySource,
+      footerModuleSource,
       statusBarSource,
     ]) {
       expect(source).toContain("useSessionStatusSelector");
@@ -64,7 +68,11 @@ describe("session status subscription performance contracts", () => {
     expect(ribbonModuleSource).toContain("fields_revision");
     expect(ribbonModuleSource).not.toContain("const sessionStatus = useSessionStatus()");
     expect(ribbonModuleSource).not.toContain("sessionStatus.data");
-    expect(footerTelemetrySource).not.toContain("const { data: status } = useSessionStatus()");
+    expect(footerModuleSource).toContain("useSessionStatusSelector(selectFooterTelemetryStatus");
+    expect(footerModuleSource).toContain("isEqual: footerTelemetryStatusEquals");
+    expect(footerModuleSource).not.toContain("const { data: status } = useSessionStatus()");
+    expect(footerTelemetrySource).not.toContain("useSessionStatusSelector(");
+    expect(footerTelemetrySource).not.toContain("useStageExecutionResource(");
     expect(statusBarSource).not.toContain("const status = useSessionStatus()");
   });
 });

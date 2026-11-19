@@ -13,6 +13,7 @@ import type {
   ComputeProbeController,
 } from "./model/types";
 import { ComputeNodePolicyEditor } from "./ComputeNodePolicyEditor";
+import { CopyableIdentifier } from "./ui/CopyableIdentifier";
 
 const BYTE_GIB = 1024 ** 3;
 const cpuFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 });
@@ -81,7 +82,7 @@ export function ComputeNodeInventoryDetails({
           ) : (
             <article className="fm-start-compute-settings__gpu-card" key={node.nodeId}>
               <div className="fm-start-compute-settings__gpu-head">
-                <h4>{node.nodeId}</h4>
+                <h4><CopyableIdentifier label="compute host ID" value={node.nodeId} /></h4>
                 <span className="fm-start-compute-settings__status" data-state="unavailable">Snapshot unavailable</span>
               </div>
               <p className="fm-start-compute-settings__reason">
@@ -122,7 +123,7 @@ function NodeSnapshotCard({
     >
       <div className="fm-start-compute-settings__gpu-head">
         <div>
-          <h4>{snapshot.nodeId}</h4>
+          <h4><CopyableIdentifier label="compute host ID" value={snapshot.nodeId} /></h4>
           <p>Inventory revision {snapshot.inventoryRevision}</p>
         </div>
         <span
