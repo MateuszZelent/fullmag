@@ -43,6 +43,14 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
+      - name: Bind the API and its command consumer to the same source snapshot
+        run: |
+          identity="$RUNNER_TEMP/abl-source.json"
+          python -B scripts/capture_source_snapshot_identity.py --repo-root . --ignore-non-runtime-dirty --output "$identity"
+          jq -e --arg sha "$GITHUB_SHA" '.head_commit_full == $sha and .source_snapshot_dirty == false' "$identity"
+          jq -r '"FULLMAG_SOURCE_GIT_COMMIT=" + .head_commit_full,
+                 "FULLMAG_SOURCE_WORKTREE_STATE=clean",
+                 "FULLMAG_SOURCE_SNAPSHOT_SHA256=" + .source_snapshot_sha256' "$identity" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
