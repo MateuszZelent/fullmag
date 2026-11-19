@@ -964,7 +964,9 @@ function runtimeState(context: CommandContext): string | null {
   return stage?.runtime_state ?? null;
 }
 
-function commandAdmissionRevision(status: LiveStatusResource | undefined): number | undefined {
+function commandAdmissionRevision(
+  status: LiveStatusResource | null | undefined,
+): number | undefined {
   // The durable command journal can advance without growing the visible queue.
   const revision = status?.resources?.commands_revision;
   return typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0
