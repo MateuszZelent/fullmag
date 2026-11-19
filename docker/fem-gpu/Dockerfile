@@ -109,8 +109,14 @@ RUN git clone --depth 1 --branch ${MFEM_REF} https://github.com/mfem/mfem.git &&
 RUN git clone --depth 1 --branch ${LIBCEED_REF} https://github.com/CEED/libCEED.git /tmp/build/libCEED && \
     test "$(git -C /tmp/build/libCEED rev-parse HEAD)" = "${LIBCEED_SOURCE_COMMIT}"
 
-RUN make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} -j"$(nproc)" && \
-    make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} install prefix=${INSTALL_PREFIX}
+ARG FULLMAG_LIBCEED_CUDA_ARCHITECTURE=""
+RUN ceed_cuda_arch=""; \
+    if [ -n "$FULLMAG_LIBCEED_CUDA_ARCHITECTURE" ]; then \
+      [[ "$FULLMAG_LIBCEED_CUDA_ARCHITECTURE" =~ ^[1-9][0-9]{1,2}$ ]] || exit 1; \
+      ceed_cuda_arch="compute_${FULLMAG_LIBCEED_CUDA_ARCHITECTURE} --gpu-code=sm_${FULLMAG_LIBCEED_CUDA_ARCHITECTURE}"; \
+    fi; \
+    make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} CUDA_ARCH="$ceed_cuda_arch" -j"$(nproc)" && \
+    make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} CUDA_ARCH="$ceed_cuda_arch" install prefix=${INSTALL_PREFIX}
 
 # S10: Build hypre (serial + CUDA) Ä‚ËĂ˘â€šÂ¬Ă˘â‚¬ĹĄ required for CG+AMG Poisson solver
 ENV UMPIRE_REF=v2024.07.0
@@ -275,6 +281,7 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build-cpu -G Ninja \
 # pair from source into the shared managed prefix.
 COPY docker/fem-gpu/patches/petsc-3.24.6-multiarch-nvcc.diff /tmp/build/petsc-3.24.6-multiarch-nvcc.diff
 ARG FULLMAG_PETSC_CUDA_ARCHITECTURES="80,89,90"
+ENV FULLMAG_PETSC_CUDA_ARCHITECTURES=${FULLMAG_PETSC_CUDA_ARCHITECTURES}
 # Sparse direct and dense kernels for both PETSc installations: MUMPS (with
 # ScaLAPACK) and METIS ordering for the exact modal Poisson LU, and OpenBLAS
 # instead of the reference netlib BLAS/LAPACK.  PETSc pins the downloaded

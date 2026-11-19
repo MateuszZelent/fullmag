@@ -55,31 +55,9 @@ RECEIPT_SCHEMA = "fullmag.direct-compose.backend-build-receipt.v1"
 LIVE_SYNC_ATTEMPTS = 3
 # Conventional SIGTERM status recorded for a Make stopped with its container.
 INTERRUPTED_MAKE_EXIT_CODE = 143
-# DEV packages run on the GPU of the host that builds them.  "auto" compiles
-# CUDA for the visible devices only; "all" keeps the image's portable matrix.
+# The launcher pins one host target in the selected group's toolchain receipt.
 DEV_CUDA_ARCHITECTURES_ENV = "FULLMAG_DEV_CUDA_ARCHITECTURES"
-CUDA_ARCHITECTURE_LIST_RE = re.compile(
-    r"[1-9][0-9]{1,2}(?:-real|-virtual)?(?:;[1-9][0-9]{1,2}(?:-real|-virtual)?)*"
-)
-CUDA_CAPABILITY_PROBE = r"""import ctypes, json
-driver = ctypes.CDLL("libcuda.so.1")
-if driver.cuInit(0) != 0:
-    raise SystemExit(3)
-count = ctypes.c_int()
-if driver.cuDeviceGetCount(ctypes.byref(count)) != 0 or count.value < 1:
-    raise SystemExit(4)
-found = set()
-for ordinal in range(count.value):
-    device = ctypes.c_int()
-    major = ctypes.c_int()
-    minor = ctypes.c_int()
-    if (driver.cuDeviceGet(ctypes.byref(device), ordinal) != 0
-            or driver.cuDeviceGetAttribute(ctypes.byref(major), 75, device) != 0
-            or driver.cuDeviceGetAttribute(ctypes.byref(minor), 76, device) != 0):
-        raise SystemExit(5)
-    found.add(major.value * 10 + minor.value)
-print(json.dumps(sorted(found)))
-"""
+DEV_CUDA_TARGET_RE = re.compile(r"[1-9][0-9]{1,2}-real")
 LIVE_MANIFEST_SCHEMA = "fullmag.docker-backend-live-source.v1"
 LIVE_SOURCE_MODE = "live-shadow-v1"
 BACKEND_CARGO_PROFILE = "backend-dev"
@@ -1999,6 +1977,12 @@ def _toolchain_identity() -> tuple[str, dict[str, Any]]:
     for key in ("declared", "actual", "latest"):
         if not isinstance(dependency.get(key), dict):
             _fail(f"FEM dependency manifest field {key} is invalid")
+    if os.environ.get("FULLMAG_BACKEND_CARGO_PROFILE", BACKEND_CARGO_PROFILE) == BACKEND_CARGO_PROFILE:
+        target = _dev_cuda_architectures()
+        if target is not None:
+            declared_cuda = dependency["declared"].get("cuda", {})
+            if not isinstance(declared_cuda, dict) or declared_cuda.get("architectures") != target:
+                _fail("FEM dependency manifest CUDA target differs from the DEV launcher pin")
     commits = dependency["actual"].get("source_commits")
     if not isinstance(commits, dict) or any(not isinstance(commits.get(key), str) or not commits[key] for key in ("mfem", "libceed", "hypre", "petsc", "slepc")):
         _fail("FEM dependency manifest lacks pinned source commits")
@@ -2018,34 +2002,14 @@ def _validate_cargo_profile(value: str) -> str:
 
 
 def _dev_cuda_architectures() -> str | None:
-    """Resolve the CUDA targets of a DEV build, or None for the image matrix."""
+    """Read the launcher pin, permitting inspection of old unpinned packages."""
 
-    requested = os.environ.get(DEV_CUDA_ARCHITECTURES_ENV, "auto").strip()
-    if requested == "all":
+    requested = os.environ.get(DEV_CUDA_ARCHITECTURES_ENV, "").strip()
+    if not requested:
         return None
-    if requested != "auto":
-        if not CUDA_ARCHITECTURE_LIST_RE.fullmatch(requested):
-            _fail(f"{DEV_CUDA_ARCHITECTURES_ENV} must be auto, all, or a CMake list such as 89-real")
-        return requested
-    try:
-        result = subprocess.run(
-            [sys.executable, "-B", "-c", CUDA_CAPABILITY_PROBE],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
-        capabilities = json.loads(result.stdout) if result.returncode == 0 else None
-    except (OSError, subprocess.SubprocessError, ValueError):
-        capabilities = None
-    if (
-        not isinstance(capabilities, list)
-        or not capabilities
-        or not all(type(value) is int and 30 <= value <= 199 for value in capabilities)
-    ):
-        _log_phase("cuda", "architectures", reason="probe-unavailable", target="image-default")
-        return None
-    return ";".join(f"{value}-real" for value in capabilities)
+    if DEV_CUDA_TARGET_RE.fullmatch(requested) is None:
+        _fail(f"{DEV_CUDA_ARCHITECTURES_ENV} must be one real target, such as 86-real")
+    return requested
 
 
 def _cargo_home(build_root: Path) -> str:
@@ -2130,15 +2094,12 @@ def _build_environment(
         }
     )
     if cargo_profile == BACKEND_CARGO_PROFILE:
-        environment.pop("FULLMAG_CUDA_ARCHITECTURES", None)
-        environment.pop("FULLMAG_FDM_CUDA_ARCHITECTURES", None)
         architectures = _dev_cuda_architectures()
-        if architectures is not None:
-            # FEM reads FULLMAG_CUDA_ARCHITECTURES; FDM has its own variable so
-            # release builds keep their fixed FDM target list.
-            environment["FULLMAG_CUDA_ARCHITECTURES"] = architectures
-            environment["FULLMAG_FDM_CUDA_ARCHITECTURES"] = architectures
-            _log_phase("cuda", "architectures", target=architectures.replace(";", ","))
+        if architectures is None:
+            _fail(f"DEV compilation requires {DEV_CUDA_ARCHITECTURES_ENV} from the managed launcher")
+        environment["FULLMAG_CUDA_ARCHITECTURES"] = architectures
+        environment["FULLMAG_FDM_CUDA_ARCHITECTURES"] = architectures
+        _log_phase("cuda", "architectures", target=architectures)
     for path in (build_root / "cargo", build_root / "home", build_root / "tmp"):
         _ensure_directory(path, f"build directory {path}")
     return environment
@@ -6040,22 +6001,13 @@ def _prepare_with_shared_package(
                 _write_candidate_marker(output, PACKAGE_ROOT, build_root, state="ready", records=records)
                 _log_phase("shared-package", "hit", key=entry.key)
                 return 0
-            # Freeze the probed architecture for the actual compiler invocation.
-            previous = os.environ.get(DEV_CUDA_ARCHITECTURES_ENV)
-            os.environ[DEV_CUDA_ARCHITECTURES_ENV] = architectures or "all"
-            try:
-                if on_actual_build is None:
-                    result = _prepare_locked(args, build_root, output, jobs, toolchain, direct_install_root)
-                else:
-                    result = _prepare_locked(
-                        args, build_root, output, jobs, toolchain, direct_install_root,
-                        on_actual_build=on_actual_build,
-                    )
-            finally:
-                if previous is None:
-                    os.environ.pop(DEV_CUDA_ARCHITECTURES_ENV, None)
-                else:
-                    os.environ[DEV_CUDA_ARCHITECTURES_ENV] = previous
+            if on_actual_build is None:
+                result = _prepare_locked(args, build_root, output, jobs, toolchain, direct_install_root)
+            else:
+                result = _prepare_locked(
+                    args, build_root, output, jobs, toolchain, direct_install_root,
+                    on_actual_build=on_actual_build,
+                )
             if result == 0:
                 receipt, _, _ = _validated_package(output, "shared package publisher", exclude_candidate_marker=True)
                 if receipt["build"].get("cuda_architectures") != architectures:

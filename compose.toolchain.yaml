@@ -26,6 +26,7 @@ services:
         # Explicit DEV optimization tradeoff; 0 preserves the normal CUDA policy.
         FULLMAG_MFEM_CUDA_FAST_COMPILE: "${FULLMAG_MFEM_CUDA_FAST_COMPILE:-0}"
         FULLMAG_PETSC_CUDA_ARCHITECTURES: "${FULLMAG_PETSC_CUDA_ARCHITECTURES:-80,89,90}"
+        FULLMAG_LIBCEED_CUDA_ARCHITECTURE: "${FULLMAG_LIBCEED_CUDA_ARCHITECTURE:-}"
     profiles: [toolchain]
     # The toolchain service is also used for a bounded dependency-manifest
     # probe. Keep its runtime policy declarative so the probe does not depend

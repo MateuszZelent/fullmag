@@ -143,6 +143,7 @@ services:
       FULLMAG_RUNTIME_IMAGE_ID: ${FULLMAG_DEV_IMAGE}
       FULLMAG_TOOLCHAIN_IMAGE_ID: ${FULLMAG_TOOLCHAIN_IMAGE_ID:?Pin the toolchain identity}
       FULLMAG_BACKEND_CARGO_PROFILE: ${FULLMAG_BACKEND_CARGO_PROFILE:-backend-dev}
+      FULLMAG_DEV_CUDA_ARCHITECTURES: ${FULLMAG_DEV_CUDA_ARCHITECTURES:-}
       # Match the baseline backend CPU quota; the managed saved budget
       # updates both this value and the quota when rendering Compose.
       CARGO_BUILD_JOBS: "4"
