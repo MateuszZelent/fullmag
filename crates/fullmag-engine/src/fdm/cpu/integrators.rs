@@ -1023,7 +1023,7 @@ mod adaptive_decision_tests {
             &mut rhs,
             crate::EvaluationRequest::Minimal,
             time_seconds,
-        );
+        ).expect("current-time observables");
         rhs
     }
 
@@ -1041,8 +1041,66 @@ mod adaptive_decision_tests {
             &mut h_eff,
             time_seconds,
         );
-        problem.llg_rhs_soa_into(magnetization, &h_eff, &mut rhs);
+        problem
+            .llg_rhs_soa_into_at_time(
+                magnetization,
+                &h_eff,
+                &mut rhs,
+                time_seconds,
+                TimeEvaluationSide::LeftLimit,
+            )
+            .expect("current-time observable RHS");
         rhs
+    }
+
+    #[test]
+    fn soa_step_observables_apply_the_time_dependent_slonczewski_multiplier() {
+        let mut problem = adaptive_test_problem(crate::TimeIntegrator::RK45);
+        problem.terms.external_field = None;
+        problem.terms.slonczewski_stt = Some(crate::SlonczewskiSttConfig {
+            formula: crate::SlonczewskiFormula::FullmagV2,
+            current_density_magnitude: 1.0e12,
+            spin_polarization_axis: [0.0, 0.0, 1.0],
+            lambda: 1.0,
+            epsilon_prime: 0.0,
+            degree: 0.4,
+            thickness: 1.0e-9,
+            current_sign: 1.0,
+            active_mask: None,
+        });
+        problem
+            .set_slonczewski_time_expression(&fullmag_ir::TimeExpressionIR {
+                source: "heaviside(t - on)".into(),
+                constants: [("on".to_string(), 1.0e-9)].into_iter().collect(),
+                event_times_s: vec![1.0e-9],
+            })
+            .expect("valid current expression");
+
+        let magnetization = crate::VectorFieldSoA::from_aos(&[[1.0, 0.0, 0.0]]);
+        let mut workspace = problem.create_workspace();
+        let mut h_eff = crate::VectorFieldSoA::zeros(1);
+        let mut rhs = crate::VectorFieldSoA::zeros(1);
+        let before = problem
+            .compute_step_observables_soa_minimal(
+                &magnetization,
+                &mut workspace,
+                &mut h_eff,
+                &mut rhs,
+                0.5e-9,
+            )
+            .expect("off-state SoA observables");
+        assert_eq!(before.max_rhs_amplitude, 0.0);
+
+        let on = problem
+            .compute_step_observables_soa_minimal(
+                &magnetization,
+                &mut workspace,
+                &mut h_eff,
+                &mut rhs,
+                1.5e-9,
+            )
+            .expect("on-state SoA observables");
+        assert!(on.max_rhs_amplitude > 0.0);
     }
 
     #[test]
@@ -1467,7 +1525,7 @@ impl ExchangeLlgProblem {
             &mut bufs.rhs,
             evaluation,
             t0 + dt,
-        );
+        )?;
         let final_terms = external_terms(
             &bufs.delta[..n],
             t0 + dt,
@@ -1642,7 +1700,7 @@ impl ExchangeLlgProblem {
             &mut bufs.rhs,
             evaluation,
             t0 + dt,
-        );
+        )?;
         // k[2] is unused by Heun. Keep the raw candidate difference before
         // projection: (m0 + dt*(k0+k1)/2) - (m0 + dt*k0).
         // The synchronous callback borrows this scratch; no accepted state owns it.
@@ -1786,7 +1844,7 @@ impl ExchangeLlgProblem {
             &mut bufs.rhs,
             evaluation,
             state.time_seconds,
-        );
+        )?;
         Ok(eval.into_step_report(state.time_seconds, dt, false))
     }
 
@@ -1838,7 +1896,7 @@ impl ExchangeLlgProblem {
             &mut bufs.rhs,
             evaluation,
             state.time_seconds,
-        );
+        )?;
         Ok(eval.into_step_report(state.time_seconds, dt, false))
     }
 
@@ -1995,7 +2053,7 @@ impl ExchangeLlgProblem {
             &mut bufs.rhs,
             evaluation,
             state.time_seconds,
-        );
+        )?;
         Ok(eval.into_step_report(state.time_seconds, dt, false))
     }
 
@@ -2083,7 +2141,7 @@ impl ExchangeLlgProblem {
             &mut bufs.rhs,
             evaluation,
             state.time_seconds,
-        );
+        )?;
         Ok(eval.into_step_report(state.time_seconds, dt, false))
     }
 
@@ -2108,7 +2166,7 @@ impl ExchangeLlgProblem {
         h_eff: &mut [Vector3],
         h_scratch: &mut [Vector3],
         out: &mut [Vector3],
-    ) -> crate::RhsEvaluation {
+    ) -> crate::Result<crate::RhsEvaluation> {
         self.compute_step_observables_zero_alloc(magnetization, ws, h_eff, h_scratch, out)
     }
 
@@ -2314,7 +2372,7 @@ impl ExchangeLlgProblem {
                     &mut bufs.rhs,
                     evaluation,
                     state.time_seconds,
-                );
+                )?;
                 state.adaptive_previous_error = if self.dynamics.adaptive_enabled {
                     adaptive_controller.previous_error()
                 } else {
@@ -2488,7 +2546,7 @@ impl ExchangeLlgProblem {
                     &mut bufs.rhs,
                     evaluation,
                     state.time_seconds,
-                );
+                )?;
                 state.adaptive_previous_error = if self.dynamics.adaptive_enabled {
                     adaptive_controller.previous_error()
                 } else {
@@ -2961,7 +3019,7 @@ impl ExchangeLlgProblem {
                     &mut bufs.rhs,
                     evaluation,
                     state.time_seconds,
-                );
+                )?;
                 state.adaptive_previous_error = if self.dynamics.adaptive_enabled {
                     adaptive_controller.previous_error()
                 } else {
@@ -3317,7 +3375,7 @@ impl ExchangeLlgProblem {
                     &mut bufs.rhs,
                     evaluation,
                     state.time_seconds,
-                );
+                )?;
                 state.adaptive_previous_error = if self.dynamics.adaptive_enabled {
                     adaptive_controller.previous_error()
                 } else {
@@ -3446,7 +3504,7 @@ impl ExchangeLlgProblem {
                 &mut bufs.rhs,
                 evaluation,
                 accepted_time,
-            );
+            )?;
             state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
             state.time_seconds = accepted_time;
             state.abm_history.push_copy_from_slice(&bufs.rhs[..n], dt);
@@ -3536,7 +3594,7 @@ impl ExchangeLlgProblem {
             &mut bufs.rhs,
             evaluation,
             accepted_time,
-        );
+        )?;
         state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
         state.time_seconds = accepted_time;
         state.abm_history.push_copy_from_slice(&bufs.rhs[..n], dt);
@@ -3634,6 +3692,7 @@ impl ExchangeLlgProblem {
                 accepted_time,
             )
         };
+        let report = eval?.into_step_report(accepted_time, dt, false);
         bufs.soa.k[0].gather_into_aos(&mut bufs.k[0][..n]);
         bufs.soa
             .m_stage
@@ -3641,7 +3700,7 @@ impl ExchangeLlgProblem {
         state.time_seconds = accepted_time;
         state.abm_history.push_copy_from_slice(&bufs.k[0][..n], dt);
         Ok(tag_abm3_step(
-            eval.into_step_report(accepted_time, dt, false),
+            report,
             false,
             false,
             state.abm_history.history_resets,
@@ -3694,7 +3753,7 @@ impl ExchangeLlgProblem {
             bufs,
             evaluation,
             state.time_seconds,
-        );
+        )?;
         Ok(eval.into_step_report(state.time_seconds, dt, false))
     }
 
@@ -3780,7 +3839,7 @@ impl ExchangeLlgProblem {
             bufs,
             evaluation,
             state.time_seconds,
-        );
+        )?;
         Ok(eval.into_step_report(state.time_seconds, dt, false))
     }
 
@@ -3917,7 +3976,7 @@ impl ExchangeLlgProblem {
                     bufs,
                     evaluation,
                     state.time_seconds,
-                );
+                )?;
                 state.adaptive_previous_error = if self.dynamics.adaptive_enabled {
                     adaptive_controller.previous_error()
                 } else {
@@ -4225,7 +4284,7 @@ impl ExchangeLlgProblem {
                     bufs,
                     evaluation,
                     state.time_seconds,
-                );
+                )?;
                 state.adaptive_previous_error = if self.dynamics.adaptive_enabled {
                     adaptive_controller.previous_error()
                 } else {
@@ -4356,11 +4415,12 @@ impl ExchangeLlgProblem {
                 accepted_time,
             )
         };
+        let report = eval?.into_step_report(accepted_time, dt, false);
         state.magnetization.copy_from(&bufs.soa.m_stage);
         state.time_seconds = accepted_time;
         state.abm_history.push_copy_from_soa(&bufs.soa.k[0], dt);
         Ok(tag_abm3_step(
-            eval.into_step_report(accepted_time, dt, false),
+            report,
             false,
             false,
             state.abm_history.history_resets,
@@ -4374,7 +4434,7 @@ impl ExchangeLlgProblem {
         bufs: &mut IntegratorBuffers,
         evaluation: EvaluationRequest,
         time_seconds: f64,
-    ) -> RhsEvaluation {
+    ) -> Result<RhsEvaluation> {
         let soa = &mut bufs.soa;
         let (rhs_slots, scratch_slots) = soa.k.split_at_mut(1);
         self.compute_step_observables_soa_parts(
@@ -4397,7 +4457,7 @@ impl ExchangeLlgProblem {
         h_scratch: &mut VectorFieldSoA,
         evaluation: EvaluationRequest,
         time_seconds: f64,
-    ) -> RhsEvaluation {
+    ) -> Result<RhsEvaluation> {
         match evaluation {
             EvaluationRequest::Minimal => self.compute_step_observables_soa_minimal(
                 magnetization,
@@ -4426,7 +4486,7 @@ impl ExchangeLlgProblem {
         rhs_out: &mut VectorFieldSoA,
         h_scratch: &mut VectorFieldSoA,
         time_seconds: f64,
-    ) -> RhsEvaluation {
+    ) -> Result<RhsEvaluation> {
         h_eff.fill_zero();
 
         let exchange_energy_joules = if self.terms.exchange {
@@ -4477,12 +4537,18 @@ impl ExchangeLlgProblem {
 
         let max_effective_field_amplitude = max_norm_soa(h_eff);
 
-        self.llg_rhs_soa_into(magnetization, h_eff, rhs_out);
+        self.llg_rhs_soa_into_at_time(
+            magnetization,
+            h_eff,
+            rhs_out,
+            time_seconds,
+            TimeEvaluationSide::LeftLimit,
+        )?;
 
         let max_rhs_amplitude = max_norm_soa(rhs_out);
         let max_torque_apm = max_cross_norm_soa(magnetization, h_eff);
 
-        RhsEvaluation {
+        Ok(RhsEvaluation {
             exchange_energy_joules,
             demag_energy_joules,
             external_energy_joules,
@@ -4500,7 +4566,7 @@ impl ExchangeLlgProblem {
             max_rhs_all_amplitude: max_rhs_amplitude,
             max_torque_Apm: max_torque_apm,
             max_torque_all_Apm: max_torque_apm,
-        }
+        })
     }
 
     fn compute_step_observables_soa_minimal(
@@ -4510,16 +4576,22 @@ impl ExchangeLlgProblem {
         h_eff: &mut VectorFieldSoA,
         rhs_out: &mut VectorFieldSoA,
         time_seconds: f64,
-    ) -> RhsEvaluation {
+    ) -> Result<RhsEvaluation> {
         self.effective_field_into_soa_ws_at_time(magnetization, ws, h_eff, time_seconds);
         let max_effective_field_amplitude = max_norm_soa(h_eff);
 
-        self.llg_rhs_soa_into(magnetization, h_eff, rhs_out);
+        self.llg_rhs_soa_into_at_time(
+            magnetization,
+            h_eff,
+            rhs_out,
+            time_seconds,
+            TimeEvaluationSide::LeftLimit,
+        )?;
 
         let max_rhs_amplitude = max_norm_soa(rhs_out);
         let max_torque_apm = max_cross_norm_soa(magnetization, h_eff);
 
-        RhsEvaluation {
+        Ok(RhsEvaluation {
             exchange_energy_joules: 0.0,
             demag_energy_joules: 0.0,
             external_energy_joules: 0.0,
@@ -4532,7 +4604,7 @@ impl ExchangeLlgProblem {
             max_rhs_all_amplitude: max_rhs_amplitude,
             max_torque_Apm: max_torque_apm,
             max_torque_all_Apm: max_torque_apm,
-        }
+        })
     }
 
     // -----------------------------------------------------------------------

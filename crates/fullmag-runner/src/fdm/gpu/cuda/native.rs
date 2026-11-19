@@ -1720,6 +1720,11 @@ impl NativeFdmBackend {
                     .to_string(),
             });
         }
+        if plan.slonczewski_time_expression.is_some() {
+            return Err(RunError {
+                message: "batched CUDA FDM does not support time-dependent Slonczewski current; use the regular RK step path".to_string(),
+            });
+        }
         Self::create_with_stats_policy(plan, stats_policy)
     }
 
@@ -5109,6 +5114,37 @@ mod tests {
         assert_eq!(policy.adaptive_safety, 0.9);
         assert_eq!(policy.adaptive_growth_limit, 2.0);
         assert_eq!(policy.adaptive_shrink_limit, 0.2);
+    }
+
+    #[test]
+    fn native_adaptive_batch_constructor_fails_closed_for_time_dependent_current() {
+        let mut plan = fullmag_ir::FdmPlanIR {
+            adaptive_timestep: Some(fullmag_ir::AdaptiveTimeStepIR {
+                tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+                atol: 1e-6,
+                rtol: 0.0,
+                dt_initial: Some(1e-15),
+                dt_min: 1e-16,
+                dt_max: Some(1e-14),
+                safety: 0.9,
+                growth_limit: 2.0,
+                shrink_limit: 0.2,
+                max_spin_rotation: None,
+                norm_tolerance: None,
+            }),
+            ..Default::default()
+        };
+        plan.slonczewski_time_expression = Some(fullmag_ir::TimeExpressionIR {
+            source: "sin(t)".into(),
+            constants: Default::default(),
+            event_times_s: Vec::new(),
+        });
+
+        let error = match NativeFdmBackend::create_for_adaptive_batch(&plan) {
+            Err(error) => error,
+            Ok(_) => panic!("native batch constructor must reject J(t) before CUDA creation"),
+        };
+        assert!(error.message.contains("does not support time-dependent"));
     }
 
     #[test]

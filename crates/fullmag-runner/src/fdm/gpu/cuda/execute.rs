@@ -596,6 +596,10 @@ fn adaptive_batch_execution_eligible(
     plan.adaptive_timestep.is_some()
         && plan.relaxation.is_none()
         && plan.spin_transport_plans.is_empty()
+        // The native batch path captures the RHS in a CUDA graph and freezes
+        // scalar parameters at capture time. J(t) requires host-selected RK
+        // stages and event clipping, so it must use the regular step loop.
+        && plan.slonczewski_time_expression.is_none()
         && !plan_uploads_time_dependent_drive(plan)
         && !live
         // The native batch ABI exposes only terminal accepted-state outputs.
@@ -719,6 +723,26 @@ fn cap_cuda_target_to_drive_event(
         .map_or(proposed_target_solver_time_s, |event_s| {
             event_s - plan.time_stage.start_time_s
         })
+}
+
+#[cfg(feature = "cuda")]
+fn cap_cuda_step_to_drive_event(
+    plan: &FdmPlanIR,
+    current_solver_time_s: f64,
+    proposed_dt_s: f64,
+    drive_events_s: &[f64],
+) -> f64 {
+    let tolerance_s = if plan.slonczewski_time_expression.is_some() {
+        0.0
+    } else {
+        crate::schedules::OUTPUT_TIME_TOLERANCE
+    };
+    crate::time_events::cap_timestep_to_next_event(
+        super::canonical_fdm_time(plan, current_solver_time_s),
+        proposed_dt_s,
+        drive_events_s,
+        tolerance_s,
+    )
 }
 
 #[cfg(feature = "cuda")]
@@ -1288,11 +1312,11 @@ pub(crate) fn execute_cuda_fdm(
                 }
             }
 
-            let dt_step = crate::time_events::cap_timestep_to_next_event(
-                super::canonical_fdm_time(plan, current_time),
+            let dt_step = cap_cuda_step_to_drive_event(
+                plan,
+                current_time,
                 dt.min(until_seconds - current_time),
                 &drive_event_schedule,
-                crate::schedules::OUTPUT_TIME_TOLERANCE,
             );
             let interrupt_requested = live
                 .as_ref()
@@ -1984,8 +2008,9 @@ pub(crate) fn execute_cuda_fdm(
 #[cfg(all(test, feature = "cuda"))]
 mod adaptive_batch_tests {
     use super::{
-        adaptive_batch_execution_eligible, adaptive_batch_target, cap_cuda_target_to_drive_event,
-        cuda_drive_event_schedule, execute_cuda_fdm, record_cuda_initial_scalar,
+        adaptive_batch_execution_eligible, adaptive_batch_target, cap_cuda_step_to_drive_event,
+        cap_cuda_target_to_drive_event, cuda_drive_event_schedule, execute_cuda_fdm,
+        record_cuda_initial_scalar,
         resolve_observation_policy, should_refresh_cuda_terminal_stats, OutputSchedule,
     };
     use crate::artifact_pipeline::ArtifactRecorder;
@@ -2225,6 +2250,43 @@ mod adaptive_batch_tests {
         assert!(
             !adaptive_batch_execution_eligible(&plan, false, true),
             "accepted-step table or field autosaves require an exact accepted state"
+        );
+
+        let mut time_dependent_plan = plan;
+        time_dependent_plan.slonczewski_time_expression =
+            Some(fullmag_ir::TimeExpressionIR {
+                source: "sin(t)".into(),
+                constants: Default::default(),
+                event_times_s: vec![1.0e-15],
+            });
+        assert!(
+            !adaptive_batch_execution_eligible(&time_dependent_plan, false, false),
+            "time-dependent current must stay out of the captured CUDA batch path"
+        );
+    }
+
+    #[test]
+    fn cuda_single_step_keeps_sub_atol_current_edges_as_endpoints() {
+        let plan = FdmPlanIR {
+            slonczewski_time_expression: Some(fullmag_ir::TimeExpressionIR {
+                source: "heaviside(t - a) - heaviside(t - b)".into(),
+                constants: Default::default(),
+                event_times_s: vec![5.0e-19, 1.0e-18],
+            }),
+            ..FdmPlanIR::default()
+        };
+        let events = [5.0e-19, 1.0e-18];
+
+        let first_dt = cap_cuda_step_to_drive_event(&plan, 0.0, 2.0e-18, &events);
+        assert_eq!(
+            first_dt,
+            5.0e-19,
+            "the actual CUDA single-step cap must stop at the first J(t) edge"
+        );
+        assert_eq!(
+            cap_cuda_step_to_drive_event(&plan, first_dt, 2.0e-18, &events),
+            5.0e-19,
+            "the next single-step cap must stop at the second J(t) edge"
         );
     }
 

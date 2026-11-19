@@ -106,6 +106,7 @@ fn interactive_time_event_schedule(
     waveform_origin_time_s: f64,
     duration_s: f64,
     time_expression: Option<&fullmag_ir::TimeExpressionIR>,
+    time_expression_clock_origin_s: Option<f64>,
     output_periods_s: impl IntoIterator<Item = f64>,
 ) -> Vec<f64> {
     let stage_end_s = stage_start_s + duration_s;
@@ -123,12 +124,20 @@ fn interactive_time_event_schedule(
         &[],
         tolerance_s,
     );
-    crate::time_events::extend_absolute_time_expression_events(
-        &mut schedule,
-        time_expression,
-        stage_start_s,
-        stage_end_s,
-    );
+    if let Some(expression) = time_expression {
+        let clock_origin_s = time_expression_clock_origin_s.unwrap_or(0.0);
+        schedule.times_s.extend(expression.event_times_s.iter().filter_map(
+            |event_time_s| {
+                let schedule_time_s = *event_time_s - clock_origin_s;
+                (schedule_time_s.is_finite()
+                    && schedule_time_s >= stage_start_s
+                    && schedule_time_s <= stage_end_s)
+                    .then_some(schedule_time_s)
+            },
+        ));
+        schedule.times_s.sort_by(f64::total_cmp);
+        schedule.times_s.dedup_by(|right, left| *right == *left);
+    }
     let mut times = schedule.times_s;
     for period_s in output_periods_s {
         if period_s.is_finite() && period_s > 0.0 {
@@ -278,7 +287,8 @@ mod tests {
         attach_fem_crossover_decision_to_provenance, attach_resolved_fallback_to_provenance,
         build_grid_preview_field, cached_display_refresh_due, cpu_execution_provenance,
         display_refresh_due, full_resolution_preview_request, normalize_runtime_context_signature,
-        observation_preview_quantities_for, should_materialize_terminal_fields,
+        interactive_time_event_schedule, observation_preview_quantities_for,
+        should_materialize_terminal_fields,
         InteractiveFdmPreviewRuntime, InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
@@ -302,6 +312,33 @@ mod tests {
         SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn interactive_cuda_maps_absolute_expression_events_to_stage_local_clock() {
+        let expression = fullmag_ir::TimeExpressionIR {
+            source: "heaviside(t - on) - heaviside(t - off)".into(),
+            constants: Default::default(),
+            event_times_s: vec![71.0e-9, 72.0e-9],
+        };
+        let events = interactive_time_event_schedule(
+            &[],
+            &[],
+            0.0,
+            0.0,
+            10.0e-9,
+            Some(&expression),
+            Some(70.0e-9),
+            std::iter::empty(),
+        );
+
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0], 0.0);
+        assert!((events[1] - 1.0e-9).abs() < 1.0e-23);
+        assert!((events[2] - 2.0e-9).abs() < 1.0e-23);
+        assert_eq!(events[3], 10.0e-9);
+        let step_dt = crate::time_events::cap_timestep_to_next_event(0.0, 2.0e-9, &events, 0.0);
+        assert!((step_dt - 1.0e-9).abs() < 1.0e-23);
+    }
 
     #[test]
     fn interactive_fem_runtime_reuses_runtime_owned_stage_context() {
@@ -2936,6 +2973,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             plan.slonczewski_time_expression.as_ref(),
+            None,
             std::iter::empty(),
         );
         let mut dt = crate::resolve_timestep_policy(
@@ -3296,6 +3334,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             plan.slonczewski_time_expression.as_ref(),
+            None,
             output_periods,
         );
         let mut dt = crate::resolve_timestep_policy(
@@ -3715,6 +3754,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             plan.slonczewski_time_expression.as_ref(),
+            Some(plan.time_stage.start_time_s),
             std::iter::empty(),
         );
         reject_non_llg_interactive_relaxation(
@@ -4093,6 +4133,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             plan.slonczewski_time_expression.as_ref(),
+            Some(plan.time_stage.start_time_s),
             output_periods,
         );
         reject_non_llg_interactive_relaxation(
@@ -4517,6 +4558,7 @@ impl CpuInteractiveFemPreviewRuntime {
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             None,
+            None,
             std::iter::empty(),
         );
         reject_non_llg_interactive_relaxation(
@@ -4866,6 +4908,7 @@ impl CpuInteractiveFemPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            None,
             None,
             output_periods,
         );
@@ -5295,6 +5338,7 @@ impl GpuInteractiveFemPreviewRuntime {
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             None,
+            None,
             std::iter::empty(),
         );
         reject_non_llg_interactive_relaxation(
@@ -5591,6 +5635,7 @@ impl GpuInteractiveFemPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            None,
             None,
             output_periods,
         );
