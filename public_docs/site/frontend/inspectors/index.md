@@ -42,6 +42,7 @@ exposed in a dedicated inspector remain `Python-only` (see {doc}`/frontend/capab
 :maxdepth: 1
 
 objects-and-materials
+absorbing-boundaries
 physics-antennas-and-transport
 studies-and-stages
 analysis-and-frequency-domain
