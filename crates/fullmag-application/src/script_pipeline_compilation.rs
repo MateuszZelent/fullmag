@@ -224,6 +224,7 @@ fn validate_physical_snapshot_coverage(document:&StudyPipelineDocument,nodes:&[S
                 | ScriptExecutionStageAction::AddMaskFieldDrive { .. }
                 | ScriptExecutionStageAction::UpdateMaskFieldDrive { .. }
                 | ScriptExecutionStageAction::RemoveFieldDrive { .. }
+                | ScriptExecutionStageAction::SetSpinTorqueEnabled { .. }
             ) => {
                 let mut authored = serde_json::to_value(payload)?;
                 authored["kind"] = serde_json::Value::String(stage_kind.clone());

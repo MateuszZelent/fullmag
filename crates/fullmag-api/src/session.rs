@@ -3455,6 +3455,38 @@ pub(crate) fn invalidate_live_magnetization_preview(current: &mut SessionStateRe
     current.simulation_preparation = None;
 }
 
+/// Retire prior solver H publications when a new accepted stage M0 is bound.
+/// Immutable artifact fields normally survive domain replacement, but they
+/// are still the previous stage's observation when the grid is unchanged.
+pub(crate) fn retire_previous_solver_h_fields(current: &mut SessionStateResponse) {
+    let mut retired = BTreeSet::new();
+    retired.extend(
+        current
+            .latest_fields
+            .entries()
+            .filter(|(quantity, _)| quantity.starts_with("H_"))
+            .map(|(quantity, _)| quantity.clone()),
+    );
+    retired.extend(
+        current
+            .field_publication_bundles
+            .keys()
+            .filter(|quantity| quantity.starts_with("H_"))
+            .cloned(),
+    );
+    if retired.is_empty() {
+        return;
+    }
+
+    for quantity in retired {
+        current.latest_fields.remove(&quantity);
+        current.field_publication_bundles.remove(&quantity);
+        current.preview_cache.forget_quantity(&quantity);
+        bump_field_sample_revision(current, &quantity, None);
+    }
+    bump_field_catalog_revision(current);
+}
+
 pub(crate) fn apply_current_live_authored_initial_state(
     current: &mut SessionStateResponse,
     publication: crate::live_authored_initial_state::AuthoredInitialStatePublication,
@@ -3569,9 +3601,20 @@ fn apply_current_live_field_frame_in_place(
             !current.field_publication_bundles.contains_key(quantity)
                 || frame.latest_fields.as_ref().is_some_and(|fields| fields.get(quantity).is_some())
         });
+        let keep_chart_rows = publication.retain_accepted_scalar_series
+            && current.latest_scalar_source.as_ref().and_then(|source| source.series.as_ref())
+                .is_some_and(|series| series.identity.run_id == current.session.run_id);
         current.authored_initial_state = Some(publication);
         current.magnetization_applies.pending = None;
-        if !current.scalar_rows.is_empty() || current.latest_scalar_source.is_some() {
+        if keep_chart_rows {
+            // Rows keep their old observation frames. Do not present the raw
+            // scalar pin from the previous stage as an observation of the new one.
+            if let Some(source) = &mut current.latest_scalar_source {
+                source.public_source = None;
+                source.accepted_live_identity = None;
+                source.active_live_identity = None;
+            }
+        } else if !current.scalar_rows.is_empty() || current.latest_scalar_source.is_some() {
             current.scalar_rows.clear();
             current.latest_scalar_source = None;
             current.scalar_revision = next_revision(current.scalar_revision);
@@ -7496,6 +7539,36 @@ mod tests {
             authored_initial_state_fields(),
         )
         .expect("stage preparation should publish authored initial magnetization");
+    }
+
+    #[test]
+    fn live_view_continuity_keeps_the_last_chart_series_during_same_run_preparation() {
+        let mut current = current_with_run("run-a", "running", Some("run-a"));
+        let identity = crate::types::AcceptedLiveScalarIdentity {
+            run_id: "run-a".into(), task_id: "task-a".into(), step_id: "step-a".into(),
+            case_id: "default".into(), attempt_id: "attempt-a".into(), ownership_epoch: 1,
+        };
+        assert!(select_current_accepted_scalar_series(&mut current, "run-a", Some(&identity)));
+        apply_current_live_accepted_scalar_row(&mut current, &identity, scalar_row(8, 2.0)).unwrap();
+        let source = current.latest_scalar_source.as_mut().unwrap();
+        source.accepted_live_identity = Some(identity.clone());
+        source.active_live_identity = Some(identity.clone());
+        let revision = current.scalar_revision;
+        let mut publication = crate::live_authored_initial_state::AuthoredInitialStatePublication::new(
+            &current, authored_initial_state_origin(), 0.0,
+        );
+        publication.retain_accepted_scalar_series = true;
+
+        apply_current_live_authored_initial_state(&mut current, publication, authored_initial_state_fields()).unwrap();
+
+        assert!(current.latest_fields.get("m").is_some());
+        assert_eq!(current.scalar_revision, revision);
+        assert_eq!(current.scalar_rows[0].step, 8);
+        let source = current.latest_scalar_source.as_ref().unwrap();
+        assert_eq!(source.series.as_ref().unwrap().identity, identity);
+        assert!(source.public_source.is_none());
+        assert!(source.accepted_live_identity.is_none());
+        assert!(source.active_live_identity.is_none());
     }
 
     #[test]

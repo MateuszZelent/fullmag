@@ -3147,14 +3147,14 @@ fn execute_accepted_worker_start_with_snapshot(
         );
     }
     let storage_attempt_dir = attempt_output_dir.clone();
+    let mut live_observation = AcceptedLiveObservationWriter::new(
+        &attempt_output_dir,
+        accepted_step,
+        &execution_plan,
+        format!("fdm_{}", request.device),
+    );
     let execution: Result<AcceptedRunnerExecution> = (|| {
         let display_selection = fullmag_runner::DisplaySelectionState::default;
-        let mut live_observation = AcceptedLiveObservationWriter::new(
-            &attempt_output_dir,
-            accepted_step,
-            &execution_plan,
-            format!("fdm_{}", request.device),
-        );
         let field_cadence = live_observation.field_cadence();
         let frozen = match accepted_step.resolved_input.frozen_stage_context.as_ref() {
             Some(binding) => {
@@ -3194,8 +3194,6 @@ fn execute_accepted_worker_start_with_snapshot(
             },
         )
         };
-        // Drain the live sidecar for both frozen and ordinary execution, including errors.
-        live_observation.finish();
         let result = runner_result
         .map_err(|error| anyhow::anyhow!(error.to_string()))
         .with_context(|| format!("execute accepted FDM {} runner plan", request.device))?;
@@ -3290,7 +3288,7 @@ fn execute_accepted_worker_start_with_snapshot(
             completion: result.completion,
         })
     })();
-    if let Some(storage) = &mut storage {
+    let storage_result = if let Some(storage) = &mut storage {
         let success = execution
             .as_ref()
             .is_ok_and(|result| result.status == RunStatus::Completed);
@@ -3301,8 +3299,14 @@ fn execute_accepted_worker_start_with_snapshot(
             Err(error) => storage.note_outcome("failed", Some(format!("{error:#}"))),
             _ => {}
         }
-        storage.finish(success, &storage_attempt_dir)?;
-    }
+        storage.finish(success, &storage_attempt_dir)
+    } else {
+        Ok(())
+    };
+    // Keep the last live field and its original clock visible while the
+    // artifact writer publishes the stage. Always drain it, even on error.
+    live_observation.finish();
+    storage_result?;
     execution
 }
 

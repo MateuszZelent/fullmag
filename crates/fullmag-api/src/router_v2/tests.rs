@@ -23116,6 +23116,7 @@ fm.run(1e-10)
             .unwrap().unwrap().publish(
                 snapshot, "base-preview", "base-plan", 30,
                 serde_json::json!({"source_kind": "prepared_initial_state"}),
+                false,
             ).unwrap();
         let descriptor = crate::live_stage_initial_state::describe_prepared_initial_state(snapshot)
             .expect("the initial preview should qualify");

@@ -2132,7 +2132,7 @@ mod tests {
 
         // Exercise the complete accepted compiler and catalog, not only stage expansion.
         let generated = render_accepted_scene_source_bounded(&root, workspace.path(), &scene).unwrap();
-        let capture = capture_startup_script_scene(&root, workspace.path(), &generated.path).unwrap();
+        let capture = capture_startup_script_scene(&root, workspace.path(), &generated.path, false).unwrap();
         let accepted = fullmag_application::compile_accepted_closed_loop_pipeline(
             prepared, "study:closed-loop-full-acceptance".into(), scene.revision,
             reference.clone(), layers.clone(), capture.manifest.clone(),
@@ -2983,6 +2983,7 @@ fn material_catalog_snapshot() -> Option<Vec<u8>> {
 /// Capture has no geometry/cache environment; meshing remains a separate one-shot preparation.
 pub(crate) fn capture_startup_script_scene(
     repo_root: &Path, workspace_root: &Path, script_path: &Path,
+    include_run_config: bool,
 ) -> Result<fullmag_application::script_source_capture::CapturedScriptSource, ApiError> {
     let real_root = python_workspace_root(repo_root);
     let authored = real_root.join("packages/fullmag-py/src/fullmag");
@@ -2992,6 +2993,7 @@ pub(crate) fn capture_startup_script_scene(
     fullmag_application::script_source_capture::capture_authored_script(script_path, &fullmag,
         &fullmag_application::script_source_capture::CaptureOptions {
             scene_only: true,
+            include_run_config,
             material_catalog: catalog.as_deref(),
             ..Default::default()
         },

@@ -76735,6 +76735,7 @@
     "fft_response",
     "set_field",
     "set_current",
+    "set_spin_torque_enabled",
     "save_state",
     "load_state",
     "export"

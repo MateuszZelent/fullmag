@@ -51,7 +51,12 @@ def _source_hashes(selected: Path) -> dict[str, str]:
 
 def run(control, selected: Path, identity, *, scope="authoring-contracts") -> int:
     commands = {
-        "authoring-contracts": (COMMAND,),
+        "authoring-contracts": (
+            COMMAND,
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-application', '--lib', 'script_imported_run'),
+        ),
         "gpu-temperature-contracts": (
             ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
              '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
@@ -76,6 +81,25 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
              '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
              '-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-worker',
              'accepted_live_layout_tests'),
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0',
+             'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api', 'live_view_continuity'),
+        ),
+        "accepted-runtime-ownership-contracts": tuple(
+            # These tests allocate private native SessionStores under TMPDIR.
+            # The live service's /state mount profile belongs to user sessions.
+            ('/usr/bin/env', '-u', 'FULLMAG_SESSION_STORAGE_PROFILE', 'CARGO_INCREMENTAL=0',
+             'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev', *test)
+            for test in (
+                ('-p', 'fullmag-runtime-control', '--lib', 'store_retry_repeats_transient_enomem'),
+                ('-p', 'fullmag-runtime-control', '--lib', 'closes_portable_solution_after_transient'),
+                ('-p', 'fullmag-runtime-control', '--lib', 'missing_gpu_sample_does_not_change'),
+                ('-p', 'fullmag-session', '--lib', 'durable_prestart_stop_fences'),
+                ('-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-scheduler',
+                 'transient_pre_spawn_read_releases_slot'),
+            )
         ),
         "fem-response-worker-contracts": (
             ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',

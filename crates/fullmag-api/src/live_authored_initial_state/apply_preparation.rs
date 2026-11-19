@@ -92,6 +92,7 @@ impl PreparedMagnetizationApply {
                     &plan_fingerprint,
                     scene_revision,
                     provenance,
+                    false,
                 )?;
                 Ok((MagnetizationApplyStatus::InitialStateReady, None))
             }

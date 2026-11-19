@@ -970,6 +970,17 @@ fn run_scheduler(
                     error = ?error,
                     "compute scheduler deferred worker launch; runtime remains available"
                 );
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "schema_version": "scheduler_worker_launch_deferred.v1",
+                        "component": "accepted_compute_scheduler",
+                        "run_id": worker_run_id.as_str(),
+                        "task_id": &worker_task_id,
+                        "resource_id": &resource_id,
+                        "detail": format!("{error:#}"),
+                    })
+                );
                 if active_workers.is_empty() {
                     std::thread::sleep(args.idle_poll_interval);
                 } else {

@@ -287,6 +287,7 @@ def export_builder_draft(
         replay_initial_magnetization=replay_initial_magnetization,
     )
     authored_problem = loaded.workspace_problem or loaded.problem
+    base_damping = _object_damping(base_problem)
     relax_stage = _first_relax_stage(loaded)
     source_root = loaded.source_path.parent
     base_dynamics = getattr(base_problem.study, "dynamics", None)
@@ -389,7 +390,7 @@ def export_builder_draft(
         "universe": _export_universe(base_problem),
         "domain_frame": _export_domain_frame(base_problem, source_root=source_root),
         "stages": [
-            _export_stage_draft_with_identity(stage)
+            _export_stage_draft_with_identity(stage, base_damping)
             for stage in _builder_stage_sequence(loaded)
         ],
         "study_pipeline": export_study_pipeline_document(loaded),
@@ -771,13 +772,22 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(excitation_lines)
 
+    magnet_names = {m.object_id or m.name: m.name for m in base_problem.magnets}
+    if isinstance(overrides.get("geometries"), list):
+        magnet_names = {
+            obj.get("object_id") or obj["name"]: obj["name"]
+            for obj in overrides["geometries"]
+            if isinstance(obj, dict) and obj.get("name") and (obj.get("role") or "magnet") == "magnet"
+        }
     stage_lines = _render_stages(
         stages,
         overrides=overrides,
         surface=surface,
         magnet_vars=magnet_vars,
         initial_outputs=_study_outputs(base_problem.study),
-        magnet_names={magnet.object_id or magnet.name: magnet.name for magnet in base_problem.magnets},
+        initial_table=_study_table_autosave(base_problem.study),
+        base_damping=_object_damping(base_problem),
+        magnet_names=magnet_names,
         region_vars=region_vars,
         source_root=source_root,
         mask_renderer=mask_renderer,
@@ -1541,6 +1551,9 @@ def _render_scene_document_bootstrap(
         if not isinstance(raw_stages, list):
             raise ValueError("SceneDocument stages must be a list")
         authored_stages = _scene_antenna_stage_sequence(builder)
+        if any(stage.get("kind") == "set_spin_torque_enabled" for stage in authored_stages):
+            for torque in builder.get("spin_torques") or []:
+                lines.append(f"study.spin_torque({_render_spin_torque_override(torque)})")
         mask_renderer = _MaskAntennaRenderer(
             reserved_names={"study", "fm", *snapshot_handles.values(), *region_vars.values()},
             source_root=Path.cwd(),
@@ -1560,10 +1573,14 @@ def _render_scene_document_bootstrap(
                         assignment["object_id"], assignment["region_id"], assignment["initializer"],
                         magnet_vars=snapshot_handles_by_id, region_vars=region_vars,
                     ))
-            lines.extend(_render_scene_stage_bootstrap(
+            damping = payload.pop("gilbert_damping_by_object", {})
+            if damping and payload.get("kind") != "run":
+                raise ValueError("gilbert_damping_by_object requires a run stage")
+            stage_lines = _render_scene_stage_bootstrap(
                 payload, index=index, solver=solver, magnet_vars=snapshot_handles,
                 mask_renderer=mask_renderer,
-            ))
+            )
+            lines.extend(_with_run_damping(stage_lines, damping, snapshot_handles_by_id))
     elif include_legacy_relax_stages:
         for stage in raw_stages:
             if not isinstance(stage, Mapping) or str(stage.get("kind") or "relax") != "relax":
@@ -1872,7 +1889,11 @@ def _enabled_scene_stages(stages: list[object]) -> list[object]:
             raise ValueError(
                 f"SceneDocument stages[{index}].enabled must be a boolean"
             )
-        if flag:
+        # For these commands the flag is the value being assigned. Their
+        # pipeline node has its own enable flag, checked during traversal.
+        if flag or stage.get("kind") in {
+            "set_spin_torque_enabled", "table_autosave", "autosave", "fft_response",
+        }:
             enabled.append(stage)
     return enabled
 
@@ -3139,6 +3160,7 @@ def export_study_pipeline_document(loaded: LoadedProblem) -> dict[str, object] |
     stages = _builder_stage_sequence(loaded)
     if not stages:
         return None
+    base_damping = _object_damping(_builder_base_problem(loaded))
     return {
         "version": (
             "study_pipeline.v2"
@@ -3146,14 +3168,46 @@ def export_study_pipeline_document(loaded: LoadedProblem) -> dict[str, object] |
             else "study_pipeline.v1"
         ),
         "nodes": [
-            _export_study_pipeline_node(stage, index=index)
+            _export_study_pipeline_node(stage, index=index, base_damping=base_damping)
             for index, stage in enumerate(stages)
         ],
     }
 
 
-def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
+def _object_damping(problem: Problem) -> dict[str, float]:
+    return {m.object_id or m.name: m.material.alpha for m in problem.magnets}
+
+
+def _run_damping(stage: LoadedStage, base: Mapping[str, float]) -> dict[str, float]:
+    if stage.action is not None or not isinstance(stage.problem.study, TimeEvolution):
+        return {}
+    return {key: value for key, value in _object_damping(stage.problem).items()
+            if key in base and base[key] != value}
+
+
+def _with_run_damping(
+    calls: list[str], damping: object, handles: Mapping[str, str]
+) -> list[str]:
+    if not isinstance(damping, Mapping):
+        raise ValueError("gilbert_damping_by_object must be a mapping")
+    setters, restores = [], []
+    for object_id, alpha in damping.items():
+        if object_id not in handles:
+            raise ValueError(f"unknown magnetic object in run damping: {object_id!r}")
+        if type(alpha) not in (float, int) or not math.isfinite(alpha) or alpha < 0:
+            raise ValueError("run Gilbert damping must be finite and non-negative")
+        handle = handles[object_id]
+        saved = f"_{handle}_alpha_before_run"
+        setters.extend([f"{saved} = {handle}.alpha.value", f"{handle}.alpha = {_py_float_roundtrip(alpha)}"])
+        restores.append(f"{handle}.alpha = {saved}")
+    return [*setters, *calls, *restores]
+
+
+def _export_stage_draft_with_identity(stage: LoadedStage, base_damping: Mapping[str, float]) -> dict[str, object]:
     payload = _export_stage_draft(stage)
+    damping = _run_damping(stage, base_damping)
+    if damping:
+        payload["gilbert_damping_by_object"] = damping
     if stage.stage_id is not None:
         payload["stage_id"] = stage.stage_id
     if stage.output_every_seconds is not None:
@@ -3178,8 +3232,10 @@ def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
     return payload
 
 
-def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, object]:
-    draft = _export_stage_draft_with_identity(stage)
+def _export_study_pipeline_node(
+    stage: LoadedStage, *, index: int, base_damping: Mapping[str, float]
+) -> dict[str, object]:
+    draft = _export_stage_draft_with_identity(stage, base_damping)
     stage_kind = _infer_pipeline_stage_kind(draft)
     if stage_kind == "antenna_field_solve":
         definition = cast(dict[str, object], draft["definition"])
@@ -9248,6 +9304,8 @@ def _render_stages(
     surface: str,
     magnet_vars: dict[str, str],
     initial_outputs: Sequence[object],
+    initial_table: TableAutosave | None,
+    base_damping: Mapping[str, float],
     magnet_names: dict[str, str],
     region_vars: dict[tuple[str, str], str],
     source_root: Path,
@@ -9264,6 +9322,8 @@ def _render_stages(
     stage_overrides = overrides.get("stages")
     is_study_surface = surface == "study"
     active_outputs = list(initial_outputs)
+    table_override = _table_autosave_from_override(overrides.get("table_autosave"))
+    inherits_table = True
     lines = ["# Stages" if is_study_surface else "# Run"]
     magnet_vars_by_id = {
         object_id: magnet_vars[name]
@@ -9296,6 +9356,8 @@ def _render_stages(
             lines.extend(output_lines)
         if stage.action is not None:
             action_kind = str(stage.action.get("kind") if isinstance(stage.action, dict) else "").strip().lower()
+            if action_kind == "table_autosave":
+                inherits_table = False
             if action_kind == "antenna_field_solve":
                 if not is_study_surface:
                     raise ValueError("antenna_field_solve action requires the study API surface")
@@ -10024,6 +10086,9 @@ def _render_stages(
         # Reproduce non-action sampling changes between Runs without inserting
         # configuration stages into the authored pipeline.
         stage_table = _study_table_autosave(study)
+        inherits_table = inherits_table and stage_table == initial_table
+        if inherits_table and table_override is not None:
+            stage_table = table_override
         if stage_table is not None:
             lines.extend(_render_table_autosave_policy(stage_table, surface=surface))
         else:
@@ -10040,9 +10105,11 @@ def _render_stages(
             run_autosave = _stage_autosave_with_override(stage_override, stage.autosave)
             if run_autosave is not None:
                 run_call += _render_stage_autosave(run_autosave)
-            lines.append(run_call)
         else:
-            lines.append(f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})")
+            run_call = f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})"
+        lines.extend(_with_run_damping(
+            [run_call], _run_damping(stage, base_damping), magnet_vars_by_id
+        ))
     return lines
 
 

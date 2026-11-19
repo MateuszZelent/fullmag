@@ -2364,7 +2364,7 @@ fn materialize_pipeline_run(
 #[test]
 fn script_imported_run_replays_its_captured_dynamics_and_sampling_after_duration_edit() {
     let base = ProblemIR::bootstrap_example();
-    let payload: BTreeMap<String, Value> = serde_json::from_value(serde_json::json!({
+    let mut payload: BTreeMap<String, Value> = serde_json::from_value(serde_json::json!({
         "kind": "run",
         "entrypoint_kind": "build",
         "integrator": "rk4",
@@ -2379,6 +2379,9 @@ fn script_imported_run_replays_its_captured_dynamics_and_sampling_after_duration
         "spin_wave_response": null,
     }))
     .unwrap();
+    let magnet = &base.magnets[0];
+    let object_id = magnet.object_id.as_ref().unwrap_or(&magnet.name);
+    payload.insert("gilbert_damping_by_object".into(), serde_json::json!({(object_id): 1.0}));
     let materialize = |source: &str, payload: &BTreeMap<String, Value>| {
         materialize_pipeline_primitive(
             &mut base.clone(),
@@ -2391,6 +2394,11 @@ fn script_imported_run_replays_its_captured_dynamics_and_sampling_after_duration
     };
     assert!(materialize("ui_authored", &payload).is_err());
     let stage = materialize("script_imported", &payload).unwrap().unwrap();
+    assert_eq!(stage.ir.materials.iter().find(|m| m.name == magnet.material).unwrap().damping, 1.0);
+    assert_ne!(base.materials.iter().find(|m| m.name == magnet.material).unwrap().damping, 1.0);
+    let mut invalid = payload.clone();
+    invalid.insert("gilbert_damping_by_object".into(), serde_json::json!({"unknown-magnet": 1.0}));
+    assert!(materialize("script_imported", &invalid).is_err());
     assert_eq!(stage.until_seconds, 8e-12);
     let fullmag_ir::StudyIR::TimeEvolution { dynamics, sampling } = &stage.ir.study else {
         panic!("expected an imported Run");
@@ -2564,6 +2572,7 @@ fn validate_pipeline_run_primitive_payload(
                         | "demag_interval_s"
                         | "sampling"
                         | "spin_wave_response"
+                        | "gilbert_damping_by_object"
                 ) || (matches!(
                     key,
                     "relax_algorithm" | "torque_tolerance" | "energy_tolerance" | "max_steps"
@@ -2581,9 +2590,41 @@ fn validate_pipeline_run_primitive_payload(
     Ok(())
 }
 
+/// Resolve object-scoped damping on the isolated Run IR. Objects sharing a
+/// material must still agree on that material's effective Gilbert damping.
+fn apply_run_damping(ir: &mut ProblemIR, value: &Value) -> Result<()> {
+    let mut overrides: BTreeMap<String, f64> = serde_json::from_value(value.clone())
+        .context("gilbert_damping_by_object must map magnetic object IDs to numbers")?;
+    let mut effective = BTreeMap::new();
+    for magnet in &ir.magnets {
+        let id = magnet.object_id.as_ref().unwrap_or(&magnet.name);
+        let material = ir.materials.iter().find(|item| item.name == magnet.material)
+            .with_context(|| format!("missing material for magnetic object {id}"))?;
+        let damping = overrides.remove(id).unwrap_or(material.damping);
+        if !damping.is_finite() || damping < 0.0 {
+            bail!("invalid Gilbert damping for magnetic object {id}");
+        }
+        if effective.insert(magnet.material.as_str(), damping).is_some_and(|prior| prior != damping) {
+            bail!("conflicting run damping for objects sharing material {}", material.name);
+        }
+    }
+    if let Some(id) = overrides.keys().next() {
+        bail!("unknown magnetic object in run damping: {id}");
+    }
+    for material in &mut ir.materials {
+        if let Some(damping) = effective.get(material.name.as_str()) {
+            material.damping = *damping;
+        }
+    }
+    Ok(())
+}
+
 /// Imported Python Run nodes carry the solver and output snapshot that was
 /// captured for that particular Run. Preserve it on Scene-based re-execution.
 fn apply_imported_run_capture(ir: &mut ProblemIR, payload: &BTreeMap<String, Value>) -> Result<()> {
+    if let Some(value) = payload.get("gilbert_damping_by_object") {
+        apply_run_damping(ir, value)?;
+    }
     let fullmag_ir::StudyIR::TimeEvolution { dynamics, sampling } = &mut ir.study else {
         bail!("script-imported Run did not materialize a time-evolution stage");
     };
