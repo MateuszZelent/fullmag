@@ -71,6 +71,7 @@ import {
   useFieldMetaResource,
   useQuantityCatalogResource,
 } from "@/kernel/resources/studyRuntimeResources";
+import { resourceDataRevision } from "@/kernel/resources/resourceState";
 import { useResource } from "@/kernel/resources/useResource";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import {
@@ -3492,6 +3493,13 @@ export function useViewport3DSceneModel({
   const topology = useViewport3DDomainTopology(
     liveViewportResourcesEnabled && femLaneActive,
   );
+  // Identity of the topology payload being shown. `topology.revision` follows
+  // the pending external revision while a refresh is in flight, so keying
+  // builds on it rebuilt (and blanked) FEM geometry and colours twice per
+  // refresh (audit 2026-11-19, A8).
+  const topologyDataRevisionValue = resourceDataRevision(topology);
+  const topologyDataRevision =
+    topologyDataRevisionValue == null ? null : String(topologyDataRevisionValue);
   const fdmMultilayerLayout = useFdmMultilayerLayoutResource({
     enabled: liveViewportResourcesEnabled && Boolean(fdmLaneActive),
   });
@@ -3583,7 +3591,7 @@ export function useViewport3DSceneModel({
     enabled:
       liveViewportResourcesEnabled &&
       Boolean(fdmLaneActive && fdmRegionMembership.data),
-    revision: fdmRegionMembership.revision,
+    revision: resourceDataRevision(fdmRegionMembership),
   });
   const fdmDomainPresentation = useMemo(
     () =>
@@ -3681,7 +3689,7 @@ export function useViewport3DSceneModel({
     magneticParts: femDomain.magneticParts,
     magneticSurfacePartsByPartId: femDomain.magneticSurfacePartsByPartId,
     topology: topology.data,
-    topologyRevision: topology.revision == null ? null : String(topology.revision),
+    topologyRevision: topologyDataRevision,
   });
   const topologyIndexState =
     topologyIndexBundle.status === "building"
@@ -5072,8 +5080,7 @@ export function useViewport3DSceneModel({
             targetQuantityFieldVectors.payloadRevision ?? null,
           targetQuantityFieldVectors: targetQuantityFieldVectors.data,
           topology: fieldCompatibleTopologyRenderModel,
-          topologyRevision:
-            topology.revision == null ? null : String(topology.revision),
+          topologyRevision: topologyDataRevision,
         });
       const partScalarRangesByMode = mergeViewport3DPartScalarRanges({
         baseRanges: partScalarRanges.data,
@@ -5114,7 +5121,7 @@ export function useViewport3DSceneModel({
       targetQuantityFieldVectors.data,
       targetQuantityFieldVectors.payloadRevision,
       targetQuantityFieldRequests,
-      topology.revision,
+      topologyDataRevision,
     ],
   );
   const fdmVoxelMagnitudeThreshold =
@@ -5614,8 +5621,7 @@ export function useViewport3DSceneModel({
         primaryFieldResourceKey: fieldVectorResourceKey,
         sessionIdentity,
         topology: fieldCompatibleTopologyRenderModel,
-        topologyRevision:
-          topology.revision == null ? null : String(topology.revision),
+        topologyRevision: topologyDataRevision,
       }),
     [
       primaryFieldPayload,
@@ -5628,7 +5634,7 @@ export function useViewport3DSceneModel({
       primaryFieldRevision,
       resolvedFieldRenderOptions,
       sessionIdentity,
-      topology.revision,
+      topologyDataRevision,
     ],
   );
   const analysisComplexField = useMemo(() => {
@@ -5801,8 +5807,13 @@ export function useViewport3DSceneModel({
   const fdmInstanceModelFieldVector = fdmInstanceModelNeedsFieldVector
     ? fdmFieldVector
     : null;
+  // A1: key FDM builds on the settled payload identity, not on the pending
+  // refresh revision, so the last good voxel model survives a refresh.
+  const domainMetaDataRevision = resourceDataRevision(domainMeta);
+  const fdmRegionMembershipDataRevision =
+    resourceDataRevision(fdmRegionMembership);
   const fdmBuildTopologyRevision =
-    domainMeta.revision == null ? null : String(domainMeta.revision);
+    domainMetaDataRevision == null ? null : String(domainMetaDataRevision);
   const fdmBuildFieldRevision =
     fdmInstanceModelNeedsFieldVector
       ? fdmFieldRevision == null
@@ -5810,7 +5821,7 @@ export function useViewport3DSceneModel({
         : String(fdmFieldRevision)
       : null;
   const fdmBuildSamplingRevision = fdmDomain
-    ? `shape=${fdmDomain.shape.join("x")}|display=${fdmDomain.displayCellCount}|total=${fdmDomain.totalCells}|stride=${fdmDomain.stride}|membership=${fdmRegionMembership.revision ?? "none"}`
+    ? `shape=${fdmDomain.shape.join("x")}|display=${fdmDomain.displayCellCount}|total=${fdmDomain.totalCells}|stride=${fdmDomain.stride}|membership=${fdmRegionMembershipDataRevision ?? "none"}`
     : "none";
   const fdmBuildStyleRevision = [
     `fill=${visualProfile.voxelFillRatio}`,
@@ -5851,7 +5862,7 @@ export function useViewport3DSceneModel({
     modelFieldVector: fdmInstanceModelFieldVector,
     topologyKey: `fdm-grid:${domainMeta.data?.domain_id ?? "shared-domain"}|generation=${fdmDomainGenerationId}|${fdmBuildSamplingRevision}|topology=${fdmBuildTopologyRevision ?? "none"}`,
     realizedRegionIds: fdmRealizedRegionIds,
-    revisionSummary: `domain=${fdmBuildTopologyRevision ?? "none"} field=${fdmBuildFieldRevision ?? "none"} membership=${fdmRegionMembership.revision ?? "none"}`,
+    revisionSummary: `domain=${fdmBuildTopologyRevision ?? "none"} field=${fdmBuildFieldRevision ?? "none"} membership=${fdmRegionMembershipDataRevision ?? "none"}`,
     vectorAnchorMode: "center",
     vectorField: null,
     vectorScale: 0,
@@ -6115,7 +6126,7 @@ export function useViewport3DSceneModel({
     modelFieldVector: null,
     topologyKey: `fdm-airbox:${domainMeta.data?.domain_id ?? "shared-domain"}|generation=${fdmDomainGenerationId}|${fdmBuildSamplingRevision}|topology=${fdmBuildTopologyRevision ?? "none"}`,
     realizedRegionIds: fdmRealizedRegionIds,
-    revisionSummary: `domain=${fdmBuildTopologyRevision ?? "none"} membership=${fdmRegionMembership.revision ?? "none"} target=${fdmAirboxBuildTargetRevision ?? "none"}`,
+    revisionSummary: `domain=${fdmBuildTopologyRevision ?? "none"} membership=${fdmRegionMembershipDataRevision ?? "none"} target=${fdmAirboxBuildTargetRevision ?? "none"}`,
     vectorAnchorMode: fdmAirboxVectorAnchorMode,
     vectorField: fdmAirboxVectorsVisible ? fdmAirboxFieldVector : null,
     vectorGeometryScope: fdmSingleGridAirboxSettings?.geometryScope ?? "full",
@@ -7158,7 +7169,7 @@ export function useViewport3DSceneModel({
       globalFieldRenderOptionsWithPrimaryTargetBuffers.targetRenderPlans,
     targetVisualizationRevision: renderingState?.revision ?? null,
     topology: fieldCompatibleTopologyRenderModel,
-    topologyRevision: topology.revision,
+    topologyRevision: topologyDataRevisionValue,
   });
   const fieldRenderModelBuildOptions = useMemo(
     () =>
@@ -7206,7 +7217,7 @@ export function useViewport3DSceneModel({
                 : null,
             scalarRangesByMode: fieldScalarRangesByMode,
             targetVisualizationRevision: renderingState?.revision ?? null,
-            topologyRevision: topology.revision,
+            topologyRevision: topologyDataRevisionValue,
             wavevectorKf: analysisOverlay?.wavevectorKf,
             cellOrigin: analysisOverlay?.cellOrigin,
             floquetSpatialConvention: analysisOverlay?.floquetSpatialConvention,
@@ -7233,7 +7244,7 @@ export function useViewport3DSceneModel({
     fieldScalarRangesByMode,
     primaryFieldRevision,
     renderingState?.revision,
-    topology.revision,
+    topologyDataRevisionValue,
     vectorColorMode,
     vectorScale,
     analysisOverlay?.cellOrigin,

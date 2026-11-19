@@ -199,8 +199,8 @@ describe("planar field resources", () => {
   it("keeps a cropped sample apart from the full frame in the resource cache", () => {
     const query = { component: "normal", resolution_x: 64, resolution_y: 64 };
     const window = planarWindowParams({ u_min_m: 0, u_max_m: 1e-8, v_min_m: 0, v_max_m: 1e-8 });
-    const full = resolvePlanarFieldResourceKey("m", { kind: "default" }, query, "1");
-    const cropped = resolvePlanarFieldResourceKey("m", { kind: "default" }, { ...query, ...window }, "1");
+    const full = resolvePlanarFieldResourceKey("m", { kind: "default" }, query);
+    const cropped = resolvePlanarFieldResourceKey("m", { kind: "default" }, { ...query, ...window });
     expect(cropped).not.toBe(full);
     // The window is part of the canonical query, not a client-side suffix.
     expect(cropped).not.toContain("#window=");
@@ -286,10 +286,9 @@ describe("planar field resources", () => {
         "m",
         monitorSource("plane/a"),
         { component: "z" },
-        '"etag"',
         DATA_PLANAR_FIELD_SCALAR_PATH,
       ),
-    ).toContain("#revision=%22etag%22");
+    ).not.toContain("#revision=");
   });
 
   it("keeps immutable sample tokens and exact revisions in binary cache identity", () => {
@@ -563,14 +562,12 @@ describe("planar field resources", () => {
       "m",
       source,
       { component: "x" },
-      '"field-revision"',
       DATA_PLANAR_FIELD_SCALAR_PATH,
     );
     const yKey = resolvePlanarFieldResourceKey(
       "m",
       source,
       { component: "y" },
-      '"field-revision"',
       DATA_PLANAR_FIELD_SCALAR_PATH,
     );
     const xPayload = new Uint8Array([1]).buffer;

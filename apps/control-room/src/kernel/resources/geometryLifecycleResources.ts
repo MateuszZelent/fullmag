@@ -127,6 +127,7 @@ export {
   useVisualizationStateResource,
 } from "../visualization/useVisualizationStateResource";
 
+import { resourceHasDisplayableData } from "./resourceState";
 import { useResource } from "./useResource";
 import { sessionRequestScopeKey, sessionScopedResourceKey } from "./sessionResourceIdentity";
 import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
@@ -1452,14 +1453,10 @@ export function resolveFdmRegionMembershipDescriptorResult(
       data: null,
     };
   }
-  if (resource.status !== "ready") {
-    return {
-      ...resource,
-      availability: { reason: "loading", status: "pending" },
-      data: null,
-    };
-  }
-  if (!resource.data) {
+  // A background refresh keeps the last settled descriptor (status
+  // `stale`); dropping it here made FDM region colouring vanish on every
+  // membership invalidation.
+  if (!resourceHasDisplayableData(resource) || !resource.data) {
     return {
       ...resource,
       availability: { reason: "loading", status: "pending" },
@@ -1686,7 +1683,7 @@ export function useFdmRegionMembershipBinaryResource(
   const prerequisite: FdmRegionMembershipAvailability =
     descriptor.availability.status !== "ready"
       ? descriptor.availability
-      : domain.status !== "ready" || !domain.data
+      : !resourceHasDisplayableData(domain) || !domain.data
         ? { reason: "loading", status: "pending" }
         : descriptor.data?.domain_generation_id !== domain.data.generation_id
           ? { reason: "generation-mismatch", status: "incompatible" }

@@ -155,12 +155,11 @@ export function LiveChartInspectorPanel({
                     checked={checked}
                     className="fm-live-chart-inspector__checkbox"
                     type="checkbox"
-                    onChange={(event) => {
+                    onChange={() => {
                       const next = checked
                         ? selectedSeriesIds.filter((id) => id !== series.id)
                         : [...selectedSeriesIds, series.id];
                       execute("live-charts.set-selected-series", { descriptorId: presetId, selectedSeriesIds: next });
-                      event.currentTarget.blur();
                     }}
                   />
                   <span>{series.quantity}</span>
