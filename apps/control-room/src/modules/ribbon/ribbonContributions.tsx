@@ -124,6 +124,7 @@ import {
   type InteractionDiscretization,
 } from "@/shared/domain/physics/interactions";
 
+import { addAbsorbingBoundaryCommand } from "./absorbingBoundaryCommand";
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
 import {
   icon,
@@ -484,6 +485,14 @@ const physicsTab: RibbonTabContent = {
       subtitle: "add physics",
       tone: "compose",
       actions: [
+        {
+          id: addAbsorbingBoundaryCommand.id,
+          icon: icon(Waves),
+          label: addAbsorbingBoundaryCommand.title,
+          iconColor: "text-teal-400",
+          commandId: addAbsorbingBoundaryCommand.id,
+          tooltip: "Add or open the selected magnetic object's absorbing boundary",
+        },
         {
           id: "physics-add-frozen-spins",
           icon: icon(Magnet),

@@ -394,5 +394,25 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   await parent.click();
   await enabled.uncheck();
   await apply("removed", null);
+  // Pick the rendered film, then add its absorber from the Physics ribbon.
+  await canvas.click();
+  const object = page.locator(`[data-node-id="model:object:${fixture.object_id}"]`);
+  await expect(object).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "Physics", exact: true }).click();
+  const addBoundary = page.getByRole("button", { name: "Add Absorbing Boundary", exact: true });
+  await expect(addBoundary).toBeEnabled();
+  await page.screenshot({ path: info.outputPath("ribbon-selected-film.png") });
+  const [created] = await Promise.all([
+    page.waitForResponse(r => r.url() === objectUrl && r.request().method() === "PATCH"),
+    addBoundary.click(),
+  ]);
+  expect(created.status()).toBe(200);
+  const ribbonScene = await readScene();
+  expect(ribbonScene.revision).toBeGreaterThan(revision);
+  expect(ribbonScene.objects[0].absorbing_boundary).toEqual(activatedScene.objects[0].absorbing_boundary);
+  await expect(child).toHaveAttribute("aria-selected", "true");
+  await expect(group).toBeVisible();
+  await page.screenshot({ path: info.outputPath("ribbon-created-absorber.png") });
+
   await writeFile(info.outputPath("abl-field-evidence.json"), JSON.stringify({ session: pin, evidence }, null, 2));
 });

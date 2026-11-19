@@ -158,7 +158,15 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
   const initial = await checkMap(0.45, initialRequest.url());
   const initialDraw = await verifyDraw(initial, 0);
   await page.screenshot({ path: info.outputPath("material-alpha.png") });
-  await page.locator('[data-node-id="model:object:film:magnetic-parameters:absorbing-boundary"]').click();
+  // The existing three-layer FEM absorber should open without rewriting its settings.
+  await page.locator('[data-node-id="model:object:film"]').click();
+  await page.getByRole("tab", { name: "Physics", exact: true }).click();
+  await page.getByRole("button", { name: "Add Absorbing Boundary", exact: true }).click();
+  await expect(page.locator('[data-node-id="model:object:film:magnetic-parameters:absorbing-boundary"]'))
+    .toHaveAttribute("aria-selected", "true");
+  const reopened = await (await get("model/scene")).json();
+  expect(reopened.revision).toBe(scene.revision);
+  expect(reopened.objects[0].absorbing_boundary).toEqual(scene.objects[0].absorbing_boundary);
   const select = (name: string) => page.locator("select").and(page.getByLabel(name, { exact: true }));
   await select("Layer").selectOption("ring");
   await expect(select("Geometry")).toHaveValue("cylinder");
