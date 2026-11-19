@@ -149,12 +149,38 @@ class InterfacialDMI:
 @dataclass(frozen=True, slots=True)
 class RotatedInterfacialDMI:
     D: float
+    object_ids: tuple[str, ...] | None = None
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "D", require_finite(self.D, "D"))
+    def __init__(
+        self,
+        D: float,
+        object_ids: Sequence[str] | None = None,
+    ) -> None:
+        object.__setattr__(self, "D", require_finite(D, "D"))
+        if object_ids is None:
+            normalized_ids = None
+        else:
+            if isinstance(object_ids, (str, bytes)) or not isinstance(
+                object_ids, Sequence
+            ):
+                raise TypeError("object_ids must be a sequence of strings or None")
+            normalized: list[str] = []
+            for index, object_id in enumerate(object_ids):
+                if not isinstance(object_id, str):
+                    raise TypeError(f"object_ids[{index}] must be a string")
+                normalized.append(require_non_empty(object_id, f"object_ids[{index}]"))
+            if not normalized:
+                raise ValueError("object_ids must contain at least one object ID")
+            if len(set(normalized)) != len(normalized):
+                raise ValueError("object_ids must contain unique IDs")
+            normalized_ids = tuple(normalized)
+        object.__setattr__(self, "object_ids", normalized_ids)
 
     def to_ir(self) -> dict[str, object]:
-        return {"kind": "rotated_interfacial_dmi", "D": self.D}
+        ir: dict[str, object] = {"kind": "rotated_interfacial_dmi", "D": self.D}
+        if self.object_ids is not None:
+            ir["object_ids"] = list(self.object_ids)
+        return ir
 
 
 @dataclass(frozen=True, slots=True)

@@ -535,6 +535,68 @@ describe("ObjectGeneralPanel staged identity edits", () => {
     }
   });
 
+  it("reports a saved identity when the following geometry write fails", async () => {
+    const before = mocks.sceneData as {
+      objects: Array<Record<string, unknown>>;
+      revision: number;
+      scene_revision: number;
+    };
+    const identityAck = {
+      ...before,
+      objects: [{ ...before.objects[0], name: "Updated magnet" }],
+      revision: 11,
+      scene_revision: 11,
+    };
+    mocks.readScene.mockReset();
+    mocks.readScene.mockResolvedValueOnce(before).mockResolvedValueOnce(identityAck);
+    mocks.patchObject.mockResolvedValueOnce(identityAck);
+    mocks.commitTransaction.mockRejectedValueOnce(new Error("revision conflict"));
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <InspectorEditSessionProvider>
+          <ObjectGeneralPanel selection={selection} />
+          <InspectorFooter focusDisabled onFocus={() => undefined} />
+        </InspectorEditSessionProvider>,
+      ));
+      const baseDraft = resolveCommittedGeometryObjectDraft(mocks.sceneData as never, "object-a");
+      if (!baseDraft) throw new Error("Expected base draft");
+      const identity = mocks.objectEditSession!.activate({
+        objectId: "object-a",
+        sessionScopeKey: "session=A&epoch=1",
+        targetKey: geometryObjectEditSessionTargetKey("session=A&epoch=1", baseDraft),
+      }, baseDraft);
+      await act(async () => {
+        mocks.objectEditSession!.updateDraft(identity, (draft) => ({
+          ...draft,
+          size: ["2e-7", "1e-7", "1e-8"],
+        }));
+        changeInput(container, "Name", "Updated magnet");
+      });
+      await act(async () => {
+        findButton(container, "Apply").click();
+        for (let i = 0; i < 8; i += 1) await Promise.resolve();
+      });
+
+      expect(mocks.patchObject).toHaveBeenCalledOnce();
+      expect(mocks.commitTransaction).toHaveBeenCalledOnce();
+      expect(mocks.recordHistory).toHaveBeenCalledOnce();
+      expect(mocks.objectEditSession!.getSnapshot()).toMatchObject({
+        dirty: true,
+        draft: { baseRevision: 11, name: "Updated magnet", size: ["2e-7", "1e-7", "1e-8"] },
+      });
+      expect(container.textContent).toContain(
+        "Object identity was committed. Geometry and placement could not be confirmed.",
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("keeps newer General metadata through sequential identity and geometry ACKs", async () => {
     const before = mocks.sceneData as {
       objects: Array<Record<string, unknown>>;
@@ -864,6 +926,60 @@ describe("ObjectGeneralPanel staged identity edits", () => {
       expect(mocks.publishCommittedScene).toHaveBeenCalledOnce();
       expect(mocks.recordHistory).toHaveBeenCalledOnce();
       expect(container.textContent).toContain("Geometry and placement committed.");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("hides ferromagnetic Material, Region, and Energies fields for antenna objects and suppresses duplicate Identity fields on Geometry child routes", async () => {
+    mocks.sceneData = {
+      objects: [{
+        geometry: { geometry_kind: "Box", geometry_params: { size: [1e-7, 1e-7, 1e-8] } },
+        id: "antenna-1",
+        name: "Stripline",
+        notes: "Excitation antenna",
+        role: "antenna",
+        transform: {
+          pivot: [0, 0, 0],
+          rotation_quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+          translation: [0, 0, 0],
+        },
+      }],
+      revision: 10,
+      scene_revision: 10,
+    };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <InspectorEditSessionProvider>
+          <ObjectGeneralPanel selection={objectSelection("antenna-1", "Stripline")} />
+        </InspectorEditSessionProvider>,
+      ));
+      expect(container.textContent).toContain("current source");
+      expect(container.textContent).not.toContain("Energies");
+      expect(
+        findElements(container, (el) => el.tagName === "INPUT" && el.getAttribute("aria-label") === "Material"),
+      ).toHaveLength(0);
+      expect(
+        findElements(container, (el) => el.tagName === "INPUT" && el.getAttribute("aria-label") === "Region"),
+      ).toHaveLength(0);
+
+      await act(async () => root.render(
+        <InspectorEditSessionProvider>
+          <GeometryObjectPanel
+            selection={{
+              ...objectSelection("antenna-1", "Stripline Geometry"),
+              kind: "object.antenna.geometry",
+            }}
+          />
+        </InspectorEditSessionProvider>,
+      ));
+      expect(container.textContent).not.toContain("Identity and references");
     } finally {
       await act(async () => root.unmount());
       dom.restore();

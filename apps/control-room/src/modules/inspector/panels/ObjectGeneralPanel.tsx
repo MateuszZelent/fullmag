@@ -47,8 +47,10 @@ import {
   createPrimitiveSurfaceColorAssignments,
   isFerromagneticPrimitiveRole,
   resolvePrimitiveSurfaceColor,
+  primitiveMonoColorForRole,
 } from "@/kernel/visualization/primitiveSurfaceColor";
 import { Button } from "@/shared/ui/Button";
+import { DisabledReason } from "@/shared/ui/DisabledReason";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
@@ -58,6 +60,7 @@ import { ColorValue, ColorValueField } from "../primitives/ColorValue";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import {
   buildGeometryDraftPatch,
   buildTransformDraftPatch,
@@ -70,6 +73,7 @@ import {
 } from "./objectGeneralPanelModel";
 import {
   objectEditMetadataEquals,
+  rebaseDirtyDraftOntoUnchangedObject,
   reconcileObjectEditAck,
   reconcileObjectIdentityAck,
 } from "./objectEditAckReconciliation";
@@ -203,6 +207,8 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
   const validation = useGeometryValidationResource();
   const object = resolveObjectGeneralPanelModel(selection, scene.data);
   const sceneObject = scene.data?.objects?.find((entry) => entry.id === object.objectId);
+  const geometrySelectionKind = sceneObject?.role === "antenna"
+    ? "object.antenna.geometry" : "object.geometry";
   const antennaWithoutMagnetization = sceneObject?.role === "antenna"
     && hasEmptyObjectMagneticModel(sceneObject);
   const visualizationState = useVisualizationStateResource({
@@ -286,7 +292,11 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
       Number.isFinite(canonicalGeometryDraft.baseRevision) &&
       currentDraft.baseRevision === canonicalGeometryDraft.baseRevision
     ) return;
-    kernel.objectEditSession.refreshCanonical(identity, canonicalDraftInSelectedUnits(canonicalGeometryDraft, currentDraft ?? canonicalGeometryDraft));
+    kernel.objectEditSession.refreshCanonical(
+      identity,
+      canonicalDraftInSelectedUnits(canonicalGeometryDraft, currentDraft ?? canonicalGeometryDraft),
+      rebaseDirtyDraftOntoUnchangedObject,
+    );
   }, [
     canonicalGeometryDraft,
     currentSessionScopeKey,
@@ -831,7 +841,19 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
       const hasGeometryChanges =
         !geometryDraftGeometryEquals(editState.draft, acknowledgedDraft) ||
         !geometryDraftTranslationEquals(editState.draft, acknowledgedDraft);
-      if (hasGeometryChanges) return applyObjectEditPatch(identityAck);
+      if (hasGeometryChanges) {
+        const geometryApplied = await applyObjectEditPatch(identityAck);
+        if (
+          !geometryApplied &&
+          (kernel.commands.getSessionScopeKey() ?? null) === sessionScopeKey &&
+          kernel.objectEditSession.getSnapshot().identity === editState.identity
+        ) {
+          throw new Error(
+            "Object identity was committed. Geometry and placement could not be confirmed. Review the draft and panel feedback before retrying Apply.",
+          );
+        }
+        return geometryApplied;
+      }
       return true;
     }
 
@@ -882,6 +904,19 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Role", value: sceneObject?.role ?? "magnet" },
+          { label: "Shape", value: object.shape },
+          {
+            label: antennaWithoutMagnetization ? "Conductor" : "Material",
+            value: antennaWithoutMagnetization
+              ? "current source"
+              : (draftMaterial || "unassigned"),
+          },
+          { label: "Mesh", value: object.meshStatus },
+        ]}
+      />
       <InspectorGroup title="Object" collapsible defaultOpen>
         {object.mode === "committed" ? (
           <>
@@ -895,6 +930,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
             <FormField
               label="Notes"
               type="textarea"
+              rows={3}
               value={draftNotes}
               onChange={(event) => updateDraft("notes", event.target.value)}
             />
@@ -904,48 +940,55 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         )}
         <FieldRow label="Object ID" value={object.objectId} />
         <FieldRow label="Shape" value={object.shape} />
-        {object.mode === "committed" ? (
-          <>
-            <FormField
-              label="Material"
-              type="text"
-              value={draftMaterial}
-              onChange={(event) => updateDraft("material", event.target.value)}
-            />
-            <FormField
-              label="Region"
-              type="text"
-              value={draftRegion}
-              onChange={(event) => updateDraft("region", event.target.value)}
-            />
-          </>
-        ) : (
-          <>
-            <FieldRow label="Material" value={object.material} />
-            <FieldRow label="Region" value={object.region} />
-          </>
-        )}
-        {object.mode === "committed" && visualizationSettings ? (
-          <>
-            <ColorValueField
-              description="Viewport-local primitive preference; a solid shader override takes precedence."
-              label="Primitive color"
-              value={visualizationSettings.primitiveMonoColor ?? ""}
-              onChange={(value) => patchObjectColor("primitiveColor", value)}
-            />
-            <FieldRow
-              label="Preview color"
-              value={primitiveColor ? <ColorValue value={primitiveColor.color} /> : "unavailable"}
-            />
-            <FieldRow label="Preview color source" value={primitiveColor?.source ?? "unavailable"} />
-            <ColorValueField
-              label="Frame color"
-              value={visualizationSettings.wireframeColor}
-              onChange={(value) => patchObjectColor("frameColor", value)}
-            />
-          </>
+        {!antennaWithoutMagnetization ? (
+          object.mode === "committed" ? (
+            <>
+              <FormField
+                label="Material"
+                type="text"
+                value={draftMaterial}
+                onChange={(event) => updateDraft("material", event.target.value)}
+              />
+              <FormField
+                label="Region"
+                type="text"
+                value={draftRegion}
+                onChange={(event) => updateDraft("region", event.target.value)}
+              />
+            </>
+          ) : (
+            <>
+              <FieldRow label="Material" value={object.material} />
+              <FieldRow label="Region" value={object.region} />
+            </>
+          )
         ) : null}
+
       </InspectorGroup>
+
+      {object.mode === "committed" && visualizationSettings ? (
+        <InspectorGroup title="Viewport display" badge="Live" collapsible defaultOpen>
+          <p className="fm-inspector-form-field__hint">
+            Display colors apply immediately and are not affected by the draft Apply or Revert.
+          </p>
+          <ColorValueField
+            description="Viewport-local primitive preference; a solid shader override takes precedence."
+            label="Primitive color"
+            value={primitiveMonoColorForRole(presentationObject?.role, visualizationSettings.primitiveMonoColor)}
+            onChange={(value) => patchObjectColor("primitiveColor", value)}
+          />
+          <FieldRow
+            label="Preview color"
+            value={primitiveColor ? <ColorValue value={primitiveColor.color} /> : "unavailable"}
+          />
+          <FieldRow label="Preview color source" value={primitiveColor?.source ?? "unavailable"} />
+          <ColorValueField
+            label="Frame color"
+            value={visualizationSettings.wireframeColor}
+            onChange={(value) => patchObjectColor("frameColor", value)}
+          />
+        </InspectorGroup>
+      ) : null}
 
       {!antennaWithoutMagnetization ? <InspectorGroup title="Energies" badge={metricsModel.status} collapsible defaultOpen>
         <FieldRow label="Fetch state" value={objectMetrics.status} />
@@ -973,7 +1016,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
 
       <InspectorGroup title="Actions">
         {objectEditDraftDirty ? (
-          <div style={{ marginBottom: "0.5rem" }}>
+          <div className="fm-inspector-banner-slot">
             <FeedbackBanner
               kind="warning"
               message="Uncommitted object changes are pending. Use Apply or Revert to commit or discard them."
@@ -990,12 +1033,12 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
                 onClick={() => {
                   kernel.selection.set(
                     {
-                      kind: "object.geometry",
+                      kind: geometrySelectionKind,
                       label: `${object.name} Geometry`,
                       nodeId: `model:object:${object.objectId}:geometry`,
                       objectId: object.objectId,
                       ref: {
-                        kind: "object.geometry",
+                        kind: geometrySelectionKind,
                         nodeId: `model:object:${object.objectId}:geometry`,
                         objectId: object.objectId,
                         type: "scene-object",
@@ -1009,16 +1052,24 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
                 Edit Geometry
               </Button>
               <span className="fm-inspector-toolbar__spacer" />
-              <Button
-                disabled={pending || inspectorDirty || Boolean(sceneMutationLockReason)}
-                size="sm"
-                type="button"
-                variant="danger"
-                title={sceneMutationLockReason ?? (inspectorDirty ? "Apply or revert changes before deleting this object." : undefined)}
-                onClick={() => void deleteObject()}
-              >
-                Delete
-              </Button>
+              {(() => {
+                const deleteDisabledReason =
+                  sceneMutationLockReason ?? (inspectorDirty ? "Apply or revert changes before deleting this object." : undefined);
+                const deleteButton = (
+                  <Button
+                    disabled={pending || inspectorDirty || Boolean(sceneMutationLockReason)}
+                    size="sm"
+                    type="button"
+                    variant="danger"
+                    onClick={() => void deleteObject()}
+                  >
+                    Delete
+                  </Button>
+                );
+                return deleteDisabledReason ? (
+                  <DisabledReason reason={deleteDisabledReason}>{deleteButton}</DisabledReason>
+                ) : deleteButton;
+              })()}
             </>
           )}
         </div>
@@ -1036,7 +1087,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Fetch state" value={validation.status} />
         {validationMessages.length > 0 ? (
           <ul className="fm-inspector-validation-list">
-            {validationMessages.map((message) => (
+            {[...new Set(validationMessages)].map((message) => (
               <li key={message}>{message}</li>
             ))}
           </ul>
@@ -1045,10 +1096,12 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         )}
       </InspectorGroup>
 
-      <ObjectExtensionsSection
-        objectId={object.objectId}
-        selection={selection}
-      />
+      {!antennaWithoutMagnetization ? (
+        <ObjectExtensionsSection
+          objectId={object.objectId}
+          selection={selection}
+        />
+      ) : null}
     </div>
   );
 }

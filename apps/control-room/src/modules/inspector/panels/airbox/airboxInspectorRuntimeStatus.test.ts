@@ -28,6 +28,7 @@ describe("airboxInspectorRuntimeStatus", () => {
       } as never),
     ).toEqual({
       authoring: { method: "fem", state: "known", reason: null },
+      executionState: "unknown",
       capabilities: { explicit_topology: true },
       domain: {
         cell_count: undefined,
@@ -53,6 +54,7 @@ describe("airboxInspectorRuntimeStatus", () => {
       },
     } as never);
     expect(airboxInspectorRuntimeStatusEquals(left, { ...left! })).toBe(true);
+    expect(airboxInspectorRuntimeStatusEquals(left, { ...left!, executionState: "running" })).toBe(false);
     expect(
       airboxInspectorRuntimeStatusEquals(left, {
         ...left!,

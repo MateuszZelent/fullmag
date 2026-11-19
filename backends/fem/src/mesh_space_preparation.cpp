@@ -10,6 +10,7 @@
 #include "fullmag_fem.h"
 
 #include "core/fem_mesh.hpp"
+#include "core/fem_marker_map.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "frequency_domain/canonical_digest.hpp"
 
@@ -175,6 +176,7 @@ void copy_fingerprint(char (&destination)[FULLMAG_FEM_MESH_SPACE_PREPARATION_FIN
 bool verify_marker_map(
     const fullmag::fem::FemMeshRuntimeState &source,
     const mfem::Mesh &mesh,
+    const fullmag::fem::FemMarkerMaps &maps,
     std::string &error)
 {
     if (mesh.GetNE() != static_cast<int>(source.n_elements)) {
@@ -182,22 +184,10 @@ bool verify_marker_map(
         return false;
     }
 
-    std::uint32_t maximum_marker = 0u;
-    bool has_air = false;
-    for (const std::uint32_t marker : source.cell_markers) {
-        maximum_marker = std::max(maximum_marker, marker);
-        has_air = has_air || marker == 0u;
-    }
-    if (maximum_marker > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
-        (has_air && maximum_marker == static_cast<std::uint32_t>(std::numeric_limits<int>::max()))) {
-        error = "MFEM marker range cannot be represented by positive attributes";
-        return false;
-    }
-    const int air_attribute = has_air ? static_cast<int>(maximum_marker + 1u) : 1;
     for (std::uint32_t element = 0; element < source.n_elements; ++element) {
-        const std::uint32_t marker = source.cell_markers[element];
-        const int expected = marker == 0u ? air_attribute : static_cast<int>(marker);
-        if (mesh.GetAttribute(static_cast<int>(element)) != expected) {
+        const std::uint32_t marker = source.cell_markers.empty() ? 1u : source.cell_markers[element];
+        const int expected = maps.domain.attribute(marker);
+        if (expected == 0 || mesh.GetAttribute(static_cast<int>(element)) != expected) {
             error = "MFEM mesh volume attributes differ from canonical cell markers";
             return false;
         }
@@ -207,7 +197,7 @@ bool verify_marker_map(
     if (source.facet_types.empty()) {
         expected_boundary_count = mesh.GetNBE();
         for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
-            if (mesh.GetBdrAttribute(boundary) != 1) {
+            if (mesh.GetBdrAttribute(boundary) != maps.boundary.attribute(1u)) {
                 error = "MFEM generated boundary marker differs from the default canonical marker";
                 return false;
             }
@@ -223,9 +213,9 @@ bool verify_marker_map(
             error = "MFEM boundary count is smaller than the canonical exterior/seam marker map";
             return false;
         }
-        const std::uint32_t marker = source.facet_markers[facet];
-        const int expected = marker == 0u ? 1 : static_cast<int>(marker);
-        if (mesh.GetBdrAttribute(expected_boundary_count) != expected) {
+        const std::uint32_t marker = source.facet_markers.empty() ? 1u : source.facet_markers[facet];
+        const int expected = maps.boundary.attribute(marker);
+        if (expected == 0 || mesh.GetBdrAttribute(expected_boundary_count) != expected) {
             error = "MFEM boundary attributes differ from canonical facet markers";
             return false;
         }
@@ -369,13 +359,14 @@ bool produce_evidence(
     const std::string marker_map_fingerprint = digest_marker_map(source);
 
     std::unique_ptr<mfem::Mesh> mesh;
-    if (!fullmag::fem::build_mfem_mesh(source, mesh, error)) {
+    fullmag::fem::FemMarkerMaps marker_maps;
+    if (!fullmag::fem::build_mfem_mesh(source, mesh, error, &marker_maps)) {
         return false;
     }
     if (!mesh || mesh->Dimension() != 3 ||
         mesh->GetNV() != static_cast<int>(source.n_nodes) ||
         mesh->GetNE() != static_cast<int>(source.n_elements) ||
-        !verify_marker_map(source, *mesh, error)) {
+        !verify_marker_map(source, *mesh, marker_maps, error)) {
         if (error.empty()) {
             error = "MFEM mesh dimensions/cardinalities differ from canonical input";
         }

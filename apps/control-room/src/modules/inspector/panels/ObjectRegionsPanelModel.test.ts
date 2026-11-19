@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { CouplingListResource } from "@/kernel/api/apiTypes";
+import type { CouplingListResource, RegionListResource } from "@/kernel/api/apiTypes";
 
 import {
   buildObjectRegionPatch,
@@ -1023,5 +1023,49 @@ describe("ObjectRegionsPanelModel", () => {
         severity: "warning",
       },
     ]);
+  });
+});
+
+
+describe("material override round-trip", () => {
+  function modelFor(overrides: NonNullable<RegionListResource["regions"][number]["material_overrides"]>) {
+    return resolveObjectRegionPanelModel(
+      { kind: "object.region", label: "Core", moduleSource: "explorer", nodeId: "core", objectId: "film",
+        ref: { kind: "object.region", nodeId: "core", objectId: "film", regionId: "film:core", type: "scene-object", visualizationTargetId: "object:film" } },
+      { objects: [{ id: "film", name: "Film", visible: true, material_ref: "mat-film", magnetization_ref: "mag-film" }], revision: 1 },
+      { scene_revision: 1, geometry_realization_revision: 0, regions: [{
+        region_id: "film:core", owner_object_id: "film", name: "Core", enabled: true, priority: 0,
+        source: "authored_object_region", source_object_ids: ["film"], source_body_ids: [],
+        bounds_min: [-1,-1,-1], bounds_max: [1,1,1], mesh_part_ids: [], interaction_refs: [],
+        realization_status: "authored_pending_realization", material_overrides: overrides,
+        shape: { kind: "box", center: [0,0,0], size: [1,1,1] },
+      }] },
+    );
+  }
+
+  it.each(["alpha", "aex"] as const)("preserves an intentional zero %s when renaming a region", (parameter) => {
+    const model = modelFor([{ parameter, priority: 0, conflict_policy: "error", value: { kind: "constant", value: 0 } }]);
+    const draft = { ...objectRegionDraftFromModel(model), name: "Renamed" };
+    expect(validateObjectRegionDraft(draft)).toEqual([]);
+    expect(buildObjectRegionPatch(draft).material_overrides?.[0].value).toMatchObject({ kind: "constant", value: 0 });
+  });
+
+  it.each([
+    { kind: "constant" as const, value: [1, 0, 0] },
+    { kind: "linear" as const, gradient: [2,0,0], base: 800e3, frame: "object" as const, unit: "A/m" },
+    { kind: "radial" as const, center: [0,0,0], inside: 800e3, outside: 600e3, radius: 1, frame: "object" as const, unit: "A/m" },
+  ])("preserves $kind profiles through metadata edits", (value) => {
+    const source = { parameter: "ms" as const, priority: 3, conflict_policy: "error" as const, value };
+    const model = modelFor([source]);
+    const draft = { ...objectRegionDraftFromModel(model), name: "Renamed" };
+    expect(validateObjectRegionDraft(draft)).toEqual([]);
+    expect(buildObjectRegionPatch(draft).material_overrides).toEqual([source]);
+    expect(objectRegionDraftKey(model)).not.toEqual(objectRegionDraftKey(modelFor([{ ...source, priority: 4 }])));
+  });
+
+  it("retains parameters outside the scalar editor instead of converting them to Ms", () => {
+    const source = { parameter: "dbulk" as const, priority: 0, conflict_policy: "error" as const, value: { kind: "constant" as const, value: 0.003, unit: "J/m^2" } };
+    const draft = objectRegionDraftFromModel(modelFor([source]));
+    expect(buildObjectRegionPatch({ ...draft, name: "Renamed" }).material_overrides).toEqual([source]);
   });
 });

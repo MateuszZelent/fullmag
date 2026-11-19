@@ -24,8 +24,8 @@ mesh asset used by weak-form operators, scalar-potential domains, eigenproblems,
 (python-api-meshing-fem-symbols-and-si-units)=
 ## Symbols and SI units
 
-Element sizes, airbox geometry, layer thicknesses, interface distances, and transition distances are
-SI metres. Orders, counts, algorithms, ratios, and quality controls are dimensionless.
+Element sizes, airbox geometry, layer thicknesses, interface distances, and transition distances use
+SI metres ($\mathrm{m}$). Orders, counts, algorithms, ratios, and quality controls are dimensionless ($1$).
 
 (python-api-meshing-fem-assumptions-and-validity)=
 ## Assumptions and validity
@@ -39,11 +39,11 @@ subject to native validation. Element-family/device support is capability-gated.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---:|---:|---|---|---|---|
-| `FEM.order` | `int` | required | 1 | Integer greater than or equal to one. | Study-level finite-element field order. | FEM CPU; GPU element/order capability-gated | `backend_policy.discretization_hints.fem.order` |
-| `FEM.maximum_element_size` | `float \| None` | `None` | m | Finite and positive; required unless hmax is supplied. | Canonical study-level maximum-size target. | FEM | `backend_policy.discretization_hints.fem.hmax` |
-| `FEM.hmax` | `float \| None` | `None` | m | Finite positive alias; equal to maximum_element_size when both are supplied. | Compatibility spelling of the same target. | FEM | `backend_policy.discretization_hints.fem.hmax` |
-| `FEM.mesh` | `str \| None` | `None` | 1 | Nonempty when present; asset is revalidated during extraction. | Imported or prebuilt FEM mesh reference. | FEM import/extraction path | `backend_policy.discretization_hints.fem.mesh` |
-| `FEM.demag_solver_policy` | `FemLinearSolverPolicy \| None` | `None` | 1 | Typed solver policy. | Algebraic Poisson/demag solver request; not mesh geometry. | FEM demagnetization lanes | `backend_policy.discretization_hints.fem.demag_solver_policy` |
+| `FEM.order` | `int` | required | $1$ | Integer greater than or equal to one. | Study-level finite-element field order. | FEM CPU; GPU element/order capability-gated | `backend_policy.discretization_hints.fem.order` |
+| `FEM.maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | Finite and positive; required unless `hmax` is supplied. | Canonical study-level maximum-size target. | FEM | `backend_policy.discretization_hints.fem.hmax` |
+| `FEM.hmax` | `float \| None` | `None` | $\mathrm{m}$ | Finite positive alias; equal to `maximum_element_size` when both are supplied. | Compatibility spelling of the same target. | FEM | `backend_policy.discretization_hints.fem.hmax` |
+| `FEM.mesh` | `str \| None` | `None` | $1$ | Nonempty when present; asset is revalidated during extraction. | Imported or prebuilt FEM mesh reference. | FEM import/extraction path | `backend_policy.discretization_hints.fem.mesh` |
+| `FEM.demag_solver_policy` | `FemLinearSolverPolicy \| None` | `None` | $1$ | Typed solver policy. | Algebraic Poisson/demag solver request; not mesh geometry. | FEM demagnetization lanes | `backend_policy.discretization_hints.fem.demag_solver_policy` |
 
 ```python
 # %% Complete stage-first FEM mesh scenario
@@ -132,24 +132,32 @@ scenario-dependent.
 ## Scientific bibliography
 
 1. P. G. Ciarlet, *The Finite Element Method for Elliptic Problems*, SIAM, 2002.
-2. C. Geuzaine and J.-F. Remacle, “Gmsh,” *Int. J. Numer. Methods Eng.* **79**, 1309–1331 (2009).
-3. R. Anderson et al., “MFEM,” *Comput. Math. Appl.* **81**, 42–74 (2021).
+2. C. Geuzaine and J.-F. Remacle, “Gmsh: A 3-D finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79**(11), 1309–1331 (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579) | [Open-access HAL PDF](https://hal.science/hal-03406365v1/file/Geuzaine2009.pdf).
+3. R. Anderson et al., “MFEM: A modular finite element methods library,” *Computers & Mathematics with Applications* **81**, 42–74 (2021), [doi:10.1016/j.camwa.2020.06.009](https://doi.org/10.1016/j.camwa.2020.06.009).
+
+## Control Room
+
+FEM object mesh policy, airbox mesh parameters, per-region mesh sizing, and mesh quality/history inspection are supported (`partial` relative to raw Python/Gmsh overrides); unlisted FEM options remain `Python-only`.
+
+| Python/API surface | Control Room path | Status | Interaction |
+|---|---|---|---|
+| `study.universe.mesh(...)` / Airbox sizing and grading | `Model Explorer -> Universe / Airbox -> Mesh` | `supported` | Apply airbox mesh draft and trigger mesh build in Airbox Mesh Parameters ({doc}`/frontend/meshing/airbox-mesh`) |
+| `Object.mesh(...)` / `ObjectRegion.mesh(...)` | `Model Explorer -> Objects -> <object> -> Mesh` / `Regions` | `supported` | Apply `ObjectMeshPolicyPanel` or `ObjectRegionMeshPanel` draft and mark dependent mesh stale ({doc}`/frontend/meshing/object-mesh`, {doc}`/frontend/meshing/region-mesh`) |
+| Unlisted Gmsh / sizing-field options | — | `Python-only` | Configured directly in Python |
+
+See {doc}`/frontend/meshing/index`, {doc}`/frontend/meshing/quality-and-reports`, and [Control Room capability register](/frontend/capability-register) for panel details and build-evidence inspection (`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` and `apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx`).
+
+```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
+:alt: Semantic Inspector panel configuring FEM object mesh sizing and airbox parameters
+:width: 92%
+```
+
+```{image} /_static/images/ui/viewport-3d-fem-mesh-airbox.png
+:alt: 3D Viewport rendering FEM tetrahedral mesh and surrounding airbox shell
+:width: 92%
+```
 
 (python-api-meshing-fem-source-code-index)=
-
-## Control Room crosswalk
-
-Status: Frontend support is not implemented unless a named source-backed panel is added.
-
-| Python/API surface | Control Room path | Status | Transaction |
-|---|---|---|---|
-| Parameters documented on this page | `See the capability register; no page-specific route is established` | `not implemented` | No supported frontend transaction |
-| Parameters without a named UI field | `See the capability register; no page-specific route is established` | `not implemented` | Python-only until implemented |
-
-frontend support is not implemented for this API surface and its parameters.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx (inspectorRouteCatalog)`.
-
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |

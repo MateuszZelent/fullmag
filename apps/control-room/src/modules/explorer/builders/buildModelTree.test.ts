@@ -647,12 +647,18 @@ describe("buildModelTree", () => {
     });
   });
 
-  it("does not fabricate a FEM Airbox from discretization alone", () => {
+  it("keeps Airbox visualization reachable without fabricating a FEM mesh", () => {
     const flattened = flattenExplorerNodes(
       buildModelTree({ domainDiscretization: "fem" }),
     );
 
-    expect(flattened.map((node) => node.kind)).not.toContain("airbox.root");
+    expect(flattened.find((node) => node.kind === "airbox.root")).toMatchObject({
+      badge: "no mesh", status: "unavailable", visualizationTargetId: "airbox",
+    });
+    expect(flattened.find((node) => node.kind === "airbox.visualization")).toMatchObject({
+      status: "ready", visualizationTargetId: "airbox",
+    });
+    expect(flattened.map((node) => node.kind)).not.toContain("airbox.mesh");
   });
 
   it("marks authored FEM Airbox policy stale until a matching carrier is realized", () => {
@@ -955,6 +961,22 @@ describe("buildModelTree", () => {
       badge: "stale",
       status: "mesh-stale",
     });
+  });
+
+  it("shows a retained FEM mesh as ready when the server validates the edited scene", () => {
+    const nodes = flattenExplorerNodes(buildModelTree({
+      domainDiscretization: "fem",
+      mesh: {
+        meshName: "shared-domain",
+        meshRevision: 12,
+        sourceSceneRevision: 5,
+        manifestSourceSceneRevision: 4,
+        manifestValidatedSceneRevision: 5,
+      },
+    }));
+
+    expect(nodes.find((node) => node.id === "model:mesh:shared-domain"))
+      .toMatchObject({ badge: "current", status: "mesh-ready" });
   });
 
   it("keeps the published mesh identity visible after a failed candidate", () => {
@@ -4489,7 +4511,7 @@ describe("buildModelTree", () => {
     ]) {
       expect(nodes.map((node) => node.kind)).toContain(kind);
     }
-    expect(nodes.map((node) => node.kind)).not.toContain("airbox.visualization.debug");
+    expect(nodes.map((node) => node.kind)).toContain("airbox.visualization.debug");
   });
 
   it("places each frozen-spins constraint once under its stable object or region owner", () => {

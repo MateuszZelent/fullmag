@@ -59,6 +59,26 @@ describe("viewport3dDiagnostics", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("publishes allocation changes without React updates or stale snapshots", () => {
+    vi.stubGlobal("window", testWindow);
+    testWindow.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__ = { publishes: 0, scans: 0, viewportFrames: 0 };
+    const tracker = new Viewport3DResourceTracker();
+    const listener = vi.fn();
+    tracker.subscribe(listener);
+    const stale = tracker.getSnapshot();
+    const texture = { dispose: vi.fn() };
+    tracker.track("texture", texture);
+    expect(testWindow.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__.resourceCounts?.textures).toBe(1);
+    // A passive effect must publish the current owner instead of its render-time snapshot.
+    expect(stale.textures).toBe(0);
+    tracker.publishDebugResourceCounts();
+    expect(testWindow.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__.resourceCounts?.textures).toBe(1);
+    tracker.release("texture", texture);
+    expect(testWindow.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__.resourceCounts?.textures).toBe(0);
+    expect(texture.dispose).toHaveBeenCalledTimes(1);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("publishes fresh zero resource counts when teardown disposes the tracker", () => {
     vi.stubGlobal("window", testWindow);
     testWindow.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__ = {

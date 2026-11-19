@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-magnetostriction_law",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_magnetostriction_law"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_magnetostriction_law",
@@ -63,7 +46,7 @@
         "python": "name",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "law identifier",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
@@ -73,7 +56,7 @@
         "python": "kind",
         "type": "str",
         "default": "cubic",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "cubic or isotropic",
         "meaning": "law family",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
@@ -83,7 +66,7 @@
         "python": "B1/B2",
         "type": "float or None",
         "default": "None",
-        "si_unit": "Pa",
+        "si_unit": "$\\mathrm{Pa}$",
         "validation": "both required for cubic; finite",
         "meaning": "cubic coefficients",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
@@ -93,7 +76,7 @@
         "python": "lambda_s",
         "type": "float or None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "required for isotropic; finite",
         "meaning": "saturation magnetostriction",
         "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",

@@ -51,6 +51,40 @@ class LinuxNativeProbeTests(unittest.TestCase):
         self.assertEqual(set(final["checks"]), set(probe.CHECKS))
         self.assertEqual((self.state / ".linux-native-restart").read_bytes(), self.payload)
 
+    def test_diagnostic_probe_preserves_default_evidence_and_bound_inode(self):
+        self.host["restart_verified"] = True
+        self.publish()
+        (self.state / ".linux-native-restart").write_bytes(self.payload)
+        default = self.state / ".linux-native-probe.json"
+        default.write_bytes(b"retained-backend-evidence")
+        private = self.state / "diagnostic.json"
+        private.write_bytes(b"{}")
+        inode = private.stat().st_ino
+        with patch.object(probe.subprocess, "check_output", return_value="ef53\n"):
+            evidence = probe.run(True, self.state, self.certificate, evidence_path=private)
+        self.assertEqual(private.stat().st_ino, inode)
+        self.assertEqual(default.read_bytes(), b"retained-backend-evidence")
+        self.assertEqual(json.loads(private.read_bytes()), evidence)
+        self.assertTrue(all(evidence["checks"].values()))
+        self.assertEqual(evidence["mount_namespace_inode"], Path("/proc/self/ns/mnt").stat().st_ino)
+
+    def test_bound_probe_refuses_links_and_unverified_restart(self):
+        target = self.state / "diagnostic.json"
+        target.write_bytes(b"{}")
+        for hard in (False, True):
+            alias = self.state / ("hard" if hard else "symbolic")
+            if hard:
+                os.link(target, alias)
+            else:
+                alias.symlink_to(target)
+            with self.assertRaises((RuntimeError, OSError)):
+                probe.publish_bound_evidence(alias, b"changed")
+            self.assertEqual(target.read_bytes(), b"{}")
+        with patch.object(probe.subprocess, "check_output", return_value="ef53\n"):
+            with self.assertRaisesRegex(RuntimeError, "verified restart"):
+                probe.run(False, self.state, self.certificate, evidence_path=target)
+        self.assertEqual(target.read_bytes(), b"{}")
+
     def test_guest_evidence_remains_readable_with_restrictive_umask(self):
         previous = os.umask(0o077)
         try:

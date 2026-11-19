@@ -38,11 +38,33 @@ pub struct AcceptedAntennaInspectionIdentity {
 
 pub(crate) struct LoadedAcceptedAntennaInspection {
     pub identity: AcceptedAntennaInspectionIdentity,
-    pub loaded: fullmag_runner::LoadedAntennaExternalLeadSolution,
+    pub loaded: AcceptedAntennaInspectionData,
+}
+
+pub(crate) enum AcceptedAntennaInspectionData {
+    ExternalLead(fullmag_runner::LoadedAntennaExternalLeadSolution),
+    ClosedLoop {
+        loaded: fullmag_runner::LoadedAntennaClosedLoopInspection,
+        port_mode_id: String,
+        output_id: String,
+    },
 }
 
 fn invalid(message: impl Into<String>) -> ApiError {
     ApiError::internal(message.into())
+}
+
+fn closed_inspection_error(error: anyhow::Error) -> ApiError {
+    if error.chain().any(|cause| matches!(
+        cause.downcast_ref::<std::fs::TryLockError>(),
+        Some(std::fs::TryLockError::WouldBlock)
+    )) {
+        return ApiError::conflict_with_code(
+            "antenna_store_busy",
+            "accepted antenna store has an active writer; retry this read after publication",
+        );
+    }
+    invalid(format!("invalid accepted closed-loop inspection: {error}"))
 }
 
 fn read_bounded_cas(
@@ -83,6 +105,7 @@ fn with_accepted_antenna_publications<T>(
     mut visit: impl FnMut(
         &SessionStore,
         &fullmag_ir::ExecutionPlanIR,
+        &fullmag_authoring::StudyStep,
         AcceptedAntennaInspectionIdentity,
         &fullmag_session::FmsStudyOutputManifestEntry,
     ) -> Result<T, ApiError>,
@@ -127,9 +150,6 @@ fn with_accepted_antenna_publications<T>(
         let Some(plan) = &lowered.execution_plan else {
             continue;
         };
-        let BackendPlanIR::AntennaExternalLeadInspection(inspection) = &plan.backend_plan else {
-            continue;
-        };
         if !lowered.enabled
             || !matches!(
                 &lowered.status,
@@ -144,12 +164,25 @@ fn with_accepted_antenna_publications<T>(
             .iter()
             .find(|step| step.step_id == lowered.step_id)
             .ok_or_else(|| invalid("antenna execution plan has no accepted Study step"))?;
-        if !matches!(
-            &step.kind,
+        let (native_stage_id, codec_id, codec_version) = match &step.kind {
+            StudyStepKind::ClosedLoopInspection { stage_id, .. } => (
+                stage_id.as_str(),
+                fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID,
+                fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION,
+            ),
             StudyStepKind::Primitive {
-                stage_kind: StudyPrimitiveStageKind::AntennaFieldSolve
+                stage_kind: StudyPrimitiveStageKind::AntennaFieldSolve,
+            } => {
+                let BackendPlanIR::AntennaExternalLeadInspection(inspection) = &plan.backend_plan else {
+                    continue;
+                };
+                (inspection.input.stage.id.as_str(),
+                    fullmag_application::STUDY_ANTENNA_INSPECTION_CODEC_ID,
+                    fullmag_application::STUDY_ANTENNA_INSPECTION_CODEC_VERSION)
             }
-        ) || step.outputs.len() != 1
+            _ => continue,
+        };
+        if !step.enabled || step.outputs.len() != 1
             || step.outputs[0].port_id != fullmag_authoring::ANTENNA_INSPECTION_OUTPUT_PORT_ID
             || step.outputs[0].data_kind != StudyPortDataKind::Artifact
             || !step.inputs.is_empty()
@@ -225,7 +258,7 @@ fn with_accepted_antenna_publications<T>(
             epoch,
         )?;
         let output = &manifest.outputs[0];
-        validate_output_codec(output)?;
+        validate_output_codec(output, codec_id, codec_version)?;
         let logical_identity = fullmag_session::FmsStudyArtifactOutput {
             step_id: step.step_id.clone(),
             port_id: output.port_id.clone(),
@@ -263,11 +296,12 @@ fn with_accepted_antenna_publications<T>(
         results.push(visit(
             &store,
             plan,
+            step,
             AcceptedAntennaInspectionIdentity {
                 run_id: run_id.as_str().into(),
                 task_id,
                 study_step_id: step.step_id.clone(),
-                native_stage_id: inspection.input.stage.id.clone(),
+                native_stage_id: native_stage_id.into(),
                 attempt_id: attempt_id.into(),
                 ownership_epoch: epoch,
                 manifest_artifact_id: manifest_entry.artifact_id.clone(),
@@ -304,7 +338,7 @@ pub(crate) fn discover_accepted_antenna_inspections(
     run_id: &RunId,
     project_id: &ProjectId,
 ) -> Result<Vec<AcceptedAntennaInspectionIdentity>, ApiError> {
-    with_accepted_antenna_publications(store_root, run_id, project_id, None, |_, _, identity, _| {
+    with_accepted_antenna_publications(store_root, run_id, project_id, None, |_, _, _, identity, _| {
         Ok(identity)
     })
 }
@@ -321,7 +355,7 @@ pub(crate) fn load_accepted_antenna_inspection(
         run_id,
         project_id,
         Some(study_step_id),
-        |store, plan, identity, output| {
+        |store, plan, step, identity, output| {
             if identity.attempt_id != pin.attempt_id
                 || identity.ownership_epoch != pin.ownership_epoch
                 || identity.package_object_ref != pin.package_object_ref
@@ -330,6 +364,23 @@ pub(crate) fn load_accepted_antenna_inspection(
                     "antenna_source_conflict",
                     "requested antenna publication is no longer current",
                 ));
+            }
+            if output.codec_id == fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID {
+                let (evidence, loaded) = fullmag_runtime_control::load_saved_inspection(
+                    store, project_id, run_id, &identity.task_id, &identity.attempt_id,
+                    identity.ownership_epoch, &identity.package_object_ref,
+                ).map_err(closed_inspection_error)?;
+                if evidence["artifact_id"].as_str() != Some(identity.artifact_id.as_str()) {
+                    return Err(invalid("closed-loop artifact changed during accepted read"));
+                }
+                let StudyStepKind::ClosedLoopInspection { port_mode_id, output_id, .. } = &step.kind else {
+                    return Err(invalid("closed-loop codec has no accepted typed operation"));
+                };
+                return Ok(LoadedAcceptedAntennaInspection {
+                    identity, loaded: AcceptedAntennaInspectionData::ClosedLoop {
+                        loaded, port_mode_id: port_mode_id.clone(), output_id: output_id.clone(),
+                    },
+                });
             }
             let bytes = read_bounded_cas(
                 store,
@@ -363,7 +414,9 @@ pub(crate) fn load_accepted_antenna_inspection(
                     "accepted antenna package does not retain V/J/H display data",
                 ));
             }
-            Ok(LoadedAcceptedAntennaInspection { identity, loaded })
+            Ok(LoadedAcceptedAntennaInspection {
+                identity, loaded: AcceptedAntennaInspectionData::ExternalLead(loaded),
+            })
         },
     )?;
     results
@@ -373,11 +426,13 @@ pub(crate) fn load_accepted_antenna_inspection(
 
 fn validate_output_codec(
     output: &fullmag_session::FmsStudyOutputManifestEntry,
+    codec_id: &str,
+    codec_version: &str,
 ) -> Result<(), ApiError> {
     if output.port_id != fullmag_authoring::ANTENNA_INSPECTION_OUTPUT_PORT_ID
         || output.data_kind != "artifact"
-        || output.codec_id != fullmag_application::STUDY_ANTENNA_INSPECTION_CODEC_ID
-        || output.codec_version != fullmag_application::STUDY_ANTENNA_INSPECTION_CODEC_VERSION
+        || output.codec_id != codec_id
+        || output.codec_version != codec_version
     {
         return Err(invalid(
             "accepted antenna output has an unsupported port/data-kind/codec tuple",
@@ -415,6 +470,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn closed_reader_distinguishes_transient_lock_conflict_from_corruption() {
+        let busy = anyhow::Error::new(std::fs::TryLockError::WouldBlock)
+            .context("inspection cold-load requires a valid shared store snapshot");
+        assert_eq!(closed_inspection_error(busy).code.as_deref(), Some("antenna_store_busy"));
+        let corrupt = anyhow::anyhow!("legacy or corrupt session read lock descriptor");
+        assert_ne!(closed_inspection_error(corrupt).code.as_deref(), Some("antenna_store_busy"));
+    }
+
+    #[test]
+    fn inspection_codecs_are_bound_to_the_accepted_family() {
+        let families = [
+            (fullmag_application::STUDY_ANTENNA_INSPECTION_CODEC_ID,
+                fullmag_application::STUDY_ANTENNA_INSPECTION_CODEC_VERSION),
+            (fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID,
+                fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION),
+        ];
+        for (codec_id, codec_version) in families {
+            let output = fullmag_session::FmsStudyOutputManifestEntry {
+                port_id: "inspection".into(), case_id: "default".into(),
+                data_kind: "artifact".into(), codec_id: codec_id.into(),
+                codec_version: codec_version.into(), artifact_id: "artifact".into(),
+                object_ref: "a".repeat(64), content_sha256: "a".repeat(64),
+            };
+            for (expected_id, expected_version) in families {
+                assert_eq!(validate_output_codec(&output, expected_id, expected_version).is_ok(),
+                    codec_id == expected_id);
+            }
+            assert!(validate_output_codec(&output, codec_id, "unknown-version").is_err());
+        }
+    }
+
+    #[test]
     fn inspection_reader_rejects_magnetic_and_unknown_output_contracts() {
         let output = fullmag_session::FmsStudyOutputManifestEntry {
             port_id: "inspection".into(),
@@ -426,7 +513,7 @@ mod tests {
             object_ref: "a".repeat(64),
             content_sha256: "a".repeat(64),
         };
-        assert!(validate_output_codec(&output).is_ok());
+        assert!(validate_output_codec(&output, fullmag_application::STUDY_ANTENNA_INSPECTION_CODEC_ID, "v1").is_ok());
         for (port, kind, codec, version) in [
             ("final_state", "artifact", output.codec_id.as_str(), "v1"),
             ("inspection", "state", output.codec_id.as_str(), "v1"),
@@ -440,7 +527,7 @@ mod tests {
                 codec_version: version.into(),
                 ..output.clone()
             };
-            assert!(validate_output_codec(&changed).is_err());
+            assert!(validate_output_codec(&changed, fullmag_application::STUDY_ANTENNA_INSPECTION_CODEC_ID, "v1").is_err());
         }
         let manifest = fullmag_session::FmsStudyOutputManifest {
             schema_version: fullmag_session::FMS_STUDY_OUTPUT_MANIFEST_SCHEMA.into(),

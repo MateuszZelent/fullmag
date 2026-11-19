@@ -19,6 +19,38 @@ import {
   meshRootStatus,
 } from "./meshExplorerNodes";
 
+// Presentation controls remain reachable before any solver publishes a mesh.
+export function buildAirboxPresentationNode(): ExplorerNode {
+  return {
+    id: "model:airbox",
+    kind: "airbox.root",
+    label: "Airbox",
+    parentId: "model:universe",
+    badge: "no mesh",
+    icon: "shield",
+    status: "unavailable",
+    visualizationTargetId: "airbox",
+    children: [{
+      id: "model:airbox:visualization",
+      kind: "airbox.visualization",
+      label: "Visualization",
+      parentId: "model:airbox",
+      badge: "display",
+      icon: "sparkles",
+      status: "ready",
+      visualizationTargetId: "airbox",
+      contextCommands: ["workspace.focus-selection"],
+      children: [{
+        ...visualizationDebugNode({
+          kind: "airbox.visualization.debug",
+          parentId: "model:airbox:visualization",
+        }),
+        visualizationTargetId: "airbox",
+      }],
+    }],
+  };
+}
+
 export function buildFdmAirboxNode(
   presentation: FdmDomainPresentation,
   presentationStatus: ModelTreeSnapshot["domainPresentationStatus"] = "idle",

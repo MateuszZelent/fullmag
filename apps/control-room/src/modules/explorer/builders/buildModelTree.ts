@@ -13,8 +13,9 @@ import { buildRuntimeDiagnosticTree } from "./diagnosticExplorerNodes";
 import { buildRuntimeJobTree } from "./jobExplorerNodes";
 import { buildRuntimeResourceTree } from "./resourceExplorerNodes";
 import { buildStudyNodes } from "./study/studyExplorerNodes";
-import { buildPhysicsGraphTree } from "./physicsGraphTree";
+import { buildPhysicsGraphTree, withMaskAntennaModules } from "./physicsGraphTree";
 import {
+  buildAirboxPresentationNode,
   buildBoundaryFacesNode,
   buildFdmAirboxNode,
   buildFemAirboxNode,
@@ -93,16 +94,23 @@ export function buildModelTree(
             buildBoundaryFacesNode(snapshot),
           ])
         : [];
+  if (!universeChildren.some((node) => node.kind === "airbox.root")) {
+    universeChildren.unshift(buildAirboxPresentationNode());
+  }
 
   const physicsGraphDataPresent =
     snapshot?.physicsGraph !== undefined && snapshot?.physicsGraph !== null;
   const physicsGraphStatus = snapshot?.physicsGraphStatus;
   const physicsGraphMode =
     physicsGraphStatus === "ready" && physicsGraphDataPresent;
+  // Mask antennas are not modules of the canonical graph; add them for the tree.
+  const physicsGraph = physicsGraphMode
+    ? withMaskAntennaModules(snapshot?.physicsGraph, snapshot?.fieldDrives ?? [])
+    : null;
   const physicsGraphNodes = physicsGraphMode
     ? buildPhysicsGraphTree({
         currentTransports: resources.currentTransports,
-        graph: snapshot?.physicsGraph,
+        graph: physicsGraph,
         objects,
       })
     : [];
@@ -116,7 +124,7 @@ export function buildModelTree(
     buildObjectsRootNode(
       objects,
       resources,
-      physicsGraphMode ? snapshot?.physicsGraph : null,
+      physicsGraph,
     ),
   ];
 

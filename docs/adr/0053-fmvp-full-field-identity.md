@@ -66,3 +66,14 @@ niedostepna, dopoki dzialajacy klient nie obsluguje pelnej tozsamosci.
 Endpointy, OpenAPI JSON, Python DSL, ProblemIR, jednostki SI i fizyka solvera
 nie zmieniaja sie. Requested/resolved execution pozostaja w istniejacych
 resource/provenance, nie sa wyprowadzane z wersji binary.
+
+## Artefaktowe mapowanie u64 a numer wersji
+
+Układ immutable artifact inspection z natywnymi identyfikatorami u64 ma
+oddzielną zewnętrzną wersję FMVPv6, opisaną w
+[specyfikacji API](../specs/resource-first-control-room-api-v2.md#inspekcja-artefaktów-anteny-fmvp-v6-z-mapowaniem-u64).
+Nie zmienia generic v5 tego ADR. Oba używają FMMIv4, ale znaczenie offsetów76/80
+jest różne; selektorem jest zawsze zewnętrzna wersja FMVP. Nieopublikowanego
+eksperymentalnego framingu artefaktowego v5 nie traktuje się jako zgodnego
+wariantu pełnego ID ani nie dopuszcza przez heurystykę. V6 ma wspólną bramkę
+producent/klient i osobne, nadal wymagane dowody HTTP/cold-load/browser.

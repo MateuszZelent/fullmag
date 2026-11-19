@@ -1,0 +1,4 @@
+OpenAlex Terms & Data License Notification
+Timestamp: 2026-11-16T12:40:20+01:00
+Terms URL: https://help.openalex.org/
+Notice: Always check the terms at https://help.openalex.org/ and always check the license of individual papers retrieved via OpenAlex for any reuse or distribution restrictions.

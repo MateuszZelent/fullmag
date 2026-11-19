@@ -392,7 +392,23 @@ odpowiednie kroki. Nie obejmuje to starych, obcych worktree, cache ani wyników.
    obejmujący untracked files, unikalne zmiany, ownership, procesy, kontenery,
    mounty i linki. Z dostępnego cleanup executora — głównego checkoutu albo
    innego zachowanego checkoutu, którego nie usuwasz — wykonaj
-   `git worktree remove` dla pojedynczej zweryfikowanej ścieżki, bez `--force`.
+   najpierw `worktree-finish ... completed` w jeszcze istniejącym worktree.
+   Polecenie sprawdza ownera, brak kontenerów i wykonuje cleanup objęty
+   kwalifikacją oraz receiptem; receipt nie dowodzi, że rozpoznano każdą
+   starszą tożsamość. Nie usuwaj ręcznie wolumenów przed tym krokiem, bo
+   etykiety są dowodem właściciela namespace. Po receipcie cleanupu
+   wykonaj niezależny Docker inventory, łącząc bieżące i historyczne Compose
+   project IDs/etykiety z registered source/worktree i resolved storage root.
+   Dla zakończonej, nieużywanej grupy potwierdź brak jej prywatnych backend
+   build/package i frontend namespaces; dla grup, które nadal pozostają w użyciu,
+   potwierdź current + jeden bezpośredni rollback bez starszych kwalifikowanych
+   generacji. Pusty receipt nie wystarcza, jeśli inventory nadal pokazuje
+   należące bajty. Zmierz fizyczne bajty przed/po na backing filesystemie
+   Docker oraz na C: osobno, a logiczne `docker system df` zapisz oddzielnie.
+   Jeśli pomiar lub niezależny inventory jest niedostępny, oznacz cleanup jako
+   `NOT VERIFIED`/`blocked` i nie usuwaj worktree przy nierozstrzygniętej
+   tożsamości. Dopiero po tych kontrolach wykonaj `git worktree remove` dla
+   pojedynczej zweryfikowanej ścieżki, bez `--force`.
    Zweryfikuj brak wpisu
    w `git worktree list` i brak katalogu. Następnie usuń lokalny branch zadania
    dopiero po potwierdzeniu integracji: dla merge/fast-forward sprawdź ancestry,
@@ -402,8 +418,8 @@ odpowiednie kroki. Nie obejmuje to starych, obcych worktree, cache ani wyników.
    Git odmawia, zachowaj dane i zapisz powód.
 8. Zaktualizuj rekord pierwotnego worktree w `storage/index` (nie rekord
    głównego checkoutu): PR, merge commit, stan cleanupu, zachowane zasoby
-   i następny krok. Istniejący `worktree-finish` jedynie zapisuje stan;
-   nie tworzy PR, nie scala ani nie usuwa worktree. Zachowaj `worktree_id`
+   i następny krok. `worktree-finish ... completed` wykonuje kwalifikowaną
+   retencję Docker, lecz nie tworzy PR, nie scala ani nie usuwa worktree. Zachowaj `worktree_id`
    i ścieżkę rekordu przed usunięciem. Raport końcowy zawiera te dowody.
 
 Zadanie jest zakończone po integracji i cleanupie. Przy oczekiwaniu na CI,
@@ -411,6 +427,48 @@ review, uprawnienia lub zwolnienie zasobów zachowaj worktree i wpis `review`
 albo `blocked`, z przyczyną i konkretnym następnym krokiem. Jawne polecenie
 zachowania worktree jest wyjątkiem i musi być zapisane. Nie przedstawiaj
 samej gotowości kodu ani PR jako ukończenia pełnego cyklu.
+
+### Zakończenie źródłowego worktree bez historycznego Compose
+
+Stary, scalony worktree może nie zawierać `compose.toolchain.yaml`. Aktualny
+`scripts/fullmag_storage.py finish --state completed` obsługuje wtedy jawne
+`--retirement-helper-image sha256:<pełne-64-znakowe-ID>`. Wskazany obraz musi
+już istnieć lokalnie pod dokładnie tym ID; finisher nie pobiera ani nie buduje
+obrazu. Jest to świadomy pin operatora dla znanego, zakwalifikowanego obrazu
+kontrolnego, np. z zachowanej konfiguracji toolchaina lub receiptu. Samo ID
+potwierdza niezmienność obrazu, nie jego pochodzenie. Źródło tego wyboru należy
+zapisać w planie operacyjnym. Opcja wybiera wyłącznie obraz technicznego helpera kontrolnego.
+Tożsamość wybranego worktree, exact task/owner, blokady, inventory, plan
+retencji i wymagania dotyczące konsumentów pozostają takie same jak w zwykłym
+zakończeniu. Opcja jest niedozwolona dla innych akcji i stanów.
+
+Finisher może przygotować kanoniczny wolumen control wybranej grupy i uruchomić
+krótkie helpery retencji; nie uruchamia usług aplikacji ani solvera. Zachowuje
+control, ledger i receipty. Jeżeli istnieje prywatny namespace pakietów,
+dotychczasowe wymagania jego retencji, w tym zweryfikowany obraz backendowego
+helpera i źródła kodu retencji, nadal obowiązują. Pusty plan nie zastępuje
+niezależnego sprawdzenia historycznych tożsamości z punktu 7.
+
+Zakończenie jednej grupy sprawdza innych konsumentów współdzielonych pakietów
+na podstawie zapisanej kanonicznej ścieżki, hashy identity, etykiet, environment
+i dokładnych mountów/subpathów. Nie wymaga dostępności checkoutu innej grupy
+na hoście wykonującym cleanup. Niezgodny hash lub mount, nieznany konsument
+oraz konsument usuwanego worktree/namespace nadal blokują retencję; pozostałe
+grupy i ich pakiety nie podlegają tej operacji.
+
+Ścieżka `worktree-finish`, jej tożsamość Compose i backendowy owner cache
+zachowują identyfikator nadany przez resolver, również z początkowym `_`.
+Nie generują zastępczego ID ani nowych hashy namespace.
+Rozszerzenie dotyczy wyłącznie worktree ID; identyfikatory projektu, Compose,
+task i unit zachowują dotychczasowe ograniczenia.
+
+Preflight danych naukowych obejmuje zarówno pliki wersjonowane, jak i ignored
+oraz untracked. Sam czysty `git status` nie dowodzi braku wyników w źródłach.
+Przed usunięciem zachowaj pełne grupy Zarr, łącznie z chunkami i metadanymi,
+oraz sprawdź zgodność zachowanej kopii. Wersjonowanie danych nie zastępuje
+zabezpieczenia wyników wymaganego przez plan cleanupu. Nie przechodź przez
+junction/symlink do zewnętrznego storage podczas usuwania źródeł; zachowaj
+tożsamość i poprzedni stan jego celu.
 
 Każde zakończenie worktree, profilu, builda i runu zapisuje stan końcowy,
 również po błędzie, anulowaniu lub przerwaniu. Stan musi wskazywać właściciela,
@@ -449,3 +507,29 @@ worktree na innej głębokości, odmowę legacy/env/junction przed zapisem, reus
 profilu z blokadą, obowiązkowy stan po awarii, Windows Docker Desktop, Linux
 ext4/mount guard oraz różnicę inventory przed i po ręcznie uruchomionej recepcie
 `just`.
+
+## Wspólne zasoby grup Docker DEV
+
+Wolumeny `fullmag-shared-*` nadal współdzielą Cargo registry/git, store pnpm i
+niezmienne pakiety backendu; zasady zgodności, blokady, recovery i retencji
+opisuje [shared build storage](shared-build-storage.md). Daily DEV ma
+równocześnie dokładnie jeden prywatny `BuildControl.volume` na worktree/grupę
+Compose: dotychczasowy root zachowuje control/lock/namespace, a cache backendu,
+frontend i ledger używają subpaths `private/backend`, `private/frontend` i
+`private/ledger`. Szczegóły, migracja oraz granica wdrożenia:
+[ADR 0076](../adr/0076-single-private-volume-per-dev-group.md). Control, ledger,
+user storage i źródła nie należą do rebuild wipe. Przy domykaniu zadania nie
+usuwaj wolumenu `fullmag-shared-*`; namespace pakietu `groups/<unit_key>` jest
+dokładnym subpathem. Implementacja i runtime nowej topologii pozostają
+**NOT VERIFIED** do czasu proof mountów i receiptów.
+Szczegółowy moment usunięcia compiler outputs `.fullmag-build`, cache-hit i
+failed-generation retention określa ADR 0076; zachowanie treści tego kontraktu
+nie potwierdza automatyki w runtime.
+
+Po publikacji pakietu, zakończeniu etapu także błędem/anulowaniem, zwykłym
+zatrzymaniu po drain i domknięciu zadania wykonaj kwalifikowaną retencję;
+preview nie zamyka operacji. Uzgodnij historyczne i obecne identity oraz
+sprawdź niezależny inventory po cleanupie, bo samo `worktree-finish` albo
+usunięcie worktree nie dowodzi braku pozostałych bajtów Docker. Stare grupy nie
+dziedziczą nowego obrazu/konfiguracji. Szczegółowy zakres, zachowywane dane i
+pomiar przed/po określa [shared build storage](shared-build-storage.md).

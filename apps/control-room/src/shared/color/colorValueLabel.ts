@@ -16,8 +16,8 @@ export function colorValueLabel(value: string | null | undefined): string {
 }
 
 /** `rgb(r, g, b)` / `rgba(...)` from getComputedStyle as `#rrggbb`, or null. */
-export function computedRgbToHex(value: string): string | null {
-  const match = /^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/i.exec(value.trim());
+export function computedRgbToHex(value: string | null | undefined): string | null {
+  const match = /^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/i.exec(value?.trim() ?? "");
   if (!match) return null;
   return `#${match.slice(1, 4).map((part) => Number(part).toString(16).padStart(2, "0")).join("")}`;
 }

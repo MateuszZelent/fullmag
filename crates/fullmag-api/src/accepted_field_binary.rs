@@ -10,6 +10,56 @@ use std::path::PathBuf;
 pub(crate) const ACCEPTED_FIELD_BINARY_SCHEMA: &str = "fullmag.accepted_field.f64le.v1";
 const MAX_VALUES_PER_CHUNK: usize = 65_536;
 const BYTES_PER_VALUE: usize = std::mem::size_of::<f64>();
+/// Decoded, digest-verified field values kept for repeated reads (field vector,
+/// meta, slices of one accepted field). Keyed by the verified values digest,
+/// so an entry is immutable and independent of the store that served it.
+const DECODED_FIELD_CACHE_BYTES: usize = 256 * 1024 * 1024;
+
+struct DecodedFieldCache {
+    entries: std::collections::HashMap<String, std::sync::Arc<[f64]>>,
+    order: std::collections::VecDeque<String>,
+    bytes: usize,
+}
+
+static DECODED_FIELD_CACHE: std::sync::Mutex<Option<DecodedFieldCache>> =
+    std::sync::Mutex::new(None);
+
+fn cached_decoded_values(reference: &BinaryFieldRef) -> Option<Vec<f64>> {
+    let cache = DECODED_FIELD_CACHE.lock().ok()?;
+    let values = cache.as_ref()?.entries.get(&reference.values_sha256)?;
+    (values.len() == reference.value_count).then(|| values.to_vec())
+}
+
+fn remember_decoded_values(reference: &BinaryFieldRef, values: &[f64]) {
+    let bytes = values.len().saturating_mul(BYTES_PER_VALUE);
+    if bytes > DECODED_FIELD_CACHE_BYTES / 2 {
+        return;
+    }
+    let Ok(mut guard) = DECODED_FIELD_CACHE.lock() else {
+        return;
+    };
+    let cache = guard.get_or_insert_with(|| DecodedFieldCache {
+        entries: std::collections::HashMap::new(),
+        order: std::collections::VecDeque::new(),
+        bytes: 0,
+    });
+    if cache.entries.contains_key(&reference.values_sha256) {
+        return;
+    }
+    while cache.bytes + bytes > DECODED_FIELD_CACHE_BYTES {
+        let Some(oldest) = cache.order.pop_front() else {
+            break;
+        };
+        if let Some(evicted) = cache.entries.remove(&oldest) {
+            cache.bytes -= evicted.len() * BYTES_PER_VALUE;
+        }
+    }
+    cache
+        .entries
+        .insert(reference.values_sha256.clone(), std::sync::Arc::from(values));
+    cache.order.push_back(reference.values_sha256.clone());
+    cache.bytes += bytes;
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -123,6 +173,9 @@ impl AcceptedFieldReader {
     /// their own validated descriptor and chunk identities.
     pub(crate) fn read_referenced_values(&self, reference: &BinaryFieldRef) -> Result<Vec<f64>, ApiError> {
         reference.validate()?;
+        if let Some(values) = cached_decoded_values(reference) {
+            return Ok(values);
+        }
         let mut values = Vec::with_capacity(reference.value_count);
         let mut hasher = Sha256::new();
         for chunk in &reference.chunks {
@@ -178,6 +231,7 @@ impl AcceptedFieldReader {
                 "accepted field values do not match their declared SHA-256 digest",
             ));
         }
+        remember_decoded_values(reference, &values);
         Ok(values)
     }
 

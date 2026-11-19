@@ -12,9 +12,10 @@ use axum::Json;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use super::fdm_airbox_membership::resolve_fdm_airbox_membership;
 use super::fdm_region_membership::load_resolved_fdm_membership;
 use super::field_resolution::{
-    current_fem_nodal_projection_kind, extract_fdm_field, extract_fem_field, field_values_match_current_domain,
+    current_fem_damping_uses_nodes, current_fem_nodal_projection_kind, extract_fdm_field, extract_fem_field, field_values_match_current_domain,
     flatten_json_field_values, is_fdm_snapshot, json_field_grid, json_field_matches_current_domain, json_field_value_count,
     live_magnetization_available, strict_flat_json_field_values,
 };
@@ -77,6 +78,8 @@ use fullmag_runner::{FemMeshPayload, QuantityMaterializationCapability, RuntimeE
 // ── Response header constants ────────────────────────────────────────────────
 
 static HDR_FIELD_REVISION: &str = "x-fullmag-field-revision";
+const HDR_OBSERVATION_FRAME_ID: &str = "x-fullmag-observation-frame-id";
+const HDR_EXPECTED_OBSERVATION_FRAME_ID: &str = "x-fullmag-expected-observation-frame-id";
 static HDR_DOMAIN_GEN_ID: &str = "x-fullmag-domain-generation-id";
 static HDR_ARTIFACT_GEN_ID: &str = "x-fullmag-artifact-generation-id";
 static HDR_QUANTITY_ID: &str = "x-fullmag-quantity-id";
@@ -255,6 +258,40 @@ fn read_required_string<'a>(
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("{context} {field} is missing or malformed"))
+}
+
+/// Decoded Airbox field values keyed by their validated `field_artifact_sha256`.
+/// A multilayer Airbox field is millions of JSON triplets in the store; one
+/// vector request used to re-read, hash and parse all of them (~8 s on a
+/// Windows-folder store) to return a few thousand samples. The key is the
+/// content digest the manifest already verifies, so a hit is the same data.
+const AIRBOX_VALUES_CACHE_ENTRIES: usize = 2;
+
+static AIRBOX_VALUES_CACHE: std::sync::Mutex<
+    std::collections::VecDeque<(String, std::sync::Arc<Vec<f64>>)>,
+> = std::sync::Mutex::new(std::collections::VecDeque::new());
+
+fn cached_airbox_values(field_hash: &str) -> Option<Vec<f64>> {
+    let cache = AIRBOX_VALUES_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .iter()
+        .find(|(hash, _)| hash == field_hash)
+        .map(|(_, values)| values.as_ref().clone())
+}
+
+fn remember_airbox_values(field_hash: &str, values: &[f64]) {
+    let mut cache = AIRBOX_VALUES_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.iter().any(|(hash, _)| hash == field_hash) {
+        return;
+    }
+    if cache.len() == AIRBOX_VALUES_CACHE_ENTRIES {
+        cache.pop_front();
+    }
+    cache.push_back((field_hash.to_string(), std::sync::Arc::new(values.to_vec())));
 }
 
 /// Reads the runner-origin Airbox carrier without ever projecting it onto the
@@ -495,7 +532,15 @@ fn load_fdm_multilayer_airbox_carrier_values(
             return Err("Airbox binary values lack their exact validated JSON artifact binding".into());
         }
     }
-    let values = if include_values && binary_reference.is_some() {
+    let cached_values = if include_values {
+        cached_airbox_values(expected_field_hash)
+    } else {
+        None
+    };
+    let cache_hit = cached_values.is_some();
+    let values = if let Some(values) = cached_values {
+        values
+    } else if include_values && binary_reference.is_some() {
         let reader = snapshot.latest_fields.binary_reader(requested_quantity)
             .ok_or_else(|| "Airbox binary field has no trusted runtime owner".to_string())?;
         reader.read_referenced_values(binary_reference.as_ref().unwrap()).map_err(|error| error.to_string())?
@@ -579,6 +624,9 @@ fn load_fdm_multilayer_airbox_carrier_values(
     }
     values
     } else { Vec::new() };
+    if include_values && !cache_hit {
+        remember_airbox_values(expected_field_hash, &values);
+    }
     let expected_carrier_fingerprint = if schema == FDM_MULTILAYER_AIRBOX_SCHEMA {
         fdm_multilayer_airbox_carrier_fingerprint(
         quantity_id,
@@ -692,6 +740,12 @@ pub(crate) fn resolved_fdm_multilayer_airbox_field(
             .ok_or_else(|| ApiError::not_found("requested Airbox quantity is not published"))?;
         &hydrated
     } else { carrier };
+    let air_membership = resolve_fdm_airbox_membership(
+        snapshot,
+        carrier.cells,
+        carrier.origin_m,
+        carrier.cell_size_m,
+    )?;
     let mut field = ResolvedSpatialField::from_airbox(
         quantity_id,
         &carrier.quantity_id,
@@ -701,6 +755,7 @@ pub(crate) fn resolved_fdm_multilayer_airbox_field(
         carrier.cells,
         carrier.origin_m,
         carrier.cell_size_m,
+        air_membership,
         carrier.carrier_fingerprint.clone(),
         carrier.quantity_revision,
         carrier.grid_revision,
@@ -1519,6 +1574,9 @@ fn completed_field_freshness(
 }
 
 fn current_source_step(snapshot: &SessionStateResponse) -> u64 {
+    if let Some(publication) = crate::live_authored_initial_state::current_publication(snapshot) {
+        return publication.frame.source_step;
+    }
     snapshot
         .live_state
         .as_ref()
@@ -1556,8 +1614,16 @@ fn freshness_from_selected_observation_frame(
 fn latest_json_field_freshness(
     snapshot: &SessionStateResponse,
     value: &serde_json::Value,
-    _quantity_id: &str,
+    quantity_id: &str,
 ) -> FieldFreshness {
+    if quantity_id == "mat_alpha" {
+        if let Some(revision) = crate::live_authored_damping::publication_revision(snapshot)
+            .filter(|_| crate::live_authored_damping::matches_publication(snapshot, value))
+        {
+            // The edit belongs to a scene revision and has no physical solver clock.
+            return completed_field_freshness(0, 0, revision, 0, 0);
+        }
+    }
     let precedence = latest_field_source_precedence(snapshot, value);
     let current_step = current_source_step(snapshot);
     let mut freshness = completed_field_freshness(
@@ -1760,6 +1826,9 @@ fn materializer_status<'a>(
     snapshot: &'a SessionStateResponse,
     quantity_id: &str,
 ) -> Option<&'a fullmag_runner::LiveFieldMaterializationStatus> {
+    if quantity_id == "mat_alpha" && crate::live_authored_damping::publication_revision(snapshot).is_some() {
+        return None;
+    }
     relevant_field_materialization_status(snapshot, quantity_id)
 }
 
@@ -1927,7 +1996,8 @@ fn pending_field_scope_point_count(
         ))
     })?;
     Ok(
-        if quantity_spec(quantity_id).is_some_and(|spec| spec.location.as_str() == "cell") {
+        if !current_fem_damping_uses_nodes(snapshot, quantity_id)
+            && quantity_spec(quantity_id).is_some_and(|spec| spec.location.as_str() == "cell") {
             mesh.cell_count()
         } else {
             mesh.nodes.len()
@@ -2157,8 +2227,9 @@ pub async fn get_field_catalog(
             &mut quantities,
             qid,
             &resolved.canonical_unit,
-            value.get("spatial_kind").and_then(serde_json::Value::as_str)
-                .filter(|kind| kind.starts_with("fem_")),
+            current_fem_damping_uses_nodes(snapshot, qid).then_some("node").or_else(||
+                value.get("spatial_kind").and_then(serde_json::Value::as_str)
+                    .filter(|kind| kind.starts_with("fem_"))),
             resolved.quantity_revision,
             &gen_id,
             freshness,
@@ -2315,7 +2386,7 @@ pub async fn get_field_catalog(
         .map(|status| status.quantity.clone())
         .collect::<BTreeSet<_>>();
     for quantity_id in status_quantities {
-        let Some(status) = relevant_field_materialization_status(snapshot, &quantity_id) else {
+        let Some(status) = materializer_status(snapshot, &quantity_id) else {
             continue;
         };
         if status.state == fullmag_runner::LiveFieldMaterializationState::Complete {
@@ -2425,15 +2496,11 @@ pub async fn get_field_catalog(
         } else {
             Vec::new()
         };
-        descriptor.resolved_capability = Some(
+        apply_field_descriptor_capability(
+            descriptor,
             resolved_quantity_capability_for_snapshot(
-                snapshot,
-                spec,
-                materialization,
-                carriers,
-                scope,
-            )
-            .into(),
+                snapshot, spec, materialization, carriers, scope,
+            ),
         );
     }
 
@@ -2985,6 +3052,7 @@ pub async fn get_field_meta(
     let request_context = crate::capture_current_live_request_context(&state).await?;
     let quantity_id = canonical_quantity_id(&quantity_id);
     let quantity_id = quantity_id.as_ref();
+    crate::live_field_demand::note_live_field_request(quantity_id);
     if let Some(field)=super::inspection_field_provider::resolve(&state,quantity_id,query.stage_id.as_deref(),
         query.carrier_id.as_deref(),query.view.as_deref()).await? {
         let locator=super::inspection_field_provider::validate_scope(&field,query.scope_kind.as_deref(),query.scope_id.as_deref(),
@@ -3052,7 +3120,8 @@ pub async fn get_field_meta(
             "unsupported_scope: field '{quantity_id}' is not available on airbox scope"
         )));
     }
-    let location = current_fem_nodal_projection_kind(snapshot, quantity_id).map(str::to_string).or_else(|| snapshot
+    let location = current_fem_damping_uses_nodes(snapshot, quantity_id).then_some("node")
+        .or_else(|| current_fem_nodal_projection_kind(snapshot, quantity_id)).map(str::to_string).or_else(|| snapshot
         .preview_cache
         .get(quantity_id)
         .filter(|field| preview_field_source_is_qualified(snapshot, field))
@@ -3420,6 +3489,10 @@ pub async fn get_field_meta(
                 target_carrier_id(field, resolved_scope.as_ref(), &gen_id),
                 identity.carrier_fingerprint,
             ))
+        })
+        .or_else(|| {
+            let bundle = publication_bundle.as_ref()?;
+            Some((bundle.field.carrier_id.clone(), bundle.field.carrier_fingerprint.clone()))
         });
 
     Ok(Json(FieldMeta {
@@ -3620,18 +3693,50 @@ fn remember_materialized_carrier_metadata(
     );
 }
 
+fn apply_field_descriptor_capability(
+    descriptor: &mut FieldDescriptor,
+    resolved: fullmag_runner::ResolvedQuantityCapability,
+) {
+    // Payload presence alone must not contradict the canonical provider plane.
+    descriptor.available &=
+        resolved.provider == fullmag_runner::QuantityProviderCapability::Available;
+    descriptor.resolved_capability = Some(resolved.into());
+}
+
 fn capability_supports_quantity(
     snapshot: &SessionStateResponse,
     quantity_id: &str,
 ) -> Option<bool> {
-    snapshot.capabilities.as_ref()?;
+    let field_only = snapshot.metadata.as_ref()
+        .and_then(|metadata| metadata.get("magnetic_state_present"))
+        .and_then(serde_json::Value::as_bool) == Some(false);
+    if snapshot.capabilities.is_none() && !field_only {
+        return None;
+    }
     let spec = quantity_spec(quantity_id)?;
+    // A stored read provider needs its actual qualified payload and carrier.
+    let stored_field = if snapshot.capabilities.is_none() {
+        resolve_transport_spatial_field(snapshot, quantity_id)
+            .and_then(|field| match field {
+                Some(field) => Ok(Some(field)),
+                None => resolve_current_spatial_field_metadata(snapshot, quantity_id, usize::from(spec.n_comp)),
+            }).ok().flatten()
+    } else {
+        None
+    };
+    let carriers = stored_field.as_ref()
+        .and_then(full_field_publication_carrier_identity)
+        .map(|identity| current_field_carriers(spec, &identity.scope_kind,
+            identity.scope_id.as_deref(), &identity.carrier_id,
+            Some(&identity.carrier_fingerprint), None))
+        .unwrap_or_default();
+    let materialization = if carriers.is_empty() {
+        QuantityMaterializationCapability::Unmaterialized
+    } else {
+        QuantityMaterializationCapability::Materialized
+    };
     let resolved = resolved_quantity_capability_for_snapshot(
-        snapshot,
-        spec,
-        QuantityMaterializationCapability::Unmaterialized,
-        Vec::new(),
-        spec.domain.as_str(),
+        snapshot, spec, materialization, carriers, spec.domain.as_str(),
     );
     Some(resolved.provider == fullmag_runner::QuantityProviderCapability::Available)
 }
@@ -3768,6 +3873,7 @@ fn resolve_field_scope(
             SpatialFieldCarrier::FdmAirboxCells {
                 cells,
                 carrier_fingerprint,
+                air_membership,
                 ..
             },
         ..
@@ -3783,13 +3889,31 @@ fn resolve_field_scope(
                 "field '{quantity_id}' Airbox carrier does not provide scope '{scope_kind}'"
             )));
         }
+        let indices = air_membership
+            .iter()
+            .enumerate()
+            .filter_map(|(index, air)| {
+                (*air && (geometry_scope == "full" || fdm_cell_is_domain_surface(index, *cells)))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        if indices.is_empty() {
+            return Err(ApiError::not_found("FDM Airbox scope has no realized air cells"));
+        }
+        let grid = if indices.len() == raw_point_count {
+            *cells
+        } else {
+            [u32::try_from(indices.len()).map_err(|_| {
+                ApiError::conflict("Airbox scope cell count exceeds FMVP capacity")
+            })?, 1, 1]
+        };
         return Ok(Some(ResolvedFieldScope {
             domain: ResolvedFieldScopeDomain::Air,
             kind: "airbox".to_string(),
             id: Some("airbox".to_string()),
-            node_indices: (0..raw_point_count).collect(),
-            value_indices: (0..raw_point_count).collect(),
-            grid: Some(*cells),
+            node_indices: indices.clone(),
+            value_indices: indices,
+            grid: Some(grid),
             carrier_hash: Some(format!("sha256:{carrier_fingerprint}")),
         }));
     }
@@ -3907,7 +4031,8 @@ fn resolve_field_scope(
         .filter(|index| *index < mesh.nodes.len())
         .collect::<Vec<_>>();
     let value_indices =
-        if quantity_spec(quantity_id).is_some_and(|spec| spec.location.as_str() == "cell") {
+        if !current_fem_damping_uses_nodes(snapshot, quantity_id)
+            && quantity_spec(quantity_id).is_some_and(|spec| spec.location.as_str() == "cell") {
             node_indices
                 .iter()
                 .copied()
@@ -4769,11 +4894,7 @@ fn sample_field_scope(
         return scope;
     }
 
-    let sample_count = max_samples.max(1);
-    let stride = (scope.node_indices.len() / sample_count).max(1);
-    let sampled_positions = (0..sample_count)
-        .map(|sample| sample * stride)
-        .collect::<Vec<_>>();
+    let sampled_positions = uniform_sample_positions(scope.node_indices.len(), max_samples);
     scope.node_indices = sampled_positions
         .iter()
         .filter_map(|position| scope.node_indices.get(*position).copied())
@@ -4799,14 +4920,15 @@ fn field_node_indices_cache_token(node_indices: Option<&[u32]>) -> String {
     if node_indices.is_empty() {
         return "empty".to_string();
     }
-    node_indices
-        .iter()
-        .map(u32::to_string)
-        .collect::<Vec<_>>()
-        .join(",")
+    // A digest keeps the key bounded; the text form of a 1.75 M-cell layer was ~13 MB.
+    let mut hasher = Sha256::new();
+    for index in node_indices {
+        hasher.update(index.to_le_bytes());
+    }
+    format!("{}:{:x}", node_indices.len(), hasher.finalize())
 }
 
-fn mesh_topology_hash_bytes(hash: &str) -> Result<[u8; 32], ApiError> {
+pub(crate) fn mesh_topology_hash_bytes(hash: &str) -> Result<[u8; 32], ApiError> {
     let hash = hash.strip_prefix("sha256:").ok_or_else(|| {
         ApiError::internal("mesh topology fingerprint must use the canonical sha256: prefix")
     })?;
@@ -4845,22 +4967,65 @@ fn sample_unscoped_field_values(
         return (raw_values, grid, None);
     }
 
-    let sample_count = max_samples.max(1);
-    let start = point_count.saturating_sub(sample_count) / 2;
-    let mut sampled = Vec::with_capacity(sample_count * n_comp);
-    for point_index in start..start + sample_count {
+    let positions = uniform_sample_positions(point_count, max_samples);
+    let mut sampled = Vec::with_capacity(positions.len() * n_comp);
+    for &point_index in &positions {
         let offset = point_index * n_comp;
         sampled.extend_from_slice(&raw_values[offset..offset + n_comp]);
     }
 
-    (
-        sampled,
-        [sample_count as u32, 1, 1],
-        Some((start..start + sample_count).collect()),
-    )
+    (sampled, [positions.len() as u32, 1, 1], Some(positions))
+}
+
+/// Deterministic display sample of `total` ordinals: `floor(i * total / count)`.
+///
+/// This is the same rule as the Control Room's `sampleFdmDisplayCellIndices`,
+/// so a budgeted response covers exactly the cells the renderer draws. A
+/// stride of `floor(total / count)` instead would return only a contiguous
+/// prefix whenever `count < total < 2 * count`.
+fn uniform_sample_positions(total: usize, max_samples: usize) -> Vec<usize> {
+    let count = max_samples.max(1).min(total);
+    (0..count)
+        .map(|sample| {
+            let position = (sample as u128 * total as u128 / count as u128) as usize;
+            position.min(total - 1)
+        })
+        .collect()
 }
 
 // ── Binary vector — P1 ───────────────────────────────────────────────────────
+
+fn authored_vector_frame_id(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    query: &FieldVectorQuery,
+) -> Option<String> {
+    if quantity_id != "m"
+        || query.snapshot_id.is_some()
+        || query.view.is_some()
+        || query.scope_kind.as_deref() == Some("airbox")
+    {
+        return None;
+    }
+    let frame = resolved_current_field_observation_frame(snapshot, quantity_id, 3)?;
+    frame.authored_initial_state.map(|_| frame.observation_frame_id)
+}
+
+fn field_observation_frame_changed() -> ApiError {
+    ApiError::conflict_with_code(
+        "field_observation_frame_changed",
+        "The prepared magnetization frame changed. Refresh the field metadata.",
+    )
+}
+
+fn insert_authored_vector_frame_header(
+    response: &mut axum::response::Response,
+    frame_id: Option<&str>,
+) {
+    if let Some(value) = frame_id.and_then(|id| HeaderValue::from_str(id).ok()) {
+        response.headers_mut().insert(HDR_OBSERVATION_FRAME_ID, value);
+    }
+}
 
 #[utoipa::path(
     get,
@@ -4868,11 +5033,13 @@ fn sample_unscoped_field_values(
     params(
         ("quantity_id" = String, Path, description = "Quantity identifier"),
         ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous field-vector response"),
+        ("x-fullmag-expected-observation-frame-id" = Option<String>, Header, description = "Expected authored magnetization frame from the current field metadata"),
         FieldVectorQuery,
     ),
     responses(
         (status = 200, description = "Binary FMVP field vector. Immutable artifact inspections use separate FMVP v6 metadata with lossless u64 sample identities, source ownership and carrier revision/digest; this does not change the generic v5 full-quantity-ID layout. Analysis response and eigen-mode vectors use FMVP v5 metadata with the full quantity ID and domain generation identity; when a mesh carrier is available they also include topology, scope, and indexing metadata. Analysis vectors without a mesh use the explicit legacy_count_only absent-topology sentinel and cannot establish topology-bound overlay compatibility. Other scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload.", content_type = "application/octet-stream", headers(
             ("x-fullmag-field-revision" = String, description = "Field revision"),
+            ("x-fullmag-observation-frame-id" = String, description = "Identity of the authored magnetization frame, when served"),
             ("x-fullmag-domain-generation-id" = String, description = "Domain generation identity"),
             ("x-fullmag-artifact-generation-id" = String, description = "Committed analysis artifact generation identity; present only when the served field member is verified"),
             ("x-fullmag-quantity-id" = String, description = "Canonical quantity identifier"),
@@ -4910,8 +5077,13 @@ pub async fn get_field_vector(
     let request_context = crate::capture_current_live_request_context(&state).await?;
     crate::validate_current_live_request_context(&state, &request_context).await?;
     let canonical=canonical_quantity_id(&quantity_id);
+    // A read keeps its quantity in the live capture demand of an active run.
+    crate::live_field_demand::note_live_field_request(canonical.as_ref());
     if let Some(field)=super::inspection_field_provider::resolve(&state,canonical.as_ref(),query.stage_id.as_deref(),
         query.carrier_id.as_deref(),query.view.as_deref()).await? {
+        if headers.contains_key(HDR_EXPECTED_OBSERVATION_FRAME_ID) {
+            return Err(field_observation_frame_changed());
+        }
         super::inspection_field_provider::require_binary_pins(query.stage_id.as_deref(),
             query.carrier_id.as_deref(),query.expected_carrier_revision.as_deref())?;
         let response_field=Arc::clone(&field);
@@ -4930,26 +5102,54 @@ pub async fn get_field_vector(
         return Ok(response);
     }
     if query.carrier_id.is_some() {return Err(ApiError::not_found("requested artifact carrier is not published"));}
-    let response = get_field_vector_unfenced(
-        State(state.clone()),
-        headers,
-        AxumPath(quantity_id),
-        Query(query),
-    )
-    .await?;
-    crate::validate_current_live_request_context(&state, &request_context).await?;
+    let field_domain = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::ensure_current_live_request_context(
+            snapshot,
+            &request_context,
+            state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
+        )?;
+        crate::session::current_live_field_domain_identity(snapshot)
+    };
+    let response = get_field_vector_unfenced(&state, &headers, canonical.as_ref(), &query).await?;
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().ok_or_else(|| ApiError::conflict("request_context_stale"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    if field_domain != crate::session::current_live_field_domain_identity(snapshot) {
+        return Err(ApiError::conflict_with_code(
+            "field_domain_changed",
+            "The spatial domain changed during the read. Refresh the topology and field metadata.",
+        ));
+    }
+    if canonical == "m" {
+        let response_frame_id = response
+            .headers()
+            .get(HDR_OBSERVATION_FRAME_ID)
+            .and_then(|value| value.to_str().ok());
+        let current_frame_id = authored_vector_frame_id(snapshot, canonical.as_ref(), &query);
+        if response_frame_id != current_frame_id.as_deref() {
+            return Err(field_observation_frame_changed());
+        }
+    }
     Ok(response)
 }
 
 async fn get_field_vector_unfenced(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    AxumPath(quantity_id): AxumPath<String>,
-    Query(query): Query<FieldVectorQuery>,
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    quantity_id: &str,
+    query: &FieldVectorQuery,
 ) -> Result<axum::response::Response, ApiError> {
-    let quantity_id = canonical_quantity_id(&quantity_id);
-    let quantity_id = quantity_id.as_ref();
-    resolve_field_geometry_scope(&query)?;
+    resolve_field_geometry_scope(query)?;
+    let expected_frame_id = headers
+        .get(HDR_EXPECTED_OBSERVATION_FRAME_ID)
+        .map(|value| value.to_str().map_err(|_| ApiError::bad_request("invalid observation frame ID")))
+        .transpose()?;
     let workspace_selection = if query.scope_kind.as_deref() == Some("selection") {
         Some(state.current_workspace_selection.read().await.clone())
     } else {
@@ -4957,16 +5157,23 @@ async fn get_field_vector_unfenced(
     };
     let guard = state.current_live_state.read().await;
     let Some(snapshot) = guard.as_ref() else {
+        if expected_frame_id.is_some() {
+            return Err(field_observation_frame_changed());
+        }
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
-    validate_field_vector_generation_precondition(&query, snapshot)?;
+    validate_field_vector_generation_precondition(query, snapshot)?;
+    let authored_frame_id = authored_vector_frame_id(snapshot, quantity_id, query);
+    if expected_frame_id.is_some_and(|expected| Some(expected) != authored_frame_id.as_deref()) {
+        return Err(field_observation_frame_changed());
+    }
     if let Some(response) =
-        analysis_frequency_response_vector_response(snapshot, quantity_id, &query, &headers)?
+        analysis_frequency_response_vector_response(snapshot, quantity_id, query, headers)?
     {
         return Ok(response);
     }
     if let Some(response) =
-        analysis_eigen_mode_vector_response(snapshot, quantity_id, &query, &headers)?
+        analysis_eigen_mode_vector_response(snapshot, quantity_id, query, headers)?
     {
         return Ok(response);
     }
@@ -4993,11 +5200,11 @@ async fn get_field_vector_unfenced(
     let n_comp = spec.n_comp as usize;
 
     let component = parse_field_component(quantity_id, query.component.as_deref(), n_comp)?;
-    let airbox_carrier = requested_fdm_multilayer_airbox_carrier(snapshot, &query, quantity_id)?;
+    let airbox_carrier = requested_fdm_multilayer_airbox_carrier(snapshot, query, quantity_id)?;
     let multilayer_airbox_scope =
         is_fdm_multilayer_snapshot(snapshot) && query.scope_kind.as_deref() == Some("airbox");
     if multilayer_airbox_scope && airbox_carrier.is_none() {
-        validate_field_vector_carrier_precondition(&query, None)?;
+        validate_field_vector_carrier_precondition(query, None)?;
     }
     let airbox_field = airbox_carrier
         .as_ref()
@@ -5042,7 +5249,7 @@ async fn get_field_vector_unfenced(
                 )));
             }
             validate_hysteresis_snapshot_stage_scope(
-                &state,
+                state,
                 query.stage_id.as_deref(),
                 snapshot_id,
             )
@@ -5082,7 +5289,7 @@ async fn get_field_vector_unfenced(
 
     if raw_values_opt.is_none() {
         validate_pending_field_vector_scope(
-            &query,
+            query,
             snapshot,
             workspace_selection.as_ref(),
             quantity_id,
@@ -5100,7 +5307,7 @@ async fn get_field_vector_unfenced(
             }
         };
         if !(multilayer_airbox_scope && airbox_carrier.is_none()) {
-            validate_field_vector_carrier_precondition(&query, pending_carrier_revision)?;
+            validate_field_vector_carrier_precondition(query, pending_carrier_revision)?;
         }
     }
 
@@ -5118,9 +5325,9 @@ async fn get_field_vector_unfenced(
                     status.state == fullmag_runner::LiveFieldMaterializationState::Pending
                 });
             let active_command_id = active_compute_fields_command_id_for_pending_quantity(
-                &state,
+                state,
                 snapshot,
-                &query,
+                query,
                 quantity_id,
             )
             .await;
@@ -5137,7 +5344,7 @@ async fn get_field_vector_unfenced(
             if materializer_pending {
                 let generation_id = domain_generation_id(snapshot);
                 return Ok(pending_field_vector_response(
-                    &query,
+                    query,
                     quantity_id,
                     generation_id,
                     "field_materialization_pending",
@@ -5148,7 +5355,7 @@ async fn get_field_vector_unfenced(
             if active_command_id.is_some() {
                 let generation_id = domain_generation_id(snapshot);
                 return Ok(pending_field_vector_response(
-                    &query,
+                    query,
                     quantity_id,
                     generation_id,
                     "field_materialization_pending",
@@ -5159,7 +5366,7 @@ async fn get_field_vector_unfenced(
             if legacy_pending {
                 let generation_id = domain_generation_id(snapshot);
                 return Ok(pending_field_vector_response(
-                    &query,
+                    query,
                     quantity_id,
                     generation_id,
                     "field_unmaterialized",
@@ -5184,7 +5391,7 @@ async fn get_field_vector_unfenced(
         raw_values.len()
     };
     let resolved_scope = resolve_field_scope(
-        &query,
+        query,
         snapshot,
         workspace_selection.as_ref(),
         raw_point_count,
@@ -5193,9 +5400,9 @@ async fn get_field_vector_unfenced(
     )?;
     let carrier_revision =
         field_vector_carrier_revision(snapshot, resolved_scope.as_ref(), airbox_field.as_ref());
-    validate_field_vector_carrier_precondition(&query, carrier_revision)?;
+    validate_field_vector_carrier_precondition(query, carrier_revision)?;
     let sample_limit = resolve_field_vector_sample_limit(
-        &query,
+        query,
         resolved_scope.as_ref(),
         is_fdm_snapshot(snapshot),
     )?;
@@ -5280,20 +5487,14 @@ async fn get_field_vector_unfenced(
     let snapshot_token = requested_snapshot_id
         .map(|snapshot_id| format!(":snapshot={snapshot_id}"))
         .unwrap_or_default();
+    let observation_token = authored_frame_id
+        .as_deref()
+        .map(|id| format!(":observation={id}"))
+        .unwrap_or_default();
     let topology_etag_token = topology_hash
         .as_ref()
         .map(|hash| format!(":topology_revision={topology_revision}:topology_hash={hash}"))
         .unwrap_or_default();
-    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "{}:{scope_token}{geometry_scope_token}{sample_token}{snapshot_token}{topology_etag_token}",
-        component_etag_token(
-            quantity_id,
-            session_id.as_str(),
-            field_revision,
-            gen_revision,
-            &component,
-        )
-    ));
     let scoped_grid = resolved_scope
         .as_ref()
         .map(|scope| {
@@ -5360,12 +5561,27 @@ async fn get_field_vector_unfenced(
         .as_ref()
         .and_then(|scope| scope.id.as_deref())
         .unwrap_or("");
+    let node_indices_token = field_node_indices_cache_token(field_node_indices_u32.as_deref());
+    let airbox_membership_token = if airbox_field.is_some() {
+        format!(":airbox_membership=active_cells.v1:{node_indices_token}")
+    } else {
+        String::new()
+    };
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "{}:{scope_token}{geometry_scope_token}{sample_token}{snapshot_token}{topology_etag_token}{airbox_membership_token}{observation_token}",
+        component_etag_token(
+            quantity_id,
+            session_id.as_str(),
+            field_revision,
+            gen_revision,
+            &component,
+        )
+    ));
     let topology_cache_token = topology_hash
         .as_ref()
         .map(|hash| {
             format!(
-                ":topology_revision={topology_revision}:topology_hash={hash}:node_indices={}",
-                field_node_indices_cache_token(field_node_indices_u32.as_deref())
+                ":topology_revision={topology_revision}:topology_hash={hash}:node_indices={node_indices_token}",
             )
         })
         .unwrap_or_default();
@@ -5385,7 +5601,7 @@ async fn get_field_vector_unfenced(
         session_id.as_str(),
         field_revision,
         gen_revision,
-        &format!("{comp_key}:{scope_token}{sample_token}{snapshot_token}{topology_cache_token}"),
+        &format!("{comp_key}:{scope_token}{sample_token}{snapshot_token}{topology_cache_token}{observation_token}"),
     );
     {
         let mut proj_cache = state.quantity_data_plane.projection_cache.lock().await;
@@ -5395,7 +5611,7 @@ async fn get_field_vector_unfenced(
             let (encoding_version, point_count, total_value_count) =
                 field_vector_binary_header_counts(&binary);
             let mut resp = crate::router_v2::handlers::shared::conditional_binary_response(
-                &headers, &etag, binary,
+                headers, &etag, binary,
             );
             insert_field_headers(
                 &mut resp,
@@ -5416,6 +5632,7 @@ async fn get_field_vector_unfenced(
             insert_field_vector_carrier_revision_header(&mut resp, carrier_revision);
             insert_scope_headers(&mut resp, resolved_scope.as_ref());
             insert_snapshot_header(&mut resp, requested_snapshot_id);
+            insert_authored_vector_frame_header(&mut resp, authored_frame_id.as_deref());
             return Ok(resp);
         }
     }
@@ -5471,7 +5688,7 @@ async fn get_field_vector_unfenced(
     }
 
     let mut resp =
-        crate::router_v2::handlers::shared::conditional_binary_response(&headers, &etag, binary);
+        crate::router_v2::handlers::shared::conditional_binary_response(headers, &etag, binary);
 
     // Add informational headers (present on both 200 and 304)
     insert_field_headers(
@@ -5493,6 +5710,7 @@ async fn get_field_vector_unfenced(
     insert_field_vector_carrier_revision_header(&mut resp, carrier_revision);
     insert_scope_headers(&mut resp, resolved_scope.as_ref());
     insert_snapshot_header(&mut resp, requested_snapshot_id);
+    insert_authored_vector_frame_header(&mut resp, authored_frame_id.as_deref());
 
     Ok(resp)
 }
@@ -5502,7 +5720,7 @@ fn artifact_observation_frame(field: &ResolvedSpatialField<'_>, locator: &Artifa
         observation_frame_id:format!("artifact-obs:{}:{}:{}:{}",locator.owner.session_epoch,locator.owner.run_id,
             locator.carrier_digest,field.quantity_revision),session_epoch:locator.owner.session_epoch.clone(),
         domain_generation_id:locator.carrier_digest.clone(),topology_revision:locator.carrier_revision.to_string(),
-        source_step:0,source_time_seconds:None,
+        source_step:0,source_time_seconds:None,authored_initial_state:None,
     }
 }
 
@@ -5533,7 +5751,13 @@ fn artifact_field_vector_response(
     let mut response=crate::router_v2::handlers::shared::conditional_binary_response(headers,&etag,binary);
     insert_field_headers(&mut response,&field.quantity_id,&component,field.quantity_revision,&locator.carrier_digest,
         locator.sample_count as usize,values.len());
-    for (name,value) in [(HDR_ENCODING,"FMVP;version=6".to_owned()),(HDR_FIELD_INDEXING,locator.indexing.as_str().to_owned()),
+    if let Some(scope_id)=locator.carrier_scope_id.as_deref() {
+        response.headers_mut().insert(HeaderName::from_static(HDR_SCOPE_ID),
+            HeaderValue::from_str(scope_id).map_err(|_| ApiError::conflict("invalid artifact response header"))?);
+    }
+    for (name,value) in [(HDR_ENCODING,"FMVP;version=6".to_owned()),
+        (HDR_SCOPE_KIND,locator.carrier_scope_kind),("x-fullmag-mesh-topology-hash",locator.carrier_digest.clone()),
+        (HDR_FIELD_INDEXING,locator.indexing.as_str().to_owned()),
         ("x-fullmag-carrier-id",locator.carrier_id),("x-fullmag-carrier-revision",locator.carrier_revision.to_string()),
         ("x-fullmag-carrier-digest",locator.carrier_digest),("x-fullmag-source-kind","artifact_inspection".into()),
         ("x-fullmag-source-id",locator.owner.source_digest),("x-fullmag-source-revision",field.quantity_revision.to_string()),
@@ -5658,22 +5882,28 @@ fn analysis_frequency_response_vector_response(
     } = serialize_analysis_field_vector_binary(
         snapshot, field_id, out_n_comp, out_grid, &projected, None,
     )?;
-    let revision = analysis_payload_revision(
-        snapshot,
+    let content_digest = crate::router_v2::handlers::analysis::frequency_domain::response_field_content_digest_from_bytes(
+        &artifact_dir,
+        &frequency_point_path,
         &relative_path,
-        bytes.len(),
-        artifact_generation_id.as_deref(),
-    );
-    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "fmvp5:{field_id}:{revision}:{}:{}:{}:{:x}",
+        &bytes,
+        generation.as_ref(),
+    )?;
+    let revision = sha256_hex_revision(
+        content_digest.strip_prefix("sha256:").unwrap_or(&content_digest),
+    )
+    .ok_or_else(|| ApiError::internal("invalid frequency-response source content digest"))?;
+    let etag = analysis_response_field_etag(
+        field_id,
+        &content_digest,
         effective_view,
         query
             .component
             .as_deref()
             .unwrap_or(default_component.unwrap_or("full")),
         effective_phase_rad,
-        Sha256::digest(&binary)
-    ));
+        &binary,
+    );
     let mut resp =
         crate::router_v2::handlers::shared::conditional_binary_response(headers, &etag, binary);
     insert_field_headers(
@@ -6913,6 +7143,20 @@ fn decode_complex_f64_pairs_little_endian(bytes: &[u8]) -> Result<Vec<f64>, ApiE
         values.push(value);
     }
     Ok(values)
+}
+
+fn analysis_response_field_etag(
+    field_id: &str,
+    content_digest: &str,
+    view: &str,
+    component: &str,
+    phase_rad: f64,
+    binary: &[u8],
+) -> String {
+    let representation_digest = format!("{:x}", Sha256::digest(binary));
+    crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "{field_id}:{content_digest}:{view}:{component}:{phase_rad}:{representation_digest}"
+    ))
 }
 
 fn analysis_payload_revision(
@@ -9188,6 +9432,100 @@ fn urlencoding(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn artifact_response_headers_follow_owned_scope_on_200_and_304() {
+        use crate::router_v2::handlers::data::artifact_field_carrier::{
+            ArtifactSampleCarrier, ArtifactSampleIdentity,
+        };
+        use crate::schemas::fields::{ArtifactFieldOwnerBinding, ArtifactSampleIndexing};
+        use axum::http::{HeaderMap, StatusCode, header::{ETAG, IF_NONE_MATCH}};
+
+        for (quantity, indexing, components, scope) in [
+            ("V_electric", ArtifactSampleIndexing::SourceNodes, 1, "object"),
+            ("J_charge", ArtifactSampleIndexing::Tet4CellLocalNodes, 3, "object"),
+            ("H_ant", ArtifactSampleIndexing::SampleNodes, 3, "object"),
+            ("H_ant", ArtifactSampleIndexing::SampleNodes, 3, "full"),
+        ] {
+            let owner = ArtifactFieldOwnerBinding {
+                session_id: "header-session".into(), session_epoch: "header-epoch".into(),
+                request_scope_epoch: "header-scope".into(), run_id: "header-run".into(),
+                runtime_stage_id: "header-runtime-stage".into(), authored_stage_id: "inspect".into(),
+                module_id: "transport".into(), object_id: "antenna".into(), output_id: "inspection".into(),
+                source_digest: format!("sha256:{}", "b".repeat(64)),
+                content_digest: format!("sha256:{}", "c".repeat(64)),
+                observation_mesh_revision: 1, observation_topology_revision: 1,
+                historical_inspection: true, accepted_artifact: None,
+                native_mesh_identity: "native-mesh".into(), native_topology_identity: "native-topology".into(),
+            };
+            let identities = (0_u8..4).map(|local| match indexing {
+                ArtifactSampleIndexing::SourceNodes => ArtifactSampleIdentity::SourceNode(10 + u64::from(local)),
+                ArtifactSampleIndexing::Tet4CellLocalNodes => ArtifactSampleIdentity::CellLocal {
+                    source_element_ordinal: 7, local_vertex_index: local, stable_vertex_id: 10 + u64::from(local),
+                },
+                ArtifactSampleIndexing::SampleNodes => ArtifactSampleIdentity::SampleOrdinal(u64::from(local)),
+                _ => unreachable!(),
+            }).collect();
+            let carrier = std::sync::Arc::new(ArtifactSampleCarrier {
+                owner, sample_carrier: None, carrier_scope_kind: scope.into(),
+                carrier_scope_id: (scope == "object").then(|| "antenna".into()),
+                indexing, positions_xyz_m: vec![[0., 0., 0.], [1e-6, 0., 0.],
+                    [0., 1e-6, 0.], [0., 0., 1e-6]],
+                sample_identity: identities,
+                // This response serializes FMVP samples, not a topology response.
+                topology: None, carrier_digest: "a".repeat(64),
+                carrier_revision: u64::from_le_bytes([0xaa; 8]),
+            });
+            let field = ResolvedSpatialField::from_artifact_samples(
+                quantity, vec![1.; 4 * components], carrier, 3,
+            ).unwrap();
+            let locator = crate::router_v2::handlers::data::inspection_field_provider::locator(&field).unwrap();
+            // "full" is a supported complete-carrier alias, even for an object-owned carrier.
+            let query: FieldVectorQuery = serde_json::from_value(serde_json::json!({
+                "component": "full", "scope_kind": "full",
+                "carrier_id": locator.carrier_id, "stage_id": locator.owner.runtime_stage_id,
+                "expected_carrier_revision": locator.carrier_revision,
+                "expected_generation_id": locator.carrier_digest
+            })).unwrap();
+            let response = super::artifact_field_vector_response(&field, &query, &HeaderMap::new()).unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let mut conditional = HeaderMap::new();
+            conditional.insert(IF_NONE_MATCH, response.headers().get(ETAG).unwrap().clone());
+            let cached = super::artifact_field_vector_response(&field, &query, &conditional).unwrap();
+            assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
+            for response in [&response, &cached] {
+                let headers = response.headers();
+                assert_eq!(headers.get("x-fullmag-scope-kind").unwrap().to_str().unwrap(),
+                    locator.carrier_scope_kind.as_str());
+                assert_eq!(headers.get("x-fullmag-scope-id").map(|v| v.to_str().unwrap()),
+                    locator.carrier_scope_id.as_deref());
+                let hash = headers.get("x-fullmag-mesh-topology-hash").unwrap().to_str().unwrap();
+                assert_eq!(hash.strip_prefix("sha256:").unwrap_or(hash), locator.carrier_digest.as_str());
+                assert_eq!(headers.get("x-fullmag-encoding").unwrap().to_str().unwrap(), "FMVP;version=6");
+                assert_eq!(headers.get("x-fullmag-n-comp").unwrap().to_str().unwrap(), components.to_string());
+            }
+        }
+    }
+
+    #[test]
+    fn response_etag_tracks_source_and_representation_independently() {
+        let etag = |digest, view, component, phase| {
+            super::analysis_response_field_etag(
+                "analysis:frequency-response:frequency-0000",
+                digest, view, component, phase, b"binary",
+            )
+        };
+        let baseline = etag("sha256:a", "complex", "full", 0.0);
+        assert_eq!(baseline, etag("sha256:a", "complex", "full", 0.0));
+        assert_ne!(baseline, etag("sha256:b", "complex", "full", 0.0));
+        assert_ne!(baseline, etag("sha256:a", "real", "full", 0.0));
+        assert_ne!(baseline, etag("sha256:a", "complex", "c0", 0.0));
+        assert_ne!(baseline, etag("sha256:a", "complex", "full", 0.5));
+        assert_ne!(baseline, super::analysis_response_field_etag(
+            "analysis:frequency-response:frequency-0000",
+            "sha256:a", "complex", "full", 0.0, b"changed",
+        ));
+    }
+
     use super::{
         analysis_complex_vector_view_values, analysis_frequency_response_view_values,
         AcceptedObservationFrameRef,
@@ -9275,6 +9613,36 @@ mod tests {
             Some(row.time),
         ));
         snapshot.scalar_rows.push(row);
+    }
+
+    #[test]
+    fn absorbing_boundary_publication_stays_current_after_a_physical_step() {
+        let mut snapshot = snapshot_with_field_provider("mat_alpha");
+        snapshot.live_state = Some(serde_json::from_value(serde_json::json!({
+            "status": "completed", "updated_at_unix_ms": 1234,
+            "latest_step": {
+                "kind": "physical_observation", "step": 8, "time": 8e-12, "dt": 1e-12,
+                "e_ex": 0.0, "e_demag": 0.0, "e_ext": 0.0, "e_total": 0.0,
+                "max_dm_dt": 0.0, "max_h_eff": 0.0, "wall_time_ns": 0, "grid": [1,1,1],
+                "field_materialization_states": [{
+                    "quantity": "mat_alpha", "source_step": 8, "request_revision": 4,
+                    "state": "error", "error": "previous run"
+                }], "finished": true
+            }
+        })).unwrap());
+        let field = serde_json::json!({"values": [0.3], "layout": {"grid_cells": [1,1,1]},
+            "authored_damping_revision": 12, "source_revision": 12});
+        snapshot.metadata = Some(serde_json::json!({"authored_damping":
+            crate::live_authored_damping::binding(12, Some(&field))}).into());
+        crate::session::replace_authored_damping(&mut snapshot, Some(field));
+        let alpha = snapshot.latest_fields.get("mat_alpha").unwrap();
+        let freshness = super::latest_json_field_freshness(&snapshot, alpha, "mat_alpha");
+        assert_eq!(freshness.state, FieldMaterializationState::Complete);
+        assert_eq!((freshness.source_revision, freshness.stale_by_steps), (12, 0));
+        assert_eq!((freshness.source_step, freshness.source_time_seconds), (0, None));
+        assert_eq!(freshness.materialized_at_unix_ms, 0);
+        assert!(freshness.materialization_reason_code.is_none());
+        assert!(materializer_status(&snapshot, "mat_alpha").is_none());
     }
 
     #[test]
@@ -9839,6 +10207,107 @@ mod tests {
     }
 
     #[test]
+    fn field_only_availability_rejects_magnetic_fields_with_missing_or_inherited_capabilities() {
+        let mut snapshot = snapshot_with_field_provider("m");
+        snapshot.metadata = Some(serde_json::json!({"magnetic_state_present": false}).into());
+        for inherited in [true, false] {
+            if !inherited { snapshot.capabilities = None; }
+            for spec in fullmag_quantities::quantity_specs().iter()
+                .filter(|spec| spec.domain == fullmag_quantities::QuantityDomain::MagneticOnly)
+            {
+                assert_eq!(super::capability_supports_quantity(&snapshot, spec.id.as_str()),
+                    Some(false), "{}", spec.id.as_str());
+            }
+            let availability = resolve_target_field_availability(&snapshot, "m",
+                &TargetFieldAvailabilityQuery { scope_kind: Some("full".into()), ..Default::default() })
+                .expect("resolved nonmagnetic availability");
+            assert!(!availability.supported && !availability.materialized && !availability.pending);
+            assert_eq!(availability.reason_code.as_deref(), Some("quantity_not_supported"));
+        }
+        snapshot.metadata = None;
+        assert_eq!(super::capability_supports_quantity(&snapshot, "m"), None,
+            "An unresolved workspace retains unknown capability");
+    }
+
+    #[test]
+    fn field_only_availability_preserves_only_qualified_stored_read_providers() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "field-only-stored-availability"
+        })).expect("minimal snapshot");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.capabilities = None;
+        snapshot.metadata = Some(serde_json::json!({"magnetic_state_present": false}).into());
+        snapshot.fem_mesh = Some(FemMeshPayload {
+            mesh_name: "stored-domain".into(), mesh_id: "mesh:stored-domain".into(),
+            nodes: vec![[0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0,1,2,3]]),
+            element_markers: vec![1], facets: fullmag_ir::FemFacetConnectivityIR::empty(),
+            boundary_markers: Vec::new(), periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(), object_segments: Vec::new(), mesh_parts: Vec::new(),
+            domain_mesh_mode: None, domain_frame: None, generation_id: Some("stored-generation".into()),
+            per_domain_quality: std::collections::HashMap::new(), build_report: None,
+        }.into());
+        add_physical_field_source(&mut snapshot, 2, None);
+        for quantity in ["V_electric", "J_charge", "H_ant", "spin_current_tensor"] {
+            let spec = fullmag_quantities::quantity_spec(quantity).expect("canonical stored quantity");
+            let points = if spec.location == fullmag_quantities::QuantityLocation::Node { 4 } else { 1 };
+            assert_eq!(super::capability_supports_quantity(&snapshot, quantity), Some(false),
+                "No descriptor may invent a stored provider");
+            snapshot.field_quantity_revisions.insert(quantity.into(), 9);
+            snapshot.preview_cache.insert(LivePreviewField {
+                config_revision: 1, source_step: 2, source_time_seconds: None, source_revision: 2,
+                materialized_at_unix_ms: 1, materialization_wall_time_ns: 1,
+                quantity: quantity.into(), unit: spec.unit.into(),
+                spatial_kind: if points == 4 { "fem_nodes" } else { "fem_elements" }.into(),
+                quantity_domain: spec.domain.as_str().into(),
+                preview_grid: [points,1,1], original_grid: [points,1,1],
+                vector_field_values: vec![1.0; points as usize * usize::from(spec.n_comp)],
+                x_chosen_size: points, y_chosen_size: 1, applied_x_chosen_size: points,
+                applied_y_chosen_size: 1, applied_layer_stride: 1, auto_downscaled: false,
+                auto_downscale_message: None, active_mask: None,
+            });
+            let field = super::resolve_current_spatial_field_metadata(&snapshot, quantity, usize::from(spec.n_comp))
+                .expect("stored metadata").expect("qualified stored payload");
+            let identity = super::full_field_publication_carrier_identity(&field)
+                .expect("actual FEM topology identity");
+            let carriers = super::current_field_carriers(spec, &identity.scope_kind,
+                identity.scope_id.as_deref(), &identity.carrier_id, Some(&identity.carrier_fingerprint), None);
+            let resolved = super::resolved_quantity_capability_for_snapshot(&snapshot, spec,
+                fullmag_runner::QuantityMaterializationCapability::Materialized, carriers, "full");
+            assert_eq!(super::capability_supports_quantity(&snapshot, quantity), Some(true));
+            assert_eq!(resolved.lane, "stored_field_read_only");
+            assert_eq!(resolved.carriers.len(), 1);
+            let mut descriptors = Vec::new();
+            push_field_descriptor(&mut descriptors, quantity, spec.unit, None, 9, "stored-generation",
+                FieldFreshness { source_step: 2, source_time_seconds: None, source_revision: 2,
+                    materialized_at_unix_ms: 1, stale_by_steps: 0, materialization_wall_time_ns: 1,
+                    state: FieldMaterializationState::Complete, materialization_reason_code: None,
+                    materialization_error: None }, true);
+            if quantity == "spin_current_tensor" {
+                assert_eq!(resolved.render, fullmag_runner::QuantityRenderCapability::UnsupportedShape);
+                assert_eq!(resolved.publication, fullmag_runner::QuantityPublicationCapability::ExportOnly);
+            } else if spec.supports_preview_3d {
+                let availability = resolve_target_field_availability(&snapshot, quantity,
+                    &TargetFieldAvailabilityQuery { scope_kind: Some("full".into()), ..Default::default() })
+                    .expect("stored availability");
+                assert!(availability.supported && availability.materialized, "{quantity}");
+            }
+            let mut missing_payload: super::FieldDescriptor = serde_json::from_value(
+                serde_json::to_value(&descriptors[0]).expect("descriptor JSON"),
+            ).expect("descriptor round trip");
+            missing_payload.available = false;
+            super::apply_field_descriptor_capability(&mut missing_payload, resolved.clone());
+            assert!(!missing_payload.available, "A provider alone cannot invent payload presence");
+            super::apply_field_descriptor_capability(&mut descriptors[0], resolved);
+            assert!(descriptors[0].available, "Read availability must not depend on renderability");
+            snapshot.preview_cache.clear_fields();
+            assert_eq!(super::capability_supports_quantity(&snapshot, quantity), Some(false),
+                "Removing the actual descriptor removes the read provider");
+        }
+        assert!(snapshot.capabilities.is_none(), "Read providers never invent solver capabilities");
+    }
+
+    #[test]
     fn field_catalog_descriptors_transport_canonical_quantity_domains() {
         let freshness = FieldFreshness {
             source_step: 0,
@@ -9878,6 +10347,15 @@ mod tests {
         assert_eq!(quantities[0].location, "node");
         assert_eq!(quantities[1].location, "node");
         assert_eq!(quantities[0].source_time_seconds, Some(2.5e-12));
+        let mut snapshot = snapshot_with_field_provider("m");
+        snapshot.metadata = Some(serde_json::json!({"magnetic_state_present": false}).into());
+        let resolved = super::resolved_quantity_capability_for_snapshot(&snapshot,
+            fullmag_quantities::quantity_spec("m").unwrap(),
+            fullmag_runner::QuantityMaterializationCapability::Materialized, Vec::new(), "full");
+        super::apply_field_descriptor_capability(&mut quantities[1], resolved);
+        assert!(!quantities[1].available, "Inherited magnetic payload presence is not provider truth");
+        assert_eq!(quantities[1].resolved_capability.as_ref().unwrap().provider,
+            crate::schemas::quantities::QuantityProviderCapability::Unavailable);
     }
 
     #[test]
@@ -9950,6 +10428,7 @@ mod tests {
             [2, 2, 1],
             [10.0, 20.0, 30.0],
             [0.5, 0.25, 2.0],
+            vec![false, true, false, true],
             "a".repeat(64),
             17,
             19,
@@ -9980,9 +10459,12 @@ mod tests {
 
         assert_eq!(scope.kind, "airbox");
         assert_eq!(scope.id.as_deref(), Some("airbox"));
-        assert_eq!(scope.grid, Some([2, 2, 1]));
-        assert_eq!(scope.node_indices, vec![0, 1, 2, 3]);
-        assert_eq!(scope.value_indices, vec![0, 1, 2, 3]);
+        assert_eq!(scope.grid, Some([2, 1, 1]));
+        assert_eq!(scope.node_indices, vec![1, 3]);
+        assert_eq!(scope.value_indices, vec![1, 3]);
+        let sampled = super::sample_field_scope(scope.clone(), Some(1));
+        assert_eq!(sampled.node_indices, vec![1]);
+        assert_eq!(sampled.value_indices, vec![1]);
         let expected_hash = format!("sha256:{}", "a".repeat(64));
         assert_eq!(scope.carrier_hash.as_deref(), Some(expected_hash.as_str()));
     }

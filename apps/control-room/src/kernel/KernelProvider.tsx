@@ -1,5 +1,8 @@
 "use client";
 
+import { SavedResultsPlaybackController } from "./saved-results/SavedResultsPlaybackController";
+import { homeView } from "./layout/homeView";
+
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { SESSION_EVENTS_WS_PATH, VISUALIZATION_STATE_PATH } from "./api/apiPaths";
@@ -31,6 +34,7 @@ import {
 } from "./commands/commandShortcuts";
 import { CommandDiagnosticsController } from "./commands/CommandDiagnosticsController";
 import { CommandFeedbackController } from "./commands/CommandFeedbackController";
+import { createStudyComputeObservationStore } from "./commands/studyComputeObservations";
 import { isMeshBuildConfirmCommandId } from "./authoring/meshBuildConfirmation";
 import { EventBus } from "./events/EventBus";
 import type { KernelEventMap } from "./events/eventTypes";
@@ -48,6 +52,7 @@ import { resolveDiagnosticRecorderConfig } from "./performance/diagnostic-record
 import { KernelContext } from "./KernelContext";
 import { LayoutController } from "./layout/LayoutController";
 import { SHELL_COMMANDS } from "./layout/shellCommands";
+import { useDomainSetupNavigation } from "./layout/domainSetupNavigation";
 import { ModuleRegistry } from "./module/ModuleRegistry";
 import { startBrowserActivityDiagnostics } from "./performance/browserActivityDiagnostics";
 import { startPerformanceMeasureDiagnostics } from "./performance/performanceMeasureDiagnostics";
@@ -67,7 +72,10 @@ import {
 import {
   createViewport3DInactiveResourcePauseController,
 } from "./resources/inactiveViewportResourcePolicy";
-import { createHiddenInstanceTabResourcePauseController } from "./resources/hiddenInstanceTabResourcePolicy";
+import {
+  createHiddenDocumentResourcePauseController,
+  createHiddenInstanceTabResourcePauseController,
+} from "./resources/hiddenInstanceTabResourcePolicy";
 import { listenForInstanceTabVisibility } from "./layout/instanceTabVisibility";
 import { useRuntimeCommandControlResourceData } from "./resources/studyRuntimeResources";
 import { confirmedSessionResourceIdentity, sessionRequestScopeKey, sessionScopedResourceKey, type SessionResourceIdentity } from "./resources/sessionResourceIdentity";
@@ -75,6 +83,7 @@ import { useSessionResourceIdentity } from "./resources/useSessionStatus";
 import { useSessionCollection } from "./resources/useSessionCollection";
 import { isProjectWorkspaceCommand } from "./commands/projectWorkspaceCommandPolicy";
 import { STUDY_RUNTIME_COMMANDS } from "./runtime/studyRuntimeCommandContributions";
+import { createBuildStudyCommands } from "./runtime/buildStudyCommands";
 import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
 import { ChartViewportHandoffController } from "./visualization/ChartViewportHandoffController";
@@ -130,6 +139,7 @@ function createKernel(): KernelApi {
     binaryDecodeScheduler,
     diagnostics,
   });
+  const savedResultsPlayback = new SavedResultsPlaybackController();
   const projectDocument = new ProjectDocumentController(api);
   const commands = new CommandRegistry();
   commands.attachSessionScopeSource(
@@ -144,6 +154,7 @@ function createKernel(): KernelApi {
     getSessionScopeKey: () => commands.getSessionScopeKey(),
     // The mesh build dialog observes and presents mesh run outcomes itself.
     isRunOutcomeSelfPresented: isMeshBuildConfirmCommandId,
+    studyComputeObservations: createStudyComputeObservationStore(api.getBaseUrl()),
     subscribeSessionScope: (listener) => commands.subscribeSessionScope(listener),
   });
 
@@ -211,6 +222,9 @@ function createKernel(): KernelApi {
   for (const cmd of STUDY_RUNTIME_COMMANDS) {
     commands.register(cmd);
   }
+  for (const cmd of createBuildStudyCommands(commands)) {
+    commands.register(cmd);
+  }
   for (const cmd of MAGNETIZATION_TEXTURE_COMMANDS) {
     commands.register(cmd);
   }
@@ -227,6 +241,32 @@ function createKernel(): KernelApi {
     commands.register(cmd);
   }
 
+  commands.register({
+    id: "workspace.open-results-folder", title: "Open Saved Results",
+    group: "workspace-document", category: "File", scope: "global",
+    isEnabled: () => true,
+    run: async (context) => {
+      const input = context.input as {itemId?: string; name?: string} | undefined;
+      if (!input?.itemId || !input.name) return {status: "failed", message: "Select a result folder first."};
+      if (objectEditSession.getSnapshot().dirty) {
+        return {status: "failed", message: "Apply or cancel the current object edit before opening saved results."};
+      }
+      const transition = await pendingForms.prepareTransition({applyPendingChanges: false});
+      try {
+        await api.workspace.playback(input.itemId);
+        transition.assertCurrent();
+        if (objectEditSession.getSnapshot().dirty) {
+          return {status: "failed", message: "Object edits changed while opening saved results."};
+        }
+        savedResultsPlayback.open({itemId: input.itemId, name: input.name});
+        homeView.close();
+        return {status: "completed", message: "Saved results opened read only."};
+      } finally {
+        transition.release();
+      }
+    },
+  });
+
   // Register modules and auto-register their contributed commands.
   for (const manifest of resolveControlRoomModules()) {
     modules.register(manifest);
@@ -238,6 +278,7 @@ function createKernel(): KernelApi {
   }
 
   return {
+    savedResultsPlayback,
     api,
     analysisFieldOverlay,
     authoringHistory,
@@ -475,6 +516,9 @@ function AvailableSessionRuntimeConnectors({ kernel, collection }: {
     clearRuntimeSelection();
     return clearRuntimeSelection;
   }, [kernel, scopeKey]);
+  // Declared after the clearing effect so a requested Universe selection is
+  // applied after the session-transition clear, not wiped by it.
+  useDomainSetupNavigation(kernel, confirmedIdentity?.sessionId ?? null, scopeKey);
   if (!confirmedIdentity) return null;
   return (
     <>
@@ -821,10 +865,17 @@ function Viewport3DResourceLifecycleConnector({
   return null;
 }
 
-/** Pauses this page's background work while its instance tab is hidden (ADR 0069). */
+/**
+ * Pauses this page's background work while its instance tab is hidden
+ * (ADR 0069), and its live data plane while the browser tab is hidden.
+ */
 function InstanceTabVisibilityConnector() {
   useEffect(() => listenForInstanceTabVisibility(window), []);
   useEffect(() => createHiddenInstanceTabResourcePauseController(), []);
+  useEffect(
+    () => createHiddenDocumentResourcePauseController({ visibility: document }),
+    [],
+  );
 
   return null;
 }

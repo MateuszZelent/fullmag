@@ -76,6 +76,7 @@ from ._gmsh_types import (
     _is_sha256_digest,
 )
 from ._gmsh_infra import (
+    _quality_volumes_in_si,
     _import_gmsh,
     _configure_gmsh_threads,
     _GmshProgressLogger,
@@ -107,6 +108,7 @@ from ._gmsh_airbox import (
     _gmsh_require_triangular_shell_interface,
     _mixed_transition_shell_parameters,
 )
+from ._airbox_feature_fields import require_no_airbox_feature_refinement
 from ._airbox_grading import _add_airbox_grading_field
 from ._mixed_face_incidence import MixedFaceIncidence, build_mixed_face_incidence
 
@@ -211,26 +213,6 @@ def _fresh_scoped_layer_plane_attempt_options(options: MeshOptions) -> MeshOptio
         options,
         size_fields=_clone_descriptors(options.size_fields),
         lower_bound_fields=_clone_descriptors(options.lower_bound_fields),
-    )
-
-
-def _quality_volumes_in_si(
-    quality: MeshQualityReport | None, coordinate_scale: float
-) -> MeshQualityReport | None:
-    """Convert dimensional volumes when Gmsh coordinates are scaled from SI."""
-    if quality is None:
-        return None
-    volume_factor = coordinate_scale ** -3
-    return _dc_replace(
-        quality,
-        volume_min=quality.volume_min * volume_factor,
-        volume_max=quality.volume_max * volume_factor,
-        volume_mean=quality.volume_mean * volume_factor,
-        volume_std=quality.volume_std * volume_factor,
-        element_volume=(
-            [volume * volume_factor for volume in quality.element_volume]
-            if quality.element_volume is not None else None
-        ),
     )
 
 
@@ -2843,6 +2825,7 @@ def generate_swept_tetrahedral_box_airbox_mesh(
     options: MeshOptions,
 ) -> MeshData:
     """Realize a fixed-layer Tet4 Box, partitioning scoped fields by exact z layers."""
+    require_no_airbox_feature_refinement(airbox, route="exact-layer tetrahedral Box")
     if airbox is not None and int(airbox.boundary_marker) == 10:
         raise ValueError(
             "shared-domain interface and outer boundary markers must be distinct"
@@ -2893,6 +2876,7 @@ def _generate_coincident_ring_airbox_mesh(
     bounds: tuple[float, float, float, float, float, float],
 ) -> MeshData:
     """Mesh a Box or ring and exact-cell airbox as synchronized GEO partitions."""
+    require_no_airbox_feature_refinement(airbox, route="exact-cell layered")
     SCALE = 1.0e6
     body_hmax_scaled = float(hmax) * SCALE
     if not math.isfinite(body_hmax_scaled) or body_hmax_scaled <= 0.0:
@@ -3357,7 +3341,7 @@ def _generate_coincident_ring_airbox_mesh(
             )
         nodes = np.asarray(raw_mesh.nodes, dtype=np.float64) / SCALE
         elements = raw_mesh.elements
-        magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.int32) == 1
+        magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.uint32) == 1
         if not np.any(magnetic_mask):
             raise RuntimeError("coincident ring realization produced no magnetic cells")
         magnetic_elements = elements[magnetic_mask]
@@ -3851,7 +3835,7 @@ def generate_swept_box_cylinder_ring_mesh(
 
         nodes = np.asarray(raw_mesh.nodes, dtype=np.float64) / SCALE
         elements = raw_mesh.elements
-        magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.int32) == 1
+        magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.uint32) == 1
         if not np.any(magnetic_mask):
             raise RuntimeError("swept ring realization produced no magnetic cells")
         magnetic_nodes = np.unique(elements[magnetic_mask].reshape(-1))
@@ -4095,7 +4079,7 @@ def generate_swept_cylinder_mesh(
             raise RuntimeError("Swept mesh produced 0 volume elements")
 
         elements = np.vstack(tet_elements).astype(np.int32)
-        element_markers = np.ones(elements.shape[0], dtype=np.int32)
+        element_markers = np.ones(elements.shape[0], dtype=np.uint32)
 
         # Extract boundary faces (triangles on the surface)
         surf_types, surf_tags_list, surf_node_tags_list = gmsh.model.mesh.getElements(2)
@@ -4118,7 +4102,7 @@ def generate_swept_cylinder_mesh(
             boundary_faces = np.vstack(boundary_faces_list)
         else:
             boundary_faces = np.zeros((0, 3), dtype=np.int32)
-        boundary_markers = np.ones(boundary_faces.shape[0], dtype=np.int32)
+        boundary_markers = np.ones(boundary_faces.shape[0], dtype=np.uint32)
 
         quality = None
         if opts.compute_quality:
@@ -4945,6 +4929,7 @@ def generate_disconnected_mixed_p1_mesh(
     options: MeshOptions | None = None,
 ) -> MeshData:
     """Generate a conforming Box-prism plus disconnected annulus-tet domain."""
+    require_no_airbox_feature_refinement(airbox, route="mixed-v2 prism/tetrahedral")
     opts = options or MeshOptions()
     if opts.algorithm_2d != 6 or opts.algorithm_3d not in (1, 10) or opts.periodic_pair_ids:
         raise ValueError(

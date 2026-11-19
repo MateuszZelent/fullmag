@@ -52,12 +52,15 @@ import {
   Waves,
   Zap,
 } from "lucide-react";
+import { VIEW_DIRECTION_COMMANDS } from "@/modules/viewport-3d/public";
+import { VIEWPORT_3D_QUALITY_PROFILE_LABELS } from "@/shared/viewport3dQualityLabels";
 import { PROBLEM_IR_03_RIGID_TRANSFORM_REASON } from "@/kernel/authoring/objectTranslationMutation";
 
 import {
   MESHING_CAPABILITIES_PATH,
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
+import { SCALAR_COLOR_PALETTE_ITEMS } from "@/shared/visualization/scalarColorPalette";
 import type {
   CommandQueueStatusResource,
   FieldCatalogResource,
@@ -121,6 +124,7 @@ import {
   type InteractionDiscretization,
 } from "@/shared/domain/physics/interactions";
 
+import { addAbsorbingBoundaryCommand } from "./absorbingBoundaryCommand";
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
 import {
   icon,
@@ -136,6 +140,7 @@ import {
   RIBBON_ANALYSIS_SHOW_FIELD_COMMAND,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+  RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND,
   RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND,
   RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND,
   RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND,
@@ -162,10 +167,6 @@ type RibbonResourceInvalidator = Pick<
   "invalidate"
 >;
 type ClipAxis = VisualizationStateResource["clip"]["axis"];
-type SliceMeshColorScale = VisualizationStateResource["slice"]["mesh_color_scale"];
-type SliceMeshQualityMetric =
-  VisualizationStateResource["slice"]["mesh_quality_metric"];
-type SliceRenderMode = VisualizationStateResource["slice"]["render_mode"];
 
 import {
   homeTab,
@@ -188,35 +189,6 @@ const CLIP_AXIS_ITEMS: Array<{ value: ClipAxis; label: string }> = [
   { value: "y", label: "XZ plane" },
   { value: "x", label: "YZ plane" },
 ];
-const SLICE_RENDER_MODE_ITEMS: Array<{ value: SliceRenderMode; label: string }> = [
-  { value: "heatmap", label: "Heatmap" },
-  { value: "contour", label: "Contour" },
-  { value: "heatmap+contour", label: "Heatmap + contour" },
-  { value: "vectors", label: "Vectors" },
-  { value: "mesh-overlay", label: "Mesh overlay" },
-];
-const SLICE_MESH_QUALITY_ITEMS: Array<{
-  value: SliceMeshQualityMetric;
-  label: string;
-}> = [
-  { value: "skewness", label: "Skewness" },
-  { value: "gamma", label: "Gamma" },
-  { value: "sicn", label: "SICN" },
-  { value: "volume", label: "Volume" },
-  { value: "aspect_ratio", label: "Aspect ratio" },
-  { value: "max_angle", label: "Max angle" },
-  { value: "min_edge", label: "Min edge" },
-];
-const SLICE_MESH_COLOR_SCALE_ITEMS: Array<{
-  value: SliceMeshColorScale;
-  label: string;
-}> = [
-  { value: "jet", label: "Jet" },
-  { value: "viridis", label: "Viridis" },
-  { value: "hot", label: "Hot" },
-  { value: "coolwarm", label: "Coolwarm" },
-];
-
 // statusMenu and separator imported from ./ribbonCommon
 
 function physicsInteractionMenu(
@@ -233,6 +205,12 @@ function physicsInteractionMenu(
     id: "physics-global:add-field-drive",
     label: "Field Drive",
     commandId: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+  };
+  const createMaskAntennaItem: RibbonMenuNode = {
+    type: "item",
+    id: "physics-global:add-mask-antenna",
+    label: "Mask Antenna",
+    commandId: RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND,
   };
   const spinAuthoringItems: RibbonMenuNode[] = scope === "all" &&
     (discretization === "fdm" || discretization === "fem")
@@ -270,7 +248,7 @@ function physicsInteractionMenu(
         value: "Discretization unresolved; FDM/FEM controls are unavailable",
         tone: "warning",
       },
-      ...(scope === "global" ? [createFieldDriveItem] : []),
+      ...(scope === "global" ? [createFieldDriveItem, createMaskAntennaItem] : []),
     ];
   }
   return [
@@ -292,7 +270,7 @@ function physicsInteractionMenu(
         commandInput: { interactionId: spec.id, ...(scope === "global" ? { scope: "global" } : {}) },
       };
     }),
-    ...(scope === "global" ? [createFieldDriveItem] : []),
+    ...(scope === "global" ? [createFieldDriveItem, createMaskAntennaItem] : []),
   ];
 }
 
@@ -508,6 +486,14 @@ const physicsTab: RibbonTabContent = {
       tone: "compose",
       actions: [
         {
+          id: addAbsorbingBoundaryCommand.id,
+          icon: icon(Waves),
+          label: "Add ABL",
+          iconColor: "text-teal-400",
+          commandId: addAbsorbingBoundaryCommand.id,
+          tooltip: "Add or open the selected magnetic object's absorbing boundary",
+        },
+        {
           id: "physics-add-frozen-spins",
           icon: icon(Magnet),
           label: "Frozen Spins",
@@ -653,6 +639,8 @@ const studyTab: RibbonTabContent = {
         { id: "study.compute-fields", icon: icon(Activity), label: "Compute Fields", iconColor: C.sapphire, tooltip: "Compute Fields: materialize field quantities for the current magnetization without running the study" },
         { id: "study.compute-energies", icon: icon(Sigma), label: "Compute Energies", iconColor: C.lavender, tooltip: "Compute Energies: evaluate energy terms for the current magnetization without running the study" },
         { id: "study.prepare-live", icon: icon(Layers3), label: "Prepare", iconColor: C.blue, tooltip: "Materialize the current Live scene preparation receipt without starting the solver" },
+        { id: "study.build-and-run", icon: icon(Zap), label: "Build + Study", iconColor: C.green, tooltip: "Build the saved model's domain and start the whole Study after verifying its publication." },
+        { id: "study.cancel-build-and-run", icon: icon(Square), label: "Cancel Build + Study", iconColor: C.red },
         { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, iconColor: C.green, tooltip: "Compute Study: run the study stages on the solver (same as Study > Compute Study, F5)" },
         { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
         { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
@@ -1015,8 +1003,6 @@ export function buildRibbonTabContent(
             ? buildViewOrientationGroup(group, context)
           : group.id === "view-manipulate"
             ? buildViewManipulateGroup(group, context)
-          : group.id === "view-slice-2d"
-            ? buildViewSlice2DGroup(group, context)
           : group.id === "view-display"
             ? buildViewDisplayGroup(group, context)
           : group.id === "view-selected-display"
@@ -1999,22 +1985,22 @@ function buildRenderQualityAction({
         items: [
           {
             commandId: "viewport-3d.profile-interactive-lite",
-            label: "Interactive Lite",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS["interactive-lite"],
             value: "interactive-lite",
           },
           {
             commandId: "viewport-3d.profile-interactive",
-            label: "Interactive",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.interactive,
             value: "interactive",
           },
           {
             commandId: "viewport-3d.profile-balanced",
-            label: "Balanced",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.balanced,
             value: "balanced",
           },
           {
             commandId: "viewport-3d.profile-figure",
-            label: "Figure",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.figure,
             value: "figure",
           },
           {
@@ -2046,204 +2032,6 @@ function buildViewOrientationGroup(
         ? buildHslReferenceAction(context)
         : action,
     ),
-  };
-}
-
-function buildViewSlice2DGroup(
-  group: RibbonTabContent["groups"][number],
-  context: RibbonBuildContext,
-): RibbonTabContent["groups"][number] {
-  return {
-    ...group,
-    actions: group.actions.map((action) =>
-      action.id === "view-slice-plane"
-        ? buildSlicePlaneAction(action, context)
-      : action.id === "view-slice-layers"
-        ? buildSliceLayersAction(action, context)
-      : action.id === "view-slice-quality"
-        ? buildSliceQualityAction(action, context)
-        : action,
-    ),
-  };
-}
-
-function buildSlicePlaneAction(
-  action: RibbonTabContent["groups"][number]["actions"][number],
-  context: RibbonBuildContext,
-): RibbonTabContent["groups"][number]["actions"][number] {
-  const slice = context.visualizationState?.slice;
-  return {
-    ...action,
-    active: Boolean(slice),
-    disabled: !context.api,
-    menu: [
-      {
-        type: "label",
-        id: "slice:plane:header",
-        label: "Slice plane",
-        badge: slice?.axis.toUpperCase() ?? "XY",
-      },
-      {
-        type: "radio-group",
-        id: "slice:plane:axis",
-        label: "Plane",
-        value: slice?.axis ?? "z",
-        items: CLIP_AXIS_ITEMS,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (axis: string) =>
-          visualizationStateCommandInput({
-            slice: { axis: axis as ClipAxis },
-          }),
-      },
-      {
-        type: "radio-group",
-        id: "slice:plane:mode",
-        label: "Mode",
-        value: slice?.render_mode ?? "heatmap",
-        items: SLICE_RENDER_MODE_ITEMS,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (renderMode: string) =>
-          visualizationStateCommandInput({
-            slice: { render_mode: renderMode as SliceRenderMode },
-          }),
-      },
-      {
-        type: "slider",
-        id: "slice:plane:position",
-        label: "Position",
-        value: Math.min(100, Math.max(0, slice?.position_percent ?? 50)),
-        min: 0,
-        max: 100,
-        step: 0.5,
-        unit: "%",
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (positionPercent: number) =>
-          visualizationStateCommandInput({
-            slice: { position_percent: positionPercent },
-          }),
-      },
-    ],
-  };
-}
-
-function buildSliceLayersAction(
-  action: RibbonTabContent["groups"][number]["actions"][number],
-  context: RibbonBuildContext,
-): RibbonTabContent["groups"][number]["actions"][number] {
-  const slice = context.visualizationState?.slice;
-  return {
-    ...action,
-    active: Boolean(slice?.show_mesh || slice?.show_quantity || slice?.show_vectors),
-    disabled: !context.api,
-    menu: [
-      {
-        type: "checkbox",
-        id: "slice:mesh:wireframe",
-        label: "Mesh wireframe",
-        checked: slice?.show_mesh ?? false,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (showMesh: boolean) =>
-          visualizationStateCommandInput({
-            slice: { show_mesh: showMesh },
-          }),
-      },
-      {
-        type: "checkbox",
-        id: "slice:layers:quantity",
-        label: "Quantity overlay",
-        checked: slice?.show_quantity ?? true,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (showQuantity: boolean) =>
-          visualizationStateCommandInput({
-            slice: { show_quantity: showQuantity },
-          }),
-      },
-      {
-        type: "checkbox",
-        id: "slice:layers:auto-contrast",
-        label: "Auto-scale range",
-        checked: slice?.auto_contrast ?? true,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (autoContrast: boolean) =>
-          visualizationStateCommandInput({
-            slice: { auto_contrast: autoContrast },
-          }),
-      },
-    ],
-  };
-}
-
-function buildSliceQualityAction(
-  action: RibbonTabContent["groups"][number]["actions"][number],
-  context: RibbonBuildContext,
-): RibbonTabContent["groups"][number]["actions"][number] {
-  const slice = context.visualizationState?.slice;
-  return {
-    ...action,
-    active: Boolean(slice),
-    disabled: !context.api,
-    menu: [
-      {
-        type: "radio-group",
-        id: "slice:quality:metric",
-        label: "Quality metric",
-        value: slice?.mesh_quality_metric ?? "skewness",
-        items: SLICE_MESH_QUALITY_ITEMS,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (metric: string) =>
-          visualizationStateCommandInput({
-            slice: { mesh_quality_metric: metric as SliceMeshQualityMetric },
-          }),
-      },
-      {
-        type: "radio-group",
-        id: "slice:quality:color-scale",
-        label: "Color scale",
-        value: slice?.mesh_color_scale ?? "jet",
-        items: SLICE_MESH_COLOR_SCALE_ITEMS,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (colorScale: string) =>
-          visualizationStateCommandInput({
-            slice: { mesh_color_scale: colorScale as SliceMeshColorScale },
-          }),
-      },
-      {
-        type: "text",
-        id: "slice:quality:filter",
-        label: "Element filter",
-        value: slice?.mesh_filter_expression ?? "",
-        placeholder: "quality < 0.3",
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (filterExpression: string) =>
-          visualizationStateCommandInput({
-            slice: { mesh_filter_expression: filterExpression },
-          }),
-      },
-      {
-        type: "slider",
-        id: "slice:quality:shrink",
-        label: "Shrink",
-        value: Math.min(1, Math.max(0.5, slice?.mesh_shrink_factor ?? 1)),
-        min: 0.5,
-        max: 1,
-        step: 0.05,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (shrinkFactor: number) =>
-          visualizationStateCommandInput({
-            slice: { mesh_shrink_factor: shrinkFactor },
-          }),
-      },
-    ],
   };
 }
 
@@ -2408,6 +2196,17 @@ function buildViewCameraAction({
             value: "object",
           },
         ],
+      },
+      {
+        type: "submenu",
+        id: "camera:view-direction",
+        label: "View direction",
+        nodes: VIEW_DIRECTION_COMMANDS.map((command) => ({
+          type: "item" as const,
+          id: `camera:${command.id}`,
+          label: command.label,
+          commandId: command.id,
+        })),
       },
       { type: "separator", id: "camera:rotation-separator" },
       { type: "item", id: "camera:focus", label: "Focus selected", preview: true, disabled: true },
@@ -2781,13 +2580,7 @@ function buildQuantityAction(
             id: "quantity:shader",
             label: "Colormap",
             value: colormap,
-            items: [
-              { value: "viridis", label: "Viridis" },
-              { value: "inferno", label: "Inferno" },
-              { value: "magma", label: "Magma" },
-              { value: "coolwarm", label: "Coolwarm" },
-              { value: "jet", label: "Jet" },
-            ],
+            items: SCALAR_COLOR_PALETTE_ITEMS,
             commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
             commandInput: (value: string) =>
               visualizationStateCommandInput({
@@ -3702,7 +3495,9 @@ function buildSelectedVisualizationGroup(
   const { selection, visualizationSnapshot } = context;
   const target = resolveRibbonVisualizationTarget(context);
   const targetCapabilities = target
-    ? visualizationTargetCapabilities(target)
+    ? visualizationTargetCapabilities(target, target.kind === "airbox" &&
+        visualizationSnapshot.artifactFieldSelection?.quantityId === "H_ant" &&
+        visualizationSnapshot.artifactFieldSelection.carrierScopeKind === "full")
     : null;
   const isAirboxLikeTarget =
     target?.kind === "airbox" ||
@@ -3752,7 +3547,6 @@ function buildSelectedVisualizationGroup(
     settings?.surfaceColorSource ?? targetDefaults.surfaceColorSource,
     context.sessionStatus,
   );
-  // An Airbox never inherits the scene quantity (usually magnetic-only m).
   const selectedQuantityId = normalizeQuantityIdOrDefault(
     settings?.activeQuantityId ??
       (isAirboxLikeTarget

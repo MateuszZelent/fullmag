@@ -63,6 +63,7 @@ describe("quantity catalog visualization selector", () => {
 
     expect(quantityCatalogEntrySupportsSpatialVisualization(quantity)).toBe(true);
     expect(quantityCatalogEntryHasAdoptableSpatialCarrier(quantity)).toBe(true);
+    expect(quantityCatalogEntrySupportsAirbox(quantity)).toBe(false);
   });
 
   it("separates requestable quantities from adoptable carrier evidence", () => {

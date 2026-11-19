@@ -18,6 +18,7 @@ type Vector3 = [f64; 3];
 /// Cell-centred material fields for the reciprocal M2 block.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoupledChargeSpinMaterialFields {
+    pub magnetic_active_mask: Vec<bool>,
     pub reciprocal: Vec<ReciprocalConstitutiveMaterial>,
     pub magnetization: Vec<Vector3>,
     pub reactions: Vec<SpinReactionLengths>,
@@ -195,7 +196,8 @@ impl CoupledChargeSpinProblem {
                 "M2 coupled grid and cell sizes must be positive",
             ));
         }
-        if materials.reciprocal.len() != count
+        if materials.magnetic_active_mask.len() != count
+            || materials.reciprocal.len() != count
             || materials.magnetization.len() != count
             || materials.reactions.len() != count
         {
@@ -208,15 +210,25 @@ impl CoupledChargeSpinProblem {
             ));
         }
         for cell in 0..count {
+            if materials.magnetic_active_mask[cell] && !active_cells[cell] {
+                return Err(EngineError::new("M2 magnetic cells must belong to the transport domain"));
+            }
             if active_cells[cell] {
-                materials.reciprocal[cell].validate()?;
+                materials.reciprocal[cell].validate_magnetic_activity(materials.magnetic_active_mask[cell])?;
                 let m = materials.magnetization[cell];
                 if m.iter().any(|value| !value.is_finite())
-                    || (dot(m, m).sqrt() - 1.0).abs() > 1.0e-8
+                    || materials.magnetic_active_mask[cell] && (dot(m, m).sqrt() - 1.0).abs() > 1.0e-8
                 {
                     return Err(EngineError::new(
                         "M2 magnetization must be a finite unit vector",
                     ));
+                }
+                if !materials.magnetic_active_mask[cell]
+                    && (m != [0.0; 3]
+                        || materials.reactions[cell].exchange_m.is_some()
+                        || materials.reactions[cell].dephasing_m.is_some())
+                {
+                    return Err(EngineError::new("M2 nonmagnetic cells require zero m and disabled magnetic reactions"));
                 }
                 for length in [
                     materials.reactions[cell].spin_flip_m,
@@ -284,6 +296,7 @@ impl CoupledChargeSpinProblem {
         for cell in 0..count {
             if targets.target_cells[cell]
                 && (!self.active_cells[cell]
+                    || !self.materials.magnetic_active_mask[cell]
                     || !targets.saturation_magnetization_a_per_m[cell].is_finite()
                     || targets.saturation_magnetization_a_per_m[cell] <= 0.0)
             {
@@ -322,6 +335,14 @@ impl CoupledChargeSpinProblem {
             {
                 return Err(EngineError::new(
                     "M2 interfaces must be oriented across distinct regions",
+                ));
+            }
+            if !self.active_cells[interface.from_cell]
+                || !self.active_cells[interface.to_cell]
+                || !self.materials.magnetic_active_mask[interface.to_cell]
+            {
+                return Err(EngineError::new(
+                    "M2 mixing interface requires active cells and a magnetic to-cell",
                 ));
             }
             validate_interface(interface.law)?;
@@ -705,15 +726,17 @@ impl CoupledChargeSpinProblem {
                         g[axis][component] =
                             -0.5 * (spin[right][component] - spin[left][component]) / spacing;
                     }
-                    let left_response = self.materials.reciprocal[left].evaluate(
+                    let left_response = self.materials.reciprocal[left].evaluate_with_magnetic_activity(
                         e,
                         g,
                         self.materials.magnetization[left],
+                        self.materials.magnetic_active_mask[left],
                     )?;
-                    let right_response = self.materials.reciprocal[right].evaluate(
+                    let right_response = self.materials.reciprocal[right].evaluate_with_magnetic_activity(
                         e,
                         g,
                         self.materials.magnetization[right],
+                        self.materials.magnetic_active_mask[right],
                     )?;
                     let charge_flux = 0.5
                         * (left_response.charge_current_density_a_per_m2[axis]
@@ -767,6 +790,9 @@ impl CoupledChargeSpinProblem {
         };
         let condition = spin_boundary(self.boundary.spin, axis, positive);
         let mut spin_gradient = gradients[cell].1;
+        if condition == SpinBoundaryCondition::HomogeneousSpinPotentialGradient {
+            spin_gradient[axis] = [0.0; 3];
+        }
         if let SpinBoundaryCondition::SpinSink | SpinBoundaryCondition::SpecifiedPotential(_) =
             condition
         {
@@ -783,10 +809,11 @@ impl CoupledChargeSpinProblem {
                 spin_gradient[axis][component] = -0.5 * derivative;
             }
         }
-        let response = self.materials.reciprocal[cell].evaluate(
+        let response = self.materials.reciprocal[cell].evaluate_with_magnetic_activity(
             electric_field,
             spin_gradient,
             self.materials.magnetization[cell],
+            self.materials.magnetic_active_mask[cell],
         )?;
         let charge = match charge_condition {
             ChargeBoundaryCondition::Voltage(_) if charge_is_dirichlet => {
@@ -810,7 +837,9 @@ impl CoupledChargeSpinProblem {
                     scale(outward, -1.0)
                 }
             }
-            SpinBoundaryCondition::SpinSink | SpinBoundaryCondition::SpecifiedPotential(_) => {
+            SpinBoundaryCondition::HomogeneousSpinPotentialGradient
+            | SpinBoundaryCondition::SpinSink
+            | SpinBoundaryCondition::SpecifiedPotential(_) => {
                 response.spin_current_density_a_per_m2[axis]
             }
             SpinBoundaryCondition::PeriodicSpin => unreachable!(),
@@ -940,15 +969,21 @@ impl CoupledChargeSpinProblem {
                 spin_current.push([[0.0; 3]; 3]);
                 continue;
             }
-            let response = self.materials.reciprocal[cell].evaluate(
+            let response = self.materials.reciprocal[cell].evaluate_with_magnetic_activity(
                 gradients[cell].0,
                 gradients[cell].1,
                 self.materials.magnetization[cell],
+                self.materials.magnetic_active_mask[cell],
             )?;
             charge.push(response.charge_current_density_a_per_m2);
             spin_current.push(response.spin_current_density_a_per_m2);
         }
         Ok((charge, spin_current))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reaction_channels_for_test(&self, spin: &[Vector3]) -> ReactionChannels {
+        self.reaction_channels(spin)
     }
 
     fn reaction_channels(&self, spin: &[Vector3]) -> ReactionChannels {
@@ -1725,6 +1760,18 @@ fn validate_config(config: CoupledChargeSpinSolverConfig) -> Result<()> {
 }
 
 fn validate_boundaries(boundary: CoupledChargeSpinBoundaryConditions) -> Result<()> {
+    for axis in 0..3 {
+        for positive in [false, true] {
+            if spin_boundary(boundary.spin, axis, positive)
+                == SpinBoundaryCondition::HomogeneousSpinPotentialGradient
+                && !matches!(charge_boundary(boundary.charge, axis, positive), ChargeBoundaryCondition::Voltage(_))
+            {
+                return Err(EngineError::new(
+                    "M2 homogeneous spin-potential gradient requires a voltage boundary on the same face",
+                ));
+            }
+        }
+    }
     for condition in [
         boundary.charge.x_min,
         boundary.charge.x_max,

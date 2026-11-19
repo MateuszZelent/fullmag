@@ -2,7 +2,7 @@
 
 - Status: zaakceptowany kontrakt fizyczny; realizacje zaimplementowane, bieżąca kwalifikacja bimeronu `NOT VERIFIED`
 - Owners: Fullmag physics and backend teams
-- Last updated: 2026-09-12
+- Last updated: 2026-10-29
 - Related design: `docs/superpowers/specs/2026-08-31-rotated-interfacial-dmi-bimeron-design.md`
 - Primary reference: Göbel et al., *Phys. Rev. B* **99**, 060407(R) (2019), DOI `10.1103/PhysRevB.99.060407`
 
@@ -101,8 +101,10 @@ DMI.
 ## Założenia i zakres ważności
 
 - Model jest kontinuum mikromagnetycznym z $|\mathbf m|=1$ i dodatnim $M_s$.
-- Publiczna wersja v1 przyjmuje jeden przestrzennie stały skalar $D$ dla
-  aktywnej domeny. Pola regionalne, skokowe i tensorowe pozostają poza zakresem.
+- Domyślnie jeden przestrzennie stały skalar $D$ obejmuje aktywną domenę.
+  Opcjonalne `object_ids` ogranicza go do wskazanych, rozłącznych magnetyków FDM;
+  pozostałe obiekty mają $D=0$. Nie jest to pole regionalne wewnątrz magnetyka.
+  Zakres obiektowy FEM jest odrzucany przed wykonaniem.
 - Operator zawiera pochodne po $x$ i $y$, ale nie po $z$; grubość warstwy nadal
   wchodzi do całki objętościowej.
 - Dla niezerowego $D$ naturalny warunek brzegowy wymaga dodatniej stałej wymiany $A$ na otwartej
@@ -120,11 +122,12 @@ DMI.
 (python-api)=
 ## Publiczne API Python
 
-Jedynym parametrem publicznym jest wymagane `D`:
+Wymagane `D` zachowuje dotychczasowy zakres globalny przy `object_ids=None`:
 
 | Nazwa | Typ | Domyślna | Jednostka SI | Walidacja | Znaczenie | Lane’y | `ProblemIR` |
 |---|---|---|---|---|---|---|---|
 | `fm.RotatedInterfacialDMI.D` | `float` | required | $\mathrm{J\,m^{-2}}$ | wartość skończona; oba znaki i zero dozwolone | siła i chiralność rDMI | FDM/FEM CPU/GPU po przejściu capability i qualification | `energy_terms[].D` |
+| `fm.RotatedInterfacialDMI.object_ids` | `Sequence[str] lub None` | `None` | $1$ | niepusta lista unikalnych, istniejących identyfikatorów magnetyków; puste i nieznane ID są błędem | wybór pełnych obiektów; brak pola zachowuje zakres globalny | FDM CPU/GPU; FEM odrzuca zakres jawny | `energy_terms[].object_ids` |
 
 Wykonywalny, stage-first scenariusz publiczny ma następujący kształt:
 
@@ -191,11 +194,40 @@ następująca:
 ```
 
 Rust otrzymuje osobny wariant
-`EnergyTermIR::RotatedInterfacialDmi { d: f64 }`. Wartość nie jest
+`EnergyTermIR::RotatedInterfacialDmi { d: f64, object_ids: Option<Vec<String>> }`. Wartość nie jest
 przekształcana do zwykłego iDMI ani bulk DMI. Drugi egzemplarz tej samej
 interakcji jest błędem walidacji. Zmiana ma charakter addytywny: starsze
 dokumenty bez wariantu zachowują dotychczasową semantykę i nie wymagają
 migracji.
+
+### Zakres obiektowy (2026-10-29)
+
+`object_ids` wybiera stabilne `MagnetIR.object_id` (dla starszych dokumentów
+bez ID obowiązuje identyfikator zgodności równy nazwie magnetyka). `None`
+nie serializuje nowego pola i zachowuje globalny Hamiltonian. Pusta lista,
+duplikaty i odwołania poza aktywnymi magnetykami są błędem walidacji.
+Publiczne wywołanie `fm.RotatedInterfacialDMI(D=0.004,
+object_ids=[film.object_id])` zachowuje zakres w eksporcie i ponownym odczycie.
+
+Na rozłącznych domenach $\Omega_i$ współczynnik wynosi
+$D_i=D$ dla wybranych obiektów oraz $D_i=0$ dla pozostałych. Energię
+z równania {eq}`rdmi-energy` sumuje się po wybranych domenach; pole i naturalny
+warunek brzegowy używają tego samego $D_i$. Indeks $i$ oznacza obiekt
+(jednostka $1$), $D_i$ jego współczynnik ($\mathrm{J\,m^{-2}}$),
+$\Omega_i$ jego domenę ($\mathrm{m^3}$). Nie wprowadza to exchange przez próżnię.
+
+Rozwiązany `FdmLayerPlanIR.rotated_interfacial_dmi` ma `Some(D)` dla wybranej
+warstwy i `Some(0)` dla niewybranej. `None` jest wyłącznie zgodnością ze
+starszym planem, dziedziczącym globalny skalar. Współczynniki muszą trafiać
+jednakowo do pola, energii, korekt brzegowych i obserwacji CPU/GPU.
+Single-grid scalający różne współczynniki jest niedozwolony. FEM CPU/GPU
+odrzuca `object_ids`, również przy zerowym D, do czasu własnej implementacji.
+Dotychczasowe globalne FEM pozostaje bez zmian. Zakres regionalny, wiele
+niezależnych termów rDMI i mieszanie kanałów DMI nadal nie są obsługiwane.
+
+Kwalifikacja tego rozszerzenia: **NOT VERIFIED**. Testy źródeł, walidacja
+serializacji, build, wykonanie CPU/GPU i zbieżność fizyczna są osobnymi
+bramkami. Przebieg historyczny globalnego rDMI nie kwalifikuje zakresu obiektowego.
 
 (round-trip-and-failure-semantics)=
 ## Round-trip, capability i semantyka błędów
@@ -252,9 +284,17 @@ we wszystkich wspieranych integratorach i relaksacji. Magnetyzacja, maska,
 PBC, coefficient i redukcje pozostają na urządzeniu w hot loop. Pełne
 transfery pola, hostowe obliczenie operatora i CPU fallback są błędem.
 
-Natywna ścieżka CUDA nadal odrzuca pola materiałowe per-cell. Walidacja lokalnego
-$A$ w plannerze nie oznacza dodania obsługi przestrzennie zmiennego współczynnika
-wymiany do tej ścieżki.
+CUDA single-grid FP64 dopuszcza przestrzennie zmienne $M_s$ w istniejącym
+kontrakcie pól materiałowych, przy jednorodnym współczynniku wymiany $A$.
+Pole rDMI w danym ogniwie używa jego lokalnego $M_s$ w mianowniku, w
+jednostkach $\mathrm{A\,m^{-1}}$. Zmiana dotyczy zarówno kroku integratora,
+jak i niezależnego odczytu pola rDMI. Energia zachowuje postać sumy po
+aktywnych wiązaniach i nie otrzymuje czynnika $M_s$. Pozostałe blokady
+dotyczące niejednorodnych materiałów, w tym zmienne $A$ i zmienne $M_s$
+dla rDMI w FP32, obowiązują nadal. Kontrakt Python i ProblemIR pozostaje
+taki sam. Walidacja wymaga porównania pola dla identycznej magnetyzacji
+i dwóch wartości $M_s$ na GPU oraz porównania składowej energii w J.
+Stan tego wariantu przed testem urządzenia to `NOT VERIFIED`.
 
 ### FEM CPU/MFEM
 
@@ -435,17 +475,21 @@ w macierzy wsparcia.
 | `ProblemIR` | `crates/fullmag-ir/src/study.rs` | `EnergyTermIR` | wariant `RotatedInterfacialDmi` i kanoniczna serializacja | wspólny | implemented, source test |
 | walidacja DMI | `crates/fullmag-ir/src/validation.rs` | `validate_dmi_energy_terms` | konflikt rDMI z konwencjonalnym i materiałowym DMI | wspólny | implemented, source test |
 | Python canonical rewrite | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_validate_energy_terms`, `_magnet_bulk_dmi` | zachowanie materiałowego DMI i fail-closed dla pól przestrzennych/mieszania | wspólny | implemented, source test |
-| energia i pole FDM | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `rotated_interfacial_dmi_field` | referencyjna algebra dyskretna | FDM CPU | implemented, source test |
+| energia i pole FDM | `crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs` | `rotated_interfacial_dmi_field` | referencyjna algebra dyskretna | FDM CPU | implemented, source test |
 | FEM exact-term activity | `crates/fullmag-engine/src/fem.rs` | `dmi_energy_from_vectors_selected` | exact-nonzero aktywność kanałów DMI współdzielona przez energię i pole (`dmi_fields_compute_into_selected`) | FEM CPU | implemented, source test |
 | FEM planner | `crates/fullmag-plan/src/fem.rs` | `estimate_fem_exchange_stiffness` | lokalny exchange z nodal/element `A` dla warunku naturalnego | FEM CPU/GPU | implemented, source test |
 | residual FEM | `backends/fem/src/dmi_weak_residual.cpp` | `dmi_accumulate_rotated_interfacial_residual` | wspólna pierwsza wariacja | FEM CPU/GPU | implemented, source test; runtime not verified |
 | FEM reference telemetry | `crates/fullmag-runner/src/fem_reference.rs` | `rotated_dmi_energy_from_magnetization` | rozdzielenie energii rDMI w live/relaxation stats | FEM CPU | implemented, source test; runtime not verified |
 | FEM equilibrium identity | `crates/fullmag-runner/src/fem/equilibrium_identity.rs` | `validate_supported_relax_source` | odrzucenie DMI poza zakresem tożsamości modalnej | FEM | implemented, source test |
+| Odczyt pola z lokalnym Ms | `backends/fdm/gpu/cuda/interactions/multilayer_dmi.cu` | `rotated_interfacial_dmi_field_kernel` | lokalny mianownik w odczycie niezależnym od kroku | FDM GPU FP64 | managed runtime not verified |
 | CUDA rDMI workspace | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_ensure_rotated_dmi_workspace` | transakcyjne alokacje i retry accounting | FDM GPU | implemented, managed runtime not verified |
 | multilayer snapshot telemetry | `crates/fullmag-runner/src/fdm/gpu/cuda/multilayer.rs` | `observed_snapshot_vector_field_count` | licznik transferów D2H zgodny z obecnością pola rDMI | FDM GPU | implemented, source test |
 | CLI live transport | `crates/fullmag-cli/src/live_workspace.rs` | `scalar_row_from_stats_with_active_runtime` | przeniesienie komponentu `e_rotated_dmi` | FDM/FEM | implemented, source test |
 | Control Room authoring | `apps/control-room/src/shared/domain/physics/interactions.ts` | `function studyHasRotatedDmi` | konflikt obecnego, także zerowego, rDMI z object-scoped DMI | UI | implemented, Vitest |
 | Göbel verifier | `tests/standard_problems/bimeron/goebel_2019/verify.py` | `_goebel_material_has_only_expected_physics` | ścisła lista fizyki źródłowej scenariusza | benchmark | implemented, source test; runtime not verified |
+
+| object-scope-layer | `crates/fullmag-ir/src/mesh_hints.rs` | `FdmLayerPlanIR` | jawny współczynnik każdej warstwy, w tym zero | FDM CPU/GPU | NOT VERIFIED |
+| object-scope-plan | `crates/fullmag-plan/src/fdm.rs` | `object_rotated_dmi` | wybór obiektu po stabilnym ID | FDM CPU/GPU | NOT VERIFIED |
 
 Publiczna source map wskazuje także rzeczywiste symbole CUDA, plannera,
 quantities, runnera i walidatora scenariusza. Kwalifikacja naukowa bieżącego

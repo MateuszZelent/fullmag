@@ -123,7 +123,7 @@ export function EigenSpectrumCompositionInspectorPanel({
             <span>Sample</span>
             <Select value={sample?.sampleId ?? ""} onValueChange={setSampleId}>
               <SelectTrigger aria-label="Spectrum sample"><SelectValue /></SelectTrigger>
-              <SelectContent>
+              <SelectContent className="fm-inspector-select-content">
                 {samples.map((candidate) => (
                   <SelectItem key={candidate.sampleId} value={candidate.sampleId}>{candidate.label}</SelectItem>
                 ))}
@@ -134,7 +134,7 @@ export function EigenSpectrumCompositionInspectorPanel({
             <span>Scope</span>
             <Select value={scope} onValueChange={(value) => setScope(value as SpectrumScope)}>
               <SelectTrigger aria-label="Spectrum participation scope"><SelectValue /></SelectTrigger>
-              <SelectContent>
+              <SelectContent className="fm-inspector-select-content">
                 <SelectItem value="global">Global</SelectItem>
                 {dependencies.compatibleObjects.map((object) => (
                   <SelectItem key={object.targetId} value={object.targetId}>{object.label}</SelectItem>
@@ -337,30 +337,30 @@ function ModeCompositionObjectLayerEditor({
       </InspectorGroup>
       <InspectorGroup title="Mode source" badge={selectedMode?.modeId ?? "Unavailable"}>
         <div className="fm-mode-composition-inspector__controls">
-          <label className="fm-mode-composition-inspector__control"><span>Mode sample</span><Select value={sample?.sampleId ?? ""} onValueChange={(value) => { setSampleId(value); const next = samples.find((candidate) => candidate.sampleId === value); setModeId(next?.modes[0]?.modeId ?? ""); }}><SelectTrigger aria-label="Mode sample"><SelectValue /></SelectTrigger><SelectContent>{samples.map((candidate) => <SelectItem key={candidate.sampleId} value={candidate.sampleId}>{candidate.label}</SelectItem>)}</SelectContent></Select></label>
-          <label className="fm-mode-composition-inspector__control"><span>Mode</span><Select value={selectedMode?.modeId ?? ""} onValueChange={setModeId}><SelectTrigger aria-label="Mode selection"><SelectValue /></SelectTrigger><SelectContent>{sample?.modes.map((mode) => <SelectItem key={mode.modeId} value={mode.modeId}>{`Mode ${mode.rawModeIndex ?? mode.modeId} · ${formatFrequency(mode.frequencyHz)}`}</SelectItem>)}</SelectContent></Select></label>
+          <label className="fm-mode-composition-inspector__control"><span>Mode sample</span><Select value={sample?.sampleId ?? ""} onValueChange={(value) => { setSampleId(value); const next = samples.find((candidate) => candidate.sampleId === value); setModeId(next?.modes[0]?.modeId ?? ""); }}><SelectTrigger aria-label="Mode sample"><SelectValue /></SelectTrigger><SelectContent className="fm-inspector-select-content">{samples.map((candidate) => <SelectItem key={candidate.sampleId} value={candidate.sampleId}>{candidate.label}</SelectItem>)}</SelectContent></Select></label>
+          <label className="fm-mode-composition-inspector__control"><span>Mode</span><Select value={selectedMode?.modeId ?? ""} onValueChange={setModeId}><SelectTrigger aria-label="Mode selection"><SelectValue /></SelectTrigger><SelectContent className="fm-inspector-select-content">{sample?.modes.map((mode) => <SelectItem key={mode.modeId} value={mode.modeId}>{`Mode ${mode.rawModeIndex ?? mode.modeId} · ${formatFrequency(mode.frequencyHz)}`}</SelectItem>)}</SelectContent></Select></label>
         </div>
         <FieldRow label="Mode field" value={selectedMode?.fieldId ?? "Unavailable"} />
         <FieldRow label="Residual" value={formatResidual(selectedMode?.residualNorm)} />
       </InspectorGroup>
       <InspectorGroup title="Component and representation">
         <div className="fm-mode-composition-inspector__controls">
-          <label className="fm-mode-composition-inspector__control"><span>Mode component</span><Select disabled={!layer} value={layer?.component ?? "x"} onValueChange={(value) => updateLayer({ component: value as ModeFieldComponent, appearance: { ...layer!.appearance, vectors_visible: value === "vector" ? true : layer!.appearance.vectors_visible } })}><SelectTrigger aria-label="Mode component"><SelectValue /></SelectTrigger><SelectContent>{componentOptions.map((component) => <SelectItem key={component} value={component}>{componentLabel(component)}</SelectItem>)}</SelectContent></Select></label>
-          <label className="fm-mode-composition-inspector__control"><span>Mode representation</span><Select disabled={!layer} value={layer?.representation ?? "phase_rotated_real"} onValueChange={(value) => updateRepresentation(value as ModeFieldRepresentation)}><SelectTrigger aria-label="Mode representation"><SelectValue /></SelectTrigger><SelectContent>{representationOptions().map((representation) => <SelectItem key={representation} value={representation}>{representationLabel(representation)}</SelectItem>)}</SelectContent></Select></label>
-          <label className="fm-mode-composition-inspector__control"><span>Mode palette</span><Select disabled={!layer} value={layer?.appearance.colormap ?? "coolwarm"} onValueChange={(colormap) => layer && updateLayer({ appearance: { ...layer.appearance, colormap } })}><SelectTrigger aria-label="Mode palette"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="coolwarm">Coolwarm</SelectItem><SelectItem value="viridis">Viridis</SelectItem><SelectItem value="twilight">Twilight</SelectItem></SelectContent></Select></label>
+          <label className="fm-mode-composition-inspector__control"><span>Mode component</span><Select disabled={!layer} value={layer?.component ?? "x"} onValueChange={(value) => updateLayer({ component: value as ModeFieldComponent, appearance: { ...layer!.appearance, vectors_visible: value === "vector" ? true : layer!.appearance.vectors_visible } })}><SelectTrigger aria-label="Mode component"><SelectValue /></SelectTrigger><SelectContent className="fm-inspector-select-content">{componentOptions.map((component) => <SelectItem key={component} value={component}>{componentLabel(component)}</SelectItem>)}</SelectContent></Select></label>
+          <label className="fm-mode-composition-inspector__control"><span>Mode representation</span><Select disabled={!layer} value={layer?.representation ?? "phase_rotated_real"} onValueChange={(value) => updateRepresentation(value as ModeFieldRepresentation)}><SelectTrigger aria-label="Mode representation"><SelectValue /></SelectTrigger><SelectContent className="fm-inspector-select-content">{representationOptions().map((representation) => <SelectItem key={representation} value={representation}>{representationLabel(representation)}</SelectItem>)}</SelectContent></Select></label>
+          <label className="fm-mode-composition-inspector__control"><span>Mode palette</span><Select disabled={!layer} value={layer?.appearance.colormap ?? "coolwarm"} onValueChange={(colormap) => layer && updateLayer({ appearance: { ...layer.appearance, colormap } })}><SelectTrigger aria-label="Mode palette"><SelectValue /></SelectTrigger><SelectContent className="fm-inspector-select-content"><SelectItem value="coolwarm">Coolwarm</SelectItem><SelectItem value="viridis">Viridis</SelectItem><SelectItem value="twilight">Twilight</SelectItem></SelectContent></Select></label>
         </div>
         <FieldRow label="Projection legality" value={layer?.component === "vector" ? "Vector is glyph-only and never becomes a scalar surface." : "Component is a scalar modal surface."} />
       </InspectorGroup>
       <InspectorGroup title="Phase and animation">
         <div className="fm-mode-composition-inspector__controls">
-          <label className="fm-mode-composition-inspector__control"><span>Phase (rad)</span><Slider aria-label="Phase (rad)" disabled={!layer} max={Math.PI} min={-Math.PI} step={0.01} value={[layer?.phase_rad ?? 0]} onValueChange={([phase_rad]) => updateLayer({ phase_rad })} /></label>
+          <label className="fm-mode-composition-inspector__control"><span>Phase (rad)</span><Slider aria-label="Phase (rad)" valueText={(v) => `${v.toFixed(2)} rad`} disabled={!layer} max={Math.PI} min={-Math.PI} step={0.01} value={[layer?.phase_rad ?? 0]} onValueChange={([phase_rad]) => updateLayer({ phase_rad })} /></label>
           <label className="fm-mode-composition-inspector__control"><span>Animation rate (Hz)</span><input aria-label="Animation rate (Hz)" className="fm-mode-composition-inspector__number" disabled={!layer} min="0" step="0.1" type="number" value={layer?.animation.rate_hz ?? 0} onChange={(event) => { const value = event.currentTarget.value; if (value === "" || !layer) return; const rate_hz = Number(value); if (Number.isFinite(rate_hz) && rate_hz >= 0) updateLayer({ animation: { ...layer.animation, rate_hz } }); }} /></label>
           <div className="fm-mode-composition-inspector__inline-control"><Switch aria-label="Animate mode layer" checked={layer?.animation.enabled ?? false} disabled={!layer} onCheckedChange={(enabled) => layer && updateLayer({ animation: { ...layer.animation, enabled } })} /><span>Animate mode layer</span></div>
         </div>
       </InspectorGroup>
       <InspectorGroup title="Appearance">
         <div className="fm-mode-composition-inspector__controls">
-          <label className="fm-mode-composition-inspector__control"><span>Opacity</span><Slider aria-label="Mode opacity" disabled={!layer} max={1} min={0} step={0.01} value={[layer?.appearance.opacity ?? 1]} onValueChange={([opacity]) => layer && updateLayer({ appearance: { ...layer.appearance, opacity } })} /></label>
+          <label className="fm-mode-composition-inspector__control"><span>Opacity</span><Slider aria-label="Mode opacity" valueText={(v) => `${Math.round(v * 100)}%`} disabled={!layer} max={1} min={0} step={0.01} value={[layer?.appearance.opacity ?? 1]} onValueChange={([opacity]) => layer && updateLayer({ appearance: { ...layer.appearance, opacity } })} /></label>
           <div className="fm-mode-composition-inspector__inline-control"><Switch aria-label="Show mode colorbar" checked={layer?.appearance.colorbar_visible ?? false} disabled={!layer} onCheckedChange={(colorbar_visible) => layer && updateLayer({ appearance: { ...layer.appearance, colorbar_visible } })} /><span>Show colorbar</span></div>
           <div className="fm-mode-composition-inspector__inline-control"><Switch aria-label="Show modal vectors" checked={layer?.appearance.vectors_visible ?? false} disabled={!layer || !SIGNED_REPRESENTATIONS.has(layer.representation)} onCheckedChange={(vectors_visible) => layer && updateLayer({ appearance: { ...layer.appearance, vectors_visible } })} /><span>Show modal vectors</span></div>
         </div>

@@ -1,10 +1,23 @@
 //! Prepared full-volume inspection through one native V/RT0/J/H owner.
 use super::closed_loop_v2::invalid;
 use crate::types::{AuxiliaryArtifact, RunError};
+use crate::solver_profile::{SolverProfileConfig, SolverProfileOperationOutcome, SolverProfileState};
+#[cfg(feature = "fem-gpu")]
+use crate::native_fem::NativeFemSurfaceRt0Profile;
+#[cfg(not(feature = "fem-gpu"))]
+#[derive(Default)]
+struct NativeFemSurfaceRt0Profile {
+    available: bool,
+    accounting_issue: bool,
+    operator_wall_time_ns: u64,
+    native_call_wall_ns: Option<u64>,
+    phase_wall_time_ns: [u64; 9],
+}
 use fullmag_ir::{BackendTarget, ExecutionDevice, ExecutionMode, ExecutionPrecision,
     RequestedTransportExecutionIR, ResolvedAntennaClosedLoopCurrentInputIR};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
+use crate::{AntennaOperationPhase, AntennaOperationProgress, AntennaOperationProgressObserver};
 
 fn tagged(value: &serde_json::Value) -> Result<String, RunError> {
     fullmag_ir::transport_identity::tagged_json_digest(value).map_err(|reason| invalid(&reason))
@@ -33,10 +46,134 @@ fn check_cancelled(cancelled: Option<&AtomicBool>) -> Result<(), RunError> {
     Ok(())
 }
 
+/// A controlled return from the prepared, in-memory CPU ABI. This is not
+/// proof that an arbitrary native crash or a later publication is recoverable.
+#[derive(Debug)]
+pub enum ClosedLoopExecutionError {
+    NativeCallFailed { status: KnownNativeCallFailure, message: String },
+    Other(RunError),
+}
+impl std::fmt::Display for ClosedLoopExecutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NativeCallFailed { status, message } => write!(f, "prepared native call failed ({status:?}): {message}"),
+            Self::Other(error) => std::fmt::Display::fmt(error, f),
+        }
+    }
+}
+impl std::error::Error for ClosedLoopExecutionError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KnownNativeCallFailure { Invalid, Unavailable, Internal }
+
+pub(crate) fn known_native_call_failure(status: i32) -> Option<KnownNativeCallFailure> {
+    match status {
+        -1 => Some(KnownNativeCallFailure::Invalid),
+        -2 => Some(KnownNativeCallFailure::Unavailable),
+        -3 => Some(KnownNativeCallFailure::Internal),
+        _ => None,
+    }
+}
+
+fn classify_execution_error(error: RunError, status: Option<KnownNativeCallFailure>) -> ClosedLoopExecutionError {
+    match status {
+        Some(status) => ClosedLoopExecutionError::NativeCallFailed { status, message: error.message },
+        None => ClosedLoopExecutionError::Other(error),
+    }
+}
+
+pub fn execute_antenna_closed_loop_inspection_typed(
+    input: &ResolvedAntennaClosedLoopCurrentInputIR,
+    requested: &RequestedTransportExecutionIR, output_id: &str, cancelled: Option<&AtomicBool>,
+) -> Result<Vec<AuxiliaryArtifact>, ClosedLoopExecutionError> {
+    let mut native_status = None;
+    execute_closed_loop(input, requested, output_id, cancelled, Some(&mut native_status), None, None)
+        .map_err(|error| classify_execution_error(error, native_status))
+}
+
+/// Optional operation profiling does not create a synthetic LLG step or
+/// alter scientific artifacts. The report is retained on controlled failure.
+pub fn execute_antenna_closed_loop_inspection_profiled_typed(
+    input: &ResolvedAntennaClosedLoopCurrentInputIR,
+    requested: &RequestedTransportExecutionIR, output_id: &str, cancelled: Option<&AtomicBool>,
+    config: &SolverProfileConfig, profile: &mut SolverProfileState,
+) -> Result<Vec<AuxiliaryArtifact>, ClosedLoopExecutionError> {
+    execute_antenna_closed_loop_inspection_observed_typed(input, requested, output_id, cancelled,
+        Some(config), profile, None)
+}
+
+/// Observe the existing numerical operation without creating physical steps.
+/// Field completion does not imply durable output publication.
+pub fn execute_antenna_closed_loop_inspection_observed_typed(
+    input: &ResolvedAntennaClosedLoopCurrentInputIR,
+    requested: &RequestedTransportExecutionIR, output_id: &str, cancelled: Option<&AtomicBool>,
+    config: Option<&SolverProfileConfig>, profile: &mut SolverProfileState,
+    observer: Option<&AntennaOperationProgressObserver<'_>>,
+) -> Result<Vec<AuxiliaryArtifact>, ClosedLoopExecutionError> {
+    if observer.is_none() && config.is_none_or(|config| !config.enabled) {
+        return execute_antenna_closed_loop_inspection_typed(input, requested, output_id, cancelled);
+    }
+    let started = std::time::Instant::now();
+    let observe = |mut progress: AntennaOperationProgress| {
+        progress.elapsed_seconds = started.elapsed().as_secs_f64();
+        crate::antenna_operation_progress::notify(observer, progress);
+    };
+    let observed: Option<&AntennaOperationProgressObserver<'_>> = observer.map(|_| &observe as _);
+    crate::antenna_operation_progress::notify(observed, AntennaOperationProgress {
+        phase: AntennaOperationPhase::PreparingSource, completed_targets: 0,
+        total_targets: input.field_sampling.positions_xyz_m.len() as u64,
+        source_cells: input.source_mesh.cell_count() as u64, elapsed_seconds: 0.0,
+    });
+    let Some(config) = config.filter(|config| config.enabled) else {
+        let mut native_status = None;
+        return execute_closed_loop(input, requested, output_id, cancelled,
+            Some(&mut native_status), None, observed)
+            .map_err(|error| classify_execution_error(error, native_status));
+    };
+    let config = config.clone().normalized();
+    if profile.config() != &config {
+        profile.set_config(config);
+    }
+    let mut native_status = None;
+    let mut native_profile = NativeFemSurfaceRt0Profile::default();
+    let result = execute_closed_loop(input, requested, output_id, cancelled,
+        Some(&mut native_status), Some(&mut native_profile), observed);
+    let total_wall_time_ns = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+    let outcome = if result.is_ok() {
+        SolverProfileOperationOutcome::Completed
+    } else if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+        SolverProfileOperationOutcome::Cancelled
+    } else {
+        SolverProfileOperationOutcome::Failed
+    };
+    let mut phases = [0; 8];
+    let native_operator_wall_ns = if native_profile.available {
+        phases.copy_from_slice(&native_profile.phase_wall_time_ns[..8]);
+        Some(native_profile.operator_wall_time_ns)
+    } else {
+        None
+    };
+    profile.record_antenna_operation(outcome, total_wall_time_ns,
+        native_operator_wall_ns, native_profile.native_call_wall_ns, phases, native_profile.accounting_issue);
+    result.map_err(|error| classify_execution_error(error, native_status))
+}
+
 pub fn execute_antenna_closed_loop_inspection(input: &ResolvedAntennaClosedLoopCurrentInputIR,
     requested: &RequestedTransportExecutionIR, output_id: &str, cancelled: Option<&AtomicBool>)
     -> Result<Vec<AuxiliaryArtifact>, RunError> {
+    execute_closed_loop(input, requested, output_id, cancelled, None, None, None)
+}
+
+fn execute_closed_loop(input: &ResolvedAntennaClosedLoopCurrentInputIR,
+    requested: &RequestedTransportExecutionIR, output_id: &str, cancelled: Option<&AtomicBool>,
+    native_failure: Option<&mut Option<KnownNativeCallFailure>>,
+    native_profile: Option<&mut NativeFemSurfaceRt0Profile>,
+    observer: Option<&AntennaOperationProgressObserver<'_>>,
+) -> Result<Vec<AuxiliaryArtifact>, RunError> {
     check_cancelled(cancelled)?;
+    if let Err(reason) = input.validate_field_policy() {
+        return Err(invalid(&reason));
+    }
     if requested.discretization != BackendTarget::Fem
         || !matches!(requested.device, ExecutionDevice::Cpu | ExecutionDevice::Auto)
         || requested.precision != ExecutionPrecision::Double
@@ -90,7 +227,7 @@ pub fn execute_antenna_closed_loop_inspection(input: &ResolvedAntennaClosedLoopC
             Some(fullmag_ir::ConservativeCurrentSourceIR::ClosedGeometryPotentialJump(source)) if source == &input.source)
         || input.stage.conservative_current_view_ref.is_some()
         || input.stage.model != fullmag_ir::AntennaFieldModelIR::QuasistaticConductionBiotSavart3d
-        || input.stage.oersted_realization != fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature
+        || !matches!(input.stage.oersted_realization, fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature | fullmag_ir::AntennaOerstedRealizationIR::AnalyticRt0Surface)
         || input.solver.engine != "cg"
         || input.solver.operator_version != "fem_charge_conforming_h1_p1.transparent.v1"
         || input.solver.physical_residual_version != "charge_balance_integrated_l2.v1" {
@@ -103,13 +240,15 @@ pub fn execute_antenna_closed_loop_inspection(input: &ResolvedAntennaClosedLoopC
             if source_cut_ref == &source_cuts[0].id && orientation == "minus_outward") {
         return Err(invalid("port normalization must select the actual minus-outward source cut"));
     }
-    execute_native(input, output_id, cancelled)
+    execute_native(input, output_id, cancelled, native_failure, native_profile, observer)
 }
 
 #[cfg(feature = "fem-gpu")]
 fn execute_native(input: &ResolvedAntennaClosedLoopCurrentInputIR, output_id: &str,
-    cancelled: Option<&AtomicBool>) -> Result<Vec<AuxiliaryArtifact>, RunError> {
-    use crate::native_fem::{solve_native_fem_prepared_closed_loop, NativeFemPreparedClosedLoopChargeRequest,
+    cancelled: Option<&AtomicBool>, native_failure: Option<&mut Option<KnownNativeCallFailure>>,
+    native_profile: Option<&mut NativeFemSurfaceRt0Profile>,
+    observer: Option<&AntennaOperationProgressObserver<'_>>) -> Result<Vec<AuxiliaryArtifact>, RunError> {
+    use crate::native_fem::{solve_native_fem_prepared_closed_loop_classified, NativeFemPreparedClosedLoopChargeRequest,
         PreparedClosedLoopRuntimeBinding, NativeFemSteadyTransportExecution, NativeFemSteadyTransportGauge};
     use super::closed_loop_v2::{ClosedLoopAcceptedSourceInputV2, ClosedLoopCurrentCellV2,
         ClosedLoopFieldSolutionInputV2, ClosedLoopSourceMetadataV2, ClosedLoopWeakReactionV2};
@@ -127,46 +266,88 @@ fn execute_native(input: &ResolvedAntennaClosedLoopCurrentInputIR, output_id: &s
         relative_tolerance:input.solver.linear.relative_tolerance,absolute_tolerance:input.solver.linear.absolute_tolerance,
         maximum_iterations:input.solver.linear.max_iterations};
     check_cancelled(cancelled)?;
-    let solved = solve_native_fem_prepared_closed_loop(&request,input,&binding,Some(&input.field_sampling.positions_xyz_m));
+    let mut returned_native_failure = None;
+    let solved = solve_native_fem_prepared_closed_loop_classified(&request,input,&binding,Some(&input.field_sampling.positions_xyz_m),Some(&mut returned_native_failure),native_profile,observer);
     check_cancelled(cancelled)?;
-    let mut solved = solved?;
-    let accepted = solved.prepared_closed_loop_source_snapshot.take().ok_or_else(|| invalid("native accepted prepared source absent"))?;
-    let direct = solved.oersted_quadrature_snapshot.take().ok_or_else(|| invalid("native direct H evidence absent"))?;
-    let policy = &input.direct_field_policy;
-    if direct.base_quadrature_order != policy.base_quadrature_order
-        || direct.maximum_subdivision_depth != policy.maximum_subdivision_depth
-        || direct.absolute_tolerance_apm != policy.absolute_tolerance_apm || direct.relative_tolerance != policy.relative_tolerance
-        || direct.maximum_source_target_pairs != policy.maximum_source_target_pairs
-        || direct.source_target_pairs != policy.source_target_pairs || direct.relative_scale_floor_apm != policy.relative_scale_floor_apm {
-        return Err(invalid("native direct field evidence differs from selected policy"));
+    if solved.is_err() {
+        if let Some(native_failure) = native_failure { *native_failure = returned_native_failure; }
     }
+    let mut solved = solved?;
+    crate::antenna_operation_progress::notify(observer, AntennaOperationProgress {
+        phase: AntennaOperationPhase::ValidatingResult,
+        completed_targets: input.field_sampling.positions_xyz_m.len() as u64,
+        total_targets: input.field_sampling.positions_xyz_m.len() as u64,
+        source_cells: input.source_mesh.cell_count() as u64, elapsed_seconds: 0.0,
+    });
+    let accepted = solved.prepared_closed_loop_source_snapshot.take().ok_or_else(|| invalid("native accepted prepared source absent"))?;
+    use super::closed_loop_field_evidence::{ClosedLoopFieldSnapshot, ClosedLoopFieldEvidence};
+    let (field_snapshot, resolved_field_policy) = match input.stage.oersted_realization {
+        fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature => {
+            if input.surface_field_policy.is_some() || input.stage.surface_field_policy.is_some()
+                || solved.oersted_surface_snapshot.is_some() {
+                return Err(invalid("mixed direct/surface native output or intent"));
+            }
+            let direct = solved.oersted_quadrature_snapshot.take().ok_or_else(|| invalid("native direct H evidence absent"))?;
+            let budget = fullmag_ir::antenna_closed_loop_direct_budget(&input.stage.solver_policy)
+                .ok_or_else(|| invalid("unknown closed-loop direct work policy"))?;
+            let policy = input.direct_field_policy.as_ref().ok_or_else(||invalid("direct policy absent"))?;
+            if policy.policy_version != budget.policy_version
+                || direct.maximum_kernel_evaluations != budget.maximum_kernel_evaluations
+                || direct.maximum_ledger_leaf_visits != budget.maximum_ledger_leaf_visits
+                || direct.base_quadrature_order != policy.base_quadrature_order
+                || direct.maximum_subdivision_depth != policy.maximum_subdivision_depth
+                || direct.absolute_tolerance_apm != policy.absolute_tolerance_apm || direct.relative_tolerance != policy.relative_tolerance
+                || direct.maximum_source_target_pairs != policy.maximum_source_target_pairs
+                || direct.source_target_pairs != policy.source_target_pairs || direct.relative_scale_floor_apm != policy.relative_scale_floor_apm {
+                return Err(invalid("native direct field evidence differs from selected policy"));
+            }
+            (ClosedLoopFieldSnapshot::Direct(direct),json!({"policy_version":budget.policy_version,
+                "maximum_source_target_pairs":budget.maximum_source_target_pairs,
+                "maximum_kernel_evaluations":budget.maximum_kernel_evaluations,
+                "maximum_ledger_leaf_visits":budget.maximum_ledger_leaf_visits}))
+        },
+        fullmag_ir::AntennaOerstedRealizationIR::AnalyticRt0Surface => {
+            if input.direct_field_policy.is_some() || solved.oersted_quadrature_snapshot.is_some() {
+                return Err(invalid("mixed surface/direct native output or intent"));
+            }
+            let policy=input.surface_field_policy.as_ref().ok_or_else(||invalid("surface policy absent"))?;
+            if input.stage.surface_field_policy.as_ref()!=Some(policy)
+                || !policy.validation_errors("surface_field_policy").is_empty() {
+                return Err(invalid("surface stage and resolved policy differ or are invalid"));
+            }
+            let snapshot=solved.oersted_surface_snapshot.take().ok_or_else(||invalid("native surface H evidence absent"))?;
+            let expected=serde_json::to_value(policy).map_err(|_|invalid("surface policy serialization"))?;
+            if snapshot.policy_binding()!=expected { return Err(invalid("native surface policy differs")); }
+            (ClosedLoopFieldSnapshot::Surface(snapshot),expected)
+        },
+        _=>return Err(invalid("unsupported prepared field method")),
+    };
     let raw = accepted.source;
-    let requested_intent = json!({"source_revision":input.source.revision,"object_id":input.source.object_id,
+    let mut requested_intent = json!({"source_revision":input.source.revision,"object_id":input.source.object_id,
         "geometry_id":input.source.geometry_id,"source_module_id":binding.source_module_id,
         "mesh_digest":input.source.mesh_digest,"authored_input_digest":input.source.authored_input_digest,
-        "materials_digest":input.source.materials_digest,"requested_execution":input.authored_input_preimage.get("requested_execution").ok_or_else(|| invalid("requested authoring execution absent"))?});
-    let resolved_execution = json!({"mesh_revision":binding.mesh_revision,"topology_revision":binding.topology_revision,
+        "materials_digest":input.source.materials_digest,"solver_policy":input.stage.solver_policy,"requested_execution":input.authored_input_preimage.get("requested_execution").ok_or_else(|| invalid("requested authoring execution absent"))?});
+    let mut resolved_execution = json!({"mesh_revision":binding.mesh_revision,"topology_revision":binding.topology_revision,
         "envelope_revision":binding.envelope_revision,"envelope_digest":binding.envelope_digest,
         "stable_vertex_id_version":"stable_mesh_vertex_u64.v1","stage_identity":binding.stage_identity.to_string(),
         "evaluation_time_s":binding.evaluation_time_s,"evaluated_envelope_multiplier":binding.evaluated_envelope_multiplier,
         "execution_lane":1,"charge_gauge":2,"maximum_iterations":request.maximum_iterations,
         "charge_relative_tolerance":request.relative_tolerance,"charge_absolute_tolerance":request.absolute_tolerance,
         "algebraic_relative_tolerance":input.algebraic_relative_tolerance,"physical_relative_gate":input.physical_relative_gate,
-        "physical_absolute_gate_a":input.physical_absolute_gate_a});
+        "physical_absolute_gate_a":input.physical_absolute_gate_a,
+        "direct_field_policy":resolved_field_policy});
+    if input.stage.oersted_realization == fullmag_ir::AntennaOerstedRealizationIR::AnalyticRt0Surface {
+        requested_intent["oersted_realization"]=json!("analytic_rt0_surface");
+        requested_intent["surface_field_policy"]=resolved_field_policy.clone();
+        resolved_execution.as_object_mut().ok_or_else(||invalid("resolved provenance shape"))?.remove("direct_field_policy");
+        resolved_execution["surface_field_policy"]=resolved_field_policy;
+    }
     let current_signature = format!("sha256:{}",accepted.accepted_source_state_digest);
     let sample_carrier = super::AntennaSampleCarrier {domain:input.field_sampling.domain.clone(),
         carrier_kind:input.field_sampling.carrier_kind.clone(),location:input.field_sampling.location.clone(),
         topology_digest:input.field_sampling.topology_digest.clone()};
     let sample_cells = input.field_sampling.cells.require_tet4()
         .map_err(|reason| invalid(&reason))?;
-    let retained_direct = super::direct_quadrature_v2::DirectQuadratureEvidenceV2 {
-        snapshot:direct.clone(),signed_normalization_a:raw.source_current_a,
-        source_absolute_flux_a:raw.source_absolute_flux_a,
-        scale_per_a:super::closed_loop_v2::normalization_scale(raw.source_current_a,raw.source_absolute_flux_a)?,
-        current_balance_certificate_digest:solved.balance_certificate_digest.clone(),
-    };
-    let field_signature = super::closed_loop_v2::field_signature(&accepted.accepted_source_state_digest,
-        &sample_carrier,&input.field_sampling.positions_xyz_m,&sample_cells,&retained_direct)?;
     let source = ClosedLoopAcceptedSourceInputV2 {
         metadata:ClosedLoopSourceMetadataV2 {
             prepared_execution_digest:accepted.prepared_execution_digest,
@@ -200,6 +381,11 @@ fn execute_native(input: &ResolvedAntennaClosedLoopCurrentInputIR, output_id: &s
         canonical_balance_certificate:accepted.canonical_balance_certificate,
         authored_input_json:serde_json::to_vec(&input.authored_input_preimage).map_err(|_| invalid("authored input serialization"))?,
     };
+    let retained_evidence=ClosedLoopFieldEvidence::new(field_snapshot.clone(),&source.metadata)?;
+    retained_evidence.verify_policy_binding(&requested_intent,&resolved_execution)?;
+    retained_evidence.verify_source_binding(&source.metadata,source.cells.len(),input.field_sampling.positions_xyz_m.len())?;
+    let field_signature=super::closed_loop_v2::field_signature(&source.metadata.accepted_source_state_digest,
+        &sample_carrier,&input.field_sampling.positions_xyz_m,&sample_cells,&retained_evidence)?;
     let artifacts = super::closed_loop_v2::build(&ClosedLoopFieldSolutionInputV2 {
         asset_id:format!("closed-loop-{}",output_id),solution_id:output_id.into(),
         source_object_id:input.source.object_id.clone(),current_transport_id:input.stage.current_transport_id.clone(),
@@ -208,7 +394,7 @@ fn execute_native(input: &ResolvedAntennaClosedLoopCurrentInputIR, output_id: &s
         signatures:super::AntennaFieldSolutionSignatures {current_solution_signature:current_signature,
             field_solution_signature:field_signature,target_projection_signatures:Default::default(),dependency_signatures:None},
         source,sample_carrier,sample_cells,
-        sample_positions_xyz_m:input.field_sampling.positions_xyz_m.clone(),direct_snapshot:direct,
+        sample_positions_xyz_m:input.field_sampling.positions_xyz_m.clone(),field_snapshot,
     })?;
     check_cancelled(cancelled)?;
     Ok(artifacts)
@@ -216,7 +402,29 @@ fn execute_native(input: &ResolvedAntennaClosedLoopCurrentInputIR, output_id: &s
 
 #[cfg(not(feature = "fem-gpu"))]
 fn execute_native(_input: &ResolvedAntennaClosedLoopCurrentInputIR, _output_id: &str,
-    cancelled: Option<&AtomicBool>) -> Result<Vec<AuxiliaryArtifact>, RunError> {
+    cancelled: Option<&AtomicBool>, _native_failure: Option<&mut Option<KnownNativeCallFailure>>,
+    _native_profile: Option<&mut NativeFemSurfaceRt0Profile>,
+    _observer: Option<&AntennaOperationProgressObserver<'_>>) -> Result<Vec<AuxiliaryArtifact>, RunError> {
     check_cancelled(cancelled)?;
     Err(invalid("native FEM prepared source feature unavailable; no fallback"))
+}
+
+#[cfg(test)]
+mod native_failure_tests {
+    use super::*;
+
+    #[test]
+    fn controlled_return_preserves_diagnostic_and_other_errors_stay_opaque() {
+        let error = classify_execution_error(RunError { message: "native diagnostic".into() },
+            known_native_call_failure(-3));
+        assert!(matches!(error, ClosedLoopExecutionError::NativeCallFailed {
+            status: KnownNativeCallFailure::Internal, ref message
+        } if message == "native diagnostic"));
+        for status in [0, -4, -5, 1, i32::MIN] {
+            let error = classify_execution_error(RunError { message: "opaque".into() }, known_native_call_failure(status));
+            assert!(matches!(error, ClosedLoopExecutionError::Other(ref error) if error.message == "opaque"));
+        }
+        let validation = classify_execution_error(invalid("snapshot validation"), None);
+        assert!(matches!(validation, ClosedLoopExecutionError::Other(_)));
+    }
 }

@@ -171,11 +171,18 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     [objectId, objectPolicy.data?.config, sharedPolicy.data?.config, universePolicy.data?.config],
   );
   const requestedPolicyKey = JSON.stringify(requestedPolicy);
-  const sceneRevision = typeof scene.data?.revision === "number"
+  const resourceSceneRevision = typeof scene.data?.revision === "number"
     ? scene.data.revision
     : typeof scene.data?.scene_revision === "number"
       ? scene.data.scene_revision
       : null;
+  // The scene resource mounts with this dialog and can serve a cached revision;
+  // the session status follows every scene commit, so prefer the newer value
+  // for the scene_revision precondition.
+  const statusSceneRevision = runtimeStatus?.resources.scene_revision;
+  const sceneRevision = typeof statusSceneRevision === "number"
+    ? Math.max(statusSceneRevision, resourceSceneRevision ?? statusSceneRevision)
+    : resourceSceneRevision;
   const policyLoaded = objectId ? objectPolicy.status === "ready"
     : universePolicy.status === "ready" && sharedPolicy.status === "ready";
   const computedSnapshot = useMemo(() => {

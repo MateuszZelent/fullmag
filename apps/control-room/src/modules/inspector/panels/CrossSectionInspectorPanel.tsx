@@ -31,6 +31,7 @@ import { Button } from "@/shared/ui/Button";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import {
   formatCount,
   formatValue,
@@ -40,15 +41,28 @@ import {
 import { CrossSectionDraftEditor } from "./CrossSectionDraftEditor";
 import { CrossSectionQualityChart } from "./CrossSectionQualityChart";
 import { CrossSectionSettingsEditor } from "./CrossSectionSettingsEditor";
+import { resourceHasDisplayableData } from "@/kernel/resources/resourceState";
 
 const DEFAULT_METRIC: CrossSectionQualityMetric = "skewness";
 const QUALITY_THRESHOLD = 0.1;
 
-export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
+export type CrossSectionInspectorSectionScope =
+  | "all"
+  | "overview"
+  | "draft"
+  | "plot";
+
+export function CrossSectionInspectorPanel({
+  selection,
+  sectionScope = "all",
+}: InspectorPanelProps & {
+  sectionScope?: CrossSectionInspectorSectionScope;
+}) {
   const kernel = useKernel();
   const visualizationState = useVisualizationStateResource();
   const workspace = useCrossSectionWorkspaceSelector((state) => state);
-  const draftMode = selection.ref?.type === "cross-section-draft";
+  const draftMode =
+    sectionScope === "draft" || selection.ref?.type === "cross-section-draft";
   const selectedPlotId =
     selection.ref?.type === "cross-section-plot" ? selection.ref.plotId : null;
   const selectedPlot =
@@ -75,15 +89,27 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
     enabled: !draftMode,
   });
   const quality = useCrossSectionQualityResource(qualityQuery, {
-    enabled:
-      !draftMode && crossSection.status === "ready" && Boolean(crossSection.data),
+    enabled: !draftMode && resourceHasDisplayableData(crossSection),
   });
 
   if (draftMode) {
     return (
-      <CrossSectionDraftEditor
-        draft={workspace.draft}
-      />
+      <div className="fm-cross-section-inspector grid min-w-0 gap-fm-inspector-group">
+        <InspectorMetricStrip
+          metrics={[
+            { label: "Mode", tone: "neutral", value: "draft" },
+            { label: "Plane", value: (workspace.draft?.plane ?? query.plane).toUpperCase() },
+            {
+              label: "Position",
+              value: `${formatValue(workspace.draft?.positionPercent ?? query.positionPercent)}%`,
+            },
+            { label: "Metric", value: workspace.draft?.metric ?? metric },
+          ]}
+        />
+        <CrossSectionDraftEditor
+          draft={workspace.draft}
+        />
+      </div>
     );
   }
 
@@ -116,7 +142,8 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
       />
     );
   }
-  if (crossSection.status !== "ready") {
+  // A background refresh keeps the previous section visible (`stale`).
+  if (crossSection.status !== "ready" && !resourceHasDisplayableData(crossSection)) {
     return <MeshResourceEmpty label="Loading cross-section resources." />;
   }
   if (!crossSection.data) {
@@ -159,8 +186,21 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
     kernel.layout.setPanelVisible("right", true);
   };
 
+  const isPlotScope =
+    sectionScope === "plot" ||
+    selection.kind === "mesh.cross-section.plot" ||
+    Boolean(selectedPlot);
+
   return (
-    <div className="fm-cross-section-inspector">
+    <div className="fm-cross-section-inspector grid min-w-0 gap-fm-inspector-group">
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Plane", tone: "neutral", value: query.plane.toUpperCase() },
+          { label: "Position", value: `${formatValue(query.positionPercent)}%` },
+          { label: "Polygons", value: formatCount(statistics.polygonCount) },
+          { label: "Metric", value: metric },
+        ]}
+      />
       {selectedPlot ? (
         <CrossSectionSettingsEditor
           value={settingsValueFromPlot(selectedPlot)}
@@ -177,7 +217,7 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
           }
         />
       ) : (
-        <InspectorGroup title="Cut Plane">
+        <InspectorGroup title="Cut Plane" collapsible defaultOpen>
           <MeshResourceFields
             fields={[
               { label: "Plane", value: query.plane.toUpperCase() },
@@ -199,7 +239,11 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
         </InspectorGroup>
       )}
 
-      <InspectorGroup title="Cross-Section Statistics">
+      <InspectorGroup
+        title="Cross-Section Statistics"
+        collapsible
+        defaultOpen={!isPlotScope || Boolean(selectedPlot)}
+      >
         <MeshResourceFields
           fields={[
             {
@@ -240,7 +284,11 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
         ) : null}
       </InspectorGroup>
 
-      <InspectorGroup title="Selected Element">
+      <InspectorGroup
+        title="Selected Element"
+        collapsible
+        defaultOpen={Boolean(selectedElement)}
+      >
         {selectedElement ? (
           <MeshResourceFields
             fields={[

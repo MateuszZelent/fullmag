@@ -182,6 +182,25 @@ bool gpu_runtime_coefficients_upload(
         }
     }
 
+    // Counting sort keeps members of each class in ascending node order. With
+    // no periodic reduction every node is its own one-member class.
+    std::vector<uint32_t> class_member_offsets(node_count + 1u, 0u);
+    std::vector<uint32_t> class_members(node_count);
+    for (size_t node = 0; node < node_count; ++node) {
+        class_member_offsets[static_cast<size_t>(reduced_node[node]) + 1u] += 1u;
+    }
+    for (size_t slot = 0; slot < node_count; ++slot) {
+        class_member_offsets[slot + 1u] += class_member_offsets[slot];
+    }
+    {
+        std::vector<uint32_t> cursor(
+            class_member_offsets.begin(), class_member_offsets.end() - 1);
+        for (size_t node = 0; node < node_count; ++node) {
+            class_members[cursor[reduced_node[node]]++] = static_cast<uint32_t>(node);
+        }
+    }
+    const size_t class_offset_bytes = (node_count + 1u) * sizeof(uint32_t);
+
     if (!cuda_ok(cudaMemcpy(mesh_metrics.node_volumes, node_volume_values.data(), double_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState node_volumes host->device", error) ||
         !cuda_ok(cudaMemcpy(materials.ms, ms_values.data(), double_bytes, cudaMemcpyHostToDevice),
@@ -221,14 +240,27 @@ bool gpu_runtime_coefficients_upload(
                 reduced_representative_node.data(),
                 u32_bytes,
                 cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState periodic reduced representative nodes host->device", error)) {
+            "cudaMemcpy FemGpuState periodic reduced representative nodes host->device", error) ||
+        !cuda_ok(cudaMemcpy(
+                mesh_regions.periodic_class_member_offsets,
+                class_member_offsets.data(),
+                class_offset_bytes,
+                cudaMemcpyHostToDevice),
+            "cudaMemcpy FemGpuState periodic class member offsets host->device", error) ||
+        !cuda_ok(cudaMemcpy(
+                mesh_regions.periodic_class_members,
+                class_members.data(),
+                u32_bytes,
+                cudaMemcpyHostToDevice),
+            "cudaMemcpy FemGpuState periodic class members host->device", error)) {
         return false;
     }
     record_host_to_device(
         audit,
         static_cast<uint64_t>(double_bytes) * 14ull +
             static_cast<uint64_t>(u8_bytes) +
-            static_cast<uint64_t>(u32_bytes) * 3ull);
+            static_cast<uint64_t>(u32_bytes) * 4ull +
+            static_cast<uint64_t>(class_offset_bytes));
     mesh_metrics.node_count = static_cast<uint64_t>(node_count);
     materials.node_count = static_cast<uint64_t>(node_count);
     mesh_regions.node_count = static_cast<uint64_t>(node_count);

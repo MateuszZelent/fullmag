@@ -6,7 +6,7 @@
   gap: var(--fm-space-2);
   border-bottom: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-panel-raised);
-  padding: var(--fm-space-1) var(--fm-space-2);
+  padding: var(--fm-space-2) var(--fm-space-3);
   overflow-x: auto;
 }
 
@@ -22,7 +22,7 @@
 .fm-footer-traffic__top > li > span {
   min-width: 0;
   overflow: hidden;
-  color: var(--fm-text-muted);
+  color: var(--fm-text-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -71,6 +71,8 @@
   padding: var(--fm-space-1) var(--fm-space-2);
   color: var(--fm-text-secondary);
   font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-help);
+  min-height: var(--fm-control-height-compact);
 }
 
 .fm-footer-log__row--header {
@@ -78,7 +80,7 @@
   top: 0;
   z-index: var(--fm-z-base);
   background: var(--fm-bg-panel);
-  color: var(--fm-text-muted);
+  color: var(--fm-text-secondary);
   font-family: var(--fm-font-ui);
   font-weight: 600;
 }
@@ -105,7 +107,7 @@
 .fm-footer-log__sort[data-active="true"] {
   border-color: var(--fm-border-default);
   background: var(--fm-bg-panel-raised);
-  color: var(--fm-accent);
+  color: var(--fm-accent-text);
   outline: none;
 }
 
@@ -150,7 +152,7 @@
 .fm-footer-log__message:focus-visible {
   border-color: var(--fm-border-default);
   background: var(--fm-bg-panel-raised);
-  color: var(--fm-accent);
+  color: var(--fm-accent-text);
   outline: none;
 }
 
@@ -173,11 +175,11 @@
 }
 
 .fm-footer-log__direction[data-direction="rx"] {
-  color: var(--fm-success);
+  color: var(--fm-success-text);
 }
 
 .fm-footer-log__direction[data-direction="tx"] {
-  color: var(--fm-accent);
+  color: var(--fm-accent-text);
 }
 
 .fm-footer__empty,
@@ -187,7 +189,7 @@
   min-height: 0;
   align-items: center;
   justify-content: center;
-  color: var(--fm-text-muted);
+  color: var(--fm-text-secondary);
 }
 
 .fm-footer-log-dialog {
@@ -209,3 +211,12 @@
   white-space: pre-wrap;
 }
 
+
+.fm-footer-log__row:not(.fm-footer-log__row--header):hover {
+  background: var(--fm-bg-hover);
+}
+
+.fm-footer-log__row--header {
+  background: var(--fm-bg-panel-raised);
+  border-bottom-color: var(--fm-border-default);
+}

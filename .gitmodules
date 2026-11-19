@@ -1,6 +1,6 @@
 [submodule "external_solvers/3"]
 	path = external_solvers/3
-	url = https://github.com/mumax/3
+	url = https://github.com/MateuszZelent/3.git
 [submodule "external_solvers/plus"]
 	path = external_solvers/plus
 	url = https://github.com/mumax/plus

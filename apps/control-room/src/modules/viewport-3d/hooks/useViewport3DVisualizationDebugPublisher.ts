@@ -649,7 +649,7 @@ function buildCarrierInput({
     source.airboxFieldVectorPartStates?.get(carrierId) ?? null;
   const cache = resourceKey
     ? getViewport3DFieldVectorCacheEntryDiagnostics(
-        resourceKey,
+        fieldBuffer?.cacheResourceKey ?? resourceKey,
         decoded ?? undefined,
       )
     : null;

@@ -106,7 +106,7 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
               {copiedDiag ? "Diagnostics Copied!" : "Copy Diagnostics"}
             </Button>
             <Button
-              onClick={() => startScreenStore.setSection("docs")}
+              onClick={() => startScreenStore.requestDocs("index.html")}
               size="sm"
               type="button"
               variant="secondary"

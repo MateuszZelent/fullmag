@@ -1,7 +1,8 @@
 //! API request/response types and view models.
 
 use crate::schemas::commands::{
-    CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget, SolverPolicyRequest,
+    CommandExecutionBinding, CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget,
+    RuntimeInitialStateRequest, SolverPolicyRequest,
 };
 use crate::schemas::diagnostics::SolverProfileResource;
 use crate::schemas::hysteresis::HysteresisBookmarkSchema;
@@ -108,6 +109,8 @@ pub(crate) enum MeshCommandTarget {
 
 #[derive(Debug, Clone)]
 pub(crate) struct AppState {
+    /// Monotonic API bootstrap clock, independent of session lifecycle.
+    pub api_started_at: std::time::Instant,
     /// Private pre-listener provenance. HTTP snapshots never carry this marker.
     pub development_restored_authoring: Arc<std::sync::OnceLock<
         crate::router_v2::handlers::platform::development_restore_input::RestoredAuthoringIdentity,
@@ -619,6 +622,40 @@ pub(crate) struct ScalarRow {
 }
 
 impl ScalarRow {
+    pub(crate) fn from_accepted_stats(stats: &fullmag_runner::StepStats) -> Self {
+        Self {
+            kind: stats.kind.clone(),
+            solver_progress: stats.solver_progress.clone(),
+            observation_frame: None,
+            step: stats.step,
+            time: stats.time,
+            solver_dt: stats.dt,
+            error_estimate: stats.error_estimate,
+            max_error: stats.max_error,
+            dt_suggested: stats.dt_suggested,
+            rejected_attempts: stats.rejected_attempts,
+            pseudo_time_s: stats.pseudo_time_s,
+            active_runtime_s: None,
+            mx: stats.mx,
+            my: stats.my,
+            mz: stats.mz,
+            e_ex: stats.e_ex,
+            e_demag: stats.e_demag,
+            e_ext: stats.e_ext,
+            e_ani: stats.e_ani,
+            e_dmi: stats.e_dmi,
+            e_rotated_dmi: Some(stats.e_rotated_dmi),
+            e_total: stats.e_total,
+            max_dm_dt: stats.max_dm_dt,
+            max_h_eff: stats.max_h_eff,
+            max_h_demag: stats.max_h_demag,
+            max_torque_Apm: stats.max_torque_Apm,
+            max_torque_T: stats.max_torque_T,
+            per_object_scalars: stats.per_object_scalars.clone(),
+            table_expressions: Vec::new(),
+        }
+    }
+
     pub(crate) fn validate_record_kind(&self) -> Result<(), &'static str> {
         self.kind
             .validate_solver_progress(self.solver_progress.as_ref())?;
@@ -820,6 +857,47 @@ impl StepUpdateView {
     }
 }
 
+/// Identity of one accepted worker attempt's live observation. The worker
+/// sequence is intentionally excluded: progress-only header revisions do not
+/// create a new physical scalar sample.
+pub(crate) use crate::schemas::scalars::ScalarSeriesIdentity as AcceptedLiveScalarIdentity;
+
+impl AcceptedLiveScalarIdentity {
+    pub(crate) fn from_header(
+        header: &crate::accepted_study_worker::AcceptedLiveObservationHeader,
+    ) -> Self {
+        Self {
+            run_id: header.run_id.clone(),
+            task_id: header.task_id.clone(),
+            step_id: header.step_id.clone(),
+            case_id: crate::accepted_study_worker::DEFAULT_ACCEPTED_CASE_ID.into(),
+            attempt_id: header.attempt_id.clone(),
+            ownership_epoch: header.ownership_epoch,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CurrentScalarSeries {
+    pub identity: AcceptedLiveScalarIdentity,
+    /// Mirrors the current buffer, including replacement of an equal-step row.
+    pub row_revisions: Vec<u64>,
+}
+
+/// Process-local scalar pins. Public reads expose the verified source and
+/// series independently of transient worker header availability.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CurrentScalarSourceState {
+    pub public_source: Option<crate::schemas::scalars::ScalarObservationSource>,
+    /// Identity of the worker source from which the current physical scalar row
+    /// was published, with the scalar revision bound by public_source.
+    pub accepted_live_identity: Option<AcceptedLiveScalarIdentity>,
+    /// Most recent active accepted header identity. None means the projector
+    /// cannot currently authenticate a live worker observation.
+    pub active_live_identity: Option<AcceptedLiveScalarIdentity>,
+    pub series: Option<CurrentScalarSeries>,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub(crate) struct SessionStateResponse {
     pub session_protocol_version: String,
@@ -839,9 +917,16 @@ pub(crate) struct SessionStateResponse {
     pub stage_execution: Option<StageExecutionState>,
     #[serde(skip_serializing)]
     pub simulation_preparation: Option<SimulationPreparationSnapshot>,
+    /// Importer-issued geometry evidence; never serialized or accepted from a publisher.
+    #[serde(skip)]
+    pub imported_antenna_mesh_proof: Option<crate::session_persistence::antenna_mesh_import::ImportedAntennaMeshProof>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_document: Option<SceneDocument>,
     pub scalar_rows: Vec<ScalarRow>,
+    /// Process-local source binding; never inferred by read handlers or
+    /// deserialized from imported snapshots.
+    #[serde(skip)]
+    pub latest_scalar_source: Option<CurrentScalarSourceState>,
     pub engine_log: Vec<EngineLogEntry>,
     pub solver_profile: SolverProfileResource,
     pub quantities: Vec<QuantityDescriptor>,
@@ -851,6 +936,12 @@ pub(crate) struct SessionStateResponse {
     /// with field/scalar acceptance and must never be reconstructed by a read handler.
     #[serde(skip, default)]
     pub field_publication_bundles: BTreeMap<String, crate::schemas::common::FieldPublicationBundle>,
+    /// Authority issued by the Live preparation publisher for this process.
+    #[serde(skip)]
+    pub authored_initial_state: Option<crate::live_authored_initial_state::AuthoredInitialStatePublication>,
+    /// Scoped reset receipt and pending publication for this live owner.
+    #[serde(skip)]
+    pub magnetization_applies: crate::live_authored_initial_state::MagnetizationApplyState,
     #[serde(skip_serializing, default)]
     pub preview_cache: CachedPreviewFields,
     pub artifacts: Vec<ArtifactEntry>,
@@ -886,6 +977,9 @@ pub(crate) struct SessionStateResponse {
     /// runner bridge. It is internal state, not a browser resource payload.
     #[serde(skip, default)]
     pub accepted_terminal_field_generation: Option<CurrentLiveFieldGeneration>,
+    /// Remesh events already consumed by this publisher/session incarnation.
+    #[serde(skip, default)]
+    pub accepted_mesh_reinitializations: std::collections::BTreeSet<String>,
     /// Highest accepted terminal generation per run. Retained durably so a
     /// restarted bridge can begin a new run at sequence 1 without admitting a
     /// delayed terminal frame from an earlier run.
@@ -1034,6 +1128,11 @@ impl LatestFields {
         self.0.get(quantity).map(|value| &**value)
     }
 
+    /// The shared value itself, for memos keyed by its content version.
+    pub(crate) fn get_shared(&self, quantity: &str) -> Option<&crate::shared_json::SharedJson> {
+        self.0.get(quantity)
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.0.len()
     }
@@ -1046,6 +1145,16 @@ impl LatestFields {
     pub(crate) fn remove(&mut self, quantity: &str) {
         self.0.remove(quantity);
         self.1.remove(quantity);
+    }
+
+    pub(crate) fn retain_quantity_from(&mut self, previous: &Self, quantity: &str) {
+        self.remove(quantity);
+        if let Some(value) = previous.0.get(quantity) {
+            self.0.insert(quantity.to_string(), value.clone());
+        }
+        if let Some(reader) = previous.1.get(quantity) {
+            self.1.insert(quantity.to_string(), Arc::clone(reader));
+        }
     }
 
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {
@@ -1127,6 +1236,12 @@ impl CachedPreviewFields {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.fields.is_empty()
+    }
+
+    pub(crate) fn forget_quantity(&mut self, quantity: &str) {
+        self.fields.remove(quantity);
+        self.accepted_latest_source_frames.remove(quantity);
+        self.accepted_preview_source_frames.retain(|(id, _, _, _, _), _| id != quantity);
     }
 
     pub(crate) fn clear_fields(&mut self) {
@@ -1360,6 +1475,8 @@ pub(crate) struct ImportSessionAssetRequest {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct SessionAssetImportResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_sha256: Option<String>,
     pub asset_id: String,
     pub session_id: String,
     pub artifact_ref: String,
@@ -1596,6 +1713,8 @@ pub(crate) struct StageExecutionRecord {
     pub stage_id: Option<String>,
     #[serde(default)]
     pub antenna_solve_stage_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antenna_progress: Option<fullmag_runner::AntennaOperationProgress>,
     #[serde(default)]
     pub kind: Option<String>,
     pub status: StageLifecycleState,
@@ -1770,6 +1889,8 @@ pub(crate) struct SessionCommand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<RuntimeCommandTarget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_binding: Option<CommandExecutionBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub precondition: Option<RuntimeCommandPrecondition>,
@@ -1777,6 +1898,8 @@ pub(crate) struct SessionCommand {
     pub client_intent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_at_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_state: Option<RuntimeInitialStateRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until_seconds: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2155,7 +2278,9 @@ mod tests {
 
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
+            material_assets: None,
             revision: 3,
+            compute_resources: None,
             execution_profile: None,
             execution_layers: vec![],
             backend: None,
@@ -2167,12 +2292,16 @@ mod tests {
             parallel_execution: None,
             pbc: None,
             fem_demag_solver_policy: None,
+            fem_demag_accuracy_contract: None,
+            fem_domain_mesh: None,
             exchange_enabled: true,
             demag_enabled: true,
             demag_realization: None,
             fdm: None,
             external_field: None,
+            thermal_noise: None,
             rotated_interfacial_dmi: None,
+            rotated_interfacial_dmi_object_ids: None,
             solver: fullmag_authoring::ScriptBuilderSolverState {
                 integrator: "rk45".to_string(),
                 fixed_timestep: String::new(),
@@ -2222,6 +2351,10 @@ mod tests {
                 adaptive_max_passes: 5,
                 adaptive_error_tolerance: String::new(),
                 order: None,
+                domain_mesh_mode: None,
+                domain_mesh_source: None,
+                domain_region_markers: None,
+                domain_object_region_markers: None,
             },
             universe: None,
             domain_frame: None,
@@ -2231,6 +2364,7 @@ mod tests {
             output_storage: None,
             initial_state: None,
             geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
+                source_asset: None,
                 name: "body".to_string(),
                 region_name: None,
                 geometry_kind: "Box".to_string(),
@@ -2265,9 +2399,11 @@ mod tests {
                 allocated_region_ids: Vec::new(),
                 material_parameter_fields: Vec::new(),
                 absorbing_boundary: None,
+                visualization_hint: Default::default(),
             }],
             mesh_interfaces: Vec::new(),
             field_drives: Vec::new(),
+            mask_field_drives: Vec::new(),
             planar_monitors: Vec::new(),
             current_modules: Vec::new(),
             current_transports: Vec::new(),
@@ -2291,6 +2427,7 @@ mod tests {
             session_protocol_version: "1".to_string(),
             capability_profile_version: "2026-04-04".to_string(),
             coupled_checkpoint: None,
+            imported_antenna_mesh_proof: None,
             capabilities: None,
             session: SessionManifest {
                 session_id: "s1".to_string(),
@@ -2337,12 +2474,15 @@ mod tests {
             simulation_preparation: None,
             scene_document: Some(scene_document),
             scalar_rows: Vec::new(),
+            latest_scalar_source: None,
             engine_log: Vec::new(),
             solver_profile: SolverProfileResource::default(),
             quantities: Vec::new(),
             fem_mesh: None,
             latest_fields: LatestFields::default(),
             field_publication_bundles: BTreeMap::new(),
+            authored_initial_state: None,
+            magnetization_applies: Default::default(),
             preview_cache: CachedPreviewFields::default(),
             artifacts: Vec::new(),
             display_selection: CurrentDisplaySelection::default(),
@@ -2358,6 +2498,7 @@ mod tests {
             field_quantity_revisions: BTreeMap::new(),
             accepted_terminal_field_generation: None,
             terminal_field_generations: BTreeMap::new(),
+            accepted_mesh_reinitializations: Default::default(),
             stage_execution_revision: 0,
             simulation_preparation_revision: 0,
             region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),

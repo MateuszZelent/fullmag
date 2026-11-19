@@ -1,0 +1,210 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 760" width="100%" role="img" aria-labelledby="title desc">
+  <title id="title">Fullmag object, interaction, ProblemIR, and four-lane execution architecture</title>
+  <desc id="desc">End-to-end Fullmag pipeline from fm.study authoring and scene objects (object_id, name, geometry, ObjectRegion, Material, MaterialParameterField, m0), through explicit physics modules and ordered study.stages, into ProblemIR (requested intent), the fail-closed Rust planner (fullmag-plan), four separate execution lanes (FDM CPU, FDM GPU, FEM CPU, FEM GPU), and materialized Zarr/binary outputs.</desc>
+  <defs>
+    <style>
+      .fig-title { font: 700 20px 'Segoe UI', Arial, sans-serif; fill: #172030; }
+      .fig-subtitle { font: 400 13px 'Segoe UI', Arial, sans-serif; fill: #4b5568; }
+      .panel-title { font: 700 14.5px 'Segoe UI', Arial, sans-serif; fill: #172030; }
+      .badge { font: 700 12.5px 'Segoe UI', Arial, sans-serif; fill: #ffffff; }
+      .sec-hdr { font: 700 13px 'Segoe UI', Arial, sans-serif; fill: #1d3557; }
+      .label-bold { font: 600 12.5px 'Segoe UI', Arial, sans-serif; fill: #1e2433; }
+      .body { font: 400 12px 'Segoe UI', Arial, sans-serif; fill: #2b3344; }
+      .small { font: 400 11px 'Segoe UI', Arial, sans-serif; fill: #4f586b; }
+      .tiny { font: 400 10px 'Segoe UI', Arial, sans-serif; fill: #5c657a; }
+      .code { font: 600 11px 'Consolas', 'Courier New', monospace; fill: #283147; }
+      .code-sm { font: 500 10.2px 'Consolas', 'Courier New', monospace; fill: #354059; }
+      .math { font: italic 13px 'Cambria Math', 'Times New Roman', serif; fill: #1e2433; }
+      .math-bold { font: italic 700 13.5px 'Cambria Math', 'Times New Roman', serif; fill: #1e2433; }
+      .math-sm { font: italic 11.5px 'Cambria Math', 'Times New Roman', serif; fill: #2b3344; }
+      .pill-text { font: 600 11px 'Segoe UI', Arial, sans-serif; }
+    </style>
+    <marker id="arr-ink" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1e2433"/></marker>
+    <marker id="arr-ink-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1e2433"/></marker>
+    <marker id="arr-muted" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#5c657a"/></marker>
+    <marker id="arr-muted-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#5c657a"/></marker>
+    <marker id="arr-m" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arr-m-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arr-H" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arr-H-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arr-T_DL" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arr-T_DL-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arr-T_FL" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#147d75"/></marker>
+    <marker id="arr-T_FL-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#147d75"/></marker>
+    <marker id="arr-DMI" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arr-DMI-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arr-J_c" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arr-J_c-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arr-air" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6e7b91"/></marker>
+    <marker id="arr-air-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6e7b91"/></marker>
+    <marker id="arr-err" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#ba092f"/></marker>
+    <marker id="arr-err-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#ba092f"/></marker>
+    <marker id="arr-ok" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#256b15"/></marker>
+    <marker id="arr-ok-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#256b15"/></marker>
+    <pattern id="hatch-amber" width="8" height="8" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="8" stroke="#b86b11" stroke-width="1.4" stroke-opacity="0.32"/></pattern>
+    <pattern id="hatch-slate" width="8" height="8" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="8" stroke="#6e7b91" stroke-width="1.2" stroke-opacity="0.28"/></pattern>
+    <filter id="soft-shadow" x="-3%" y="-3%" width="106%" height="108%"><feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#1e2433" flood-opacity="0.06"/></filter>
+  </defs>
+  <rect x="2.00" y="2.00" width="1356.00" height="756.00" fill="#fbfcfe" rx="10.0" stroke="#ccd0da" stroke-width="1.50"/>
+  <text x="28.00" y="36.00" class="fig-title">Fullmag Architecture: Authored Intent to Four-Lane Execution</text>
+  <text x="28.00" y="57.00" class="fig-subtitle">Explicit separation of scene identity, physics modules, ProblemIR requested intent, planner legality gate, and resolved lane provenance</text>
+  <line x1="24.00" y1="68.00" x2="1336.00" y2="68.00" stroke="#e1e5ee" stroke-width="1.20" stroke-linecap="round"/>
+  <rect x="24.00" y="78.00" width="302.00" height="28.00" fill="#f5f7fb" rx="6.0" stroke="#1d5fa7" stroke-width="1.20"/>
+  <text x="175.00" y="96.00" class="label-bold" text-anchor="middle" style="fill:#1d5fa7">1. Authored Study &amp; Scene Objects</text>
+  <rect x="356.00" y="78.00" width="312.00" height="28.00" fill="#f5f7fb" rx="6.0" stroke="#147d75" stroke-width="1.20"/>
+  <text x="512.00" y="96.00" class="label-bold" text-anchor="middle" style="fill:#147d75">2. Explicit Physics Modules</text>
+  <rect x="698.00" y="78.00" width="296.00" height="28.00" fill="#f5f7fb" rx="6.0" stroke="#6f3cc4" stroke-width="1.20"/>
+  <text x="846.00" y="96.00" class="label-bold" text-anchor="middle" style="fill:#6f3cc4">3. ProblemIR &amp; Planner Gate</text>
+  <rect x="1024.00" y="78.00" width="312.00" height="28.00" fill="#f5f7fb" rx="6.0" stroke="#b8392b" stroke-width="1.20"/>
+  <text x="1180.00" y="96.00" class="label-bold" text-anchor="middle" style="fill:#b8392b">4. Four Lanes &amp; Artifacts</text>
+  <rect x="24.00" y="116.00" width="302.00" height="64.00" fill="#ffffff" rx="7.0" stroke="#1d5fa7" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <text x="36.00" y="137.00" class="code" style="fill:#1d5fa7">fm.study(name)  [StudyBuilder]</text>
+  <text x="36.00" y="155.00" class="code-sm">study.engine · study.device · study.mode</text>
+  <text x="36.00" y="171.00" class="small">Target intent only; never triggers implicit physics</text>
+  <rect x="24.00" y="190.00" width="302.00" height="308.00" fill="#ffffff" rx="7.0" stroke="#b97a56" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <text x="36.00" y="211.00" class="label-bold">Scene Objects (geometry / conductor / antenna)</text>
+  <rect x="36.00" y="221.00" width="278.00" height="48.00" fill="#f6e8df" rx="5.0" stroke="#b97a56" stroke-width="1.00"/>
+  <text x="44.00" y="239.00" class="code-sm" style="fill:#6d3a1c">Immutable object_id + user name + type</text>
+  <text x="44.00" y="258.00" class="small" style="fill:#6d3a1c">Identity only: name/type never activate physics</text>
+  <rect x="36.00" y="282.00" width="278.00" height="46.00" fill="#f5f7fb" rx="5.0" stroke="#d6dbe6" stroke-width="1.00"/>
+  <text x="44.00" y="299.00" class="label-bold" style="font-size:11.5px">Geometry AST</text>
+  <text x="44.00" y="317.00" class="tiny" style="font-size:10.0px">Box, Cylinder, Difference, Translate, ImportedGeometry</text>
+  <rect x="36.00" y="336.00" width="278.00" height="46.00" fill="#f5f7fb" rx="5.0" stroke="#d6dbe6" stroke-width="1.00"/>
+  <text x="44.00" y="353.00" class="label-bold" style="font-size:11.5px">ObjectRegion Ω<tspan baseline-shift="sub" font-size="72%">i</tspan></text>
+  <text x="44.00" y="371.00" class="tiny" style="font-size:10.0px">frame (&#x27;object&#x27;|&#x27;world&#x27;), priority, mesh(...), transition</text>
+  <rect x="36.00" y="390.00" width="278.00" height="46.00" fill="#f5f7fb" rx="5.0" stroke="#d6dbe6" stroke-width="1.00"/>
+  <text x="44.00" y="407.00" class="label-bold" style="font-size:11.5px">SI Material &amp; Fields</text>
+  <text x="44.00" y="425.00" class="tiny" style="font-size:10.0px">Material(M<tspan baseline-shift="sub" font-size="72%">s</tspan>, A, α, K<tspan baseline-shift="sub" font-size="72%">u</tspan>, K<tspan baseline-shift="sub" font-size="72%">c</tspan>, D) · MaterialParameterField</text>
+  <rect x="36.00" y="444.00" width="278.00" height="46.00" fill="#f5f7fb" rx="5.0" stroke="#d6dbe6" stroke-width="1.00"/>
+  <text x="44.00" y="461.00" class="label-bold" style="font-size:11.5px">Initial State m<tspan baseline-shift="sub" font-size="72%">0</tspan></text>
+  <text x="44.00" y="479.00" class="tiny" style="font-size:10.0px">fm.texture.* / UniformMagnetization (‖m<tspan baseline-shift="sub" font-size="72%">0</tspan>‖<tspan baseline-shift="sub" font-size="72%">2</tspan> = 1)</text>
+  <rect x="24.00" y="510.00" width="302.00" height="226.00" fill="#ffffff" rx="7.0" stroke="#1d5fa7" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <text x="36.00" y="531.00" class="label-bold" style="fill:#1d5fa7">Ordered Stage Timeline (study.stages)</text>
+  <rect x="36.00" y="543.00" width="278.00" height="38.00" fill="#eaf1fb" rx="4.0" stroke="#b6cde8" stroke-width="0.90"/>
+  <text x="44.00" y="558.00" class="code-sm" style="fill:#1d5fa7">add_relax / add_minimize</text>
+  <text x="44.00" y="573.00" class="tiny">llg_overdamped, projected_gradient_bb, NCG</text>
+  <rect x="36.00" y="587.00" width="278.00" height="38.00" fill="#eaf1fb" rx="4.0" stroke="#b6cde8" stroke-width="0.90"/>
+  <text x="44.00" y="602.00" class="code-sm" style="fill:#1d5fa7">add_run</text>
+  <text x="44.00" y="617.00" class="tiny">LLG time evolution (heun, rk4, rk23, rk45, abm3)</text>
+  <rect x="36.00" y="631.00" width="278.00" height="38.00" fill="#eaf1fb" rx="4.0" stroke="#b6cde8" stroke-width="0.90"/>
+  <text x="44.00" y="646.00" class="code-sm" style="fill:#1d5fa7">add_eigenmodes / add_frequency_response</text>
+  <text x="44.00" y="661.00" class="tiny">Linearized LLG modes &amp; χ(ω)</text>
+  <rect x="36.00" y="675.00" width="278.00" height="38.00" fill="#eaf1fb" rx="4.0" stroke="#b6cde8" stroke-width="0.90"/>
+  <text x="44.00" y="690.00" class="code-sm" style="fill:#1d5fa7">add_hysteresis_sweep</text>
+  <text x="44.00" y="705.00" class="tiny">FieldSegment branches &amp; settle tree</text>
+  <rect x="356.00" y="116.00" width="312.00" height="178.00" fill="#ffffff" rx="7.0" stroke="#1d5fa7" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="368.00" y="126.00" width="288.00" height="22.00" fill="#eaf1fb" rx="5.0" stroke="#1d5fa7" stroke-width="1.10"/>
+  <text x="512.00" y="141.14" class="pill-text" text-anchor="middle" style="fill:#1d5fa7;font-size:11.5px">Conservative Field Terms  K<tspan baseline-shift="sub" font-size="72%">field</tspan> → H<tspan baseline-shift="sub" font-size="72%">k</tspan> (A/m)</text>
+  <text x="370.00" y="166.00" class="code-sm">Exchange · Demag · Zeeman · StaticFieldMap</text>
+  <text x="370.00" y="184.00" class="code-sm">UniaxialAnisotropy · CubicAnisotropy</text>
+  <text x="370.00" y="202.00" class="code-sm">InterfacialDMI · RotatedInterfacialDMI · BulkDMI</text>
+  <text x="370.00" y="220.00" class="code-sm">Magnetoelastic · ThermalNoise (stochastic H<tspan baseline-shift="sub" font-size="72%">th</tspan>)</text>
+  <line x1="370.00" y1="232.00" x2="654.00" y2="232.00" stroke="#e1e5ee" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="370.00" y="250.00" class="math-sm" style="fill:#1d5fa7">Variational law:  δE<tspan baseline-shift="sub" font-size="72%">k</tspan> = −μ<tspan baseline-shift="sub" font-size="72%">0</tspan> ∫ M<tspan baseline-shift="sub" font-size="72%">s</tspan> H<tspan baseline-shift="sub" font-size="72%">k</tspan> · η dV</text>
+  <text x="370.00" y="272.00" class="small">Summed into H<tspan baseline-shift="sub" font-size="72%">eff</tspan> = ∑ H<tspan baseline-shift="sub" font-size="72%">k</tspan> inside LLG RHS</text>
+  <rect x="356.00" y="306.00" width="312.00" height="134.00" fill="#ffffff" rx="7.0" stroke="#b86b11" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="368.00" y="316.00" width="288.00" height="22.00" fill="#fdf3e6" rx="5.0" stroke="#b86b11" stroke-width="1.10"/>
+  <text x="512.00" y="331.14" class="pill-text" text-anchor="middle" style="fill:#b86b11;font-size:11.5px">Direct Spin Torques  τ<tspan baseline-shift="sub" font-size="72%">direct</tspan> → ∂<tspan baseline-shift="sub" font-size="72%">t</tspan>m (s<tspan baseline-shift="super" font-size="72%">-1</tspan>)</text>
+  <text x="370.00" y="355.00" class="code-sm">PrescribedSpinOrbitTorque (SignedScalar / Vector)</text>
+  <text x="370.00" y="373.00" class="code-sm">SlonczewskiSTT (CPP) · ZhangLiSTT (CIP)</text>
+  <text x="370.00" y="391.00" class="code-sm">DriftDiffusionSpinTorque (absorbed spin flux)</text>
+  <line x1="370.00" y1="403.00" x2="654.00" y2="403.00" stroke="#f0dfc7" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="370.00" y="422.00" class="small" style="fill:#b86b11">Single Gilbert → explicit conversion: (T<tspan baseline-shift="sub" font-size="72%">G</tspan> + α m×T<tspan baseline-shift="sub" font-size="72%">G</tspan>)/(1+α<tspan baseline-shift="super" font-size="72%">2</tspan>)</text>
+  <rect x="356.00" y="452.00" width="312.00" height="142.00" fill="#ffffff" rx="7.0" stroke="#246b8e" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="368.00" y="462.00" width="288.00" height="22.00" fill="#e8f3f8" rx="5.0" stroke="#246b8e" stroke-width="1.10"/>
+  <text x="512.00" y="477.14" class="pill-text" text-anchor="middle" style="fill:#246b8e;font-size:11.5px">Coupled Transport, Oersted &amp; Auxiliary PDEs</text>
+  <text x="370.00" y="502.00" class="code-sm">CurrentTransport (V, J<tspan baseline-shift="sub" font-size="72%">c</tspan>; one_way | bidirectional)</text>
+  <text x="370.00" y="520.00" class="code-sm">SpinDriftDiffusion (μ<tspan baseline-shift="sub" font-size="72%">s</tspan>, Q<tspan baseline-shift="sub" font-size="72%">ia</tspan>, mixing interfaces)</text>
+  <text x="370.00" y="538.00" class="code-sm">OerstedField / OerstedCylinder → H<tspan baseline-shift="sub" font-size="72%">oe</tspan>(x, t)</text>
+  <text x="370.00" y="556.00" class="code-sm">ElasticBody (u) · AntennaFieldSolveStage (H<tspan baseline-shift="sub" font-size="72%">ant</tspan>)</text>
+  <text x="370.00" y="577.00" class="small" style="fill:#246b8e">Explicit PhysicsGraph dependency edges in IR</text>
+  <rect x="356.00" y="606.00" width="312.00" height="130.00" fill="#ffffff" rx="7.0" stroke="#6f3cc4" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="368.00" y="616.00" width="288.00" height="22.00" fill="#f3ecfc" rx="5.0" stroke="#6f3cc4" stroke-width="1.10"/>
+  <text x="512.00" y="631.14" class="pill-text" text-anchor="middle" style="fill:#6f3cc4;font-size:11.5px">Inter-Region &amp; Surface Couplings  Γ<tspan baseline-shift="sub" font-size="72%">ab</tspan></text>
+  <text x="370.00" y="656.00" class="code-sm">study.couplings.exchange(src, dst, mode=...)</text>
+  <text x="370.00" y="675.00" class="code-sm">study.couplings.rkky(s<tspan baseline-shift="sub" font-size="72%">a</tspan>, s<tspan baseline-shift="sub" font-size="72%">b</tspan>, J<tspan baseline-shift="sub" font-size="72%">1</tspan>=...)</text>
+  <text x="370.00" y="694.00" class="code-sm">study.couplings.interlayer_exchange(..., J<tspan baseline-shift="sub" font-size="72%">1</tspan>, J<tspan baseline-shift="sub" font-size="72%">2</tspan>)</text>
+  <text x="370.00" y="718.00" class="small" style="fill:#6f3cc4">Cell link A<tspan baseline-shift="sub" font-size="72%">ab</tspan> vs surface energy σ<tspan baseline-shift="sub" font-size="72%">surf</tspan> = −J<tspan baseline-shift="sub" font-size="72%">1</tspan>(m<tspan baseline-shift="sub" font-size="72%">a</tspan>·m<tspan baseline-shift="sub" font-size="72%">b</tspan>) − ...</text>
+  <line x1="328.00" y1="150.00" x2="352.00" y2="150.00" stroke="#5c657a" stroke-width="1.60" stroke-linecap="round" marker-end="url(#arr-muted)"/>
+  <line x1="328.00" y1="290.00" x2="352.00" y2="290.00" stroke="#5c657a" stroke-width="1.60" stroke-linecap="round" marker-end="url(#arr-muted)"/>
+  <line x1="328.00" y1="410.00" x2="352.00" y2="410.00" stroke="#5c657a" stroke-width="1.60" stroke-linecap="round" marker-end="url(#arr-muted)"/>
+  <line x1="328.00" y1="560.00" x2="352.00" y2="560.00" stroke="#5c657a" stroke-width="1.60" stroke-linecap="round" marker-end="url(#arr-muted)"/>
+  <line x1="328.00" y1="665.00" x2="352.00" y2="665.00" stroke="#5c657a" stroke-width="1.60" stroke-linecap="round" marker-end="url(#arr-muted)"/>
+  <rect x="698.00" y="116.00" width="296.00" height="250.00" fill="#ffffff" rx="7.0" stroke="#6f3cc4" stroke-width="1.50" filter="url(#soft-shadow)"/>
+  <rect x="710.00" y="126.00" width="272.00" height="24.00" fill="#f3ecfc" rx="5.0" stroke="#6f3cc4" stroke-width="1.10"/>
+  <text x="846.00" y="142.32" class="pill-text" text-anchor="middle" style="fill:#6f3cc4;font-size:12.0px">ProblemIR  [Requested Intent]</text>
+  <text x="712.00" y="170.00" class="code-sm">ir_version · problem_meta · backend_policy</text>
+  <text x="712.00" y="191.00" class="code-sm">geometry.entries · object_regions · regions</text>
+  <text x="712.00" y="212.00" class="code-sm">materials · material_parameter_fields · magnets</text>
+  <text x="712.00" y="233.00" class="code-sm">energy_terms · couplings · physics_graph</text>
+  <text x="712.00" y="254.00" class="code-sm">spin_torque_modules · spin_transport_modules</text>
+  <text x="712.00" y="275.00" class="code-sm">current_modules · study.stages · sampling</text>
+  <rect x="710.00" y="304.00" width="272.00" height="50.00" fill="#f5f7fb" rx="5.0" stroke="#d6dbe6" stroke-width="1.00"/>
+  <text x="718.00" y="323.00" class="small" style="fill:#6f3cc4;font-weight:600">Preserves &#x27;auto&#x27; &amp; requested precision/device</text>
+  <text x="718.00" y="341.00" class="tiny">Single canonical IR shared by Python &amp; Control Room</text>
+  <line x1="670.00" y1="205.00" x2="694.00" y2="205.00" stroke="#5c657a" stroke-width="1.60" stroke-linecap="round" marker-end="url(#arr-muted)"/>
+  <line x1="670.00" y1="372.00" x2="694.00" y2="372.00" stroke="#5c657a" stroke-width="1.60" stroke-linecap="round" marker-end="url(#arr-muted)"/>
+  <path d="M 670 520 L 684 520 L 684 310 L 694 310" fill="none" stroke="#5c657a" stroke-width="1.50" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-muted)"/>
+  <path d="M 670 670 L 690 670 L 690 335 L 694 335" fill="none" stroke="#5c657a" stroke-width="1.50" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-muted)"/>
+  <line x1="846.00" y1="368.00" x2="846.00" y2="404.00" stroke="#6f3cc4" stroke-width="2.00" stroke-linecap="round" marker-end="url(#arr-DMI)"/>
+  <text x="856.00" y="391.00" class="code-sm" style="fill:#6f3cc4">fullmag-plan</text>
+  <rect x="698.00" y="408.00" width="296.00" height="138.00" fill="#ffffff" rx="7.0" stroke="#1e2433" stroke-width="1.40" filter="url(#soft-shadow)"/>
+  <text x="712.00" y="430.00" class="label-bold">Planner &amp; Legality Gate (fullmag-plan)</text>
+  <text x="712.00" y="451.00" class="small">• CapabilityMatrix &amp; lane legality resolution</text>
+  <text x="712.00" y="469.00" class="small">• validate_executable_outputs &amp; physics graph</text>
+  <text x="712.00" y="487.00" class="small">• PreparationPlan &amp; reuse certificates</text>
+  <text x="712.00" y="505.00" class="small" style="fill:#ba092f;font-weight:600">• Strict GPU guard: never silent CPU fallback</text>
+  <text x="712.00" y="526.00" class="tiny">Rejects malformed SI, conflicts, unsupported lanes</text>
+  <rect x="704.00" y="558.00" width="248.00" height="46.00" fill="#fdecef" rx="6.0" stroke="#ba092f" stroke-width="1.20"/>
+  <text x="828.00" y="577.00" class="label-bold" text-anchor="middle" style="fill:#ba092f;font-size:11.5px">Fail-Closed Validation / Lane Error</text>
+  <text x="828.00" y="594.00" class="tiny" text-anchor="middle" style="fill:#ba092f">Aborts before execution; zero silent degradation</text>
+  <line x1="828.00" y1="546.00" x2="828.00" y2="555.00" stroke="#ba092f" stroke-width="1.60" stroke-linecap="round" marker-end="url(#arr-err-sm)"/>
+  <line x1="976.00" y1="546.00" x2="976.00" y2="618.00" stroke="#256b15" stroke-width="1.80" stroke-linecap="round" marker-end="url(#arr-ok)"/>
+  <rect x="698.00" y="622.00" width="296.00" height="114.00" fill="#ebf6e7" rx="7.0" stroke="#256b15" stroke-width="1.40" filter="url(#soft-shadow)"/>
+  <text x="712.00" y="644.00" class="label-bold" style="fill:#256b15">ExecutionPlanIR  [Resolved Execution]</text>
+  <text x="712.00" y="665.00" class="small">• Resolved lane (FEM|FDM × CPU|GPU) &amp; precision</text>
+  <text x="712.00" y="683.00" class="small">• Concrete integrator, demag operator, PBC pairs</text>
+  <text x="712.00" y="701.00" class="small">• Device identity, seed &amp; provenance digest</text>
+  <text x="712.00" y="721.00" class="tiny" style="fill:#256b15">Requested &#x27;auto&#x27; remains visible alongside resolved</text>
+  <rect x="1024.00" y="116.00" width="312.00" height="92.00" fill="#ffffff" rx="7.0" stroke="#1d5fa7" stroke-width="1.40" filter="url(#soft-shadow)"/>
+  <rect x="1036.00" y="126.00" width="96.00" height="22.00" fill="#eaf1fb" rx="5.0" stroke="#1d5fa7" stroke-width="1.10"/>
+  <text x="1084.00" y="141.14" class="pill-text" text-anchor="middle" style="fill:#1d5fa7;font-size:11.5px">FDM CPU</text>
+  <text x="1142.00" y="141.00" class="tiny" style="fill:#5c657a">Independent qualification</text>
+  <text x="1036.00" y="168.00" class="small">Cartesian SoA grid · open FFT &amp; multilayer</text>
+  <text x="1036.00" y="187.00" class="small">Rust engine (fullmag-engine)</text>
+  <path d="M 1009 679 L 1009 162.0 L 1020 162.0" fill="none" stroke="#256b15" stroke-width="1.50" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-ok)"/>
+  <rect x="1024.00" y="220.00" width="312.00" height="92.00" fill="#ffffff" rx="7.0" stroke="#246b8e" stroke-width="1.40" filter="url(#soft-shadow)"/>
+  <rect x="1036.00" y="230.00" width="96.00" height="22.00" fill="#e8f3f8" rx="5.0" stroke="#246b8e" stroke-width="1.10"/>
+  <text x="1084.00" y="245.14" class="pill-text" text-anchor="middle" style="fill:#246b8e;font-size:11.5px">FDM GPU</text>
+  <text x="1142.00" y="245.00" class="tiny" style="fill:#5c657a">Independent qualification</text>
+  <text x="1036.00" y="272.00" class="small">CUDA device buffers · cuFFT convolution</text>
+  <text x="1036.00" y="291.00" class="small">Explicit FP32/FP64 &amp; device identity</text>
+  <path d="M 1009 679 L 1009 266.0 L 1020 266.0" fill="none" stroke="#256b15" stroke-width="1.50" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-ok)"/>
+  <rect x="1024.00" y="324.00" width="312.00" height="92.00" fill="#ffffff" rx="7.0" stroke="#147d75" stroke-width="1.40" filter="url(#soft-shadow)"/>
+  <rect x="1036.00" y="334.00" width="96.00" height="22.00" fill="#e6f5f3" rx="5.0" stroke="#147d75" stroke-width="1.10"/>
+  <text x="1084.00" y="349.14" class="pill-text" text-anchor="middle" style="fill:#147d75;font-size:11.5px">FEM CPU</text>
+  <text x="1142.00" y="349.00" class="tiny" style="fill:#5c657a">Independent qualification</text>
+  <text x="1036.00" y="376.00" class="small">MFEM shared mesh (Ω<tspan baseline-shift="sub" font-size="72%">m</tspan> ⊂ Ω<tspan baseline-shift="sub" font-size="72%">a</tspan>) · P1 / prism</text>
+  <text x="1036.00" y="395.00" class="small">Krylov airbox &amp; Fredkin–Koehler BEM</text>
+  <path d="M 1009 679 L 1009 370.0 L 1020 370.0" fill="none" stroke="#256b15" stroke-width="1.50" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-ok)"/>
+  <rect x="1024.00" y="428.00" width="312.00" height="92.00" fill="#ffffff" rx="7.0" stroke="#b8392b" stroke-width="1.40" filter="url(#soft-shadow)"/>
+  <rect x="1036.00" y="438.00" width="96.00" height="22.00" fill="#fceceb" rx="5.0" stroke="#b8392b" stroke-width="1.10"/>
+  <text x="1084.00" y="453.14" class="pill-text" text-anchor="middle" style="fill:#b8392b;font-size:11.5px">FEM GPU</text>
+  <text x="1142.00" y="453.00" class="tiny" style="fill:#5c657a">Independent qualification</text>
+  <text x="1036.00" y="480.00" class="small">CUDA / HYPRE / libCEED device kernels</text>
+  <text x="1036.00" y="499.00" class="small">Device residency &amp; transfer provenance</text>
+  <path d="M 1009 679 L 1009 474.0 L 1020 474.0" fill="none" stroke="#256b15" stroke-width="1.50" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-ok)"/>
+  <line x1="995.00" y1="679.00" x2="1009.00" y2="679.00" stroke="#256b15" stroke-width="1.80" stroke-linecap="round"/>
+  <rect x="1024.00" y="548.00" width="312.00" height="188.00" fill="#ffffff" rx="7.0" stroke="#1e2433" stroke-width="1.40" filter="url(#soft-shadow)"/>
+  <text x="1038.00" y="570.00" class="label-bold">Materialized Artifacts &amp; Observables</text>
+  <rect x="1036.00" y="582.00" width="288.00" height="42.00" fill="#f5f7fb" rx="5.0" stroke="#d6dbe6" stroke-width="1.00"/>
+  <text x="1044.00" y="600.00" class="label-bold" style="fill:#1d5fa7;font-size:11.5px">Binary Data Plane: Spatial Fields</text>
+  <text x="1044.00" y="616.00" class="tiny">m, H<tspan baseline-shift="sub" font-size="72%">eff</tspan>, H<tspan baseline-shift="sub" font-size="72%">k</tspan>, u, J<tspan baseline-shift="sub" font-size="72%">c</tspan> on native FDM grid or FEM mesh</text>
+  <rect x="1036.00" y="632.00" width="288.00" height="42.00" fill="#f5f7fb" rx="5.0" stroke="#d6dbe6" stroke-width="1.00"/>
+  <text x="1044.00" y="650.00" class="label-bold" style="fill:#b86b11;font-size:11.5px">Accepted-Step Scalar Reductions</text>
+  <text x="1044.00" y="666.00" class="tiny">Q<tspan baseline-shift="sub" font-size="72%">scalar</tspan> = ∑<tspan baseline-shift="sub" font-size="72%">i∈Ω<tspan baseline-shift="sub" font-size="72%">m</tspan></tspan> w<tspan baseline-shift="sub" font-size="72%">i</tspan> q<tspan baseline-shift="sub" font-size="72%">i</tspan> (airbox excluded) · TableAutosave</text>
+  <rect x="1036.00" y="682.00" width="288.00" height="42.00" fill="#f5f7fb" rx="5.0" stroke="#d6dbe6" stroke-width="1.00"/>
+  <text x="1044.00" y="700.00" class="label-bold" style="fill:#256b15;font-size:11.5px">Zarr / HDF5 Archives &amp; Run Receipt</text>
+  <text x="1044.00" y="716.00" class="tiny">OutputStorage, fm.Result, canonical provenance JSON</text>
+  <line x1="1180.00" y1="522.00" x2="1180.00" y2="544.00" stroke="#1e2433" stroke-width="1.80" stroke-linecap="round" marker-end="url(#arr-ink)"/>
+</svg>

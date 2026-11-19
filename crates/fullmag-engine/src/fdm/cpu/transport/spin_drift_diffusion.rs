@@ -10,6 +10,8 @@ type Vector3 = [f64; 3];
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SpinBoundaryCondition {
     SpinInsulating,
+    /// Zero normal spin-potential gradient; supported only by reciprocal M2.
+    HomogeneousSpinPotentialGradient,
     SpinSink,
     SpecifiedPotential(Vector3),
     /// Outward-normal spin-current flux `n_i Q_ia`.
@@ -1413,6 +1415,9 @@ impl SpinDriftDiffusionProblem {
         }
         match self.spin_boundary(axis, positive_side) {
             SpinBoundaryCondition::SpinInsulating => [0.0; 3],
+            SpinBoundaryCondition::HomogeneousSpinPotentialGradient => {
+                unreachable!("M1 admission rejects homogeneous spin-potential gradient")
+            }
             SpinBoundaryCondition::SpecifiedFlux(flux) => {
                 if positive_side {
                     flux
@@ -1455,6 +1460,9 @@ impl SpinDriftDiffusionProblem {
     ) -> Vector3 {
         match condition {
             SpinBoundaryCondition::SpinInsulating => [0.0; 3],
+            SpinBoundaryCondition::HomogeneousSpinPotentialGradient => {
+                unreachable!("M1 admission rejects homogeneous spin-potential gradient")
+            }
             SpinBoundaryCondition::SpecifiedFlux(outward) => {
                 if positive_side {
                     outward
@@ -2135,6 +2143,11 @@ fn validate_boundary(boundary: SpinBoundaryConditions) -> Result<()> {
 
 fn validate_boundary_condition(condition: SpinBoundaryCondition) -> Result<()> {
     let values = match condition {
+        SpinBoundaryCondition::HomogeneousSpinPotentialGradient => {
+            return Err(EngineError::new(
+                "homogeneous spin-potential gradient requires reciprocal M2",
+            ));
+        }
         SpinBoundaryCondition::SpinInsulating
         | SpinBoundaryCondition::SpinSink
         | SpinBoundaryCondition::PeriodicSpin => return Ok(()),

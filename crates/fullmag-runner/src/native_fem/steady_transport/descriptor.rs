@@ -42,6 +42,7 @@ pub(crate) fn preflight_transport_plans(
             message: "FEM M1 steady transport resolved CPU but the enclosing plan requests a non-CPU MFEM device; refusing hidden fallback before provenance".into(),
         });
     }
+    validate_transport_ms_realization(plan)?;
     let mut module_ids = BTreeSet::new();
     let mut source_ids = BTreeSet::new();
     let mut prepared = Vec::with_capacity(plan.spin_transport_plans.len());
@@ -102,6 +103,43 @@ pub(crate) fn preflight_transport_plans(
         });
     }
     Ok(prepared)
+}
+
+/// The FEM transport descriptor computes its torque coefficient
+/// `-gamma_e hbar / (2 e Ms)` with one scalar Ms. Reject element DG0 Ms and a
+/// nodal Ms field that differs from that scalar before any native call, so a
+/// plan that bypassed the planner cannot apply a wrong torque.
+pub(crate) fn validate_transport_ms_realization(plan: &FemPlanIR) -> Result<(), RunError> {
+    if plan.spin_transport_plans.is_empty() {
+        return Ok(());
+    }
+    if plan.ms_element_field.is_some() {
+        return Err(RunError {
+            message: "FEM steady transport requires one scalar saturation magnetization; per-element Ms_element_field is not supported by the native descriptor".into(),
+        });
+    }
+    let Some(values) = plan.material.ms_field.as_deref() else {
+        return Ok(());
+    };
+    for resolved in &plan.spin_transport_plans {
+        let Some(descriptor) = resolved.fem_cpu_double.as_ref() else {
+            continue;
+        };
+        let scalar = descriptor.saturation_magnetization_apm;
+        let differs = values.iter().any(|value| {
+            let scale = value.abs().max(scalar.abs());
+            !((value - scalar).abs() <= 64.0 * f64::EPSILON * scale)
+        });
+        if differs {
+            return Err(RunError {
+                message: format!(
+                    "FEM steady transport module '{}' uses one scalar saturation magnetization (Ms={scalar:e} A/m) in its torque coefficient; a spatially varying nodal 'material.ms_field' is not supported by the native descriptor",
+                    resolved.module_id
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn require_rt0_text(value: &str, label: &str) -> Result<(), RunError> {
@@ -420,6 +458,41 @@ mod rt0_descriptor_tests {
         };
 
         assert!(error.message.contains("non-CPU MFEM device"), "{error:?}");
+    }
+
+    #[test]
+    fn transport_plan_rejects_spatial_ms_before_native_call() {
+        let mut plan = crate::dispatch::test_tiny_fem_plan();
+        plan.spin_transport_plans = vec![crate::native_fem::test_resolved_steady_transport_plan()];
+        let scalar = plan.spin_transport_plans[0]
+            .fem_cpu_double
+            .as_ref()
+            .expect("FEM transport descriptor")
+            .saturation_magnetization_apm;
+
+        // Halving Ms at one node must double the transport torque there; the
+        // scalar descriptor cannot express that, so preflight fails closed.
+        let mut nodal = vec![scalar; plan.mesh.nodes.len().max(1)];
+        nodal[0] = 0.5 * scalar;
+        plan.material.ms_field = Some(nodal);
+        let error = match preflight_transport_plans(&plan) {
+            Ok(_) => panic!("heterogeneous nodal Ms must be rejected before the native call"),
+            Err(error) => error,
+        };
+        assert!(error.message.contains("material.ms_field"), "{error:?}");
+
+        let uniform = vec![scalar; plan.mesh.nodes.len().max(1)];
+        plan.material.ms_field = Some(uniform);
+        validate_transport_ms_realization(&plan)
+            .expect("a uniform nodal field equal to the scalar is the same coefficient");
+
+        plan.material.ms_field = None;
+        plan.ms_element_field = Some(vec![0.5 * scalar, scalar]);
+        let error = match preflight_transport_plans(&plan) {
+            Ok(_) => panic!("element DG0 Ms must be rejected before the native call"),
+            Err(error) => error,
+        };
+        assert!(error.message.contains("Ms_element_field"), "{error:?}");
     }
 
     #[test]

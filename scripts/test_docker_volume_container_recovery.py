@@ -44,6 +44,50 @@ class ContainerRecoveryTests(unittest.TestCase):
         value.update(overrides)
         return value
 
+    @staticmethod
+    def terminal_request(**overrides):
+        pin={"run_id":"run-terminal", "run_intent_sha256":"1"*64,
+             "run_catalog_sha256":"2"*64, "artifact_catalog_sha256":"3"*64}
+        value={"schema_version":recovery.TERMINAL_REQUEST_SCHEMA,"retained_terminal_runs":[pin]}
+        value.update(overrides)
+        return value
+
+    def test_terminal_history_version_and_every_digest_are_required(self):
+        request=self.terminal_request()
+        self.assertEqual(recovery.expected_recovery_outcome(request),"retained_terminal_runs_recovered")
+        for schema in [recovery.REQUEST_SCHEMA,recovery.RETAINED_REQUEST_SCHEMA,"unknown"]:
+            with self.subTest(schema=schema),self.assertRaises(recovery.ContainerRecoveryError):
+                recovery.expected_recovery_outcome({**request,"schema_version":schema})
+        for count in [0,129]:
+            with self.subTest(count=count),self.assertRaises(recovery.ContainerRecoveryError):
+                recovery.expected_recovery_outcome(self.terminal_request(retained_terminal_runs=request['retained_terminal_runs']*count))
+        pin=request['retained_terminal_runs'][0]
+        for key in ['run_intent_sha256','run_catalog_sha256','artifact_catalog_sha256']:
+            for invalid in (["short","0"*64,"F"*64] if key == 'artifact_catalog_sha256' else [None,"short","0"*64,"F"*64]):
+                with self.subTest(key=key,invalid=invalid),self.assertRaises(recovery.ContainerRecoveryError):
+                    recovery.expected_recovery_outcome(self.terminal_request(retained_terminal_runs=[{**pin,key:invalid}]))
+        with self.assertRaises(recovery.ContainerRecoveryError):
+            recovery.expected_recovery_outcome(self.terminal_request(retained_cancelled_runs=[]))
+        for pins in [[pin,pin],[{k:v for k,v in pin.items() if k!='artifact_catalog_sha256'}],[{**pin,'run_id':'../escape'}]]:
+            with self.assertRaises(recovery.ContainerRecoveryError):
+                recovery.expected_recovery_outcome(self.terminal_request(retained_terminal_runs=pins))
+
+    def test_cancelled_only_contract_remains_v2(self):
+        pin=self.terminal_request()['retained_terminal_runs'][0]
+        cancelled={k:v for k,v in pin.items() if k!='artifact_catalog_sha256'}
+        request={'schema_version':recovery.RETAINED_REQUEST_SCHEMA,'retained_cancelled_runs':[cancelled]}
+        self.assertEqual(recovery.expected_recovery_outcome(request),'retained_cancelled_runs_recovered')
+        with self.assertRaises(recovery.ContainerRecoveryError):
+            recovery.expected_recovery_outcome({**request,'retained_cancelled_runs':[pin]})
+        self.assertEqual(recovery.expected_recovery_outcome({'schema_version':recovery.REQUEST_SCHEMA}),'empty_namespace_recovered')
+
+
+
+
+
+
+
+
     def test_operator_authorization_binds_prior_journal_not_shutdown_receipt(self):
         value = recovery.validate_operator_authorization(self.operator())
         self.assertEqual(value["prior_ready_owner_proof_sha256"], "5" * 64)
@@ -117,6 +161,29 @@ class ContainerRecoveryTests(unittest.TestCase):
         self.assertIn("type=bind,src=/windows/ledger,dst=/host-ledger,readonly", argv)
         self.assertIn("deadline=time.monotonic()+5", " ".join(argv))
         self.assertNotIn("bind-nonrecursive", " ".join(argv))
+
+    def test_terminal_storage_probe_preserves_pins_and_checks_exact_input_inventory(self):
+        pin=self.terminal_request()['retained_terminal_runs'][0]
+        records=[pin]
+        backend={'Image':'sha256:'+'f'*64,'Mounts':[
+            {'Destination':'/state','Type':'bind','Source':'/state/source','RW':True},
+            {'Destination':'/host-ledger','Type':'bind','Source':'/ledger/source','RW':True}]}
+        value={'store_root_sha256':'1'*64,'ledger_root_sha256':'2'*64,
+               'ledger_snapshot_sha256':'3'*64,'run_records':records}
+        result=SimpleNamespace(returncode=0,stdout=json.dumps(value).encode(),stderr=b'')
+        with patch.object(recovery,'bounded_capture',return_value=result) as capture:
+            recovery._ledger_and_store_snapshot(SimpleNamespace(project='fullmag-test'),backend,retained_terminal_runs=[pin])
+        observation=json.loads(capture.call_args.args[0][-1])
+        self.assertEqual(observation['retained_terminal_runs'],[pin])
+        self.assertEqual(observation['retained_cancelled_runs'],[pin])
+        self.assertTrue(observation['terminal_mode'])
+        result.stdout=json.dumps({**value,'run_records':[]}).encode()
+        with patch.object(recovery,'bounded_capture',return_value=result):
+            with self.assertRaises(recovery.ContainerRecoveryError):
+                recovery._ledger_and_store_snapshot(SimpleNamespace(project='fullmag-test'),backend,retained_terminal_runs=[pin])
+        with self.assertRaises(recovery.ContainerRecoveryError):
+            recovery._ledger_and_store_snapshot(SimpleNamespace(project='fullmag-test'),backend,
+                retained_terminal_runs=[pin],retained_cancelled_runs=[])
 
     def test_storage_probe_uses_selected_host_docker_adapter(self):
         backend = {"Image": "sha256:" + "f" * 64, "Mounts": [
@@ -328,45 +395,54 @@ class ContainerRecoveryTests(unittest.TestCase):
             def path(relative):
                 return "/control/" + relative
 
-        with patch.object(recovery, "_control_json", return_value=(None, None)):
-            request = recovery._build_request(
-                authorization,
-                owner=owner,
-                owner_sha256="2" * 64,
-                launch_sha256="3" * 64,
-                config={},
-                control=Control(),
-                device_release=device,
-                config_sha256=config_sha,
-                store_root_sha256="4" * 64,
-                ledger_root_sha256="5" * 64,
-                ledger_snapshot_sha256="6" * 64,
-                docker_engine_id_sha256="7" * 64,
-                manifest_sha256="8" * 64,
-                containers=[
-                    {
-                        "container_id": "9" * 64,
-                        "image_id": "sha256:" + "a" * 64,
-                        "config_sha256": "b" * 64,
-                        "service": "backend",
-                        "compose_project": "fullmag-test",
-                        "private_pid_namespace": True,
-                        "host_pid": False,
-                        "device_requests_sha256": "c" * 64,
-                    },
-                    {
-                        "container_id": "d" * 64,
-                        "image_id": "sha256:" + "a" * 64,
-                        "config_sha256": "e" * 64,
-                        "service": "frontend",
-                        "compose_project": "fullmag-test",
-                        "private_pid_namespace": True,
-                        "host_pid": False,
-                        "device_requests_sha256": "f" * 64,
-                    },
-                ],
-            )
-        self.assertEqual(request["application"], {"mode": "external_only", "raw_sha256": config_sha})
+        pin=self.terminal_request()['retained_terminal_runs'][0]
+        for retained in [{}, {'retained_cancelled_runs':[{k:v for k,v in pin.items() if k!='artifact_catalog_sha256'}]},
+                         {'retained_terminal_runs':[pin]}]:
+            with patch.object(recovery, "_control_json", return_value=(None, None)):
+                request = recovery._build_request(
+                    authorization,
+                    owner=owner,
+                    owner_sha256="2" * 64,
+                    launch_sha256="3" * 64,
+                    config={},
+                    control=Control(),
+                    device_release=device,
+                    config_sha256=config_sha,
+                    store_root_sha256="4" * 64,
+                    ledger_root_sha256="5" * 64,
+                    ledger_snapshot_sha256="6" * 64,
+                    docker_engine_id_sha256="7" * 64,
+                    manifest_sha256="8" * 64,
+                    containers=[
+                        {
+                            "container_id": "9" * 64,
+                            "image_id": "sha256:" + "a" * 64,
+                            "config_sha256": "b" * 64,
+                            "service": "backend",
+                            "compose_project": "fullmag-test",
+                            "private_pid_namespace": True,
+                            "host_pid": False,
+                            "device_requests_sha256": "c" * 64,
+                        },
+                        {
+                            "container_id": "d" * 64,
+                            "image_id": "sha256:" + "a" * 64,
+                            "config_sha256": "e" * 64,
+                            "service": "frontend",
+                            "compose_project": "fullmag-test",
+                            "private_pid_namespace": True,
+                            "host_pid": False,
+                            "device_requests_sha256": "f" * 64,
+                        },
+                    ],
+                    **retained,
+                )
+            self.assertEqual(request["application"], {"mode": "external_only", "raw_sha256": config_sha})
+            if 'retained_terminal_runs' in retained:
+                self.assertEqual(request['schema_version'],recovery.TERMINAL_REQUEST_SCHEMA)
+                self.assertEqual(recovery.expected_recovery_outcome(request),'retained_terminal_runs_recovered')
+                with self.assertRaisesRegex(recovery.ContainerRecoveryError,'unexpected fields'):
+                    recovery.validate_attestation({'schema_version':recovery.ABSENCE_ATTESTATION_SCHEMA},request,'1'*64)
 
     def test_prepared_transition_is_resumable_before_absence_sidecar(self):
         """A crash between rm and absence publication remains recoverable."""
@@ -502,6 +578,81 @@ class ContainerRecoveryTests(unittest.TestCase):
                 container["State"].update(Status=status, Pid=pid)
                 with self.assertRaises(recovery.ContainerRecoveryError):
                     recovery._container_observation(container, pin, after=True)
+
+    def test_recovery_args_preserve_retained_native_contract_and_all_44_source_files(self):
+        import docker_volume_dev as volume_dev
+
+        retained_files = [f"untracked-inputs/input-{index:02d}.py" for index in range(44)]
+        normalized_files = volume_dev.normalize_include_untracked_paths(retained_files)
+        terminal = {"inputs": {"native_contracts": ["fem-demag-poisson"]}}
+        compose = {"services": {"backend": {
+            "command": ["start", "--native-contract", "fem-demag-poisson"],
+            "environment": {volume_dev.INCLUDE_UNTRACKED_ENV: json.dumps(
+                normalized_files, ensure_ascii=False, separators=(",", ":"))},
+        }}}
+        args = SimpleNamespace(source_root=Path("/old"), script=Path("old.py"),
+                               native_contract=None, include_untracked=None)
+        native_contracts, include_untracked = recovery._retained_start_selections(args, terminal, compose)
+
+        result = recovery._recover_args(
+            args, Path("/selected"), native_contracts=native_contracts,
+            include_untracked=include_untracked)
+
+        self.assertEqual(result.source_root, Path("/selected"))
+        self.assertEqual(result.native_contract, ["fem-demag-poisson"])
+        self.assertEqual(result.include_untracked, retained_files)
+        self.assertEqual(len(result.include_untracked), 44)
+        with self.assertRaisesRegex(recovery.ContainerRecoveryError, "source allowlist"):
+            recovery._retained_start_selections(
+                SimpleNamespace(native_contract=None, include_untracked=[]), terminal, compose)
+        with self.assertRaisesRegex(recovery.ContainerRecoveryError, "native contracts"):
+            recovery._retained_start_selections(
+                SimpleNamespace(native_contract=["fem-cuda-activity-trace"], include_untracked=None),
+                terminal, compose)
+
+    def test_recovery_pins_layout_from_retained_terminal_and_refuses_legacy_fallback(self):
+        import docker_volume_dev as volume_dev
+
+        writes = []
+        control = SimpleNamespace(write=lambda path, value: writes.append((path, copy.deepcopy(value))),
+                                  read=lambda path, optional=False: None)
+        operation = {"root": "development/attempts/" + "a" * 32,
+                     "receipt": {"private_group_storage": None}}
+        terminal = {"private_group_storage": "group-volume-v1"}
+
+        self.assertTrue(recovery._pin_recovery_private_group_storage(control, operation, terminal))
+        self.assertEqual(operation["receipt"]["private_group_storage"], "group-volume-v1")
+        self.assertEqual(writes, [(operation["root"] + "/receipt.json", operation["receipt"])])
+
+        legacy = {"root": "development/attempts/" + "b" * 32, "receipt": {}}
+        self.assertFalse(recovery._pin_recovery_private_group_storage(control, legacy, {}))
+        self.assertEqual(len(writes), 1)
+
+        grouped_marker = {"schema": "fullmag.docker-group-storage-owner.v1"}
+        foreign_control = SimpleNamespace(write=lambda *_args: None,
+                                           read=lambda path, optional=False: grouped_marker)
+        with self.assertRaisesRegex(volume_dev.BuildControlError, "cannot fall back"):
+            recovery._pin_recovery_private_group_storage(foreign_control, legacy, {})
+
+    def test_recovery_layout_pin_requires_same_retained_terminal_bytes_at_boundary(self):
+        terminal = {"private_group_storage": "group-volume-v1", "inputs": {"native_contracts": []}}
+        raw = recovery._canonical(terminal)
+        self.assertIsNone(recovery._assert_retained_terminal_matches(terminal, raw, terminal, raw))
+        with self.assertRaisesRegex(recovery.ContainerRecoveryError, "retained terminal changed"):
+            recovery._assert_retained_terminal_matches(
+                terminal, raw, {**terminal, "private_group_storage": "legacy"}, raw)
+        with self.assertRaisesRegex(recovery.ContainerRecoveryError, "retained terminal changed"):
+            recovery._assert_retained_terminal_matches(terminal, raw + b"\n", terminal, raw)
+
+    def test_recovery_inherits_layout_before_removing_old_containers(self):
+        import inspect
+
+        source = inspect.getsource(recovery.recover)
+        boundary = source.index("_revalidate_recovery_boundary(")
+        pin = source.index("_pin_recovery_private_group_storage(control, operation, terminal)")
+        remove = source.index('docker_capture("rm"')
+        self.assertLess(boundary, pin)
+        self.assertLess(pin, remove)
 
 
 if __name__ == "__main__":

@@ -1815,7 +1815,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn('study = fm.study("region_owned")', exported)
         self.assertIn("film_core_region = film.add_region", exported)
         self.assertIn('region_id="film:core_region"', exported)
-        self.assertIn('fm.fields.constant(760000, unit="A/m")', exported)
+        self.assertIn('fm.fields.constant(760000.0, unit="A/m")', exported)
         self.assertIn("film_core_region.texture = fm.texture.neel_skyrmion", exported)
         self.assertIn("film.set_material_field", exported)
         self.assertIn("study.couplings.rkky", exported)
@@ -4410,14 +4410,14 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(loaded.problem.runtime_metadata["study_universe"]["airbox_hmax"], 80e-9)
         self.assertEqual(workflow["per_geometry"][0]["hmax"], 25e-9)
 
-    def test_object_mesh_rejects_imported_mesh_source(self) -> None:
+    def test_object_mesh_rejects_non_npz_mesh_source(self) -> None:
         fm.reset()
         study = fm.study("object_mesh_source_rejected")
         body = study.geometry(fm.Box(20e-9, 20e-9, 10e-9), name="body")
 
         with self.assertRaisesRegex(
             ValueError,
-            r"per-object mesh source is unavailable; use FEM\(mesh=\.\.\.\)",
+            r"per-object mesh source requires a non-empty MeshData NPZ path",
         ):
             body.mesh(source="object.mesh")
 
@@ -6117,7 +6117,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn('body_ui_core_region = body.add_region("ui_core"', rewritten)
         self.assertIn('body_ui_core_region.mesh(maximum_element_size=1e-09', rewritten)
         self.assertIn(
-            'body_ui_core_region.set_material("ms", fm.fields.constant(700000, unit="A/m"), priority=5',
+            'body_ui_core_region.set_material("ms", fm.fields.constant(700000.0, unit="A/m"), priority=5',
             rewritten,
         )
         self.assertIn(

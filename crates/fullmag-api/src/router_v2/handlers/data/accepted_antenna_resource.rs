@@ -12,17 +12,17 @@ use utoipa::ToSchema;
 
 use super::accepted_antenna_inspection::{
     discover_accepted_antenna_inspections, load_accepted_antenna_inspection,
-    AcceptedAntennaInspectionIdentity, AcceptedAntennaPublicationPin,
+    AcceptedAntennaInspectionIdentity, AcceptedAntennaPublicationPin, AcceptedAntennaInspectionData,
 };
 use super::antenna_inspection::{
     inspection_display_data, manifest_resource, AntennaInspectionDisplayDataResource,
-    AntennaInspectionManifestResource,
+    AntennaInspectionManifestResource, AntennaInspectionDisplayCapabilities,
 };
 use crate::error::ApiError;
 use crate::types::AppState;
 
 #[derive(Debug, Serialize, ToSchema)]
-pub struct AcceptedAntennaInspectionResource {
+pub struct AcceptedExternalLeadInspectionResource {
     pub schema_version: String,
     pub resource_id: String,
     pub project_id: String,
@@ -31,6 +31,27 @@ pub struct AcceptedAntennaInspectionResource {
     pub output_id: String,
     pub manifest: AntennaInspectionManifestResource,
     pub display: AntennaInspectionDisplayDataResource,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum AcceptedAntennaInspectionResource {
+    ExternalLead(AcceptedExternalLeadInspectionResource),
+    ClosedLoop(AcceptedClosedLoopInspectionResource),
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AcceptedClosedLoopInspectionResource {
+    pub schema_version: String,
+    pub resource_id: String,
+    pub project_id: String,
+    pub owner: AcceptedAntennaInspectionIdentity,
+    pub port_mode_id: String,
+    pub output_id: String,
+    pub capabilities: AntennaInspectionDisplayCapabilities,
+    pub normalization: String,
+    /// Existing verified, bounded closed-loop descriptors; numerical arrays stay binary.
+    pub closed_loop_display: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -138,7 +159,11 @@ pub async fn get_accepted_antenna_inspection(
     let run_id =
         RunId::parse(run_id).map_err(|e| ApiError::bad_request(format!("invalid run_id: {e}")))?;
     super::accepted_antenna_payload::validate_publication_query(&step_id, &query)?;
+    let permit = Arc::clone(&state.quantity_data_plane.accepted_inspection_admission)
+        .acquire_owned().await
+        .map_err(|_| ApiError::internal("accepted inspection reader admission closed"))?;
     let resource = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         let root = state
             .submit_store_root
             .as_ref()
@@ -148,27 +173,38 @@ pub async fn get_accepted_antenna_inspection(
         }
         let inspection =
             load_accepted_antenna_inspection(root, &run_id, &project_id, &step_id, &query)?;
-        let display = inspection_display_data(&inspection.loaded)?;
-        let port_mode_id = inspection.loaded.manifest.port_mode_id.clone();
-        let output_id = inspection.loaded.manifest.output_id.clone();
-        let mut manifest = manifest_resource(inspection.loaded.manifest)?;
-        // Full byte/plan validation is not scientific drive qualification.
-        manifest.validation_scope = "accepted_plan_and_payloads".into();
-        Ok::<_, ApiError>(AcceptedAntennaInspectionResource {
-            schema_version: "accepted_antenna_inspection.v1".into(),
-            resource_id: format!(
-                "persistence/projects/{}/runs/{}/antenna-inspections/{}",
-                project_id.as_str(),
-                run_id.as_str(),
-                step_id
-            ),
-            project_id: project_id.as_str().into(),
-            owner: inspection.identity,
-            port_mode_id,
-            output_id,
-            manifest,
-            display,
-        })
+        let resource_id = format!(
+            "persistence/projects/{}/runs/{}/antenna-inspections/{}",
+            project_id.as_str(), run_id.as_str(), step_id,
+        );
+        match inspection.loaded {
+            AcceptedAntennaInspectionData::ExternalLead(loaded) => {
+                let display = inspection_display_data(&loaded)?;
+                let port_mode_id = loaded.manifest.port_mode_id.clone();
+                let output_id = loaded.manifest.output_id.clone();
+                let mut manifest = manifest_resource(loaded.manifest)?;
+                // Full byte/plan validation is not scientific drive qualification.
+                manifest.validation_scope = "accepted_plan_and_payloads".into();
+                Ok::<_, ApiError>(AcceptedAntennaInspectionResource::ExternalLead(AcceptedExternalLeadInspectionResource {
+                    schema_version: "accepted_antenna_inspection.v1".into(),
+                    resource_id, project_id: project_id.as_str().into(),
+                    owner: inspection.identity, port_mode_id, output_id, manifest, display,
+                }))
+            }
+            AcceptedAntennaInspectionData::ClosedLoop { loaded, port_mode_id, output_id } => {
+                Ok(AcceptedAntennaInspectionResource::ClosedLoop(AcceptedClosedLoopInspectionResource {
+                    schema_version: "accepted_antenna_inspection.closed_loop.v1".into(),
+                    resource_id, project_id: project_id.as_str().into(),
+                    owner: inspection.identity, port_mode_id, output_id,
+                    capabilities: AntennaInspectionDisplayCapabilities {
+                        display: true, current_density: true, per_ampere_basis: false,
+                        source_fft: false, llg_drive: false,
+                    },
+                    normalization: "raw_authored_potential_jump".into(),
+                    closed_loop_display: loaded.metadata,
+                }))
+            }
+        }
     })
     .await
     .map_err(|e| ApiError::internal(format!("accepted antenna metadata worker: {e}")))??;
@@ -214,7 +250,7 @@ mod tests {
             }
         }
         let properties =
-            &value["components"]["schemas"]["AcceptedAntennaInspectionResource"]["properties"];
+            &value["components"]["schemas"]["AcceptedExternalLeadInspectionResource"]["properties"];
         for field in [
             "project_id",
             "owner",

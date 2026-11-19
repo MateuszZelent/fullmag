@@ -56,6 +56,20 @@ function model(regionIds: number[]): FdmCuboidInstanceModel {
 }
 
 describe("buildViewport3DFdmTargetViews", () => {
+  it("does not promote geometry-only preview cells to realized target membership", () => {
+    const result = buildViewport3DFdmTargetViews({
+      membership: membership(),
+      model: { ...model([1, 1, 1, 1]), regionIds: null },
+      realizedRegionIds: Uint32Array.from([1, 1, 1, 1]),
+    });
+
+    expect(result).toMatchObject({
+      reason: "sampled-model-membership-unavailable",
+      status: "incompatible",
+    });
+    expect(result.views).toEqual([]);
+  });
+
   it("fails closed every render and inspect consumer for an identity-incompatible object field", () => {
     const [view] = buildViewport3DFdmTargetViews({
       membership: membership({ object_ids: ["left"] }),

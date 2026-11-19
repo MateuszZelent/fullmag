@@ -44,6 +44,9 @@ pub struct LiveStatus {
     pub capabilities: CapabilityMap,
     /// Thin latest energy summary for status surfaces. Energy samples/history are owned by `simulation/solver/energies/*`.
     pub energies: EnergySummary,
+    /// Whether `simulation/solver/energies/current` can return a source-qualified current sample now.
+    #[serde(default)]
+    pub solver_energy_current_available: bool,
     /// Lightweight runtime metrics for status surfaces. Detailed logs/diagnostics live under `diagnostics/*`.
     pub metrics: MetricsSummary,
 }

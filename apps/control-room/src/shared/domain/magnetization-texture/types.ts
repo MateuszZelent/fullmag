@@ -39,6 +39,8 @@ export interface MagnetizationAssetDraft {
 export interface MagnetizationTextureModel {
   asset: MagnetizationAssetDraft | null;
   assignment: MagnetizationTextureAssignment;
+  authoredRegion: boolean;
+  regionTextureOverride: components["schemas"]["SceneTextureOverride"] | null;
   baseRevision: number | null;
   effectiveMagnetizationRef: string | null;
   objectMagnetizationRef: string | null;

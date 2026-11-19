@@ -1,17 +1,16 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { runMaterialAssignmentDraftCheck } from "./check-material-assignment-draft.mjs";
+import { loadMaterialAssignmentDraftSources, runMaterialAssignmentDraftCheck } from "./check-material-assignment-draft.mjs";
 
-import {
-  assignedMaterialParametersDraft,
-  buildMaterialParametersPatch,
-  magneticParametersDraftDirty,
-  magneticParametersDraftFromResource,
-} from "../src/modules/inspector/panels/ObjectMaterialPanelModel.ts";
-import {
-  resolveInspectorDraftState,
-  updateInspectorDraftState,
-} from "../src/modules/inspector/panels/inspectorDraftState.ts";
+const {
+  model: {
+    assignedMaterialParametersDraft,
+    buildMaterialParametersPatch,
+    magneticParametersDraftDirty,
+    magneticParametersDraftFromResource,
+  },
+  inspectorDraftState: { resolveInspectorDraftState, updateInspectorDraftState },
+} = await loadMaterialAssignmentDraftSources();
 
 const material = {
   id: "mat:waveguide",
@@ -64,7 +63,7 @@ const panel = await readFile(new URL("../src/modules/inspector/panels/ObjectMate
 assert.match(panel, /rebaseAssignedMaterialDraft\(\s*result\.materialId,\s*\[result\.assigned, result\.created\.committed_scene\]/);
 assert.match(panel, /rebaseAssignedMaterialDraft\(\s*failure\.error\.materialId,\s*\[assigned, failure\.error\.created\.committed_scene\]/);
 assert.doesNotMatch(panel, /mergeDraftPatch\(\{ materialRef:/);
-assert.match(panel, /rebaseMagneticParametersDraftAfterAssignment\(\{[\s\S]*?startingRevisions,[\s\S]*?currentRevisions: draftFieldRevisionsRef\.current/);
+assert.match(panel, /rebaseMagneticParametersDraftAfterAssignment\(\{[\s\S]*?startingRevisions,[\s\S]*?currentRevisions: scope\.draftFieldRevisions/);
 
 // Execute the revision comparison independently; source guards below bind its
 // reset ordering to the panel. This is not a React scheduling/lifecycle test.
@@ -96,14 +95,15 @@ const merged = mergeAtRevisions(
 assert.equal(merged.ms, "800000");
 assert.equal(merged.aex, committed.aex);
 assert.equal(merged.alpha, "0.07");
-const scopeReset = panel.slice(
-  panel.indexOf("if (scopeRef.current.key !== scopeKey)"),
-  panel.indexOf("const scope = scopeRef.current;"),
+const scopeTransition = panel.slice(
+  panel.indexOf("const scope = useMemo("),
+  panel.indexOf("const historyGeneration ="),
 );
-assert.match(scopeReset, /draftFieldRevisionsRef\.current\.clear\(\)/);
-assert.match(scopeReset, /anisotropyFieldRevisionsRef\.current\.clear\(\)/);
+assert.match(scopeTransition, /scopeState\.key === scopeKey \? scopeState/);
+assert.match(scopeTransition, /draftFieldRevisions: new Map/);
+assert.match(scopeTransition, /anisotropyFieldRevisions: new Map/);
 const startPending = panel.slice(panel.indexOf("function startPending("), panel.indexOf("function finishPending("));
-assert.doesNotMatch(startPending, /RevisionsRef\.current\.clear/);
-assert.match(panel, /scopeRef\.current\.token === scope\.token/);
+assert.doesNotMatch(startPending, /FieldRevisions\.clear/);
+assert.match(panel, /scopeRef\.current === scope && commands\.getSessionScopeKey\(\) === sessionScopeKey/);
 assert.equal((await runMaterialAssignmentDraftCheck()).status, "passed");
 console.log("PASS: legacy null-write and scope-reset counterexamples reproduced; full ACK, per-field merge, current retry ACK, missing asset rejection and reset ordering checked. Browser/React lifecycle NOT VERIFIED.");

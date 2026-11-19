@@ -1,0 +1,688 @@
+{
+  "cases": [
+    {
+      "activation_entered": true,
+      "activation_replayed": false,
+      "activation_started_at_utc": "2026-11-05T15:20:21.301+00:00",
+      "archive_manifest": {
+        "attempt_id": "attempt-b2d9a4239af54f3aaf0a9cf400ebdb4a",
+        "case_id": "material_rdmi_current__film_bimeron__cylinder_plus_x",
+        "epoch": 1,
+        "files": [
+          {
+            "bytes": 5990400,
+            "path": "accepted-observable-H_ani-478d4a61ce33ce23b0e16fd4348cf9914382b4b186cb8ed8c46dc363f52715fa.f64le",
+            "sha256": "478d4a61ce33ce23b0e16fd4348cf9914382b4b186cb8ed8c46dc363f52715fa"
+          },
+          {
+            "bytes": 5990400,
+            "path": "accepted-observable-H_demag-8ba20f523eda088626a1d82c34119916c16629ce1fc71c7715032485c96ff68f.f64le",
+            "sha256": "8ba20f523eda088626a1d82c34119916c16629ce1fc71c7715032485c96ff68f"
+          },
+          {
+            "bytes": 5990400,
+            "path": "accepted-observable-H_eff-ff7a18995b8cbdffff71950211101e07f70afe7a6942d8c7e57aed8d48d7fae9.f64le",
+            "sha256": "ff7a18995b8cbdffff71950211101e07f70afe7a6942d8c7e57aed8d48d7fae9"
+          },
+          {
+            "bytes": 5990400,
+            "path": "accepted-observable-H_ex-c56e2d2bbeb1cb7c6069a5ef8e2ef9c3fcd8d9fb81f710271069e1afcb0c1383.f64le",
+            "sha256": "c56e2d2bbeb1cb7c6069a5ef8e2ef9c3fcd8d9fb81f710271069e1afcb0c1383"
+          },
+          {
+            "bytes": 1996800,
+            "path": "accepted-observable-eden_ani-877b06fe7503657bfd653c9f9a912dca3a668cbd1ae16c8b9b77338f832c246e.f64le",
+            "sha256": "877b06fe7503657bfd653c9f9a912dca3a668cbd1ae16c8b9b77338f832c246e"
+          },
+          {
+            "bytes": 1996800,
+            "path": "accepted-observable-eden_demag-afbec3d39bb058995c3c344f2f226ad952482363548611d4cee3a4aa939b64a2.f64le",
+            "sha256": "afbec3d39bb058995c3c344f2f226ad952482363548611d4cee3a4aa939b64a2"
+          },
+          {
+            "bytes": 1996800,
+            "path": "accepted-observable-eden_ex-1129e3ab6037d3fd3b5db574819461e8547f144174664faedaca82315538fe90.f64le",
+            "sha256": "1129e3ab6037d3fd3b5db574819461e8547f144174664faedaca82315538fe90"
+          },
+          {
+            "bytes": 1996800,
+            "path": "accepted-observable-eden_total-666babaf1b5b218eca9445e857b60558c71c68386f4a9158364cc64d201c3d9e.f64le",
+            "sha256": "666babaf1b5b218eca9445e857b60558c71c68386f4a9158364cc64d201c3d9e"
+          },
+          {
+            "bytes": 5990400,
+            "path": "accepted-observable-m-7a065524f08bb27206b9b52aeb2c90432531136cbe1b970aca54bfdd4ff447a8.f64le",
+            "sha256": "7a065524f08bb27206b9b52aeb2c90432531136cbe1b970aca54bfdd4ff447a8"
+          },
+          {
+            "bytes": 1996800,
+            "path": "accepted-observable-mat_aex-b532dfeafa5f356f4ebe403ab59203532218ffa929de1651343aa9060a7172c1.f64le",
+            "sha256": "b532dfeafa5f356f4ebe403ab59203532218ffa929de1651343aa9060a7172c1"
+          },
+          {
+            "bytes": 1996800,
+            "path": "accepted-observable-mat_alpha-2e3b4c200773c4c347253d85eb4c6ad5e44017777fe0d3080b83539892ae40b4.f64le",
+            "sha256": "2e3b4c200773c4c347253d85eb4c6ad5e44017777fe0d3080b83539892ae40b4"
+          },
+          {
+            "bytes": 1996800,
+            "path": "accepted-observable-mat_ms-62280950e949b8e623c5df97fc442441cd8bcde06d359649d614458c34233090.f64le",
+            "sha256": "62280950e949b8e623c5df97fc442441cd8bcde06d359649d614458c34233090"
+          },
+          {
+            "bytes": 5990400,
+            "path": "accepted-observable-torque-a25fe46563a16a1ed398df1c8e0a78188edc78f0b0aa7649c6b251b2226e82bc.f64le",
+            "sha256": "a25fe46563a16a1ed398df1c8e0a78188edc78f0b0aa7649c6b251b2226e82bc"
+          },
+          {
+            "bytes": 52329,
+            "path": "accepted_observables_stream.v1.json",
+            "sha256": "0b456c4853117ab67397c44293e760b8511ceea55dc6d27e1599f1a6c95e1487"
+          },
+          {
+            "bytes": 330,
+            "path": "execution/parallel_execution.v1.json",
+            "sha256": "896d5fad8a5a45e1d81938a6e05e6e1abb2acac599ee83dc3bdaef73a07a8661"
+          },
+          {
+            "bytes": 111,
+            "path": "field-storage.v1.json",
+            "sha256": "209a4c69ff666a0454f4bfe39b275160b530a708c43f2380bc757f10ad64acd7"
+          },
+          {
+            "bytes": 20733063,
+            "path": "fields/H_demag/layer-bimeron_film/step_000000.json",
+            "sha256": "7827798bac3cb57179f4700b6fdc8f6a6a748e2acd12cb1621e4e087591b2f17"
+          },
+          {
+            "bytes": 20726823,
+            "path": "fields/H_demag/layer-bimeron_film/step_001000.json",
+            "sha256": "74c0cef8a2f6dc7ba58f387bfa4d7065c28d8ae1063980396e4a3e939769fea5"
+          },
+          {
+            "bytes": 20726224,
+            "path": "fields/H_demag/layer-bimeron_film/step_001037.json",
+            "sha256": "aaa09d7baf07a72bca821e8506b9bf37490148dfc80233606a96e2b4d302c313"
+          },
+          {
+            "bytes": 1562964,
+            "path": "fields/H_demag/layer-upper_cylinder/step_000000.json",
+            "sha256": "a8b8caa560d2ac8930ed3364fe2e9a80d6b87652c04c37be0cf0170aed328cfc"
+          },
+          {
+            "bytes": 1560814,
+            "path": "fields/H_demag/layer-upper_cylinder/step_001000.json",
+            "sha256": "26ffe4af3689e2350d8adccd766067d6c3dfac68094bef3cf6d6fb8b11ea3bcd"
+          },
+          {
+            "bytes": 1560731,
+            "path": "fields/H_demag/layer-upper_cylinder/step_001037.json",
+            "sha256": "fbb0868114d5bbecd52a2a79645662a16b7627d3b4ef1b2c3d9abec31fd39598"
+          },
+          {
+            "bytes": 9730,
+            "path": "fields/H_demag/manifest.json",
+            "sha256": "6ce764efabb47db63ce5a966315d81c49ee77254a777a42981d84bd5c4af441c"
+          },
+          {
+            "bytes": 19562561,
+            "path": "fields/m/layer-bimeron_film/step_000000.json",
+            "sha256": "82be15269b1430bfb32a57a0d69b29c73c009d432779f6274df23d2ff02612a5"
+          },
+          {
+            "bytes": 22229048,
+            "path": "fields/m/layer-bimeron_film/step_001000.json",
+            "sha256": "67a989ddbbd9de0c15e6a01b27525e15f771936c6399e849d9a6ef22f2903288"
+          },
+          {
+            "bytes": 22228902,
+            "path": "fields/m/layer-bimeron_film/step_001037.json",
+            "sha256": "c09968744b94a4adaa01cd4123219479c1a60c90e3f1b12e346bef2790ea9500"
+          },
+          {
+            "bytes": 874056,
+            "path": "fields/m/layer-upper_cylinder/step_000000.json",
+            "sha256": "c25ac118d4ec1acbc07b1f6e5438287b668bd1ed879ce2750614d013e8d6ebff"
+          },
+          {
+            "bytes": 1599564,
+            "path": "fields/m/layer-upper_cylinder/step_001000.json",
+            "sha256": "c18a30fcdd0438347697f803d05fbec19c13f42c12d6dcd38c150f05b1f4c97e"
+          },
+          {
+            "bytes": 1599855,
+            "path": "fields/m/layer-upper_cylinder/step_001037.json",
+            "sha256": "0b581b5200a14b3223aaccb481441f59a71de4cbc4daacf43536703abba088bf"
+          },
+          {
+            "bytes": 9722,
+            "path": "fields/m/manifest.json",
+            "sha256": "4315fdad1527ac9468ca6ad5051f2ddfacea63b0e0aca8bb825c63ebd79b8839"
+          },
+          {
+            "bytes": 389,
+            "path": "frames.json",
+            "sha256": "ee8850327d08d513882be0fba970b353f4fa7bba2e13af8e7771db8de8d87d73"
+          },
+          {
+            "bytes": 6323,
+            "path": "live_observation.v1.json",
+            "sha256": "87c84ceb1220202ac2526c70b91f3d85a95cd252e20346742d9460485f10ad53"
+          },
+          {
+            "bytes": 23817046,
+            "path": "m_final.json",
+            "sha256": "f65ced8884d67c0b6a39ffbfe710f476dddcb717eee2b21b09e9485f79aa79de"
+          },
+          {
+            "bytes": 20424915,
+            "path": "m_initial.json",
+            "sha256": "5337da8d62c15c4afaaee1c7f445a0d79dbe5ed78be724dd1a0d87e5315f0ffe"
+          },
+          {
+            "bytes": 1613977,
+            "path": "material-fields/fdm-multilayer/layer-bimeron_film/native-region-membership.json",
+            "sha256": "c692dc8207a0a173dbe25b124d4f328a3014ea2c0295d320d669879fe9951e34"
+          },
+          {
+            "bytes": 171885,
+            "path": "material-fields/fdm-multilayer/layer-upper_cylinder/native-region-membership.json",
+            "sha256": "2085571eac6ac93553766939f201a4cf0b83c7ccec1c9169b11d23d790927db0"
+          },
+          {
+            "bytes": 4151,
+            "path": "material-fields/fdm-multilayer/manifest.json",
+            "sha256": "d187ad6555555c41aff92c09fb7428c3928f1a4521d469d791adc98b9e36e659"
+          },
+          {
+            "bytes": 745,
+            "path": "mesh/fdm_grid_certificate.json",
+            "sha256": "1d65df35768694a3448da5ff6eb22085b5eee55285e9554443ffa005cf30cf49"
+          },
+          {
+            "bytes": 984,
+            "path": "mesh/fdm_pbc_provenance.v1.json",
+            "sha256": "b6e3db421671f20bf4dd1331debfcc254f0e399763b2b1c22dd1cd4cec31d073"
+          },
+          {
+            "bytes": 2578,
+            "path": "mesh/fdm_transfer_provenance.v1.json",
+            "sha256": "8e2dafd2a723fccc1385cdcbe8de8cc8042b2a8cc2f3baa1309f5e3a36318154"
+          },
+          {
+            "bytes": 38686852,
+            "path": "metadata.json",
+            "sha256": "9ffd5bc672cefa6f483bfb6c9e35d3b9987a2539c2e039208751803e8a950d8f"
+          },
+          {
+            "bytes": 7260,
+            "path": "performance/live.v1.json",
+            "sha256": "c65d7dafcab79510916a5d23dba3725e05582a7e1faec8aae6b0bc207aa485db"
+          },
+          {
+            "bytes": 10275,
+            "path": "performance/resources.csv",
+            "sha256": "d303a77502bed9fe03738d86b7092c74a5640d3a3f617701e33abcfd863a1f17"
+          },
+          {
+            "bytes": 221350,
+            "path": "performance/steps.csv",
+            "sha256": "15bdb54c778fbef9344c23301a247638bdd3d4439018a6942ba9b900982318d5"
+          },
+          {
+            "bytes": 17134,
+            "path": "performance/summary.json",
+            "sha256": "b1acdd1a206d94fae1fccd41123b60eda2bce591e7ec791a0c7dc5fedead7de5"
+          },
+          {
+            "bytes": 493,
+            "path": "physics/physics_graph_provenance.v1.json",
+            "sha256": "01992c122da8a3a20b22b942bcf13025e3feb4048c5bee269ce4aa7594fe856f"
+          },
+          {
+            "bytes": 400728,
+            "path": "scalars.csv",
+            "sha256": "7bbc31a119fe8158e9881369378bad77954a6cb9eac3c4becc07ea732df857c0"
+          },
+          {
+            "bytes": 855,
+            "path": "solver/fdm_multilayer_observation_snapshot.v1.json",
+            "sha256": "c0f51d0313d353ea192fbe95cd4f26800e36c7639fa290c6cb347949aa0990a0"
+          },
+          {
+            "bytes": 9847,
+            "path": "worker_execution_completed.v1.json",
+            "sha256": "97613e6a7e7bd18410699d88e3b16568a14001d701417fa105aefc1e105054fd"
+          },
+          {
+            "bytes": 1004,
+            "path": "worker_execution_started.v1.json",
+            "sha256": "c197d4a5669a907c7ef00c626c72573180d6d147f31a829321691db6c5162a76"
+          }
+        ],
+        "host_copied_file_hashes": {
+          "accepted-observable-H_ani-478d4a61ce33ce23b0e16fd4348cf9914382b4b186cb8ed8c46dc363f52715fa.f64le": {
+            "bytes": 5990400,
+            "sha256": "478d4a61ce33ce23b0e16fd4348cf9914382b4b186cb8ed8c46dc363f52715fa"
+          },
+          "accepted-observable-H_demag-8ba20f523eda088626a1d82c34119916c16629ce1fc71c7715032485c96ff68f.f64le": {
+            "bytes": 5990400,
+            "sha256": "8ba20f523eda088626a1d82c34119916c16629ce1fc71c7715032485c96ff68f"
+          },
+          "accepted-observable-H_eff-ff7a18995b8cbdffff71950211101e07f70afe7a6942d8c7e57aed8d48d7fae9.f64le": {
+            "bytes": 5990400,
+            "sha256": "ff7a18995b8cbdffff71950211101e07f70afe7a6942d8c7e57aed8d48d7fae9"
+          },
+          "accepted-observable-H_ex-c56e2d2bbeb1cb7c6069a5ef8e2ef9c3fcd8d9fb81f710271069e1afcb0c1383.f64le": {
+            "bytes": 5990400,
+            "sha256": "c56e2d2bbeb1cb7c6069a5ef8e2ef9c3fcd8d9fb81f710271069e1afcb0c1383"
+          },
+          "accepted-observable-eden_ani-877b06fe7503657bfd653c9f9a912dca3a668cbd1ae16c8b9b77338f832c246e.f64le": {
+            "bytes": 1996800,
+            "sha256": "877b06fe7503657bfd653c9f9a912dca3a668cbd1ae16c8b9b77338f832c246e"
+          },
+          "accepted-observable-eden_demag-afbec3d39bb058995c3c344f2f226ad952482363548611d4cee3a4aa939b64a2.f64le": {
+            "bytes": 1996800,
+            "sha256": "afbec3d39bb058995c3c344f2f226ad952482363548611d4cee3a4aa939b64a2"
+          },
+          "accepted-observable-eden_ex-1129e3ab6037d3fd3b5db574819461e8547f144174664faedaca82315538fe90.f64le": {
+            "bytes": 1996800,
+            "sha256": "1129e3ab6037d3fd3b5db574819461e8547f144174664faedaca82315538fe90"
+          },
+          "accepted-observable-eden_total-666babaf1b5b218eca9445e857b60558c71c68386f4a9158364cc64d201c3d9e.f64le": {
+            "bytes": 1996800,
+            "sha256": "666babaf1b5b218eca9445e857b60558c71c68386f4a9158364cc64d201c3d9e"
+          },
+          "accepted-observable-m-7a065524f08bb27206b9b52aeb2c90432531136cbe1b970aca54bfdd4ff447a8.f64le": {
+            "bytes": 5990400,
+            "sha256": "7a065524f08bb27206b9b52aeb2c90432531136cbe1b970aca54bfdd4ff447a8"
+          },
+          "accepted-observable-mat_aex-b532dfeafa5f356f4ebe403ab59203532218ffa929de1651343aa9060a7172c1.f64le": {
+            "bytes": 1996800,
+            "sha256": "b532dfeafa5f356f4ebe403ab59203532218ffa929de1651343aa9060a7172c1"
+          },
+          "accepted-observable-mat_alpha-2e3b4c200773c4c347253d85eb4c6ad5e44017777fe0d3080b83539892ae40b4.f64le": {
+            "bytes": 1996800,
+            "sha256": "2e3b4c200773c4c347253d85eb4c6ad5e44017777fe0d3080b83539892ae40b4"
+          },
+          "accepted-observable-mat_ms-62280950e949b8e623c5df97fc442441cd8bcde06d359649d614458c34233090.f64le": {
+            "bytes": 1996800,
+            "sha256": "62280950e949b8e623c5df97fc442441cd8bcde06d359649d614458c34233090"
+          },
+          "accepted-observable-torque-a25fe46563a16a1ed398df1c8e0a78188edc78f0b0aa7649c6b251b2226e82bc.f64le": {
+            "bytes": 5990400,
+            "sha256": "a25fe46563a16a1ed398df1c8e0a78188edc78f0b0aa7649c6b251b2226e82bc"
+          },
+          "accepted_observables_stream.v1.json": {
+            "bytes": 52329,
+            "sha256": "0b456c4853117ab67397c44293e760b8511ceea55dc6d27e1599f1a6c95e1487"
+          },
+          "execution/parallel_execution.v1.json": {
+            "bytes": 330,
+            "sha256": "896d5fad8a5a45e1d81938a6e05e6e1abb2acac599ee83dc3bdaef73a07a8661"
+          },
+          "field-storage.v1.json": {
+            "bytes": 111,
+            "sha256": "209a4c69ff666a0454f4bfe39b275160b530a708c43f2380bc757f10ad64acd7"
+          },
+          "fields/H_demag/layer-bimeron_film/step_000000.json": {
+            "bytes": 20733063,
+            "sha256": "7827798bac3cb57179f4700b6fdc8f6a6a748e2acd12cb1621e4e087591b2f17"
+          },
+          "fields/H_demag/layer-bimeron_film/step_001000.json": {
+            "bytes": 20726823,
+            "sha256": "74c0cef8a2f6dc7ba58f387bfa4d7065c28d8ae1063980396e4a3e939769fea5"
+          },
+          "fields/H_demag/layer-bimeron_film/step_001037.json": {
+            "bytes": 20726224,
+            "sha256": "aaa09d7baf07a72bca821e8506b9bf37490148dfc80233606a96e2b4d302c313"
+          },
+          "fields/H_demag/layer-upper_cylinder/step_000000.json": {
+            "bytes": 1562964,
+            "sha256": "a8b8caa560d2ac8930ed3364fe2e9a80d6b87652c04c37be0cf0170aed328cfc"
+          },
+          "fields/H_demag/layer-upper_cylinder/step_001000.json": {
+            "bytes": 1560814,
+            "sha256": "26ffe4af3689e2350d8adccd766067d6c3dfac68094bef3cf6d6fb8b11ea3bcd"
+          },
+          "fields/H_demag/layer-upper_cylinder/step_001037.json": {
+            "bytes": 1560731,
+            "sha256": "fbb0868114d5bbecd52a2a79645662a16b7627d3b4ef1b2c3d9abec31fd39598"
+          },
+          "fields/H_demag/manifest.json": {
+            "bytes": 9730,
+            "sha256": "6ce764efabb47db63ce5a966315d81c49ee77254a777a42981d84bd5c4af441c"
+          },
+          "fields/m/layer-bimeron_film/step_000000.json": {
+            "bytes": 19562561,
+            "sha256": "82be15269b1430bfb32a57a0d69b29c73c009d432779f6274df23d2ff02612a5"
+          },
+          "fields/m/layer-bimeron_film/step_001000.json": {
+            "bytes": 22229048,
+            "sha256": "67a989ddbbd9de0c15e6a01b27525e15f771936c6399e849d9a6ef22f2903288"
+          },
+          "fields/m/layer-bimeron_film/step_001037.json": {
+            "bytes": 22228902,
+            "sha256": "c09968744b94a4adaa01cd4123219479c1a60c90e3f1b12e346bef2790ea9500"
+          },
+          "fields/m/layer-upper_cylinder/step_000000.json": {
+            "bytes": 874056,
+            "sha256": "c25ac118d4ec1acbc07b1f6e5438287b668bd1ed879ce2750614d013e8d6ebff"
+          },
+          "fields/m/layer-upper_cylinder/step_001000.json": {
+            "bytes": 1599564,
+            "sha256": "c18a30fcdd0438347697f803d05fbec19c13f42c12d6dcd38c150f05b1f4c97e"
+          },
+          "fields/m/layer-upper_cylinder/step_001037.json": {
+            "bytes": 1599855,
+            "sha256": "0b581b5200a14b3223aaccb481441f59a71de4cbc4daacf43536703abba088bf"
+          },
+          "fields/m/manifest.json": {
+            "bytes": 9722,
+            "sha256": "4315fdad1527ac9468ca6ad5051f2ddfacea63b0e0aca8bb825c63ebd79b8839"
+          },
+          "frames.json": {
+            "bytes": 389,
+            "sha256": "ee8850327d08d513882be0fba970b353f4fa7bba2e13af8e7771db8de8d87d73"
+          },
+          "live_observation.v1.json": {
+            "bytes": 6323,
+            "sha256": "87c84ceb1220202ac2526c70b91f3d85a95cd252e20346742d9460485f10ad53"
+          },
+          "m_final.json": {
+            "bytes": 23817046,
+            "sha256": "f65ced8884d67c0b6a39ffbfe710f476dddcb717eee2b21b09e9485f79aa79de"
+          },
+          "m_initial.json": {
+            "bytes": 20424915,
+            "sha256": "5337da8d62c15c4afaaee1c7f445a0d79dbe5ed78be724dd1a0d87e5315f0ffe"
+          },
+          "material-fields/fdm-multilayer/layer-bimeron_film/native-region-membership.json": {
+            "bytes": 1613977,
+            "sha256": "c692dc8207a0a173dbe25b124d4f328a3014ea2c0295d320d669879fe9951e34"
+          },
+          "material-fields/fdm-multilayer/layer-upper_cylinder/native-region-membership.json": {
+            "bytes": 171885,
+            "sha256": "2085571eac6ac93553766939f201a4cf0b83c7ccec1c9169b11d23d790927db0"
+          },
+          "material-fields/fdm-multilayer/manifest.json": {
+            "bytes": 4151,
+            "sha256": "d187ad6555555c41aff92c09fb7428c3928f1a4521d469d791adc98b9e36e659"
+          },
+          "mesh/fdm_grid_certificate.json": {
+            "bytes": 745,
+            "sha256": "1d65df35768694a3448da5ff6eb22085b5eee55285e9554443ffa005cf30cf49"
+          },
+          "mesh/fdm_pbc_provenance.v1.json": {
+            "bytes": 984,
+            "sha256": "b6e3db421671f20bf4dd1331debfcc254f0e399763b2b1c22dd1cd4cec31d073"
+          },
+          "mesh/fdm_transfer_provenance.v1.json": {
+            "bytes": 2578,
+            "sha256": "8e2dafd2a723fccc1385cdcbe8de8cc8042b2a8cc2f3baa1309f5e3a36318154"
+          },
+          "metadata.json": {
+            "bytes": 38686852,
+            "sha256": "9ffd5bc672cefa6f483bfb6c9e35d3b9987a2539c2e039208751803e8a950d8f"
+          },
+          "performance/live.v1.json": {
+            "bytes": 7260,
+            "sha256": "c65d7dafcab79510916a5d23dba3725e05582a7e1faec8aae6b0bc207aa485db"
+          },
+          "performance/resources.csv": {
+            "bytes": 10275,
+            "sha256": "d303a77502bed9fe03738d86b7092c74a5640d3a3f617701e33abcfd863a1f17"
+          },
+          "performance/steps.csv": {
+            "bytes": 221350,
+            "sha256": "15bdb54c778fbef9344c23301a247638bdd3d4439018a6942ba9b900982318d5"
+          },
+          "performance/summary.json": {
+            "bytes": 17134,
+            "sha256": "b1acdd1a206d94fae1fccd41123b60eda2bce591e7ec791a0c7dc5fedead7de5"
+          },
+          "physics/physics_graph_provenance.v1.json": {
+            "bytes": 493,
+            "sha256": "01992c122da8a3a20b22b942bcf13025e3feb4048c5bee269ce4aa7594fe856f"
+          },
+          "scalars.csv": {
+            "bytes": 400728,
+            "sha256": "7bbc31a119fe8158e9881369378bad77954a6cb9eac3c4becc07ea732df857c0"
+          },
+          "solver/fdm_multilayer_observation_snapshot.v1.json": {
+            "bytes": 855,
+            "sha256": "c0f51d0313d353ea192fbe95cd4f26800e36c7639fa290c6cb347949aa0990a0"
+          },
+          "worker_execution_completed.v1.json": {
+            "bytes": 9847,
+            "sha256": "97613e6a7e7bd18410699d88e3b16568a14001d701417fa105aefc1e105054fd"
+          },
+          "worker_execution_started.v1.json": {
+            "bytes": 1004,
+            "sha256": "c197d4a5669a907c7ef00c626c72573180d6d147f31a829321691db6c5162a76"
+          }
+        },
+        "run_id": "run-live-7ff17d43b5eaeb2fdd1621ede4b9aa718aa40cb566b77dbf0f1a97892fd0fa6f",
+        "schema_version": "fullmag.bimeron-matrix-worker-archive.v1",
+        "source_root": "/state/runs/docker-all/session-store/runs/run-live-7ff17d43b5eaeb2fdd1621ede4b9aa718aa40cb566b77dbf0f1a97892fd0fa6f/worker-attempts/task-7dee6e0c288b1558975667ed16ecee680e7d913bd9e291d0acfd76628bdc43e5/attempt-b2d9a4239af54f3aaf0a9cf400ebdb4a/epoch-1",
+        "task_id": "task-7dee6e0c288b1558975667ed16ecee680e7d913bd9e291d0acfd76628bdc43e5"
+      },
+      "capture_started_at_utc": "2026-11-05T15:29:22.105+00:00",
+      "case_id": "material_rdmi_current__film_bimeron__cylinder_plus_x",
+      "observation_reconciled_at_utc": "2026-11-05T15:29:17.592+00:00",
+      "observer_failure_preserved": {
+        "error_type": "TimeoutError",
+        "message": "",
+        "outcome": "runner_exception",
+        "state": "unknown"
+      },
+      "raw_path": "material_rdmi_current__film_bimeron__cylinder_plus_x/raw",
+      "request_id": "1c2e5ebe-d520-43ba-9297-30993ca41ecd",
+      "result": {
+        "api_instance_id": "2c4086ed-11bd-4f22-9f4a-e2bb5fec4138",
+        "attempt": "ce6502ecea824a559b56ced56aee3ee6",
+        "config_sha256": "ed81ab29e73b7c561ea8d603bc1658b71e45bd739057ef83b2b24dea2874de2d",
+        "exit_code": 0,
+        "outcome": "completed",
+        "request_id": "1c2e5ebe-d520-43ba-9297-30993ca41ecd",
+        "request_scope_epoch": "2c4086ed-11bd-4f22-9f4a-e2bb5fec4138:1",
+        "run_id": "run-live-7ff17d43b5eaeb2fdd1621ede4b9aa718aa40cb566b77dbf0f1a97892fd0fa6f",
+        "schema": "fullmag.docker-dev-run-script.v1",
+        "session_epoch": "docker-startup-5de2bccc7a2f2bae0300f50a2a6d40813149f284b238e5f6a9f49c29704d7b8a@1793892049786",
+        "session_id": "docker-startup-5de2bccc7a2f2bae0300f50a2a6d40813149f284b238e5f6a9f49c29704d7b8a",
+        "source_sha256": "160ee602c7f30805c36f7100559cfe2415cdf9126a7996d458e37f54d2bb077b",
+        "state": "terminal",
+        "status": "completed"
+      },
+      "run_id": "run-live-7ff17d43b5eaeb2fdd1621ede4b9aa718aa40cb566b77dbf0f1a97892fd0fa6f",
+      "runtime_pins": {
+        "attempt": "ce6502ecea824a559b56ced56aee3ee6",
+        "backend_container_id_sha256": "60cc8caff4a6663a08f4a7d0075770bb48d3f9caf004a5575f92fc2aa013b94f",
+        "config_sha256": "ed81ab29e73b7c561ea8d603bc1658b71e45bd739057ef83b2b24dea2874de2d",
+        "port": 3342
+      },
+      "source_sha256": "160ee602c7f30805c36f7100559cfe2415cdf9126a7996d458e37f54d2bb077b",
+      "state": "collection_failed",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "path": "telemetry/material_rdmi_current__film_bimeron__cylinder_plus_x.jsonl",
+        "sampling_coverage": "partial_after_observer_reconciliation",
+        "scope": "device_total",
+        "state": "observed"
+      },
+      "terminal_observed_at_utc": "2026-11-05T15:29:18.102+00:00",
+      "wall_end_to_end_s": 536.801357
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_rdmi_current__film_bimeron__cylinder_minus_x",
+      "request_id": "3ac4ace0-3840-46b8-9182-a91701e6631d",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "4c90ff2380d0ab2a24aab2c087c218c812779241095c748c7dc7ce622d2ab479",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_rdmi_current__film_uniform_plus_x__cylinder_plus_x",
+      "request_id": "46a0bd8b-6d5a-4126-a096-fa1a5db25976",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "b7aaa8413bb6d22111ea27244388ec4a359afda81a91a0e9b694dfc5f1ca590f",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_rdmi_current__film_uniform_plus_x__cylinder_minus_x",
+      "request_id": "708bbb4d-0b7a-4c83-a586-3825e97ce8b4",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "d9847904125b339ae51a61cc31901801041b43dcc548b03de6dbba254fb44c00",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_yig__film_bimeron__cylinder_plus_x",
+      "request_id": "db803ca1-e0bc-4d5c-997e-0c7cbb1439f2",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "8ca15a09b33a2499cfe713acc98651ac7b0a97ea7224e66e6ed021a1e657cf0e",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_yig__film_bimeron__cylinder_minus_x",
+      "request_id": "495cd78c-75c8-4c28-9626-98f32e7e3978",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "e6771f5a5f7ca8d7d1f69c73bb281801706a2d1db64bbaa0e9f517b789183e80",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_yig__film_uniform_plus_x__cylinder_plus_x",
+      "request_id": "72d44053-5c9a-4f1e-a4ce-a48dc2984dd7",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "f9c209782f84377868e6c42ebdb4786b0221571187866f19e97f5de2a4472418",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_yig__film_uniform_plus_x__cylinder_minus_x",
+      "request_id": "ad01d4d2-6970-4c68-a952-df62189a84bf",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "6a22c21c64e7c2d168541e6f9cee30efbe22cdfa9c8e192813b19147cc2f8fb2",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_permalloy__film_bimeron__cylinder_plus_x",
+      "request_id": "eea57c05-2ce9-461a-aee1-a4c4db60b44d",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "c3384abca9dba05804ce29f6e890b6091d1bea01981d974f42483359bb68c540",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_permalloy__film_bimeron__cylinder_minus_x",
+      "request_id": "cc9160d7-10e5-4ff6-b436-a98209c1bf0f",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "05562e998de5199843c5e409ae84208b6f9b322b11c933f082e8393ec9e31e78",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_permalloy__film_uniform_plus_x__cylinder_plus_x",
+      "request_id": "868977cf-be47-4cec-a8e5-80d99a042813",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "45f7835587e03f7089074707a39fa710883501ee4d5e1a62fd4c256029ac3276",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_permalloy__film_uniform_plus_x__cylinder_minus_x",
+      "request_id": "7c9e4f1b-fc4e-415a-9f2b-6ab5d20db2b9",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "007b6b8911301eb0fbbd93e06d58ebb3a37eed19ee8a7b6b1e3e8e626ac950f8",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    }
+  ],
+  "created_at_utc": "2026-11-05T15:20:12.211+00:00",
+  "manifest_path": "/home/kkingstoun/git/fullmag/fullmag/examples/bimeron-cylinder-relax/scenario-matrix/manifest.json",
+  "manifest_sha256": "f91f41959ab6ed23866c98180d1247478ba1c02cd0c7e02d8fd52592db74db25",
+  "max_steps": 3000,
+  "port": 3342,
+  "repo_root": "/home/kkingstoun/git/fullmag/fullmag",
+  "requested_execution": {
+    "backend": "fdm",
+    "device": "gpu",
+    "fallback_cpu": false,
+    "precision": "double"
+  },
+  "runtime_group": "fullmag-master",
+  "schema_version": "fullmag.bimeron-matrix-execution-journal.v1",
+  "source_head": "b2896445fef381a2f912f675c4418579caa7deaf",
+  "state": "running",
+  "updated_at_utc": "2026-11-05T15:29:32.263+00:00"
+}

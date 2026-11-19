@@ -128,11 +128,12 @@
   align-items: center;
   gap: 0;
   padding-inline: var(--fm-space-3);
-  color: var(--fm-text-muted);
-  font-size: var(--fm-font-size-xs);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-control);
   letter-spacing: 0.01em;
   user-select: none;
-  overflow: hidden;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 /* Text-only fields: a block box lets text-overflow draw the ellipsis
@@ -168,6 +169,7 @@
 .fm-status-bar__dot {
   width: var(--fm-space-1);
   height: var(--fm-space-1);
+  margin-inline-end: var(--fm-space-1);
   border-radius: 50%;
   background: var(--fm-text-muted);
   flex-shrink: 0;
@@ -238,7 +240,7 @@
 
 .fm-status-bar__engine[data-tone="warning"] .fm-status-bar__engine-label,
 .fm-status-bar__engine[data-tone="warning"] .fm-status-bar__engine-detail {
-  color: var(--fm-warning);
+  color: var(--fm-warning-text);
 }
 
 .fm-status-bar__compute-cta {
@@ -255,7 +257,7 @@
 }
 
 .fm-status-bar__engine-label {
-  color: var(--fm-accent);
+  color: var(--fm-accent-text);
   font-weight: 700;
 }
 
@@ -266,8 +268,9 @@
 .fm-status-bar__engine-detail {
   min-width: 0;
   overflow: hidden;
-  color: var(--fm-text-muted);
+  color: var(--fm-text-secondary);
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-status-bar__button {
@@ -290,11 +293,11 @@
 }
 
 .fm-status-bar__button.fm-status-bar__preparation[data-tone="ready"] {
-  color: var(--fm-success);
+  color: var(--fm-success-text);
 }
 
 .fm-status-bar__button.fm-status-bar__preparation[data-tone="failed"] {
-  color: var(--fm-danger);
+  color: var(--fm-danger-text);
 }
 
 .fm-status-bar__button.fm-status-bar__engine {
@@ -319,7 +322,9 @@
 }
 
 .fm-status-bar__axis + .fm-status-bar__axis,
-.fm-status-bar__axis + .fm-status-bar__engine {
+.fm-status-bar__axis + .fm-status-bar__engine,
+.fm-status-bar__engine + .fm-status-bar__engine,
+.fm-status-bar__compute-cta + .fm-status-bar__engine {
   margin-inline-start: var(--fm-space-1);
 }
 
@@ -367,6 +372,11 @@
 .fm-status-bar__engine--clickable:focus-visible {
   background: color-mix(in srgb, var(--fm-text-muted) 8%, var(--fm-bg-panel-raised));
   border-color: var(--fm-border-strong);
+}
+
+.fm-status-bar button:focus-visible {
+  outline: 2px solid var(--fm-accent);
+  outline-offset: -2px;
 }
 
 /* The shell owns this row; a nested border must not clip the header. */

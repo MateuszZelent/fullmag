@@ -153,7 +153,9 @@ pub(crate) fn read_solution_run_owner(
     Ok(intent)
 }
 
-pub(crate) fn read_solution_tensor_artifact(
+/// Read a bounded, hash-verified tensor descriptor against its declared artifact.
+/// Run/member ownership is checked by the calling publication or resolution path.
+pub fn read_solution_tensor_artifact(
     cas: &CasStore,
     artifact: &SolutionArtifactRef,
 ) -> Result<TensorDescriptor> {

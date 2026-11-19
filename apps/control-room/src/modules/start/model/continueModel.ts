@@ -157,6 +157,7 @@ export const REASON_PROBING = "Checking which compute devices this machine offer
 export const REASON_FAMILY_MISMATCH =
   "The checkpoint was written by a different runtime realization than the open session and cannot be resumed exactly.";
 export const REASON_NOT_EXACT: Readonly<Record<string, string>> = {
+  unsupported: "The current runtime does not support exact continuation from this checkpoint.",
   logical_resume:
     "The checkpoint was written by a different build or runtime and cannot be resumed exactly.",
   initial_condition_import:

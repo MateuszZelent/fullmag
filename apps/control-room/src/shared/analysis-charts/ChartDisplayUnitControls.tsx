@@ -23,7 +23,7 @@ export function ChartDisplayUnitControls({
     .map(([unit, items]) => ({ items, options: chartDisplayUnitOptions(unit), unit }))
     .filter((group) => group.options.length > 1);
   if (groups.length === 0) return null;
-  return <div className="fm-chart-display-units" aria-label="Display units">
+  return <div role="group" className="fm-chart-display-units" aria-label="Display units">
     {groups.map((group) => {
       const requested = group.items.map((item) => displayUnits[item.quantity]).filter((unit): unit is string => Boolean(unit));
       const selected = requested.length > 0 && requested.every((unit) => unit === requested[0]) && group.options.includes(requested[0]!)

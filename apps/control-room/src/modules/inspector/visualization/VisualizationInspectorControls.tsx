@@ -32,6 +32,8 @@ export interface VisualizationDisplayPassItem {
   icon?: ReactNode;
   id: string;
   label: string;
+  /** Short qualifier shown under the label, e.g. a pass hidden by a view mask. */
+  note?: string;
   pressed: boolean;
   onToggle: () => void;
 }
@@ -48,13 +50,15 @@ export function VisualizationDisplayPassesControl({
           key={item.id}
           aria-label={item.ariaLabel ?? `Toggle ${item.label}`}
           aria-pressed={item.pressed}
-          className={`fm-viz-layer-chip${item.pressed ? " fm-viz-layer-chip--on" : ""}`}
+          className={`fm-viz-layer-chip${item.pressed ? " fm-viz-layer-chip--on" : ""}${item.note ? " fm-viz-layer-chip--noted" : ""}`}
           disabled={item.disabled}
+          title={item.note ? `${item.label}: ${item.note}` : undefined}
           type="button"
           onClick={item.onToggle}
         >
           {item.icon}
           {item.label}
+          {item.note ? <span className="fm-viz-layer-chip__note">{item.note}</span> : null}
         </button>
       ))}
     </div>
@@ -136,11 +140,11 @@ function VisualizationRenderModeIcon({
   active: boolean;
   mode: RenderModeOption;
 }) {
-  if (mode === "vectors") return <ArrowUpRight size={20} strokeWidth={1.5} />;
-  if (mode === "off") return <EyeOff size={20} strokeWidth={1.5} />;
+  if (mode === "vectors") return <ArrowUpRight aria-hidden="true" size={20} strokeWidth={1.5} />;
+  if (mode === "off") return <EyeOff aria-hidden="true" size={20} strokeWidth={1.5} />;
   if (mode === "points") {
     return (
-      <svg fill="none" height="20" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24" width="20">
+      <svg aria-hidden="true" fill="none" height="20" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24" width="20">
         <circle cx="12" cy="12" fill="currentColor" r="1.5" />
         <circle cx="7" cy="9" fill="currentColor" r="1.5" />
         <circle cx="17" cy="9" fill="currentColor" r="1.5" />
@@ -150,7 +154,7 @@ function VisualizationRenderModeIcon({
     );
   }
   return (
-    <svg fill="none" height="20" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" viewBox="0 0 24 24" width="20">
+    <svg aria-hidden="true" fill="none" height="20" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" viewBox="0 0 24 24" width="20">
       <path
         d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"
         fill={active && mode !== "wireframe" ? "currentColor" : "none"}

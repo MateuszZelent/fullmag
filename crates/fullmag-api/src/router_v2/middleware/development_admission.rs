@@ -31,7 +31,7 @@ struct AdmissionState {
     mutations: Arc<RwLock<()>>,
     runtime_failure_fence_path: OnceLock<Result<Option<PathBuf>, ()>>,
     runtime_failure_fenced: AtomicBool,
-    runtime_failure_reason: OnceLock<&'static str>,
+    runtime_failure_reason: OnceLock<String>,
 }
 
 impl Default for AdmissionState {
@@ -128,17 +128,27 @@ impl DevelopmentAdmission {
     /// This is an in-memory latch only; the supervisor remains the owner of
     /// the on-disk failure marker.
     pub(crate) fn latch_runtime_failure(&self, reason: &'static str) {
-        let _ = self.0.runtime_failure_reason.set(reason);
+        let summary = match self.0.runtime_failure_fence_path.get_or_init(read_runtime_failure_fence_path) {
+            Ok(Some(path)) => public_runtime_failure_summary(path),
+            _ => None,
+        };
+        let _ = self.0.runtime_failure_reason.set(summary.unwrap_or_else(|| reason.to_owned()));
         self.0.runtime_failure_fenced.store(true, Ordering::Release);
     }
 
     /// Fixed application messages only; raw owner data and host paths remain
-    /// in the backend log. Keep the first initialization failure visible.
-    pub(crate) fn runtime_failure_reason(&self) -> Option<&'static str> {
+    /// in the backend log. The fence is diagnostic input, never permission to
+    /// reopen admission. Keep the first initialization failure visible.
+    pub(crate) fn runtime_failure_reason(&self) -> Option<&str> {
         self.observe_runtime_failure_fence().then(|| {
-            self.0.runtime_failure_reason.get().copied().unwrap_or(
-                "Runtime execution is unavailable. API diagnostics remain available; inspect the backend log for the failing stage. No task was restarted.",
-            )
+            self.0.runtime_failure_reason.get_or_init(|| {
+                let summary = match self.0.runtime_failure_fence_path.get() {
+                    Some(Ok(Some(path))) => public_runtime_failure_summary(path),
+                    _ => None,
+                };
+                summary.unwrap_or_else(||
+                    "Runtime execution is unavailable. API diagnostics remain available; inspect the backend log for the failing stage. No task was restarted.".to_owned())
+            }).as_str()
         })
     }
 
@@ -239,6 +249,64 @@ impl DevelopmentAdmission {
         }
         Ok(freeze)
     }
+}
+
+/// Interpret only known failure categories for presentation. Never expose raw
+/// exception text, tokens, process paths, or arbitrary next_action strings.
+/// Missing/malformed metadata leaves the separate existence-based fence closed.
+fn public_runtime_failure_summary(path: &std::path::Path) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct SummaryInput {
+        schema: String,
+        stage: String,
+        reason: String,
+        #[serde(default)]
+        api_pid: Option<u32>,
+    }
+    let root = path.parent()?;
+    let name = path.file_name()?.to_str()?;
+    let bytes = fullmag_session::repository_path::read_bounded_regular_file(root, name, 16 * 1024).ok()?;
+    let input: SummaryInput = serde_json::from_slice(&bytes).ok()?;
+    if input.schema != "fullmag.api-runtime-failure-fence.v1"
+        || input.reason.len() > 4096
+        || input.api_pid.is_some_and(|pid| pid != std::process::id())
+    {
+        return None;
+    }
+    let stage = match input.stage.as_str() {
+        "runtime_startup" => "runtime startup",
+        "runtime_supervision" if input.api_pid.is_some() => "runtime supervision",
+        _ => return None,
+    };
+    let (cause, action) = if input.reason.contains(
+        "stored host resource policy differs from explicit ledger configuration",
+    ) {
+        (
+            "The configured CPU/RAM budget differs from this group's stored resource policy.",
+            "Restore this group's saved resource budget before an explicit managed restart.",
+        )
+    } else if input.reason.contains("session store writer is busy") {
+        (
+            "The runtime reported an unavailable session-store writer.",
+            "Inspect the writer and task diagnostics before explicitly continuing.",
+        )
+    } else if input.reason.contains("exited unexpectedly") {
+        (
+            "A supervised runtime process exited unexpectedly.",
+            "Inspect the backend runtime log for its exit and failing stage before restarting.",
+        )
+    } else if input.reason.contains("runtime service owner is not ready") {
+        (
+            "The runtime owner stopped reporting a ready state.",
+            "Inspect the runtime log and the separate task outcome before restarting.",
+        )
+    } else {
+        (
+            "Runtime initialization or supervision failed; details are retained in the backend log.",
+            "Inspect the backend runtime log and correct the cause before restarting.",
+        )
+    };
+    Some(format!("Failure stage: {stage}. Cause: {cause} Next action: {action} No task was restarted."))
 }
 
 fn read_runtime_failure_fence_path() -> Result<Option<PathBuf>, ()> {

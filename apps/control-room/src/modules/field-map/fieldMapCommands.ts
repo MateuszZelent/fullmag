@@ -15,19 +15,17 @@ import {
   beginPlanarMonitorDraft,
   type PlanarMonitorCreateIntent,
 } from "@/kernel/workspace/crossSectionWorkspace";
+import { planarWindowParams } from "@/kernel/resources/planarFieldResources";
 
-import { downloadPlanarPng, planarExportFilename } from "./fieldMapExport";
+import { downloadPlanarBlob, downloadPlanarPng, planarExportFilename } from "./fieldMapExport";
+import { getRegisteredFieldMapCapture } from "./fieldMapCaptureRegistry";
+import { planarScopeQuery } from "./model/fieldMapDataPlan";
+import { withStalePlanarCropCleared } from "./model/planarCropPatch";
 
 const commandTitles = {
-  "field-map.export-data": "Export 2D Data",
   "field-map.export-png": "Export 2D PNG",
-  "field-map.fit": "Fit 2D View",
   "field-map.open": "Open 2D View",
-  "field-map.reset-view": "Reset 2D View",
   "field-map.select-monitor": "Select Planar Monitor",
-  "field-map.toggle-contours": "Toggle 2D Contours",
-  "field-map.toggle-mesh": "Toggle 2D Mesh",
-  "field-map.toggle-vectors": "Toggle 2D Vectors",
   "planar-monitor.create": "Create Planar Monitor",
   "planar-monitor.delete": "Delete Planar Monitor",
   "planar-monitor.duplicate": "Duplicate Planar Monitor",
@@ -42,12 +40,12 @@ function queuePlanarSourceSelection(
 ): boolean {
   if (!context.visualizationSync || !state?.planar) return false;
   context.visualizationSync.queuePatch({
-    planar: {
+    planar: withStalePlanarCropCleared(state.planar, {
       source:
         source.kind === "default"
           ? { kind: "default" }
           : { kind: "monitor", monitor_id: source.monitorId },
-    },
+    }),
   });
   return true;
 }
@@ -261,11 +259,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           component: planar.component,
           resolution_x: planar.resolution.width,
           resolution_y: planar.resolution.height,
-          scope_id:
-            planar.view_scope.kind === "mesh_part"
-              ? planar.view_scope.scope_id
-              : undefined,
-          scope_kind: planar.view_scope.kind,
+          ...planarScopeQuery(planar.view_scope),
         },
         requestOptions,
       );
@@ -290,6 +284,29 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
       context.layout?.setFocusedSlot("viewport-main");
     }
     if (id === "field-map.export-png") {
+      const explicitMonitorExport = typeof input?.monitorId === "string";
+      const visibleCapture = !explicitMonitorExport && sessionScopeKey
+        ? getRegisteredFieldMapCapture(sessionScopeKey)
+        : null;
+      if (visibleCapture) {
+        try {
+          const captured = await visibleCapture();
+          const obsoleteAfterCapture = obsoleteSessionResult(context);
+          if (obsoleteAfterCapture) return obsoleteAfterCapture;
+          downloadPlanarBlob(captured.blob, captured.filename);
+          return {
+            message: `Exported the current 2D view as ${captured.filename}.`,
+            status: "completed",
+          };
+        } catch (error) {
+          return {
+            message: error instanceof Error
+              ? error.message
+              : "The current 2D view could not be captured as PNG.",
+            status: "failed",
+          };
+        }
+      }
       if (!context.api) {
         return { message: "Planar field API is unavailable.", status: "failed" };
       }
@@ -300,6 +317,15 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
       if (!planar) {
         return {
           message: "The server did not publish a planar visualization profile.",
+          status: "failed",
+        };
+      }
+      const visibleOverlays = planar.field_overlays?.filter(
+        (overlay) => overlay.raster_visible || overlay.vectors_visible,
+      ) ?? [];
+      if (!explicitMonitorExport && visibleOverlays.length > 0) {
+        return {
+          message: "The current 2D view has visible field overlays. Open the 2D view to export the displayed composition.",
           status: "failed",
         };
       }
@@ -316,12 +342,10 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
         quality: "export",
         resolution_x: planar.resolution.width,
         resolution_y: planar.resolution.height,
-        scope_id:
-          planar.view_scope.kind === "mesh_part"
-            ? planar.view_scope.scope_id
-            : undefined,
-        scope_kind: planar.view_scope.kind,
+        ...planarScopeQuery(planar.view_scope),
         vector_budget: planar.resolution.vector_budget,
+        // The crop belongs to the current source's plane; another monitor exports in full.
+        ...(explicitMonitorExport ? {} : planarWindowParams(planar.crop)),
       };
       const [meta, monitor, png] = await Promise.all([
         context.api.data.fields.planar.meta(

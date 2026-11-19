@@ -209,7 +209,7 @@
   min-height: 0;
   overflow-y: auto;
   padding-top: var(--fm-space-2);
-  scrollbar-color: var(--fm-border-default) transparent;
+  scrollbar-color: var(--fm-scrollbar-thumb) var(--fm-scrollbar-track);
   scrollbar-width: thin;
 }
 
@@ -411,7 +411,7 @@
   overflow-y: auto;
   padding: var(--fm-space-2) var(--fm-space-3);
   list-style: none;
-  scrollbar-color: var(--fm-border-default) transparent;
+  scrollbar-color: var(--fm-scrollbar-thumb) var(--fm-scrollbar-track);
   scrollbar-width: thin;
 }
 
@@ -590,7 +590,8 @@
 @media (prefers-reduced-motion: reduce) {
   .fm-simulation-startup__progress[data-kind="indeterminate"] .fm-progress__indicator {
     width: 42%;
-    animation: none;
+    /* Busy state stays visible: static bar with an opacity pulse instead of sliding. */
+    animation: fm-reduced-busy-pulse 2s ease-in-out infinite;
     transform: translateX(70%) !important;
   }
 }

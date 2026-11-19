@@ -591,7 +591,7 @@ describe("resolveViewport3DColorbarLegend", () => {
       maxLabel: "0.75",
       minLabel: "-0.25",
       paletteGradient:
-        "linear-gradient(90deg, rgb(68, 1, 84), rgb(49, 104, 142), rgb(53, 183, 121), rgb(253, 231, 37))",
+        "linear-gradient(90deg in srgb, rgb(68, 1, 84), rgb(49, 104, 142), rgb(53, 183, 121), rgb(253, 231, 37))",
     });
   });
 
@@ -607,7 +607,7 @@ describe("resolveViewport3DColorbarLegend", () => {
     ).toMatchObject({
       label: "mat_ms [A/m]",
       paletteGradient:
-        "linear-gradient(90deg, rgb(0, 0, 4), rgb(66, 10, 104), rgb(147, 43, 93), rgb(221, 81, 58), rgb(252, 255, 164))",
+        "linear-gradient(90deg in srgb, rgb(0, 0, 4), rgb(66, 10, 104), rgb(147, 43, 93), rgb(221, 81, 58), rgb(252, 255, 164))",
       maxLabel: "800000 A/m",
       minLabel: "400000 A/m",
     });
@@ -686,7 +686,7 @@ describe("resolveViewport3DColorbarLegend", () => {
       maxLabel: "0.4",
       minLabel: "-0.6",
       paletteGradient:
-        "linear-gradient(90deg, rgb(0, 0, 4), rgb(66, 10, 104), rgb(147, 43, 93), rgb(221, 81, 58), rgb(252, 255, 164))",
+        "linear-gradient(90deg in srgb, rgb(0, 0, 4), rgb(66, 10, 104), rgb(147, 43, 93), rgb(221, 81, 58), rgb(252, 255, 164))",
     });
   });
 
@@ -2030,25 +2030,14 @@ describe("Viewport3DModule scene wiring", () => {
       "const canvasGlOptions = resolveStableViewport3DCanvasGlOptions(\n    getViewport3DVisualProfile(canvasContextProfileId),\n    effectAntialias,\n  );",
     );
     expect(source).toContain("const handleCanvasCreated = useCallback");
-    expect(source).toContain("const handleCanvasContextMenu = useCallback");
     expect(source).toContain("const handleCanvasPointerMissed = useCallback");
     expect(canvasBlock).toContain("camera={canvasCamera}");
     expect(canvasBlock).toContain("gl={canvasGlOptions}");
     expect(canvasBlock).toContain("onCreated={handleCanvasCreated}");
-    expect(canvasBlock).toContain("onContextMenu={handleCanvasContextMenu}");
+    expect(source).toContain("<Viewport3DExportMenu onCommand={onViewCommand}>");
     expect(canvasBlock).toContain("onPointerMissed={handleCanvasPointerMissed}");
     expect(canvasBlock).not.toContain("camera={{");
     expect(canvasBlock).not.toContain("onCreated={({ gl }) =>");
-  });
-
-  it("suppresses the native context menu because right button pans the camera", () => {
-    const source = readFileSync(
-      new URL("./Viewport3DModule.tsx", import.meta.url),
-      "utf8",
-    );
-
-    expect(source).toContain("const handleCanvasContextMenu = useCallback");
-    expect(source).toContain("event.preventDefault();");
   });
 
   it("holds transport only for a real camera interaction", () => {

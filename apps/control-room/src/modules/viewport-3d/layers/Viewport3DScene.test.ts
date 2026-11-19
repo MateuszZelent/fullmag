@@ -18,6 +18,7 @@ import {
   resolveViewport3DModelLayerStageKey,
   resolveViewport3DModelLayerStageVisibility,
   resolveViewport3DRealizedFdmObjectIds,
+  resolveViewport3DRealizedTopologyObjectIds,
   scheduleViewport3DProjectionRenderFrames,
   VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE,
 } from "./Viewport3DScene";
@@ -44,18 +45,63 @@ describe("Viewport3DScene scale helpers", () => {
     expect(cleanup).not.toContain("disposeViewport3DCameraGesture(");
   });
 
-  it("treats native multilayer grids as realized object geometry", () => {
+  it("requires current, loaded, complete object surfaces before replacing the primitive preview", () => {
+    const primitiveModel = { objects: [
+      { objectId: "antenna", meshState: "mesh-ready" },
+      { objectId: "draft", meshState: "primitive-only" },
+    ] } as never;
+    const surface = { part: { object_id: "antenna_geom" }, surfaceIndices: new Uint32Array([0, 1, 2]) };
+    const topologyModel = {
+      positions: new Float32Array(9),
+      magneticParts: [surface],
+    } as never;
+    const input = { enabled: true, committedParts: new Set([surface]) as never, primitiveModel, topologyModel, topologyFreshness: "current" as const };
+    expect(resolveViewport3DRealizedTopologyObjectIds({ ...input, topologyModel: null }).size).toBe(0);
+    expect(resolveViewport3DRealizedTopologyObjectIds({ ...input, enabled: false }).size).toBe(0);
+    expect(resolveViewport3DRealizedTopologyObjectIds({ ...input, topologyFreshness: "stale" }).size).toBe(0);
+    expect(resolveViewport3DRealizedTopologyObjectIds(input)).toEqual(new Set(["antenna"]));
+    expect(resolveViewport3DRealizedTopologyObjectIds({ ...input, committedParts: new Set() }).size).toBe(0);
+    for (const magneticParts of [
+      [],
+      [{ ...surface, surfaceIndices: null }],
+      [surface, { ...surface, surfaceIndices: null }],
+      [{ ...surface, part: { object_id: "another" } }],
+    ]) {
+      expect(resolveViewport3DRealizedTopologyObjectIds({
+        ...input, topologyModel: { positions: new Float32Array(9), magneticParts } as never,
+      }).size).toBe(0);
+    }
+    const aliasPart = { ...surface, part: { geometry_id: "antenna_geom" } };
+    expect(resolveViewport3DRealizedTopologyObjectIds({
+      ...input, committedParts: new Set([aliasPart]) as never,
+      topologyModel: { positions: new Float32Array(9), magneticParts: [aliasPart] } as never,
+    })).toEqual(new Set(["antenna"]));
+  });
+
+  it("treats native multilayer grids as realized only after their model is ready", () => {
     expect(
       resolveViewport3DRealizedFdmObjectIds({
         fdmNativeLayerViews: [
-          { domain: { objectId: "layer_bottom" } },
-          { domain: { objectId: "layer_top" } },
+          { domain: { objectId: "layer_bottom" }, model: { count: 12 } },
+          { domain: { objectId: "layer_top" }, model: { count: 8 } },
         ] as never,
         fdmTargetViews: [
           { ownerTarget: { id: "object:single_grid", kind: "object" } },
         ] as never,
       }),
     ).toEqual(new Set(["single_grid", "layer_bottom", "layer_top"]));
+  });
+
+  it("keeps primitive previews while native multilayer models are pending or empty", () => {
+    expect(
+      resolveViewport3DRealizedFdmObjectIds({
+        fdmNativeLayerViews: [
+          { domain: { objectId: "pending_layer" }, model: null },
+          { domain: { objectId: "empty_layer" }, model: { count: 0 } },
+        ] as never,
+        fdmTargetViews: [],
+      }),
+    ).toEqual(new Set());
   });
 
   it("wires ordinary OrbitControls into the camera registry interaction lifecycle", () => {
@@ -109,8 +155,8 @@ describe("Viewport3DScene scale helpers", () => {
       "utf8",
     );
     const airboxPass = source.slice(
-      source.indexOf("fdmAirboxPassPlan.needsInactiveCellGeometry"),
-      source.indexOf("!fdmLaneActive", source.indexOf("fdmAirboxPassPlan.needsInactiveCellGeometry")),
+      source.indexOf("fdmAirboxPassPlan.needsInactiveCellGeometry", source.indexOf("function Viewport3DModelLayerStack")),
+      source.indexOf("!fdmLaneActive", source.indexOf("fdmAirboxPassPlan.needsInactiveCellGeometry", source.indexOf("function Viewport3DModelLayerStack"))),
     );
 
     expect(airboxPass).toContain("adoptionRegistry={adoptionRegistry}");
@@ -792,8 +838,9 @@ describe("Viewport3DScene scale helpers", () => {
       "{!fdmLaneActive &&\n      viewport3DAirboxLayerEnabledFromBrowserConfig() ? (",
     );
     expect(modelStack).toContain(
-      "{!savedViewportActive &&\n      !fdmLaneActive &&\n      viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (",
+      "const topologyLayerEnabled = !savedViewportActive && !fdmLaneActive &&\n    viewport3DTopologyMeshLayerEnabledFromBrowserConfig();",
     );
+    expect(modelStack).toContain("{topologyLayerEnabled ? (");
   });
 
   it("uses the magnetic-support bounds for the generic FDM domain frame", () => {
@@ -906,7 +953,10 @@ describe("Viewport3DScene scale helpers", () => {
       "viewport3DMeshSizeHighlightLayerEnabledFromBrowserConfig()",
     );
     expect(postProcessingSource).toContain(
-      "const enabled = available && !quantitativeDataVisible;",
+      "const postProcessingPolicy = resolveViewport3DPostProcessingPolicy({",
+    );
+    expect(postProcessingSource).toContain(
+      "viewport3dStore.setPostProcessingDataProtection(postProcessingPolicy.dataProtected);",
     );
   });
 

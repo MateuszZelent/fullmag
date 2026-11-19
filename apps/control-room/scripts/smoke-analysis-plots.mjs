@@ -568,7 +568,7 @@ async function verifyAnalysisInspectorSummary(page, datasetRef) {
       throw new Error(`Analysis Inspector is missing ${required}: ${text}`);
     }
   }
-  for (const forbidden of ["Chart controls", "Following", "Resume live chart updates"]) {
+  for (const forbidden of ["Chart controls", "Following", "Resume live chart updates", "Pause live chart updates"]) {
     if (text.includes(forbidden)) {
       throw new Error(`Analysis Inspector still exposes Live Chart control ${forbidden}.`);
     }
@@ -763,7 +763,7 @@ function validateProof(proof, expectedDatasetRef) {
   if (!proof.cursor || /cursor\s+—/i.test(proof.cursor)) {
     failures.push(`analysis cursor selection is missing: ${proof.cursor}`);
   }
-  for (const forbidden of ["Chart controls", "Following", "Resume live chart updates"]) {
+  for (const forbidden of ["Chart controls", "Following", "Resume live chart updates", "Pause live chart updates"]) {
     if (proof.inspectorText.includes(forbidden)) {
       failures.push(`Analysis Inspector exposes Live Chart control ${forbidden}.`);
     }
@@ -976,6 +976,7 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
       requestPath &&
       (
         requestPath === CURRENT_RUN_FIXTURE_PATH ||
+        requestPath === "/v2/sessions/current/diagnostics/performance" ||
         requestPath.startsWith("/v2/sessions/current/analysis/")
       )
     ) {
@@ -1029,6 +1030,11 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
 
     const inspector = page.locator(".fm-inspector");
     await inspector.waitFor({ state: "visible", timeout: timeoutMs });
+    const provenanceGroup = inspector.getByRole("button", { name: "Provenance", exact: true });
+    await provenanceGroup.waitFor({ state: "visible", timeout: timeoutMs });
+    if (await provenanceGroup.getAttribute("aria-expanded") !== "true") {
+      await provenanceGroup.click({ timeout: timeoutMs });
+    }
     const ownerText = (await inspector.innerText()).replace(/\s+/g, " ");
     for (const expected of [runId, stageId, "Artifact revision", "17"]) {
       if (!ownerText.includes(expected)) {
@@ -2389,6 +2395,26 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
     if (referenceImportEnabled && url.pathname === DATA_OBSERVATION_FRAMES_FIXTURE_PATH) {
       await route.fulfill({
         body: JSON.stringify({ frames: [], next_cursor: null, run_id: REFERENCE_FIXTURE_RUN_ID }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (url.pathname === "/v2/sessions/current/diagnostics/performance") {
+      // A published fixture run has no native worker performance samples.
+      await route.fulfill({
+        body: JSON.stringify({
+          elapsed_monotonic_ns: 0,
+          gpu_scope: "unavailable",
+          points: [],
+          reason: "Analysis fixture does not run a native worker.",
+          revision: `analysis-performance-${revision}`,
+          rows_dropped: 0,
+          sample_sequence: 0,
+          state: "unavailable",
+          unique_step_callback_records: 0,
+        }),
         contentType: "application/json",
         headers: cors,
         status: 200,

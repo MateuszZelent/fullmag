@@ -112,7 +112,7 @@ export function ThinFilmDiagnosticsSection({
                 className="fm-mesh-detail-list__item"
                 data-status={Array.isArray(warnings) && warnings.length ? "warning" : "ready"}
               >
-                <strong>{formatValue(geometryName)}</strong>
+                <strong title={formatValue(geometryName)}>{formatValue(geometryName)}</strong>
                 <span>{formatValue(actualMethod ?? requestedMethod ?? "auto")}</span>
                 <small>
                   thickness {formatLength(thickness)} / lateral {formatLength(lateralSize)}

@@ -1,5 +1,7 @@
 "use client";
 
+import { resolveViewport3DPresentationQuality } from "./viewport3dPresentation";
+
 import { useCallback, useSyncExternalStore } from "react";
 
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
@@ -45,6 +47,13 @@ export interface Viewport3DArtifactInspectionPresentation {
   adoptedGlyphCount: number | null;
 }
 
+export type Viewport3DQuickExportFormat = "glb" | "vtu";
+
+export interface Viewport3DQuickExportRequest {
+  readonly format: Viewport3DQuickExportFormat;
+  readonly revision: number;
+}
+
 export interface Viewport3DCommandState {
   artifactInspectionPresentation: Viewport3DArtifactInspectionPresentation | null;
   activeScalarColorbarLegends: Viewport3DScalarColorbarLegend[];
@@ -54,11 +63,23 @@ export interface Viewport3DCommandState {
   captureReturnProfileId: Viewport3DVisualProfileId | null;
   captureError: string | null;
   captureRevision: number;
+  export3DError: string | null;
   fitRevision: number;
+  quickExport3DRequest: Viewport3DQuickExportRequest | null;
   renderedScalarRanges: Viewport3DRenderedScalarRange[];
   resetCameraRevision: number;
+  /** Keyboard/command equivalent of a ViewCube face click; consumed by the orientation HUD. */
+  viewDirectionRequest: Viewport3DViewDirectionRequest | null;
   visualProfileId: Viewport3DVisualProfileId;
   widgets: Viewport3DWidgetState;
+}
+
+export type Viewport3DStoreSnapshot = Viewport3DCommandState;
+export type Viewport3DWidgetsState = Viewport3DWidgetState;
+
+export interface Viewport3DViewDirectionRequest {
+  direction: [number, number, number];
+  revision: number;
 }
 
 type Viewport3DListener = () => void;
@@ -159,6 +180,7 @@ interface Viewport3DWidgetState {
   rotationMode: Viewport3DRotationMode;
   scaleLabelsVisible: boolean;
   scaleUnitMode: Viewport3DScaleUnitMode;
+  export3dDialogOpen: boolean;
   settingsDialogOpen: boolean;
   viewCubeVisible: boolean;
 }
@@ -186,9 +208,12 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
   captureReturnProfileId: null,
   captureError: null,
   captureRevision: 0,
+  export3DError: null,
   fitRevision: 0,
+  quickExport3DRequest: null,
   renderedScalarRanges: [],
   resetCameraRevision: 0,
+  viewDirectionRequest: null,
   visualProfileId: DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID,
   widgets: {
     cameraDialogOpen: false,
@@ -209,6 +234,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
     rotationMode: "object",
     scaleLabelsVisible: true,
     scaleUnitMode: "auto",
+    export3dDialogOpen: false,
     settingsDialogOpen: false,
     viewCubeVisible: true,
   },
@@ -222,6 +248,7 @@ class Viewport3DStore {
   private persistedPreferenceRevision = 0;
   private postProcessingDataProtected = false;
   private postProcessingAvailable = true;
+  private quickExport3DRevision = 0;
 
   getSnapshot(): Viewport3DCommandState {
     return this.snapshot;
@@ -231,6 +258,17 @@ class Viewport3DStore {
     this.snapshot = {
       ...this.snapshot,
       fitRevision: this.snapshot.fitRevision + 1,
+    };
+    this.notify();
+  }
+
+  requestViewDirection(direction: [number, number, number]): void {
+    this.snapshot = {
+      ...this.snapshot,
+      viewDirectionRequest: {
+        direction,
+        revision: (this.snapshot.viewDirectionRequest?.revision ?? 0) + 1,
+      },
     };
     this.notify();
   }
@@ -289,11 +327,16 @@ class Viewport3DStore {
     this.notify();
   }
 
+  reset(): void {
+    this.resetForTest();
+  }
+
   resetForTest(): void {
     this.snapshot = DEFAULT_VIEWPORT_3D_STATE;
     this.persistedPreferenceRevision = 0;
     this.postProcessingDataProtected = false;
     this.postProcessingAvailable = true;
+    this.quickExport3DRevision = 0;
     this.notify();
   }
 
@@ -310,10 +353,22 @@ class Viewport3DStore {
   }
 
   setAppearance(patch: Partial<Viewport3DAppearancePreferences>): void {
-    const appearance = applyViewport3DAppearancePatch(this.snapshot.appearance, patch);
-    if (sameViewport3DAppearancePreferences(this.snapshot.appearance, appearance)) return;
+    const current = this.snapshot;
+    const appearance = applyViewport3DAppearancePatch(current.appearance, patch);
+    if (sameViewport3DAppearancePreferences(current.appearance, appearance)) return;
+    const next = { ...current, appearance };
+    const preset = current.appearance.renderMode !== "presentation" && appearance.renderMode === "presentation"
+      ? applyFigurePresentationPreset(next)
+      : next;
     this.markPersistedPreferenceChange();
-    this.snapshot = { ...this.snapshot, appearance };
+    this.snapshot = {
+      ...preset,
+      appearanceDiagnostics: preset.widgets === current.widgets
+        ? current.appearanceDiagnostics
+        : buildViewport3DAppearanceDiagnostics(
+          preset.widgets, preset.visualProfileId, this.postProcessingDataProtected, this.postProcessingAvailable,
+        ),
+    };
     this.notify();
   }
 
@@ -351,6 +406,10 @@ class Viewport3DStore {
     if (resetAll || section === "lighting") {
       appearance = {
         ...appearance,
+        renderMode: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.renderMode,
+        materialRoughness: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.materialRoughness,
+        materialMetalness: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.materialMetalness,
+        softShadows: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.softShadows,
         lightingMode: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.lightingMode,
         lightingIntensity: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.lightingIntensity,
         lightingAzimuth: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.lightingAzimuth,
@@ -363,6 +422,7 @@ class Viewport3DStore {
         ...appearance,
         aoIntensity: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.aoIntensity,
         aoRadius: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.aoRadius,
+        exportScale: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.exportScale,
         exportAnnotations: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.exportAnnotations,
       };
       widgets = {
@@ -608,19 +668,25 @@ class Viewport3DStore {
   }
 
   setVisualProfile(profileId: Viewport3DVisualProfileId): void {
+    const current = this.snapshot;
+    const preset = applyFigurePresentationPreset({
+      ...current,
+      captureReturnProfileId: null,
+      visualProfileId: profileId,
+    });
     if (
-      this.snapshot.visualProfileId === profileId &&
-      this.snapshot.captureReturnProfileId === null
+      current.visualProfileId === profileId &&
+      current.captureReturnProfileId === null &&
+      preset.appearance === current.appearance &&
+      preset.widgets === current.widgets
     ) {
       return;
     }
     if (profileId !== "capture") this.markPersistedPreferenceChange();
     this.snapshot = {
-      ...this.snapshot,
-      captureReturnProfileId: null,
-      visualProfileId: profileId,
+      ...preset,
       appearanceDiagnostics: buildViewport3DAppearanceDiagnostics(
-        this.snapshot.widgets,
+        preset.widgets,
         profileId,
         this.postProcessingDataProtected,
         this.postProcessingAvailable,
@@ -745,6 +811,70 @@ class Viewport3DStore {
         ...this.snapshot.widgets,
         settingsDialogOpen: open,
       },
+    };
+    this.notify();
+  }
+
+  setExport3DDialogOpen(open: boolean): void {
+    if (this.snapshot.widgets.export3dDialogOpen === open) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        export3dDialogOpen: open,
+      },
+    };
+    this.notify();
+  }
+
+  openExport3DDialog(): void {
+    if (
+      this.snapshot.widgets.export3dDialogOpen &&
+      this.snapshot.export3DError === null
+    ) {
+      return;
+    }
+    this.snapshot = {
+      ...this.snapshot,
+      export3DError: null,
+      widgets: {
+        ...this.snapshot.widgets,
+        export3dDialogOpen: true,
+      },
+    };
+    this.notify();
+  }
+
+  requestQuickExport3D(format: Viewport3DQuickExportFormat): void {
+    this.quickExport3DRevision += 1;
+    this.snapshot = {
+      ...this.snapshot,
+      export3DError: null,
+      quickExport3DRequest: {
+        format,
+        revision: this.quickExport3DRevision,
+      },
+    };
+    this.notify();
+  }
+
+  clearQuickExport3DRequest(revision?: number): void {
+    const current = this.snapshot.quickExport3DRequest;
+    if (current === null) return;
+    if (revision !== undefined && current.revision !== revision) return;
+    this.snapshot = {
+      ...this.snapshot,
+      quickExport3DRequest: null,
+    };
+    this.notify();
+  }
+
+  setExport3DError(error: string | null): void {
+    const nextError = typeof error === "string" && error.trim() ? error : null;
+    if (this.snapshot.export3DError === nextError) return;
+    this.snapshot = {
+      ...this.snapshot,
+      export3DError: nextError,
     };
     this.notify();
   }
@@ -874,6 +1004,22 @@ class Viewport3DStore {
 }
 
 export const viewport3dStore = new Viewport3DStore();
+
+/** Apply the Figure preset on explicit selection or entry into Presentation.
+ * Subsequent individual effect edits and PNG export preserve user choices.
+ */
+function applyFigurePresentationPreset(state: Viewport3DCommandState): Viewport3DCommandState {
+  if ((state.captureReturnProfileId ?? state.visualProfileId) !== "figure" || state.appearance.renderMode !== "presentation") return state;
+  const { appearance, widgets } = state;
+  if (appearance.lightingMode === "studio" && appearance.softShadows && widgets.effectAmbientOcclusion) return state;
+  return {
+    ...state,
+    appearance: appearance.lightingMode === "studio" && appearance.softShadows
+      ? appearance
+      : { ...appearance, lightingMode: "studio", softShadows: true },
+    widgets: widgets.effectAmbientOcclusion ? widgets : { ...widgets, effectAmbientOcclusion: true },
+  };
+}
 
 ensureViewport3DPreferencesHydrated = createViewport3DPreferencesHydrationAdapter({
   applyPreferences: (preferences) =>
@@ -1017,6 +1163,7 @@ function buildViewport3DAppearanceDiagnostics(
     antialiasRequested: widgets.effectAntialias,
     bloomRequested: widgets.effectBloom,
     profileAllowsAntialias: getViewport3DVisualProfile(profileId).antialias,
+    profileAllowsAmbientOcclusion: resolveViewport3DPresentationQuality(profileId).aoEnabled,
     postProcessingAvailable,
     postProcessingDataProtected,
   });
@@ -1044,7 +1191,12 @@ function sameViewport3DAppearancePreferences(
   left: Viewport3DAppearancePreferences,
   right: Viewport3DAppearancePreferences,
 ): boolean {
-  return left.backgroundMode === right.backgroundMode &&
+  return left.renderMode === right.renderMode &&
+    left.materialRoughness === right.materialRoughness &&
+    left.materialMetalness === right.materialMetalness &&
+    left.softShadows === right.softShadows &&
+    left.exportScale === right.exportScale &&
+    left.backgroundMode === right.backgroundMode &&
     left.backgroundStrength === right.backgroundStrength &&
     left.lightingMode === right.lightingMode &&
     left.lightingIntensity === right.lightingIntensity &&

@@ -1,0 +1,858 @@
+{
+  "case_count": 12,
+  "cases": [
+    {
+      "case_id": "material_rdmi_current__film_bimeron__cylinder_plus_x",
+      "convergence_status": "pending runtime; do not infer from max_steps",
+      "cylinder_material": {
+        "Aex_J_per_m": 1e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 1300000.0,
+        "alpha": 1.0,
+        "anisU": null
+      },
+      "expected_output_path": "cases/material_rdmi_current__film_bimeron__cylinder_plus_x.zarr",
+      "film_material": {
+        "Aex_J_per_m": 1.5e-11,
+        "D_J_per_m2": 0.004,
+        "Ku1_J_per_m3": 663920.0,
+        "Ms_A_per_m": 580000.0,
+        "alpha": 1.0,
+        "anisU": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "key": "rdmi_current",
+        "reference_example": "examples/bimeron-cylinder-relax/relax.py"
+      },
+      "initial_states": {
+        "cylinder": {
+          "key": "plus_x",
+          "kind": "uniform",
+          "m": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "film": {
+          "background_m": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "background_sign": 1,
+          "helicity_rad": 0.0,
+          "key": "bimeron",
+          "kind": "bimeron",
+          "plane": "xy",
+          "radius_m": 5e-08,
+          "vorticity": -1,
+          "wall_width_m": 4.732e-09
+        }
+      },
+      "max_steps": 3000,
+      "qualification": "pending",
+      "script": "cases/material_rdmi_current__film_bimeron__cylinder_plus_x.py",
+      "script_sha256": "160ee602c7f30805c36f7100559cfe2415cdf9126a7996d458e37f54d2bb077b",
+      "study_name": "material_rdmi_current__film_bimeron__cylinder_plus_x"
+    },
+    {
+      "case_id": "material_rdmi_current__film_bimeron__cylinder_minus_x",
+      "convergence_status": "pending runtime; do not infer from max_steps",
+      "cylinder_material": {
+        "Aex_J_per_m": 1e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 1300000.0,
+        "alpha": 1.0,
+        "anisU": null
+      },
+      "expected_output_path": "cases/material_rdmi_current__film_bimeron__cylinder_minus_x.zarr",
+      "film_material": {
+        "Aex_J_per_m": 1.5e-11,
+        "D_J_per_m2": 0.004,
+        "Ku1_J_per_m3": 663920.0,
+        "Ms_A_per_m": 580000.0,
+        "alpha": 1.0,
+        "anisU": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "key": "rdmi_current",
+        "reference_example": "examples/bimeron-cylinder-relax/relax.py"
+      },
+      "initial_states": {
+        "cylinder": {
+          "key": "minus_x",
+          "kind": "uniform",
+          "m": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "film": {
+          "background_m": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "background_sign": 1,
+          "helicity_rad": 0.0,
+          "key": "bimeron",
+          "kind": "bimeron",
+          "plane": "xy",
+          "radius_m": 5e-08,
+          "vorticity": -1,
+          "wall_width_m": 4.732e-09
+        }
+      },
+      "max_steps": 3000,
+      "qualification": "pending",
+      "script": "cases/material_rdmi_current__film_bimeron__cylinder_minus_x.py",
+      "script_sha256": "4c90ff2380d0ab2a24aab2c087c218c812779241095c748c7dc7ce622d2ab479",
+      "study_name": "material_rdmi_current__film_bimeron__cylinder_minus_x"
+    },
+    {
+      "case_id": "material_rdmi_current__film_uniform_plus_x__cylinder_plus_x",
+      "convergence_status": "pending runtime; do not infer from max_steps",
+      "cylinder_material": {
+        "Aex_J_per_m": 1e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 1300000.0,
+        "alpha": 1.0,
+        "anisU": null
+      },
+      "expected_output_path": "cases/material_rdmi_current__film_uniform_plus_x__cylinder_plus_x.zarr",
+      "film_material": {
+        "Aex_J_per_m": 1.5e-11,
+        "D_J_per_m2": 0.004,
+        "Ku1_J_per_m3": 663920.0,
+        "Ms_A_per_m": 580000.0,
+        "alpha": 1.0,
+        "anisU": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "key": "rdmi_current",
+        "reference_example": "examples/bimeron-cylinder-relax/relax.py"
+      },
+      "initial_states": {
+        "cylinder": {
+          "key": "plus_x",
+          "kind": "uniform",
+          "m": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "film": {
+          "key": "uniform_plus_x",
+          "kind": "uniform",
+          "m": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "max_steps": 3000,
+      "qualification": "pending",
+      "script": "cases/material_rdmi_current__film_uniform_plus_x__cylinder_plus_x.py",
+      "script_sha256": "b7aaa8413bb6d22111ea27244388ec4a359afda81a91a0e9b694dfc5f1ca590f",
+      "study_name": "material_rdmi_current__film_uniform_plus_x__cylinder_plus_x"
+    },
+    {
+      "case_id": "material_rdmi_current__film_uniform_plus_x__cylinder_minus_x",
+      "convergence_status": "pending runtime; do not infer from max_steps",
+      "cylinder_material": {
+        "Aex_J_per_m": 1e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 1300000.0,
+        "alpha": 1.0,
+        "anisU": null
+      },
+      "expected_output_path": "cases/material_rdmi_current__film_uniform_plus_x__cylinder_minus_x.zarr",
+      "film_material": {
+        "Aex_J_per_m": 1.5e-11,
+        "D_J_per_m2": 0.004,
+        "Ku1_J_per_m3": 663920.0,
+        "Ms_A_per_m": 580000.0,
+        "alpha": 1.0,
+        "anisU": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "key": "rdmi_current",
+        "reference_example": "examples/bimeron-cylinder-relax/relax.py"
+      },
+      "initial_states": {
+        "cylinder": {
+          "key": "minus_x",
+          "kind": "uniform",
+          "m": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "film": {
+          "key": "uniform_plus_x",
+          "kind": "uniform",
+          "m": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "max_steps": 3000,
+      "qualification": "pending",
+      "script": "cases/material_rdmi_current__film_uniform_plus_x__cylinder_minus_x.py",
+      "script_sha256": "d9847904125b339ae51a61cc31901801041b43dcc548b03de6dbba254fb44c00",
+      "study_name": "material_rdmi_current__film_uniform_plus_x__cylinder_minus_x"
+    },
+    {
+      "case_id": "material_yig__film_bimeron__cylinder_plus_x",
+      "convergence_status": "pending runtime; do not infer from max_steps",
+      "cylinder_material": {
+        "Aex_J_per_m": 1e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 1300000.0,
+        "alpha": 1.0,
+        "anisU": null
+      },
+      "expected_output_path": "cases/material_yig__film_bimeron__cylinder_plus_x.zarr",
+      "film_material": {
+        "Aex_J_per_m": 3.5e-12,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 140000.0,
+        "alpha": 0.001,
+        "anisU": null,
+        "key": "yig",
+        "reference_example": "examples/fem_eigenmodes_dispersion_de_bv_low_k.py"
+      },
+      "initial_states": {
+        "cylinder": {
+          "key": "plus_x",
+          "kind": "uniform",
+          "m": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "film": {
+          "background_m": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "background_sign": 1,
+          "helicity_rad": 0.0,
+          "key": "bimeron",
+          "kind": "bimeron",
+          "plane": "xy",
+          "radius_m": 5e-08,
+          "vorticity": -1,
+          "wall_width_m": 4.732e-09
+        }
+      },
+      "max_steps": 3000,
+      "qualification": "pending",
+      "script": "cases/material_yig__film_bimeron__cylinder_plus_x.py",
+      "script_sha256": "8ca15a09b33a2499cfe713acc98651ac7b0a97ea7224e66e6ed021a1e657cf0e",
+      "study_name": "material_yig__film_bimeron__cylinder_plus_x"
+    },
+    {
+      "case_id": "material_yig__film_bimeron__cylinder_minus_x",
+      "convergence_status": "pending runtime; do not infer from max_steps",
+      "cylinder_material": {
+        "Aex_J_per_m": 1e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 1300000.0,
+        "alpha": 1.0,
+        "anisU": null
+      },
+      "expected_output_path": "cases/material_yig__film_bimeron__cylinder_minus_x.zarr",
+      "film_material": {
+        "Aex_J_per_m": 3.5e-12,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 140000.0,
+        "alpha": 0.001,
+        "anisU": null,
+        "key": "yig",
+        "reference_example": "examples/fem_eigenmodes_dispersion_de_bv_low_k.py"
+      },
+      "initial_states": {
+        "cylinder": {
+          "key": "minus_x",
+          "kind": "uniform",
+          "m": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "film": {
+          "background_m": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "background_sign": 1,
+          "helicity_rad": 0.0,
+          "key": "bimeron",
+          "kind": "bimeron",
+          "plane": "xy",
+          "radius_m": 5e-08,
+          "vorticity": -1,
+          "wall_width_m": 4.732e-09
+        }
+      },
+      "max_steps": 3000,
+      "qualification": "pending",
+      "script": "cases/material_yig__film_bimeron__cylinder_minus_x.py",
+      "script_sha256": "e6771f5a5f7ca8d7d1f69c73bb281801706a2d1db64bbaa0e9f517b789183e80",
+      "study_name": "material_yig__film_bimeron__cylinder_minus_x"
+    },
+    {
+      "case_id": "material_yig__film_uniform_plus_x__cylinder_plus_x",
+      "convergence_status": "pending runtime; do not infer from max_steps",
+      "cylinder_material": {
+        "Aex_J_per_m": 1e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 1300000.0,
+        "alpha": 1.0,
+        "anisU": null
+      },
+      "expected_output_path": "cases/material_yig__film_uniform_plus_x__cylinder_plus_x.zarr",
+      "film_material": {
+        "Aex_J_per_m": 3.5e-12,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 140000.0,
+        "alpha": 0.001,
+        "anisU": null,
+        "key": "yig",
+        "reference_example": "examples/fem_eigenmodes_dispersion_de_bv_low_k.py"
+      },
+      "initial_states": {
+        "cylinder": {
+          "key": "plus_x",
+          "kind": "uniform",
+          "m": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "film": {
+          "key": "uniform_plus_x",
+          "kind": "uniform",
+          "m": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "max_steps": 3000,
+      "qualification": "pending",
+      "script": "cases/material_yig__film_uniform_plus_x__cylinder_plus_x.py",
+      "script_sha256": "f9c209782f84377868e6c42ebdb4786b0221571187866f19e97f5de2a4472418",
+      "study_name": "material_yig__film_uniform_plus_x__cylinder_plus_x"
+    },
+    {
+      "case_id": "material_yig__film_uniform_plus_x__cylinder_minus_x",
+      "convergence_status": "pending runtime; do not infer from max_steps",
+      "cylinder_material": {
+        "Aex_J_per_m": 1e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 1300000.0,
+        "alpha": 1.0,
+        "anisU": null
+      },
+      "expected_output_path": "cases/material_yig__film_uniform_plus_x__cylinder_minus_x.zarr",
+      "film_material": {
+        "Aex_J_per_m": 3.5e-12,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 140000.0,
+        "alpha": 0.001,
+        "anisU": null,
+        "key": "yig",
+        "reference_example": "examples/fem_eigenmodes_dispersion_de_bv_low_k.py"
+      },
+      "initial_states": {
+        "cylinder": {
+          "key": "minus_x",
+          "kind": "uniform",
+          "m": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "film": {
+          "key": "uniform_plus_x",
+          "kind": "uniform",
+          "m": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "max_steps": 3000,
+      "qualification": "pending",
+      "script": "cases/material_yig__film_uniform_plus_x__cylinder_minus_x.py",
+      "script_sha256": "6a22c21c64e7c2d168541e6f9cee30efbe22cdfa9c8e192813b19147cc2f8fb2",
+      "study_name": "material_yig__film_uniform_plus_x__cylinder_minus_x"
+    },
+    {
+      "case_id": "material_permalloy__film_bimeron__cylinder_plus_x",
+      "convergence_status": "pending runtime; do not infer from max_steps",
+      "cylinder_material": {
+        "Aex_J_per_m": 1e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 1300000.0,
+        "alpha": 1.0,
+        "anisU": null
+      },
+      "expected_output_path": "cases/material_permalloy__film_bimeron__cylinder_plus_x.zarr",
+      "film_material": {
+        "Aex_J_per_m": 1.55e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 752000.0,
+        "alpha": 0.1,
+        "anisU": null,
+        "key": "permalloy",
+        "reference_example": "examples/permalloy_box_relax_300x1000x10nm_fdm.py"
+      },
+      "initial_states": {
+        "cylinder": {
+          "key": "plus_x",
+          "kind": "uniform",
+          "m": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "film": {
+          "background_m": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "background_sign": 1,
+          "helicity_rad": 0.0,
+          "key": "bimeron",
+          "kind": "bimeron",
+          "plane": "xy",
+          "radius_m": 5e-08,
+          "vorticity": -1,
+          "wall_width_m": 4.732e-09
+        }
+      },
+      "max_steps": 3000,
+      "qualification": "pending",
+      "script": "cases/material_permalloy__film_bimeron__cylinder_plus_x.py",
+      "script_sha256": "c3384abca9dba05804ce29f6e890b6091d1bea01981d974f42483359bb68c540",
+      "study_name": "material_permalloy__film_bimeron__cylinder_plus_x"
+    },
+    {
+      "case_id": "material_permalloy__film_bimeron__cylinder_minus_x",
+      "convergence_status": "pending runtime; do not infer from max_steps",
+      "cylinder_material": {
+        "Aex_J_per_m": 1e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 1300000.0,
+        "alpha": 1.0,
+        "anisU": null
+      },
+      "expected_output_path": "cases/material_permalloy__film_bimeron__cylinder_minus_x.zarr",
+      "film_material": {
+        "Aex_J_per_m": 1.55e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 752000.0,
+        "alpha": 0.1,
+        "anisU": null,
+        "key": "permalloy",
+        "reference_example": "examples/permalloy_box_relax_300x1000x10nm_fdm.py"
+      },
+      "initial_states": {
+        "cylinder": {
+          "key": "minus_x",
+          "kind": "uniform",
+          "m": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "film": {
+          "background_m": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "background_sign": 1,
+          "helicity_rad": 0.0,
+          "key": "bimeron",
+          "kind": "bimeron",
+          "plane": "xy",
+          "radius_m": 5e-08,
+          "vorticity": -1,
+          "wall_width_m": 4.732e-09
+        }
+      },
+      "max_steps": 3000,
+      "qualification": "pending",
+      "script": "cases/material_permalloy__film_bimeron__cylinder_minus_x.py",
+      "script_sha256": "05562e998de5199843c5e409ae84208b6f9b322b11c933f082e8393ec9e31e78",
+      "study_name": "material_permalloy__film_bimeron__cylinder_minus_x"
+    },
+    {
+      "case_id": "material_permalloy__film_uniform_plus_x__cylinder_plus_x",
+      "convergence_status": "pending runtime; do not infer from max_steps",
+      "cylinder_material": {
+        "Aex_J_per_m": 1e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 1300000.0,
+        "alpha": 1.0,
+        "anisU": null
+      },
+      "expected_output_path": "cases/material_permalloy__film_uniform_plus_x__cylinder_plus_x.zarr",
+      "film_material": {
+        "Aex_J_per_m": 1.55e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 752000.0,
+        "alpha": 0.1,
+        "anisU": null,
+        "key": "permalloy",
+        "reference_example": "examples/permalloy_box_relax_300x1000x10nm_fdm.py"
+      },
+      "initial_states": {
+        "cylinder": {
+          "key": "plus_x",
+          "kind": "uniform",
+          "m": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "film": {
+          "key": "uniform_plus_x",
+          "kind": "uniform",
+          "m": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "max_steps": 3000,
+      "qualification": "pending",
+      "script": "cases/material_permalloy__film_uniform_plus_x__cylinder_plus_x.py",
+      "script_sha256": "45f7835587e03f7089074707a39fa710883501ee4d5e1a62fd4c256029ac3276",
+      "study_name": "material_permalloy__film_uniform_plus_x__cylinder_plus_x"
+    },
+    {
+      "case_id": "material_permalloy__film_uniform_plus_x__cylinder_minus_x",
+      "convergence_status": "pending runtime; do not infer from max_steps",
+      "cylinder_material": {
+        "Aex_J_per_m": 1e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 1300000.0,
+        "alpha": 1.0,
+        "anisU": null
+      },
+      "expected_output_path": "cases/material_permalloy__film_uniform_plus_x__cylinder_minus_x.zarr",
+      "film_material": {
+        "Aex_J_per_m": 1.55e-11,
+        "D_J_per_m2": 0.0,
+        "Ku1_J_per_m3": 0.0,
+        "Ms_A_per_m": 752000.0,
+        "alpha": 0.1,
+        "anisU": null,
+        "key": "permalloy",
+        "reference_example": "examples/permalloy_box_relax_300x1000x10nm_fdm.py"
+      },
+      "initial_states": {
+        "cylinder": {
+          "key": "minus_x",
+          "kind": "uniform",
+          "m": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "film": {
+          "key": "uniform_plus_x",
+          "kind": "uniform",
+          "m": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "max_steps": 3000,
+      "qualification": "pending",
+      "script": "cases/material_permalloy__film_uniform_plus_x__cylinder_minus_x.py",
+      "script_sha256": "007b6b8911301eb0fbbd93e06d58ebb3a37eed19ee8a7b6b1e3e8e626ac950f8",
+      "study_name": "material_permalloy__film_uniform_plus_x__cylinder_minus_x"
+    }
+  ],
+  "common_configuration": {
+    "autosave": {
+      "fields": [
+        {
+          "every_steps": 1000,
+          "quantity": "m"
+        },
+        {
+          "every_steps": 1000,
+          "quantity": "H_demag"
+        }
+      ],
+      "initial_and_terminal_observations_requested": true,
+      "runtime_status": "NOT VERIFIED",
+      "table_every_steps": 100,
+      "table_quantities": [
+        "step",
+        "mx",
+        "my",
+        "mz",
+        "E_total",
+        "max_torque_T"
+      ]
+    },
+    "execution": {
+      "execution_mode": "strict",
+      "fdm_demag": {
+        "common_cell_size_m": [
+          2.5e-09,
+          2.5e-09,
+          2.5e-09
+        ],
+        "fft_backend": "cufft",
+        "mode": "three_d",
+        "strategy": "multilayer_convolution"
+      },
+      "requested_backend": "fdm",
+      "requested_device": "gpu",
+      "requested_precision": "double"
+    },
+    "geometry": {
+      "cylinder": {
+        "center_m": [
+          0.0,
+          0.0,
+          2.5e-08
+        ],
+        "height_m": 3e-08,
+        "kind": "cylinder",
+        "object_id": "upper-cylinder",
+        "radius_m": 5e-08,
+        "z_bounds_m": [
+          1e-08,
+          4e-08
+        ]
+      },
+      "film": {
+        "center_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "kind": "box",
+        "object_id": "bimeron-film",
+        "size_m": [
+          6e-07,
+          6e-07,
+          1e-08
+        ],
+        "z_bounds_m": [
+          -5e-09,
+          5e-09
+        ]
+      },
+      "surface_gap_m": 5e-09,
+      "universe": {
+        "center_m": [
+          0.0,
+          0.0,
+          2.75e-08
+        ],
+        "padding_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "size_m": [
+          6e-07,
+          6e-07,
+          6.5e-08
+        ],
+        "z_bounds_m": [
+          -5e-09,
+          6e-08
+        ]
+      }
+    },
+    "mesh": {
+      "cell_size_m": [
+        2.5e-09,
+        2.5e-09,
+        2.5e-09
+      ]
+    },
+    "output": {
+      "data_format": "zarr",
+      "directory_pattern": "<script_stem>.zarr",
+      "docker_mapping": "FULLMAG_SCRIPT_OUTPUT_ROOT",
+      "location": "beside_source_script"
+    },
+    "relaxation": {
+      "algorithm": "projected_gradient_bb",
+      "fixed_step": false,
+      "max_steps": 3000,
+      "physical_time_advances": false,
+      "physical_time_s": 0.0,
+      "tol_torque_T": 1e-05
+    },
+    "units": "SI"
+  },
+  "convergence_claim": "none; inspect the actual terminal solver result",
+  "cylinder_material": {
+    "Aex_J_per_m": 1e-11,
+    "D_J_per_m2": 0.0,
+    "Ku1_J_per_m3": 0.0,
+    "Ms_A_per_m": 1300000.0,
+    "alpha": 1.0,
+    "anisU": null
+  },
+  "generator": "generate_cases.py",
+  "initial_state_axes": {
+    "cylinder": [
+      {
+        "key": "plus_x",
+        "kind": "uniform",
+        "m": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "key": "minus_x",
+        "kind": "uniform",
+        "m": [
+          -1.0,
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "film": [
+      {
+        "background_m": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "background_sign": 1,
+        "helicity_rad": 0.0,
+        "key": "bimeron",
+        "kind": "bimeron",
+        "plane": "xy",
+        "radius_m": 5e-08,
+        "vorticity": -1,
+        "wall_width_m": 4.732e-09
+      },
+      {
+        "key": "uniform_plus_x",
+        "kind": "uniform",
+        "m": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      }
+    ]
+  },
+  "integrity": {
+    "payload_sha256": "05a538f502540fdfa7e08a9f58f2cf6654b4c6d7c4eafaa2a473db815bd23215"
+  },
+  "materials": [
+    {
+      "Aex_J_per_m": 1.5e-11,
+      "D_J_per_m2": 0.004,
+      "Ku1_J_per_m3": 663920.0,
+      "Ms_A_per_m": 580000.0,
+      "alpha": 1.0,
+      "anisU": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "key": "rdmi_current",
+      "reference_example": "examples/bimeron-cylinder-relax/relax.py"
+    },
+    {
+      "Aex_J_per_m": 3.5e-12,
+      "D_J_per_m2": 0.0,
+      "Ku1_J_per_m3": 0.0,
+      "Ms_A_per_m": 140000.0,
+      "alpha": 0.001,
+      "anisU": null,
+      "key": "yig",
+      "reference_example": "examples/fem_eigenmodes_dispersion_de_bv_low_k.py"
+    },
+    {
+      "Aex_J_per_m": 1.55e-11,
+      "D_J_per_m2": 0.0,
+      "Ku1_J_per_m3": 0.0,
+      "Ms_A_per_m": 752000.0,
+      "alpha": 0.1,
+      "anisU": null,
+      "key": "permalloy",
+      "reference_example": "examples/permalloy_box_relax_300x1000x10nm_fdm.py"
+    }
+  ],
+  "qualification": "pending",
+  "references": {
+    "current_rdmi": "examples/bimeron-cylinder-relax/relax.py",
+    "permalloy_material": "examples/permalloy_box_relax_300x1000x10nm_fdm.py",
+    "yig_material": "examples/fem_eigenmodes_dispersion_de_bv_low_k.py"
+  },
+  "runtime_status": "NOT RUN",
+  "schema": "fullmag.bimeron_material_matrix.v1"
+}

@@ -45,6 +45,32 @@ pub fn probe_delegated_cpu_quota() -> io::Result<()> {
     cgroup.terminate_and_remove()
 }
 
+/// How long a failing delegation probe is repeated before it counts.
+const DELEGATION_PROBE_SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// [`probe_delegated_cpu_quota`] for the persisted enforcement digest.
+///
+/// Host initialization and every later compute-node sample must agree on
+/// this result, or the runtime refuses to start. One probe failing briefly
+/// recorded `Unavailable` at initialization and `Supported` a moment later,
+/// which failed every subsequent start. Repeat a failing probe for a short
+/// bound and report the cause when it still fails. A missing delegation
+/// root (no delegated cgroup at all) is final at once.
+pub fn probe_delegated_cpu_quota_settled() -> io::Result<()> {
+    let deadline = std::time::Instant::now() + DELEGATION_PROBE_SETTLE;
+    loop {
+        match probe_delegated_cpu_quota() {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(error),
+            Err(error) if std::time::Instant::now() >= deadline => {
+                eprintln!("delegated worker cgroup CPU quota probe failed: {error}");
+                return Err(error);
+            }
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    }
+}
+
 impl LinuxWorkerCgroup {
     /// Create a unique child under `FULLMAG_WORKER_CGROUP_ROOT` and verify its
     /// hard quota before it can be attached to a worker.

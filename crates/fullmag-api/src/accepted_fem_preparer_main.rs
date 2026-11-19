@@ -1,5 +1,7 @@
 #[path = "accepted_fem_preparer.rs"]
 mod accepted_fem_preparer;
+#[path = "prepared_observation_bundle.rs"]
+mod prepared_observation_bundle;
 
 mod worker_startup_gate;
 

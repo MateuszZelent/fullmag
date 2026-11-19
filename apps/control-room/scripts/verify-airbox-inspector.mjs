@@ -29,49 +29,49 @@ const panels = [
     id: "root",
     nodeId: "model:airbox",
     selectionKind: "airbox.root",
-    label: "Airbox",
-    requiredGroup: "Airbox Overview",
+    expectedHeader: "Airbox Overview",
+    requiredGroup: "Domain policy",
   },
   {
     id: "mesh",
     nodeId: "model:airbox:mesh",
     selectionKind: "airbox.mesh",
-    label: "Mesh",
+    expectedHeader: "Airbox Mesh Overview",
     requiredGroup: "Airbox Mesh Overview",
   },
   {
     id: "parameters",
     nodeId: "model:airbox:mesh:parameters",
     selectionKind: "airbox.mesh.parameters",
-    label: "Parameters",
+    expectedHeader: "Airbox Mesh Parameters",
     requiredGroup: "Canonical Authored Parameters",
   },
   {
     id: "quality-gates",
     nodeId: "model:airbox:mesh:quality-gates",
     selectionKind: "airbox.mesh.quality-gates",
-    label: "Quality Gates",
+    expectedHeader: "Airbox Mesh Quality Gates",
     requiredGroup: "Airbox Quality Gates",
   },
   {
     id: "statistics",
     nodeId: "model:airbox:mesh:statistics",
     selectionKind: "airbox.mesh.statistics",
-    label: "Statistics",
+    expectedHeader: "Airbox Mesh Statistics",
     requiredGroup: "Airbox Mesh Statistics",
   },
   {
     id: "topology",
     nodeId: "model:airbox:mesh:topology",
     selectionKind: "airbox.mesh.topology",
-    label: "Topology",
+    expectedHeader: "Airbox Mesh Topology",
     requiredGroup: "Airbox Mesh Topology",
   },
   {
     id: "build",
     nodeId: "model:airbox:mesh:build",
     selectionKind: "airbox.mesh.build",
-    label: "Build & Provenance",
+    expectedHeader: "Airbox Mesh Build",
     requiredGroup: "Airbox Mesh Build",
   },
 ];
@@ -757,7 +757,7 @@ function isRecord(value) {
 function uiSnapshot() {
   const root = document.querySelector('[data-inspector-owner="airbox-inspector"]');
   if (!root) return null;
-  const heading = root.querySelector(".fm-scientific-inspector__heading h3")?.textContent?.trim() ?? "";
+  const heading = root.closest(".fm-inspector")?.querySelector(".fm-inspector__header .fm-inspector__title")?.textContent?.trim() ?? "";
   const groups = [...root.querySelectorAll('[data-slot="inspector-group"]')];
   const groupRows = groups.map((section) => {
     const group = section.querySelector('[data-slot="inspector-group-heading"] h3, [data-slot="inspector-group-header"] h3, [data-slot="inspector-group-trigger"] h3, [data-slot="inspector-group-trigger"] span')?.textContent?.trim() ?? "";
@@ -804,7 +804,7 @@ async function readPanel(page, panel, { select = true, readiness = [] } = {}) {
       const selected = document.querySelector(`.fm-explorer [role="treeitem"][data-node-id="${nodeId}"]`);
       const inspector = document.querySelector('[data-inspector-owner="airbox-inspector"]');
       return selected?.getAttribute("aria-selected") === "true"
-        && inspector?.querySelector(".fm-scientific-inspector__heading h3")
+        && inspector?.closest(".fm-inspector")?.querySelector(".fm-inspector__header .fm-inspector__title")
         && [...inspector.querySelectorAll(".fm-inspector-field-row")].some((row) =>
           row.querySelector(".fm-inspector-field-row__label")?.textContent?.trim() === "Inspector kind"
           && row.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() === selectionKind);
@@ -853,7 +853,7 @@ async function readPanel(page, panel, { select = true, readiness = [] } = {}) {
   assert.equal(snapshot.inspectorKind, panel.selectionKind, `Inspector kind differs for ${panel.id}`);
   const group = snapshot.groupRows.find((item) => item.group === panel.requiredGroup);
   assert(group, `Inspector route ${panel.id} is missing ${panel.requiredGroup}`);
-  assert.equal(snapshot.heading, panel.label, `Inspector route ${panel.id} did not retain its dedicated title`);
+  assert.equal(snapshot.heading, panel.expectedHeader, `Inspector route ${panel.id} did not retain its dedicated title`);
   assert(snapshot.heading && !["unknown", "inspector", "airbox inspector", "details"].includes(snapshot.heading.toLowerCase()),
     `Inspector route ${panel.id} used generic header ${snapshot.heading}`);
   assert(snapshot.text.length <= 24_000, `Inspector route ${panel.id} text exceeded its capture bound`);

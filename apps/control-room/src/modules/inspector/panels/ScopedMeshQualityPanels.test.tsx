@@ -52,6 +52,7 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   shouldLoadRuntimeMeshBuild: () => true,
   shouldLoadRuntimeMeshManifest: () => true,
   shouldLoadRuntimeMeshSummary: () => true,
+  useRuntimeCommandControlResourceData: () => ({}),
 }));
 
 const sessionStatusMock = {

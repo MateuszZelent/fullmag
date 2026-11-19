@@ -28,6 +28,7 @@ from fullmag.model.geometry import (
     Union,
 )
 
+from ._gmsh_stl_shells import StlTopologyError
 from .gmsh_bridge import (
     ALGO_3D_DELAUNAY,
     ALGO_3D_FRONTAL,
@@ -56,7 +57,7 @@ from ._gmsh_swept import (
     generate_disconnected_mixed_p1_mesh,
     _supports_scoped_layer_partitioned_box,
 )
-from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS, MeshQualityReport
+from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS, MeshQualityReport, _MIXED_CELL_LOCAL_FACETS
 from .surface_assets import _geometry_to_trimesh, _import_trimesh, build_surface_preview_payload
 from .voxelization import VoxelMaskData, voxelize_geometry
 
@@ -116,8 +117,8 @@ def _rekey_per_domain_quality_for_markers(
     """
     if per_domain_quality is None:
         return None
-    source = np.asarray(source_markers, dtype=np.int32).reshape(-1)
-    assigned = np.asarray(assigned_markers, dtype=np.int32).reshape(-1)
+    source = np.asarray(source_markers, dtype=np.uint32).reshape(-1)
+    assigned = np.asarray(assigned_markers, dtype=np.uint32).reshape(-1)
     if source.shape != assigned.shape or source.size == 0:
         return None
     source_to_target: dict[int, int] = {}
@@ -168,7 +169,7 @@ def _quality_reports_for_final_mixed_markers(
         if gamma.size != mesh.n_elements:
             return None
     return extract_per_domain_quality(
-        np.asarray(assigned_markers, dtype=np.int32),
+        np.asarray(assigned_markers, dtype=np.uint32),
         sicn,
         gamma,
         volumes,
@@ -190,6 +191,7 @@ from ._gmsh_extraction import (
     extract_per_domain_quality,
 )
 from .mesh_build_report import _build_mesh_operation_statuses, _build_shared_domain_build_report
+from ._airbox_feature_fields import require_no_airbox_feature_refinement
 from ._mesh_targets import (
     _canonicalize_geometry_owner_mapping as _canonicalize_geometry_owner_mapping,
     _coerce_positive_float as _coerce_positive_float,
@@ -215,9 +217,17 @@ from ._size_field_plan import (
 
 _DEFAULT_AIRBOX_GROWTH_RATE = 1.3
 _DEFAULT_AIRBOX_GRADING = "geometric"
+# Build modes whose air layers come from explicit level sets (note 0107).
+_AIRBOX_FEATURE_UNSUPPORTED_BUILD_MODES = frozenset(
+    {
+        "multi_geometry_geo_mixed_v2",
+        "single_geometry_geo_mixed",
+        "single_geometry_geo_ring",
+        "single_geometry_geo_layered_box",
+    }
+)
 _SIZE_DISTRIBUTION_HISTOGRAM_BINS = 30
 _FROZEN_MAGNETIC_SUBMESH_MODE = "generated_frozen_magnetic_submesh"
-_PREEMPTIVE_IMPORTED_STL_FALLBACK = "single_imported_stl_preemptive_fallback"
 _SUPPORTED_DOMAIN_MESH_MODES = frozenset(
     {
         "generated_shared_domain_mesh",
@@ -259,11 +269,18 @@ def _validate_shared_mesh_assembly_policy(
     return effective
 
 
-def _is_stl_imported_geometry(geometry: Geometry) -> bool:
-    return (
-        isinstance(geometry, ImportedGeometry)
-        and Path(geometry.source).suffix.lower() == ".stl"
-    )
+def _reject_anonymous_import_fallback(geometries: Sequence[Geometry], error: Exception) -> None:
+    """Imported components must retain their exact source-surface owners."""
+    if len(geometries) <= 1:
+        return
+    for geometry in geometries:
+        while isinstance(geometry, Translate):
+            geometry = geometry.geometry
+        if isinstance(geometry, ImportedGeometry):
+            raise StlTopologyError(
+                'Cannot fall back to concatenated STL: exact imported '
+                'source-component ownership would be lost'
+            ) from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,7 +429,7 @@ def _extract_frozen_magnetic_submesh(
     if not isinstance(marker, (int, np.integer)):
         raise ValueError(f"region marker for {geometry_name!r} must be an integer")
     marker_int = int(marker)
-    magnetic_element_mask = np.asarray(shared_mesh.element_markers, dtype=np.int32) == marker_int
+    magnetic_element_mask = np.asarray(shared_mesh.element_markers, dtype=np.uint32) == marker_int
     if not np.any(magnetic_element_mask):
         raise ValueError(f"shared mesh contains no elements for magnetic marker {marker_int}")
 
@@ -467,7 +484,7 @@ def _extract_frozen_magnetic_submesh(
         cell_offsets=cell_offsets,
         cell_nodes=cell_nodes,
         cell_global_ordinals=shared_mesh.cell_global_ordinals[magnetic_ordinals],
-        element_markers=np.full(len(magnetic_ordinals), marker_int, dtype=np.int32),
+        element_markers=np.full(len(magnetic_ordinals), marker_int, dtype=np.uint32),
         facet_types=facet_types,
         facet_roles=shared_mesh.facet_roles[selected_interface_ordinals],
         facet_offsets=facet_offsets,
@@ -581,8 +598,8 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
     )
     merged_element_markers = np.concatenate(
         [
-            np.asarray(magnetic_mesh.element_markers, dtype=np.int32),
-            np.zeros(air_mesh.n_elements, dtype=np.int32),
+            np.asarray(magnetic_mesh.element_markers, dtype=np.uint32),
+            np.zeros(air_mesh.n_elements, dtype=np.uint32),
         ]
     )
     interface_face_keys = {
@@ -636,12 +653,12 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
         cell_types=merged_cell_types,
         cell_offsets=merged_cell_offsets,
         cell_nodes=merged_cell_nodes,
-        element_markers=merged_element_markers.astype(np.int32, copy=False),
+        element_markers=merged_element_markers.astype(np.uint32, copy=False),
         facet_types=facet_types,
         facet_roles=facet_roles,
         facet_offsets=facet_offsets,
         facet_nodes=facet_nodes,
-        boundary_markers=np.asarray(boundary_markers, dtype=np.int32),
+        boundary_markers=np.asarray(boundary_markers, dtype=np.uint32),
         cell_global_ordinals=np.arange(len(merged_cell_types), dtype=np.int64),
         facet_global_ordinals=np.arange(len(facet_types), dtype=np.int64),
         periodic_boundary_pairs=periodic_boundary_pairs,
@@ -650,24 +667,50 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
 
 
 def _write_frozen_boundary_ascii_stl(mesh: MeshData, path: Path) -> Path:
+    """Export the closed cell exterior without mutating the frozen artifact.
+
+    Published facets may be an unoriented subset of physical interfaces, with
+    periodic cuts omitted. They cannot define this temporary closed solid.
+    """
+    owners: dict[tuple[int, ...], tuple[tuple[int, ...], int] | None] = {}
+    for ordinal, family in enumerate(mesh.cell_types):
+        cell = mesh.cell_node_ids(ordinal)
+        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
+            face = tuple(int(cell[index]) for index in local_face)
+            key = tuple(sorted(face))
+            if key in owners:
+                if owners[key] is None:
+                    raise ValueError("frozen magnetic mesh has a nonmanifold cell face")
+                owners[key] = None
+            else:
+                owners[key] = (face, ordinal)
+
+    triangles: list[np.ndarray] = []
+    for owner in owners.values():
+        if owner is None:
+            continue
+        face, ordinal = owner
+        ids = np.asarray(face, dtype=np.int32)
+        cell_center = mesh.nodes[mesh.cell_node_ids(ordinal)].mean(axis=0)
+        candidates = [ids] if len(ids) == 3 else [ids[[0,1,2]], ids[[0,2,3]]]
+        for triangle in candidates:
+            vertices = np.asarray(mesh.nodes[triangle], dtype=np.float64)
+            normal = np.cross(vertices[1]-vertices[0], vertices[2]-vertices[0])
+            if not np.all(np.isfinite(normal)) or float(np.linalg.norm(normal)) == 0.0:
+                raise ValueError("frozen magnetic mesh has a degenerate exterior triangle")
+            if float(np.dot(normal, cell_center-vertices.mean(axis=0))) > 0.0:
+                triangle = triangle[[0,2,1]]
+            triangles.append(triangle)
+    if not triangles:
+        raise ValueError("frozen magnetic mesh has no closed exterior surface")
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="ascii") as handle:
         handle.write("solid frozen_magnetic_boundary\n")
-        triangles: list[np.ndarray] = []
-        for ordinal, facet_type in enumerate(mesh.facet_types):
-            facet = mesh.facet_node_ids(ordinal)
-            if facet_type == "tri3":
-                triangles.append(facet)
-            else:
-                triangles.extend((facet[[0, 1, 2]], facet[[0, 2, 3]]))
         for face in triangles:
             v0, v1, v2 = np.asarray(mesh.nodes[face], dtype=np.float64)
             normal = np.cross(v1 - v0, v2 - v0)
-            norm = float(np.linalg.norm(normal))
-            if norm > 0.0:
-                normal = normal / norm
-            else:
-                normal = np.zeros(3, dtype=np.float64)
+            normal = normal / float(np.linalg.norm(normal))
             handle.write(
                 f"  facet normal {normal[0]:.17g} {normal[1]:.17g} {normal[2]:.17g}\n"
             )
@@ -798,7 +841,7 @@ def _air_element_mask_outside_frozen_magnetic_submesh(
     generated: MeshData,
     frozen: FrozenMagneticSubmeshPayload,
 ) -> np.ndarray:
-    marker_mask = np.asarray(generated.element_markers, dtype=np.int32) == 0
+    marker_mask = np.asarray(generated.element_markers, dtype=np.uint32) == 0
     if not np.any(marker_mask):
         return marker_mask
     elements = np.asarray(generated.elements, dtype=np.int32)
@@ -839,7 +882,7 @@ def _boundary_faces_for_kept_elements(
     )
     return (
         np.asarray(mesh.boundary_faces[boundary_keep], dtype=np.int32),
-        np.asarray(mesh.boundary_markers[boundary_keep], dtype=np.int32),
+        np.asarray(mesh.boundary_markers[boundary_keep], dtype=np.uint32),
     )
 
 
@@ -1690,6 +1733,11 @@ def _study_universe_airbox_options(
             "study_universe.airbox_growth_rate must be greater than 1.0; "
             "use null to disable explicit grading"
         )
+    # Note 0107: air-scoped feature controls are dimensionless.
+    resolved_airbox_curvature_factor = study_universe.get("airbox_curvature_factor")
+    resolved_airbox_narrow_region_resolution = study_universe.get(
+        "airbox_narrow_region_resolution"
+    )
     raw_airbox_grading = study_universe.get("airbox_grading")
     resolved_airbox_grading: str | None = None
     if isinstance(raw_airbox_grading, str) and raw_airbox_grading.strip():
@@ -1722,6 +1770,8 @@ def _study_universe_airbox_options(
                     else _DEFAULT_AIRBOX_GROWTH_RATE
                 ),
                 grading_mode=resolved_airbox_grading or _DEFAULT_AIRBOX_GRADING,
+                curvature_factor=resolved_airbox_curvature_factor,
+                narrow_region_resolution=resolved_airbox_narrow_region_resolution,
             )
         return None
 
@@ -1757,6 +1807,8 @@ def _study_universe_airbox_options(
             else _DEFAULT_AIRBOX_GROWTH_RATE
         ),
         grading_mode=resolved_airbox_grading or _DEFAULT_AIRBOX_GRADING,
+        curvature_factor=resolved_airbox_curvature_factor,
+        narrow_region_resolution=resolved_airbox_narrow_region_resolution,
     )
 
 
@@ -1911,7 +1963,7 @@ def _element_bounds_for_marker(
     mesh: MeshData,
     marker: int,
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
-    mask = np.asarray(mesh.element_markers, dtype=np.int32) == int(marker)
+    mask = np.asarray(mesh.element_markers, dtype=np.uint32) == int(marker)
     if not np.any(mask):
         return None
     element_nodes = mesh.nodes[
@@ -1943,7 +1995,7 @@ def _match_geometry_bounds_to_source_markers(
 
     marker_candidates = sorted(
         int(marker)
-        for marker in np.unique(np.asarray(mesh.element_markers, dtype=np.int32))
+        for marker in np.unique(np.asarray(mesh.element_markers, dtype=np.uint32))
         if int(marker) > 0
     )
     if len(marker_candidates) < len(geometries):
@@ -2196,6 +2248,50 @@ def _shared_domain_size_field_default_hmax(hints: FEM, airbox: AirboxOptions | N
     return default_hmax
 
 
+def _study_default_body_clamp_fields(
+    geometries: list[Geometry],
+    hints: FEM,
+    *,
+    size_field_default_hmax: float,
+    per_object_recipes: Mapping[str, object] | None,
+    existing_fields: Sequence[object],
+) -> list[dict[str, object]]:
+    """Keep bodies on the study target when the air policy raised the background.
+
+    The background size equals ``max(hints.hmax, airbox_hmax)`` so that air
+    is not refined to the magnetic target. Bodies with an explicit per-object
+    recipe or a workflow body field already carry their own clamp; every other
+    body would otherwise be meshed at the air size although the build report
+    records the study default as its target (docs/physics/0102: the air policy
+    is never a magnetic clamp).
+    """
+    body_hmax = float(hints.hmax)
+    if not body_hmax < float(size_field_default_hmax):
+        return []
+    clamped_names = {
+        str(field["params"].get("GeometryName"))
+        for field in existing_fields
+        if isinstance(field, Mapping)
+        and field.get("kind") == "ComponentVolumeConstant"
+        and isinstance(field.get("params"), Mapping)
+    }
+    recipe_names = set(per_object_recipes or ())
+    return [
+        {
+            "kind": "ComponentVolumeConstant",
+            "params": {
+                "GeometryName": geometry.geometry_name,
+                "VIn": body_hmax,
+                "VOut": float(_NO_OP_FIELD_SIZE),
+                "Source": "StudyDefaultBodyTarget",
+            },
+        }
+        for geometry in geometries
+        if geometry.geometry_name not in recipe_names
+        and geometry.geometry_name not in clamped_names
+    ]
+
+
 def _emit_shared_domain_mesh_summary(
     mesh: MeshData,
     region_markers: list[dict[str, object]],
@@ -2210,7 +2306,7 @@ def _emit_shared_domain_mesh_summary(
         f"{mesh.nodes.shape[0]} nodes, {mesh.n_boundary_faces} boundary faces"
     )
 
-    element_markers = np.asarray(mesh.element_markers, dtype=np.int32)
+    element_markers = np.asarray(mesh.element_markers, dtype=np.uint32)
     air_mask = element_markers == 0
     region_masks: list[tuple[str, str, np.ndarray]] = []
     for entry in region_markers:
@@ -2329,7 +2425,7 @@ def _magnetic_submesh_signatures(
         dtype=np.int64,
     )
     elements = np.asarray(mesh.elements, dtype=np.int64)
-    element_markers = np.asarray(mesh.element_markers, dtype=np.int32)
+    element_markers = np.asarray(mesh.element_markers, dtype=np.uint32)
     nodes = np.asarray(mesh.nodes, dtype=np.float64)
     signatures: list[dict[str, object]] = []
     for marker_entry in region_markers:
@@ -2989,14 +3085,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 "automatic conformal object-region meshing requires OCC-compatible "
                 "owner geometries"
             )
-    preemptive_imported_stl_fallback = (
-        len(geometries) == 1
-        and _is_stl_imported_geometry(geometries[0])
-        and not single_geometry_occ_direct
-        and not conformal_occ_direct
-        and not conformal_object_regions
-    )
-
     with tempfile.TemporaryDirectory(prefix="fullmag-fem-domain-components-") as tmp_dir:
         component_descriptors: list[ComponentDescriptor] = []
         trimesh_module: object | None = None
@@ -3061,24 +3149,15 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     tuple(float(value) for value in bounds_min),
                     tuple(float(value) for value in bounds_max),
                 )
-        if preemptive_imported_stl_fallback:
-            fallbacks_triggered.append(_PREEMPTIVE_IMPORTED_STL_FALLBACK)
-            emit_progress(
-                "Single imported STL shared-domain mesh is routed directly to "
-                "concatenated STL fallback for numerical stability"
-            )
-
         size_field_default_hmax = _shared_domain_size_field_default_hmax(hints, airbox)
         airbox_bounds = _rectangular_airbox_bounds_from_options(airbox, bounds_by_name)
-        component_aware_mesh_options = not preemptive_imported_stl_fallback
-
         mesh_options = _mesh_options_from_runtime_metadata(
             mesh_workflow,
             geometries=geometries,
             default_hmax=size_field_default_hmax,
             bounds_by_name=bounds_by_name,
             airbox_bounds=airbox_bounds,
-            component_aware=component_aware_mesh_options,
+            component_aware=True,
             per_object_recipes=per_object_recipes,
             object_regions=object_regions,
         )
@@ -3090,7 +3169,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 _policy,
                 default_hmax=size_field_default_hmax,
                 bounds_by_name=bounds_by_name,
-                component_aware=component_aware_mesh_options,
+                component_aware=True,
             )
             if recipe_fields:
                 mesh_options = _dc_replace(
@@ -3147,10 +3226,24 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             planned_build_mode = "single_geometry_occ"
         elif conformal_occ_direct:
             planned_build_mode = "conformal_occ"
-        elif preemptive_imported_stl_fallback:
-            planned_build_mode = "concatenated_stl_fallback"
         else:
             planned_build_mode = "component_aware"
+        if planned_build_mode in _AIRBOX_FEATURE_UNSUPPORTED_BUILD_MODES:
+            require_no_airbox_feature_refinement(airbox, route=planned_build_mode)
+        if planned_build_mode in {"conformal_occ", "single_geometry_occ"}:
+            body_clamp_fields = _study_default_body_clamp_fields(
+                geometries,
+                hints,
+                size_field_default_hmax=size_field_default_hmax,
+                per_object_recipes=per_object_recipes,
+                existing_fields=mesh_options.size_fields,
+            )
+            if body_clamp_fields:
+                mesh_options = _dc_replace(
+                    mesh_options,
+                    size_fields=body_clamp_fields + list(mesh_options.size_fields),
+                )
+                used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
         planned_operation_statuses = _build_mesh_operation_statuses(
             geometries,
             mesh_options,
@@ -3512,8 +3605,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 # Decide between native OCC-conformal pipeline or single-pass STL pipeline
                 from ._gmsh_occ import generate_shared_domain_mesh_via_occ
 
-                is_stl_multi = len(geometries) > 1 and any(isinstance(g, ImportedGeometry) for g in geometries)
-
                 try:
                     if conformal_occ_direct:
                         build_mode = "conformal_occ"
@@ -3641,16 +3732,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             f"Conformal OCC mesh: geometry→volume mapping established for "
                             f"{len(result.component_volume_tags)} components"
                         )
-                    elif is_stl_multi:
-                        build_mode = "component_aware"
-                        raise RuntimeError(
-                            "Multi-component STL meshing is routed to concatenated STL fallback for numerical stability"
-                        )
-                    elif preemptive_imported_stl_fallback:
-                        build_mode = "concatenated_stl_fallback"
-                        raise RuntimeError(
-                            "Single imported STL meshing is routed to concatenated STL fallback for numerical stability"
-                        )
                     else:
                         build_mode = "component_aware"
                         emit_progress_event(
@@ -3673,6 +3754,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             f"{len(result.component_volume_tags)} components"
                         )
                 except Exception as primary_exc:
+                    if isinstance(primary_exc, StlTopologyError):
+                        raise
                     if conformal_object_regions:
                         raise
                     initial_primary_error = primary_exc
@@ -3700,24 +3783,22 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             )
                             primary_exc = None  # successfully recovered!
                         except Exception as stl_exc:
+                            if isinstance(stl_exc, StlTopologyError):
+                                raise
                             component_fallback_error = stl_exc
                             primary_exc = stl_exc
 
                     if primary_exc is not None:
+                        _reject_anonymous_import_fallback(geometries, primary_exc)
                         fallback_failure_context = (
                             initial_primary_error,
                             component_fallback_error,
                         )
                         build_mode = "concatenated_stl_fallback"
-                        if _PREEMPTIVE_IMPORTED_STL_FALLBACK in fallbacks_triggered:
-                            emit_progress(
-                                "Generating concatenated STL mesh for single imported STL"
-                            )
-                        else:
-                            fallbacks_triggered.append("component_aware_import_failed")
-                            emit_progress(
-                                f"Component-aware mesh failed ({primary_exc!r}), falling back to concatenated STL"
-                            )
+                        fallbacks_triggered.append("component_aware_import_failed")
+                        emit_progress(
+                            f"Component-aware mesh failed ({primary_exc!r}), falling back to concatenated STL"
+                        )
                         # Rebuild mesh options for the non-component STL path so local
                         # refinement fields do not depend on recovered component tags.
                         # This preserves per-object hmax behavior (Box/Bounds thresholds)
@@ -3829,8 +3910,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             )
 
         # Classify elements back to geometries
-        source_markers = np.asarray(mesh.element_markers, dtype=np.int32)
-        assigned_markers = np.zeros(mesh.n_elements, dtype=np.int32)
+        source_markers = np.asarray(mesh.element_markers, dtype=np.uint32)
+        assigned_markers = np.zeros(mesh.n_elements, dtype=np.uint32)
         region_markers: list[dict[str, object]] = []
         object_region_markers: list[dict[str, object]] = []
         if mixed_v2_direct:
@@ -3840,7 +3921,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 raise ValueError(
                     "mixed_v2_marker_coverage_invalid: expected air=0 and body markers 1/2"
                 )
-            assigned_markers = np.asarray(source_markers, dtype=np.int32).copy()
+            assigned_markers = np.asarray(source_markers, dtype=np.uint32).copy()
             region_markers = [
                 {"geometry_name": box.geometry_name, "marker": 1},
                 {"geometry_name": ring_geometry.geometry_name, "marker": 2},

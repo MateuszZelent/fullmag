@@ -376,6 +376,17 @@ $$
 because that mishandles material jumps.
 The face-based form is the correct architectural foundation.
 
+When every face coefficient equals the same $A$, the face-based sum
+$\sum_f A_f(\mathbf{m}_j-\mathbf{m}_i)/h_f^2$ equals $A\,\nabla_h^2\mathbf{m}_i$
+exactly in real arithmetic. The CUDA fp64 field kernel
+(`backends/fdm/gpu/cuda/interactions/exchange_fp64.cu`,
+`launch_exchange_field_fp64`) therefore evaluates the uniform Laplacian when
+the whole region-pair table equals $A$ (`Context::exchange_lut_uniform`, set
+where `fullmag_fdm_backend_create_impl` in `backends/fdm/api/c_api.cpp` builds the table). The two evaluation orders
+differ only by floating-point roundoff, measured at a relative
+$4\times10^{-16}$ of $\max|\mathbf{H}_{\mathrm{ex}}|$ on a random state. The
+energy reduction still uses the table.
+
 ##### Energy density and scalar output
 
 A compatible per-cell exchange energy density is obtained by splitting face contributions between
@@ -396,6 +407,82 @@ E_{\mathrm{ex},h} = \sum_i e_{\mathrm{ex},i}V_i.
 $$
 
 This is the quantity that should ultimately back the canonical scalar output `E_ex`.
+
+With sub-cell boundary correction (`boundary_correction`, note 0550) the CUDA
+reductions in `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` report the
+exchange energy as a sum over forward links, each counted once with weight
+$A_{ij}\,w_{ij}\,\|\mathbf m_j-\mathbf m_i\|^2$. The dynamics use the field; this
+energy is a diagnostic.
+
+- **T0 (volume-weighted):** $w_{ij} = f_{i\to j}\,V/\Delta x^2$ with the full
+  cell volume $V$. The T0 field carries $1/\varphi_i^{\mathrm{eff}}$ and the cell
+  energy weight carries $\varphi_i^{\mathrm{eff}}V$, so $\varphi_i^{\mathrm{eff}}$
+  cancels and this energy is the exact variational partner of the T0 field.
+  Links to a neighbour with $\varphi_j = 0$ are skipped, as in the field. The
+  per-cell density `eden_ex` (and its share of `eden_total`) uses the same
+  weight: $e_{\mathrm{ex},i}=-\tfrac12\mu_0M_s\,\varphi_i^{\mathrm{eff}}\,
+  \mathbf m_i\cdot\mathbf H_{\mathrm{ex},i}$, so $\sum_i e_{\mathrm{ex},i}V=E_\mathrm{ex}$
+  even when $0<\varphi_i<\varphi_\mathrm{floor}$; the other terms keep $\varphi_i$.
+- **T1 (boundary-corrected):** not qualified and rejected at runtime (see
+  *T1 consistency* below); the reduction is kept for a later rederivation. The
+  corrected field operator is not symmetric,
+  because the denominator at cell $i$ uses the boundary distance on the
+  opposite side of $i$, so no exact discrete energy exists. The reported energy
+  uses the symmetric link weight
+
+  $$
+  w_{ij} = V\cdot\frac{1}{2}\left(
+  \frac{2}{\Delta x\,(\Delta x+\delta_{\mp,i})}
+  +\frac{2}{\Delta x\,(\Delta x+\delta_{\pm,j})}
+  \right),
+  $$
+
+  which reduces to $V/\Delta x^2$ away from boundaries.
+- **Uncorrected path with volume fractions:** the link weight uses the pair
+  fraction $\tfrac12(\varphi_i+\varphi_j)\,V$, so a link has the same weight
+  whichever cell it is reduced from.
+
+Like the T0/T1 fields, these energies use open, non-periodic neighbours.
+
+**T1 consistency (review 2026-11-02).** Note 0550 §3.2.1 writes the T1
+boundary stencil with denominator $\Delta x(\Delta x+\delta)$, where the planner
+defines $\delta$ as the distance from the cell centre to the boundary
+($\Delta x$ when no crossing lies within one cell step). With a Neumann boundary
+at $x_i+\delta$ and an interior neighbour at $x_i-\Delta x$, Taylor expansion
+gives $m_{i-1}-m_i=-\Delta x\,m'_i+\tfrac12\Delta x^2m''_i+O(\Delta x^3)$ and
+$m'_i+\delta\,m''_i=O(\delta^2)$, hence
+
+$$
+\partial_x^2 m\big|_i=\frac{2\,(m_{i-1}-m_i)}{\Delta x\,(\Delta x+2\delta)}+O(\Delta x),
+$$
+
+exact for quadratic profiles. The one-sided form correctly takes $\delta$ from
+the boundary on the opposite side of the neighbour (an audit claim that the
+two distances are swapped is not supported); the error is the factor in front
+of $\delta$. Consequences with the current planner data:
+
+- a free face aligned with the grid has $\delta=\Delta x/2$, where the exact
+  discrete Neumann operator is the clamped stencil $1/\Delta x^2$ (T0 and the
+  uncorrected kernel), but T1 gives $4/(3\Delta x^2)$, over-coupling by $4/3$;
+- the T1 field also divides by $\varphi_i^{\mathrm{eff}}$, so for a cut cell
+  the $\delta$ denominator and $1/\varphi_i^{\mathrm{eff}}$ both count the
+  reduced control volume;
+- the sentinel $\delta=\Delta x$ cannot distinguish "no crossing" from a
+  boundary at the grid edge.
+
+Analytic check through the public C ABI
+(`scripts/benchmarks/fdm_cuda_analytic_abi_checks.py`, check 4): a three-cell
+chain with $\mathbf m=(+\hat x,-\hat x,+\hat x)$ and free ends on the outer
+cell faces, where the exact end-cell field is $H_x=-4A/(\mu_0M_s\Delta x^2)$.
+On the CUDA build of master c6c07b8ad the uncorrected kernel and T0 give ratio
+$1.0000000000000$ to the exact value and T1 gives $1.333333333333333$. Until the
+stencil is rederived consistently with $\varphi$ and $\delta$, the CUDA runner
+and the C ABI reject `boundary_correction="full"` with
+`fdm_boundary_correction_t1_unqualified` before any allocation, with no
+fallback; T0 (`"volume"`) remains available and the planner still produces the
+T1 data. Check 5 of the same harness verifies the T0 density weighting above
+with a cell at $\varphi=0.02$: before the change $\sum_i e_{\mathrm{ex},i}V$ differed
+from $E_\mathrm{ex}$ by a relative $0.15$ (the density used $\varphi_i$).
 
 #### 3.1.3 Demag: tensor convolution and FFT realization
 
@@ -441,6 +528,31 @@ should use FFT-based convolution:
 7. divide by the FFT normalization convention,
 8. write `H_demag` in `A/m`.
 
+For CUDA FP64 single-grid with explicit XY truncated-image demagnetization and open Z,
+the runner checks the memory cost of the legacy expanded image tensor before
+creating the native context. If the expanded six-component FP64 tensor exceeds
+the runner's 8 GiB guard, it uses the centered XY Newell implementation shared
+with the periodic multilayer operator. This computes a symmetric finite image
+sum around the nearest periodic lag and uses FFT shape
+`[N_x, N_y, 2N_z]`. Here `N_x, N_y, N_z` are the dimensionless physical grid counts.
+The kernel uses the existing near-cell Newell and far-cell point-dipole terms.
+The requested image counts, open Z, and cell sizes in metres are unchanged.
+This backend decision does not depend on whether Frozen Spins are active.
+The CUDA receipt identifies the centered operator as
+`tensor_fft_newell_periodic_xy_centered`. Small legacy CUDA requests,
+FDM CPU, and FEM keep their previous realization.
+
+The qualification target is a resolved XY FP64 case above the expanded-memory
+limit and the corresponding native periodic multilayer calculation on identical
+aligned cells. Compare the active-cell field in A/m and the demagnetization
+energy in J at a common initial state. With a frozen mask also require unchanged
+frozen vectors and verify that the unconstrained cells are advanced. Selection
+and allocation-bound tests alone do not qualify the GPU calculation.
+The implementation anchors are `centered_periodic_xy_images` in
+`crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` and
+`try_compute_periodic_xy_kernel` in
+`crates/fullmag-fdm-demag/src/shifted_kernel.rs`.
+
 In Fourier space the operator is simply
 
 $$
@@ -463,6 +575,25 @@ $$
 so that the FFT realizes the linear convolution instead of an unphysical circular one.
 The exact padding policy belongs to the execution plan and provenance.
 It must not leak into the shared Python semantics.
+
+Update 2026-11-10, CPU single-layer candidate (runtime unqualified):
+`ExchangeLlgProblem::create_workspace` selects an internal transform with
+`pz=1` only for one physical layer, an entirely open stencil policy and open
+demagnetization. All source and target cells then share the same z coordinate;
+only the six Newell tensor planes at zero z displacement contribute to the
+cropped convolution. The physical cell thickness and all six tensor components
+are retained. XY padding and inverse normalization are unchanged.
+The length-one Z transform is an identity and is skipped in the serial and
+Rayon helpers, avoiding scheduling and scratch handling for each XY column.
+The independent DFT and normalized round-trip test includes this shape.
+The public
+`FftWorkspace::new`, 3D, periodic and GPU routes retain their existing policies.
+The workspace lifecycle digest includes the actual transform dimensions and
+reports schema `fullmag.fdm.fft_workspace.v3`. Tests compare both AoS and SoA
+fields and energy against an explicitly constructed legacy `pz=2` workspace,
+including a mask hole, heterogeneous saturation magnetization and non-cubic
+cells. These tests and an identical-input full-Zarr timing/parity comparison
+must pass before claiming numerical qualification or a speedup.
 
 ##### GPU implementation contract
 
@@ -927,14 +1058,19 @@ For this topic, `Exchange + Demag + Zeeman` are now executable in the public FDM
 | Runner observable assembly | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `observe_state_with_antenna_field` | Assembles same-state observables and reconstructs active/airbox effective fields. | FDM CPU | source-level owner; no terminal-batch qualification |
 | Airbox visualization field | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `reconstruct_inactive_fdm_visual_effective_field` | Reconstructs full-domain visualization fields outside magnetic support. | FDM CPU | target-only observation contract |
 | Full-grid materialization | `crates/fullmag-runner/src/interactive_runtime.rs` | `build_cached_grid_preview_fields` | Selectively builds live fields from one observable state. | FDM CPU | part of current path, not proof of an atomic terminal generation/batch |
+| CUDA centered XY admission | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `centered_periodic_xy_images` | Bound the expanded and compact allocations. | FDM GPU FP64 | selection tests; managed parity pending |
+| Centered XY tensor | `crates/fullmag-fdm-demag/src/shifted_kernel.rs` | `try_compute_periodic_xy_kernel` | Assemble the finite-image tensor spectra. | FDM GPU FP64 | shared kernel; single-grid managed parity pending |
 | CUDA external-energy reduction | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_external_energy_fp64` | Reduces uniform, sampled, and regional external fields with partial-cell volume weighting. | FDM GPU | source-level contract; runtime parity `NOT VERIFIED` |
+| CUDA exchange field (uniform-table branch) | `backends/fdm/gpu/cuda/interactions/exchange_fp64.cu` | `exchange_field_fp64_kernel` | fp64 exchange field; the standard launch takes the uniform-Laplacian branch when every region-pair entry equals A. | FDM GPU | kernel timing and field difference measured by `scripts/benchmarks/cuda_exchange_region_bench.cu` |
+| CUDA uniform exchange-table flag | `backends/fdm/api/c_api.cpp` | `fullmag_fdm_backend_create_impl` | Builds the region-pair table and sets `Context::exchange_lut_uniform`. | FDM GPU | source-visible; exercised by the FDM GPU hot-loop benchmark runs |
 | CUDA energy-density materialization | `backends/fdm/gpu/cuda/interactions/energy_density_fp64.cu` | `launch_energy_density_observable` | Materializes external and total density using the resolved field sources and current volume measure. | FDM GPU | source-level contract; runtime parity `NOT VERIFIED` |
 | CPU terminal outcome | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm` | Returns CPU run outcome and scheduled fields. | FDM CPU | part of current path, not proof of an atomic terminal generation/batch |
 | Preview-disable switch | `crates/fullmag-cli/src/live_workspace.rs` | `feature_flags` | Reads the benchmark/display preview configuration. | CLI control plane | does not qualify or replace terminal field finalization |
 | Session field promotion | `crates/fullmag-cli/src/live_workspace.rs` | `ingest_preview_fields_from_update` | Promotes incoming fields individually into session state. | CLI control plane | part of current path, not proof of an atomic terminal generation/batch |
 | Field source-time transport | `crates/fullmag-runner/src/types.rs` | `LivePreviewField` | Carries the optional solver-time provenance for live and terminal fields. | Runner/API | source-level contract; terminal proof remains lane-gated |
 | Field metadata resource | `crates/fullmag-api/src/schemas/fields.rs` | `FieldMeta`, `FieldDescriptor` | Exposes `source_time_seconds` with SI-second semantics to resource consumers. | API | source-level contract; terminal proof remains lane-gated |
-
 | Accepted original-context fields | crates/fullmag-runner/src/accepted_materialization.rs | capture_solver_observables, materialize_captured_observables | Copy complete same-clock fields and bind them to the final immutable state before CAS publication. | FDM CPU/GPU | source-visible; runtime NOT VERIFIED |
 | Terminal binary spool | crates/fullmag-api/src/accepted_observation_spool.rs | write_fragment | Write one complete quantity with accepted-source guards and admitted budgets. | FDM/FEM CPU/GPU | source-only; runtime NOT VERIFIED |
 | Terminal binary publication | crates/fullmag-api/src/accepted_field_materialization_worker.rs | materialize_spool | Validate complete catalog and publish immutable CAS chunks plus metadata. | FDM/FEM CPU/GPU | source-only; runtime NOT VERIFIED |
+| CPU single-layer transform | `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `new_open_single_layer` | Retains all six zero-z-displacement Newell planes with one transform plane. | FDM CPU | source candidate; managed numerical/runtime qualification pending |
+| CPU single-layer oracle | `crates/fullmag-engine/src/fdm/shared/problem.rs` | `open_single_layer_workspace_matches_legacy_aos_and_soa_oracle` | Compares fields and energy against the legacy transform. | FDM CPU | executable regression; not yet run |

@@ -1,4 +1,5 @@
-//! Cold validation of the existing LE physical current certificate, against owned Tet4/J.
+//! Cold validation against owned canonical RT0 moments. The caller first binds J traces
+//! to these moments through exact reconstruction and the existing rounding budget.
 use super::closed_loop_v2::{invalid, ClosedLoopAcceptedSourceInputV2};
 use crate::types::RunError;
 use std::collections::{BTreeMap, BTreeSet};
@@ -122,6 +123,8 @@ pub(crate) fn verify_balance_certificate(
         .copied()
         .zip(source.vertex_xyz_m.iter().copied())
         .collect::<BTreeMap<_, _>>();
+    let fluxes = source.canonical_face_records.iter().copied().collect::<BTreeMap<_, _>>();
+    require(fluxes.len() == source.canonical_face_records.len(), "certificate duplicate canonical faces")?;
     let mut faces: BTreeMap<[u64; 3], Face> = BTreeMap::new();
     let mut cell_keys = Vec::new();
     for (ordinal, c) in source.cells.iter().enumerate() {
@@ -148,15 +151,10 @@ pub(crate) fn verify_balance_certificate(
                 side.is_finite() && side != 0.0,
                 "certificate degenerate face orientation",
             )?;
-            let mut average = [0.0; 3];
-            for id in face {
-                let local = c.vertex_ids.iter().position(|v| *v == id).unwrap();
-                for k in 0..3 {
-                    average[k] += c.vertex_current_xyz_apm2[3 * local + k] / 3.0;
-                }
-            }
-            let q = 0.5 * dot(average, normal);
-            require(q.is_finite(), "certificate local J face moment")?;
+            // Physical balance belongs to the retained moment, not to a second
+            // integration of its lossy binary64 display samples.
+            let q = *fluxes.get(&face).ok_or_else(|| invalid("certificate canonical face absent"))?;
+            require(q.is_finite(), "certificate nonfinite canonical face moment")?;
             let row = faces.entry(face).or_insert(Face {
                 owners: Vec::new(),
                 outward: Vec::new(),
@@ -172,26 +170,11 @@ pub(crate) fn verify_balance_certificate(
         faces.len() as u64 == nf && source.canonical_face_records.len() == faces.len(),
         "certificate complete face carrier",
     )?;
-    let fluxes = source
-        .canonical_face_records
-        .iter()
-        .copied()
-        .collect::<BTreeMap<_, _>>();
-    require(
-        fluxes.len() == faces.len(),
-        "certificate duplicate canonical faces",
-    )?;
+    require(fluxes.len() == faces.len(), "certificate foreign canonical faces")?;
     let mut balances = vec![0.0; cells];
     let mut denominators = vec![0.0; cells];
-    for (key, f) in &faces {
-        let q = *fluxes
-            .get(key)
-            .ok_or_else(|| invalid("certificate canonical face absent"))?;
-        for ((&owner, &outward), &canonical) in f.owners.iter().zip(&f.outward).zip(&f.canonical) {
-            require(
-                agree(q, canonical, q.abs() + canonical.abs()),
-                "certificate canonical flux differs from local J",
-            )?;
+    for f in faces.values() {
+        for (&owner, &outward) in f.owners.iter().zip(&f.outward) {
             balances[owner] += outward;
             denominators[owner] += outward.abs();
         }

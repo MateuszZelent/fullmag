@@ -37,6 +37,9 @@ describe("ActiveSessions", () => {
     expect(sessionPillStatus("running")).toBe("running");
     expect(sessionPillStatus("failed")).toBe("failed");
     expect(sessionPillStatus("awaiting_command")).toBe("ready");
+    expect(sessionPillStatus("waiting_for_compute")).toBe("ready");
+    expect(sessionPillStatus("activating")).toBe("draft");
+    expect(sessionPillStatus("materializing_script")).toBe("draft");
     expect(sessionPillStatus("closed")).toBe("readonly");
     expect(sessionPillStatus("something_new")).toBe("draft");
   });

@@ -35,7 +35,7 @@ export const RAIL_SECTIONS: readonly RailEntry[] = [
   { commandId: "start.section.templates", icon: LayoutGrid, id: "templates", keys: "Control+2", label: "Templates", shortcut: "Ctrl 2", count: STUDY_TEMPLATES.length },
   { commandId: "start.section.import", icon: Import, id: "import", keys: "Control+3", label: "Import", shortcut: "Ctrl 3" },
   { commandId: "start.section.learn", icon: GraduationCap, id: "learn", keys: "Control+4", label: "Learn", shortcut: "Ctrl 4" },
-  { commandId: "start.section.docs", icon: BookOpen, id: "docs", label: "Docs", shortcut: "F1" },
+  { commandId: "start.section.docs", icon: BookOpen, id: "docs", keys: "F1", label: "Docs", shortcut: "F1" },
   { commandId: "start.section.settings", icon: Settings, id: "settings", keys: "Control+,", label: "Settings", shortcut: "Ctrl ," },
   { commandId: "start.section.about", icon: Info, id: "about", label: "About" },
 ];
@@ -110,7 +110,7 @@ export function StartRail({
                   <Icon aria-hidden="true" size={16} />
                   <span>{entry.label}</span>
                   {entry.count !== undefined ? (
-                    <span aria-label={`${entry.count} available`} className="fm-start-rail__count">
+                    <span role="group" aria-label={`${entry.count} available`} className="fm-start-rail__count">
                       {entry.count}
                     </span>
                   ) : null}

@@ -224,25 +224,27 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
                 true,
                 GeometrySupportStatus::Production,
             ),
+            // FEM meshes spheres and ellipsoids through OCC (ADR 0074); the
+            // FDM flag stays false until that lane has its own evidence.
             primitive(
                 "sphere",
                 "Sphere",
                 "mumax",
-                false,
-                false,
+                true,
                 false,
                 true,
-                GeometrySupportStatus::Preview,
+                true,
+                GeometrySupportStatus::Production,
             ),
             primitive(
                 "ellipsoid",
                 "Ellipsoid",
                 "mumax",
-                false,
-                false,
+                true,
                 false,
                 true,
-                GeometrySupportStatus::Preview,
+                true,
+                GeometrySupportStatus::Production,
             ),
             primitive(
                 "disk",
@@ -303,6 +305,18 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
                 true,
                 false,
                 GeometrySupportStatus::Production,
+            ),
+            // Closed local STL volumes are executable FEM authoring inputs.
+            // Workload/runtime qualification remains distinct from this flag.
+            primitive(
+                "imported_geometry",
+                "Imported STL",
+                "import",
+                true,
+                false,
+                true,
+                false,
+                GeometrySupportStatus::Preview,
             ),
             primitive(
                 "microstrip_antenna_layout",
@@ -636,6 +650,9 @@ fn validate_object_geometry(
             &["realize_geometry", "build_mesh", "run_solver"],
         ));
     }
+    // Material and initial state are physics inputs: a mesh is realized from
+    // geometry, universe and mesh policies alone (ADR 0074), so these
+    // references gate Compute only.
     let requires_magnetic_refs = object.role == "magnet";
     if (requires_magnetic_refs || !object.material_ref.trim().is_empty())
         && (object.material_ref.trim().is_empty()
@@ -649,7 +666,7 @@ fn validate_object_geometry(
             format!("Object '{}' references a missing material.", object.id),
             Some(object.id.clone()),
             Some(object_path.clone()),
-            &["realize_geometry", "build_mesh", "run_solver"],
+            &["run_solver"],
         ));
     }
     if requires_magnetic_refs || object.magnetization_ref.is_some() {
@@ -666,12 +683,12 @@ fn validate_object_geometry(
             _ => diagnostics.push(error(
                 "GEOMETRY_OBJECT_MAGNETIZATION_MISSING",
                 format!(
-                    "Object '{}' must reference a magnetization asset before mesh/compute.",
+                    "Object '{}' must reference a magnetization asset before compute.",
                     object.id
                 ),
                 Some(object.id.clone()),
                 Some(object_path.clone()),
-                &["build_mesh", "run_solver"],
+                &["run_solver"],
             )),
         }
     }
@@ -687,13 +704,15 @@ fn validate_object_geometry(
             &["realize_geometry", "build_mesh", "run_solver"],
         ));
     }
-    validate_geometry_node(
-        &object.geometry,
-        backend_target,
-        &object.id,
-        &object_path,
-        diagnostics,
-    );
+    if object.geometry.geometry_kind == "ImportedGeometry"
+        && *backend_target == GeometryBackendTarget::Fem
+    {
+        validate_imported_stl_geometry(&object.geometry, &object.id, &object_path, diagnostics);
+    } else {
+        validate_geometry_node(
+            &object.geometry, backend_target, &object.id, &object_path, diagnostics,
+        );
+    }
     validate_tiny_features(scene, object, &object_path, diagnostics);
     if let (Some((bounds_min, bounds_max)), Some(universe)) = (
         derive_object_bounds(object),
@@ -837,6 +856,28 @@ fn validate_tiny_features(
     }
 }
 
+fn validate_imported_stl_geometry(
+    geometry: &SceneGeometry,
+    object_id: &str,
+    path: &str,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    match crate::imported_stl_parameters(&geometry.geometry_params) {
+        Ok(parameters) if !parameters.surface_only => {},
+        Ok(_) => diagnostics.push(error(
+            "GEOMETRY_IMPORTED_SURFACE_ONLY",
+            "STL source surface is available for preview; volume='full' is required for FEM meshing.".to_string(),
+            Some(object_id.to_string()), Some(path.to_string()),
+            &["build_mesh", "run_solver"],
+        )),
+        Err(message) => diagnostics.push(error(
+            "GEOMETRY_IMPORTED_SOURCE_INVALID", message,
+            Some(object_id.to_string()), Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        )),
+    }
+}
+
 fn validate_geometry_node(
     geometry: &SceneGeometry,
     backend_target: &GeometryBackendTarget,
@@ -959,6 +1000,36 @@ fn validate_geometry_node(
             path,
             diagnostics,
         ),
+        // The FEM mesher realizes spheres and ellipsoids through OCC (ADR 0074);
+        // the FDM lane keeps them preview-only until it has its own evidence.
+        "Sphere" if *backend_target == GeometryBackendTarget::Fem => validate_positive_number_param(
+            &geometry.geometry_params,
+            "radius",
+            object_id,
+            path,
+            diagnostics,
+        ),
+        "Ellipsoid" if *backend_target == GeometryBackendTarget::Fem => {
+            if geometry.geometry_params.get("radii").is_some() {
+                validate_positive_vec3_param(
+                    &geometry.geometry_params,
+                    "radii",
+                    object_id,
+                    path,
+                    diagnostics,
+                );
+            } else {
+                for key in ["rx", "ry", "rz"] {
+                    validate_positive_number_param(
+                        &geometry.geometry_params,
+                        key,
+                        object_id,
+                        path,
+                        diagnostics,
+                    );
+                }
+            }
+        }
         "Ellipsoid" | "Sphere" | "Ellipse" => diagnostics.push(error(
             "GEOMETRY_KIND_PREVIEW_ONLY",
             format!(
@@ -1446,10 +1517,35 @@ fn derive_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3
             if !(radius.is_finite() && radius > 0.0 && height.is_finite() && height > 0.0) {
                 return None;
             }
-            Some((
-                [-radius, -radius, -height / 2.0],
-                [radius, radius, height / 2.0],
-            ))
+            let axis = match geometry.geometry_params.get("axis") {
+                Some(_) => vec3_param(&geometry.geometry_params, "axis")?,
+                None => [0.0, 0.0, 1.0],
+            };
+            if !finite_vec3(axis) {
+                return None;
+            }
+            let axis_scale = axis.iter().map(|component| component.abs()).fold(0.0, f64::max);
+            if axis_scale <= 0.0 {
+                return None;
+            }
+            let scaled_axis = axis.map(|component| component / axis_scale);
+            let scaled_norm = scaled_axis[0].hypot(scaled_axis[1]).hypot(scaled_axis[2]);
+            if !scaled_norm.is_finite() || scaled_norm <= 0.0 {
+                return None;
+            }
+            let unit_axis = scaled_axis.map(|component| component / scaled_norm);
+            let half_height = height / 2.0;
+            let extent = std::array::from_fn(|index| {
+                let axial_component = unit_axis[index].abs();
+                let radial_component = (1.0 - unit_axis[index] * unit_axis[index])
+                    .max(0.0)
+                    .sqrt();
+                radius * radial_component + half_height * axial_component
+            });
+            if !finite_vec3(extent) {
+                return None;
+            }
+            Some((extent.map(|value| -value), extent))
         }
         "ArchWaveguide" => {
             let length = number_param(&geometry.geometry_params, "length")?;
@@ -1478,10 +1574,22 @@ fn derive_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3
                 [half_length, half_width, z_max],
             ))
         }
+        "Sphere" => {
+            let radius = number_param(&geometry.geometry_params, "radius")?;
+            if !radius.is_finite() || radius <= 0.0 {
+                return None;
+            }
+            Some(([-radius; 3], [radius; 3]))
+        }
         "Ellipsoid" => {
-            let rx = number_param(&geometry.geometry_params, "rx")?;
-            let ry = number_param(&geometry.geometry_params, "ry")?;
-            let rz = number_param(&geometry.geometry_params, "rz")?;
+            let [rx, ry, rz] = match vec3_param(&geometry.geometry_params, "radii") {
+                Some(radii) => radii,
+                None => [
+                    number_param(&geometry.geometry_params, "rx")?,
+                    number_param(&geometry.geometry_params, "ry")?,
+                    number_param(&geometry.geometry_params, "rz")?,
+                ],
+            };
             if [rx, ry, rz]
                 .iter()
                 .any(|value| !value.is_finite() || *value <= 0.0)
@@ -1826,6 +1934,16 @@ mod tests {
     };
     use serde_json::json;
 
+    #[test]
+    fn stl_capability_exposes_fem_without_claiming_fdm_boolean_or_production_support() {
+        let capabilities = geometry_capabilities(1);
+        let stl = capabilities.primitive_capabilities.iter()
+            .find(|capability| capability.id == "imported_geometry").unwrap();
+        assert!(stl.fem && stl.dsl);
+        assert!(!stl.fdm && !stl.boolean);
+        assert_eq!(stl.status, GeometrySupportStatus::Preview);
+    }
+
     fn scene_with_object(geometry: SceneGeometry) -> SceneDocument {
         SceneDocument {
             revision: 7,
@@ -1839,6 +1957,7 @@ mod tests {
                     dind: None,
                     dbulk: None,
                 },
+                source: None,
                 references: Vec::new(),
             }],
             magnetization_assets: vec![crate::MagnetizationAsset {
@@ -1876,6 +1995,7 @@ mod tests {
                 allocated_region_ids: Vec::new(),
                 material_parameter_fields: Vec::new(),
                 absorbing_boundary: None,
+                visualization_hint: Default::default(),
                 notes: None,
                 visible: true,
                 locked: false,
@@ -1906,9 +2026,29 @@ mod tests {
     }
 
     #[test]
+    fn imported_stl_is_a_real_fem_source_without_an_explicit_mesh_waiver() {
+        let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
+            geometry_kind: "ImportedGeometry".to_string(),
+            geometry_params: json!({"source": "body.stl", "scale": 1e-6, "volume": "full"}),
+            bounds_min: Some([0.0; 3]), bounds_max: Some([1e-6; 3]),
+        });
+        scene.objects[0].tags.clear();
+        assert!(geometry_blocks_solver_run(&scene, GeometryBackendTarget::Fem).is_none());
+        assert!(geometry_blocks_solver_run(&scene, GeometryBackendTarget::Fdm).is_some());
+        scene.objects[0].geometry.geometry_params["volume"] = json!("surface");
+        let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        let diagnostic = validation.diagnostics.iter().find(|row| row.code == "GEOMETRY_IMPORTED_SURFACE_ONLY").unwrap();
+        assert!(!diagnostic.blocks.iter().any(|block| block == "realize_geometry"));
+        assert!(diagnostic.blocks.iter().any(|block| block == "build_mesh"));
+        assert!(geometry_blocks_solver_run(&scene, GeometryBackendTarget::Fem).is_some());
+    }
+
+    #[test]
     fn auxiliary_geometry_preserves_mesh_body_without_magnetic_references() {
         for role in ["antenna", "conductor", "geometry"] {
             let mut scene = scene_with_object(SceneGeometry {
+                source_asset: None,
                 geometry_kind: "Box".to_string(),
                 geometry_params: json!({ "size": [1.0, 2.0, 3.0] }),
                 bounds_min: None,
@@ -1926,17 +2066,25 @@ mod tests {
             assert_eq!(realized.bodies[0].object_id, "free");
             assert_eq!(realized.bodies[0].bounds_max, [0.5, 1.0, 1.5]);
 
+            scene.objects[0].tags.clear();
             scene.objects[0].role = "magnet".to_string();
-            assert!(geometry_blocks_mesh_build(&scene, GeometryBackendTarget::Fem).is_some());
+            scene.objects[0].physics_stack = vec![crate::ScriptBuilderMagneticInteractionEntry {
+                kind: crate::ScriptBuilderMagneticInteractionKind::Exchange,
+                enabled: true,
+                params: None,
+            }];
+            assert!(geometry_blocks_mesh_build(&scene, GeometryBackendTarget::Fem).is_none());
             let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
             assert!(validation.diagnostics.iter().any(|entry| entry.code == "GEOMETRY_OBJECT_MATERIAL_MISSING"));
             assert!(validation.diagnostics.iter().any(|entry| entry.code == "GEOMETRY_OBJECT_MAGNETIZATION_MISSING"));
+            assert!(geometry_blocks_solver_run(&scene, GeometryBackendTarget::Fem).is_some());
         }
     }
 
     #[test]
     fn auxiliary_geometry_rejects_explicit_dangling_magnetic_references() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 2.0, 3.0] }),
             bounds_min: None,
@@ -1953,6 +2101,7 @@ mod tests {
     #[test]
     fn box_scene_realizes_with_bounds_and_dirty_state() {
         let scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 2.0, 3.0] }),
             bounds_min: None,
@@ -1970,6 +2119,7 @@ mod tests {
     #[test]
     fn arch_waveguide_scene_realizes_with_python_ir_bounds() {
         let scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "ArchWaveguide".to_string(),
             geometry_params: json!({
                 "length": 400e-9,
@@ -2004,6 +2154,7 @@ mod tests {
     #[test]
     fn microstrip_scene_derives_bounds_from_stations_not_stale_stored_bounds() {
         let scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "MicrostripAntennaLayout".to_string(),
             geometry_params: json!({
                 "length_m": 1e-6,
@@ -2045,6 +2196,7 @@ mod tests {
     #[test]
     fn microstrip_scene_rejects_unordered_stations_and_nonrigid_transform() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "MicrostripAntennaLayout".to_string(),
             geometry_params: json!({
                 "length_m": 1e-6,
@@ -2098,6 +2250,7 @@ mod tests {
     #[test]
     fn cpw_scene_uses_all_station_bounds_and_rejects_fdm() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "CPWAntennaLayout".to_string(),
             geometry_params: cpw_params(),
             bounds_min: Some([-1.0; 3]), bounds_max: Some([1.0; 3]),
@@ -2146,6 +2299,7 @@ mod tests {
     #[test]
     fn unsupported_csg_blocks_mesh_build() {
         let scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Csg".to_string(),
             geometry_params: json!({ "op": "union", "children": [] }),
             bounds_min: None,
@@ -2158,6 +2312,7 @@ mod tests {
     #[test]
     fn workspace_body_ids_are_stable_when_object_order_changes() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 1.0, 1.0] }),
             bounds_min: None,
@@ -2190,6 +2345,7 @@ mod tests {
     #[test]
     fn rotated_box_bounds_are_conservative_world_aabb() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [2.0, 4.0, 2.0] }),
             bounds_min: None,
@@ -2208,6 +2364,7 @@ mod tests {
     #[test]
     fn duplicate_region_and_overlap_emit_diagnostics() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 1.0, 1.0] }),
             bounds_min: None,
@@ -2234,6 +2391,7 @@ mod tests {
     #[test]
     fn tiny_feature_below_mesh_size_warns() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 1.0, 0.1] }),
             bounds_min: None,
@@ -2250,6 +2408,7 @@ mod tests {
     #[test]
     fn manual_universe_outside_blocks_mesh_and_solver_but_auto_does_not() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".into(),
             geometry_params: json!({"size": [2.0, 2.0, 2.0]}),
             bounds_min: None,
@@ -2292,6 +2451,7 @@ mod tests {
     #[test]
     fn manual_universe_requires_finite_positive_size_even_without_geometry() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".into(),
             geometry_params: json!({"size": [1.0, 1.0, 1.0]}),
             bounds_min: None,

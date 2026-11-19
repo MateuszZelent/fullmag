@@ -26,6 +26,8 @@
 #if FULLMAG_FEM_WITH_SLEPC
 #include <petscksp.h>
 #include <slepceps.h>
+#include "cpu/frequency_domain/modal_augmented_shift_solver.hpp"
+#include "cpu/frequency_domain/modal_poisson_lu.hpp"
 #include "cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp"
 #include "cpu/frequency_domain/modal/shifted_ksp_certified_recovery.hpp"
 #endif
@@ -1875,6 +1877,75 @@ bool create_native_floquet_shifted_preconditioner(
     // coefficients before GMRES can apply the actual Schur complement.
     *normalization_scale = scale;
     return true;
+}
+
+// Exact augmented shift-invert factorization for the Floquet Schur pencil
+// (note 0830, eq-poisson-airbox-augmented-shift):
+//   K = [[R A_qq - tau G, R A_qphi], [A_phiq, P]],
+// where R is the shell's phase rotation (rotate_native_floquet_vector_in_place)
+// and every block carries the same normalization as the matrix-free shell, so
+// the q-block of K^{-1} [r; 0] is (R S - tau G)^{-1} r.  The new solver is
+// appended to `owners`; nullptr means "keep the magnetic-only preconditioner".
+AugmentedShiftSolver *create_native_floquet_augmented_shift_solver(
+    const NativeFloquetMatShellContext &context,
+    Mat gyrotropic,
+    PetscScalar shift,
+    std::vector<std::unique_ptr<AugmentedShiftSolver, AugmentedShiftSolverDeleter>> *owners)
+{
+    if (owners == nullptr || gyrotropic == nullptr || context.rotated_a_qq == nullptr ||
+        context.a_qphi == nullptr || context.a_phiq == nullptr || context.p == nullptr ||
+        context.q_complex_count <= 0 ||
+        context.q_split_count != 2 * context.q_complex_count ||
+        (context.phase_sign != 1 && context.phase_sign != -1)) {
+        return nullptr;
+    }
+    const PetscInt complex_count = context.q_complex_count;
+    const PetscScalar sign = static_cast<PetscScalar>(context.phase_sign);
+    Mat rotation = nullptr;
+    Mat rotated_a_qphi = nullptr;
+    Mat shifted_block = nullptr;
+    bool built = MatCreateSeqAIJ(
+        PETSC_COMM_SELF, context.q_split_count, context.q_split_count,
+        1, nullptr, &rotation) == 0;
+    for (PetscInt index = 0; built && index < complex_count; ++index) {
+        // (R y)_re = s * y_im and (R y)_im = -s * y_re.
+        built = MatSetValue(rotation, index, complex_count + index, sign,
+                            INSERT_VALUES) == 0 &&
+            MatSetValue(rotation, complex_count + index, index, -sign,
+                        INSERT_VALUES) == 0;
+    }
+    built = built &&
+        MatAssemblyBegin(rotation, MAT_FINAL_ASSEMBLY) == 0 &&
+        MatAssemblyEnd(rotation, MAT_FINAL_ASSEMBLY) == 0 &&
+        MatMatMult(rotation, context.a_qphi, MAT_INITIAL_MATRIX, PETSC_DEFAULT,
+                   &rotated_a_qphi) == 0 &&
+        MatDuplicate(context.rotated_a_qq, MAT_COPY_VALUES, &shifted_block) == 0 &&
+        MatAXPY(shifted_block, -shift, gyrotropic, DIFFERENT_NONZERO_PATTERN) == 0;
+    std::unique_ptr<AugmentedShiftSolver, AugmentedShiftSolverDeleter> solver;
+    if (built) {
+        solver.reset(new (std::nothrow) AugmentedShiftSolver{});
+        built = solver != nullptr &&
+            create_augmented_shift_solver_from_blocks(
+                shifted_block, rotated_a_qphi, context.a_phiq, context.p, solver.get());
+    }
+    if (shifted_block != nullptr) {
+        MatDestroy(&shifted_block);
+    }
+    if (rotated_a_qphi != nullptr) {
+        MatDestroy(&rotated_a_qphi);
+    }
+    if (rotation != nullptr) {
+        MatDestroy(&rotation);
+    }
+    if (!built) {
+        std::fprintf(
+            stderr,
+            "Floquet modal: augmented exact shift factorization unavailable; "
+            "using the magnetic-only preconditioner\n");
+        return nullptr;
+    }
+    owners->push_back(std::move(solver));
+    return owners->back().get();
 }
 
 bool normalize_native_floquet_pencil(
@@ -4279,11 +4350,8 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
     if (error != PETSC_SUCCESS || poisson_pc == nullptr) {
         return error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE;
     }
-    error = PCSetType(poisson_pc, PCLU);
-    if (error != PETSC_SUCCESS) {
-        return error;
-    }
-    error = PCFactorSetShiftType(poisson_pc, MAT_SHIFT_NONE);
+    // Same exact P(k) LU realization as the production context.
+    error = configure_modal_poisson_lu(poisson_pc, MAT_SHIFT_NONE);
     if (error != PETSC_SUCCESS) {
         return error;
     }
@@ -7473,7 +7541,11 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     result.factorization_shift_policy = "pending_preconditioner_norm";
     result.poisson_ksp_type = "preonly";
     result.poisson_pc_type = "lu";
+#if FULLMAG_FEM_WITH_SLEPC
+    result.poisson_factorization_package = kModalPoissonLuPackage;
+#else
     result.poisson_factorization_package = "petsc_default_lu";
+#endif
     result.poisson_factorization_shift_policy = "MAT_SHIFT_NONE";
     result.poisson_iteration_semantics =
         "preonly_factorization_no_iterative_convergence";
@@ -7525,6 +7597,18 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     cancellation_context_owner->cancel_requested = spectral_request.cancel_requested;
     const std::lock_guard<std::mutex> lock(
         fullmag::fem::runtime::petsc_slepc_process_mutex());
+    // Exact augmented shift-invert factorizations (note 0830).  Declared after
+    // the PETSc lock so they are destroyed while it is still held.  An EPS can
+    // reference the PCSHELL context, so these are released (leaked) together
+    // with any EPS whose cleanup is unsafe.
+    std::vector<std::unique_ptr<AugmentedShiftSolver, AugmentedShiftSolverDeleter>>
+        augmented_shift_owners;
+    PetscReal augmented_shift_target = 0.0;
+    const auto release_augmented_shift_owners = [&]() noexcept {
+        for (auto &owner : augmented_shift_owners) {
+            static_cast<void>(owner.release());
+        }
+    };
 
     if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
         result.status = "solve_error";
@@ -7707,6 +7791,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             (void)shifted_ksp_true_convergence_context.release();
         }
         (void)cancellation_context_owner.release();
+        release_augmented_shift_owners();
         (void)local_state_owner.release();
     };
     auto destroy_all = [&]() noexcept {
@@ -7775,6 +7860,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         }
         if (!eps_cleanup_is_safe) {
             (void)cancellation_context_owner.release();
+            release_augmented_shift_owners();
         }
         if (last_shifted_solve.rhs != nullptr) {
             const PetscErrorCode error = VecDestroy(&last_shifted_solve.rhs);
@@ -7894,9 +7980,9 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         // This preonly LU computes P(k)^-1 inside the physical Schur operator.
         // A factorization shift would change that inverse, so an unusable P(k)
         // must fail closed instead of regularizing the physical Poisson block.
+        // MUMPS (when available) pivots and applies no shift either.
         if (KSPGetPC(context.p_ksp, &poisson_pc) != 0 ||
-        PCSetType(poisson_pc, PCLU) != 0 ||
-        PCFactorSetShiftType(poisson_pc, MAT_SHIFT_NONE) != 0 ||
+        configure_modal_poisson_lu(poisson_pc, MAT_SHIFT_NONE) != 0 ||
         KSPSetTolerances(
             context.p_ksp,
             poisson_ksp_rtol,
@@ -8244,6 +8330,31 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         : "magnetic_only_MAT_SHIFT_NONZERO_sqrt_machine_epsilon_times_norm";
     result.factorization_shift_amount =
         static_cast<double>(factorization_shift_amount);
+    // Beyond the dense exact materialization, replace the magnetic-only LU
+    // with the exact augmented (q, phi) factorization.  The magnetic matrix
+    // stays the ST preconditioning matrix; the certified true-residual test of
+    // the inner shifted KSP is unchanged.  Retries at the same target reuse
+    // the factorization.
+    AugmentedShiftSolver *augmented_shift = nullptr;
+    if (!exact_schur_preconditioner_materialized &&
+        floquet_augmented_shift_solver_enabled()) {
+        if (!augmented_shift_owners.empty() &&
+            augmented_shift_owners.back() != nullptr &&
+            augmented_shift_target == target_shift) {
+            augmented_shift = augmented_shift_owners.back().get();
+        } else {
+            augmented_shift = create_native_floquet_augmented_shift_solver(
+                context, gyrotropic, static_cast<PetscScalar>(target_shift),
+                &augmented_shift_owners);
+            if (augmented_shift != nullptr) {
+                augmented_shift_target = target_shift;
+            }
+        }
+    }
+    if (augmented_shift != nullptr) {
+        result.factorization_shift_policy = "augmented_exact_shift_mumps";
+        result.factorization_shift_amount = 0.0;
+    }
     // The explicit magnetic shifted pencil remains a preconditioner only; the
     // shell is the eigensolver operator. A Jacobi diagonal is invalid here
     // because the real-frequency rotation puts magnetic and gyrotropic terms
@@ -8280,10 +8391,12 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         KSPSetPCSide(shifted_ksp, PC_RIGHT) != 0 ||
         KSPSetNormType(shifted_ksp, KSP_NORM_UNPRECONDITIONED) != 0 ||
         KSPGetPC(shifted_ksp, &shifted_pc) != 0 ||
-        PCSetType(shifted_pc, PCLU) != 0 ||
-        PCFactorReorderForNonzeroDiagonal(shifted_pc, 1.0e-12) != 0 ||
-        PCFactorSetShiftType(shifted_pc, MAT_SHIFT_NONZERO) != 0 ||
-        PCFactorSetShiftAmount(shifted_pc, factorization_shift_amount) != 0 ||
+        (augmented_shift != nullptr
+             ? configure_augmented_shift_pc(shifted_pc, augmented_shift) != 0
+             : (PCSetType(shifted_pc, PCLU) != 0 ||
+                PCFactorReorderForNonzeroDiagonal(shifted_pc, 1.0e-12) != 0 ||
+                PCFactorSetShiftType(shifted_pc, MAT_SHIFT_NONZERO) != 0 ||
+                PCFactorSetShiftAmount(shifted_pc, factorization_shift_amount) != 0)) ||
         KSPSetTolerances(
             shifted_ksp,
             shifted_ksp_tolerance,
@@ -8388,6 +8501,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
         eps_cleanup_is_safe = false;
         (void)cancellation_context_owner.release();
+        release_augmented_shift_owners();
         close_local_state_before_return();
         return result;
     }
@@ -8886,6 +9000,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             (void)shifted_ksp_true_convergence_context.release();
         }
         (void)cancellation_context_owner.release();
+        release_augmented_shift_owners();
         close_local_state_before_return();
         return result;
     }

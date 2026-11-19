@@ -33,6 +33,7 @@ OUTPUT_RELATIVE = Path("packages/fullmag-py/src/fullmag/client/_generated")
 # Operations used by ``fullmag.client``; every entry must exist in the spec.
 OPERATION_IDS: tuple[str, ...] = (
     "platform_get_platform_health",
+    "workspace_get_workspace_material_library",
     "sessions_get_sessions",
     "sessions_post_sessions",
     "sessions_get_sessions_current",

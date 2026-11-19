@@ -326,9 +326,18 @@ oddzielny zakres. Kształt odpowiedzi OpenAPI pozostaje bez zmian.
 - `data/tables/{table_id}/rows` owns table-shaped scalar histories for charts.
   The default chart table is `data/tables/default/rows`; `data/scalars` is a
   compatibility projection until all scalar-history consumers migrate.
+  Opcjonalne `current_observation` identyfikuje wyłącznie pojedynczy bieżący
+  wiersz zaakceptowanej obserwacji: session/run, `request_scope_epoch`, krok
+  i rewizję skalarów. Scope wiąże instancję API i jej wewnętrzną epokę;
+  nie jest to publiczny token sesji `session_id@started_at_unix_ms`.
+  Binding powstaje przy zaakceptowanej publikacji, nie podczas odczytu historii.
+  Wielowierszowe, importowane i niepowiązane okna nie otrzymują tego pola.
+  Stopka może użyć odpowiedzi HTTP po odświeżeniu tylko przy zgodności tego
+  bindingu z bieżącym statusem; nie przypisuje sama run_id historycznej próbce.
 - `visualization/display` owns the legacy display-selection projection.
 - `visualization/state` owns canonical session-wide renderer state. Its schema version 4 exposes `quantity`, independent `layers`, `domains`, `sampling`, FDM/FEM view policy, trim/clip state, global camera state, vector glyph style, object/part `overrides`, a complete effective target registry for current scene objects/mesh parts, and diagnostics while retaining flat display fields as a compatibility projection.
 - `visualization/client-acks` owns bounded, diagnostic frontend feedback for renderer state revisions. Clients `POST` `applied`, `rendered`, or `failed` acknowledgements after consuming `visualization/state`; operators and scripts can `GET` the resource to confirm whether a visible browser applied a requested mode such as `surface` versus `wireframe`.
+- FEM target overrides may independently set `display.wireframe_geometry_scope` to `surface` or `full`; the target registry exposes the optional resolved `settings.wireframe_geometry_scope`. Missing legacy values mean surface wireframe. Object/part defaults explicitly publish `surface`; explicit wireframe `full` overrides round-trip normally. This optional additive field does not change `display.geometry_scope`, vector or point sampling, vector budgets, or the Airbox/FDM extent contract.
 - `workspace/*` owns shell state only and must not mutate physics semantics.
 - `status.capabilities` is the UI gating source of truth; discretization details may drive adapters but must not synthesize capabilities.
 
@@ -409,6 +418,34 @@ Solver residuals, balance errors, refresh counts, and requested/resolved lane
 belong in thin diagnostics/manifests, while numerical arrays stay under
 `data/fields`.
 
+
+### Jawne projekcje quantities tensorowych
+
+Katalog quantities rozdziela dostępność surowego tensora i jego jawnych widoków.
+Dla opisanego deskryptorem flow-major tensora3×3 surowe dziewięć komponentów
+zachowuje render=unsupported_shape oraz publication=export_only. Sam deskryptor
+lub możliwość pobrania payloadu nie upoważnia UI do renderowania.
+
+Opcjonalna lista resolved_capability.projections zawiera token, components,
+output_shape, render i publication. Pusta lista jest pomijana w JSON;
+starszy klient nadal odrzuca surowy tensor. c0…c8 i frobenius dają
+spatial_scalar/1, a spin_flow_x/y/z dają vector_field/3. components opisuje
+wynik projekcji, nie zmienia indeksowania zachowanego źródłowego nośnika9.
+Norma po interpolacji wymaga zachowania wszystkich składowych do interpolacji;
+nie wolno interpolować samych norm węzłowych.
+
+Listę rozstrzyga wspólny resolver runnera na podstawie kanonicznego opisu,
+rzeczywistego providera i stanu materializacji. Dla materialized wymagany jest
+zgodny nielegacy nośnik9komponentów z tożsamością i rewizją; unmaterialized
+lub pending dopuszczają żądanie tylko przy rzeczywistym providerze.
+Unavailable, legacy_unverified, brak deskryptora, full i nieznany token
+nie dają zgody na interaktywną projekcję. Katalog nie tworzy brakującego pola.
+
+Wspólne helpery klienta sprawdzają dokładny wybrany token, kształt wyniku
+i render/publication. Object, Airbox oraz FieldMap korzystają z tej samej
+polityki; wybór quantity i pierwszej dozwolonej projekcji jest jedną
+transakcją. Zmiana widoku nie uruchamia nowego Solve.
+
 ## 3.1 Realtime invalidation rules
 
 The canonical websocket remains an invalidation bus, not a payload stream. That
@@ -472,7 +509,7 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `simulation/stages/execution` | full stage tree and stage state, including tolerance-qualified completion duration and optional stage-owned mesh generation, topology fingerprint, and mesh revision identity; missing legacy identity remains unknown and is never synthesized from mesh names or element counts |
 | `simulation/solver/status` | live solver state: runtime state, algorithm, step, algorithm-appropriate `dt`, exact torque, separate RHS norm, convergence, stop reason/metric/unit, warnings |
 | `diagnostics/solver-profile` | opt-in bounded phase profile plus explicit solver, end-to-end, and successful-publication rate objects |
-| `simulation/solver/energies/*` | current and historical energy samples |
+| `simulation/solver/energies/*` | current and historical energy samples; `current` returns 204 without a body when a valid workspace has no qualified current sample, 200 for an available sample (including exact zero), and 404 when no workspace exists |
 | `data/tables/default/rows` | table-shaped scalar history for ECharts windows, including `cursor`, `from_row`/`to_row`, `from_t`/`to_t`, `limit`, `target_points`, `decimation`, and `include_tail` query identity; JSON rows are the control-plane/debug view, while `rows.bin` is the production data-plane payload for chart values |
 | `data/scalars` | compatibility projection of the default scalar table, not a second scalar-history owner |
 | `data/artifacts` | artifact index entries; entries may expose optional region-owned authoring provenance summaries (`scene_revision`, authored region count, material field count, coupling count, blocked/deferred diagnostic counts) but must not inline heavy artifact payloads |
@@ -487,6 +524,8 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `meshing/meshes/shared-domain/manifest` | mesh identity, mesh provenance, object segments, mesh parts, and tree/selection metadata |
 | `meshing/meshes/*/quality`, `meshing/meshes/*/quality/per-element`, `meshing/meshes/*/report`, and `meshing/meshes/*/size-field` | detailed shared-domain, object-scoped, and airbox-scoped quality summaries, binary per-element quality data, reports, and realized size-field diagnostics |
 | `visualization/client-acks` | latest client-side acknowledgement per browser viewport for observed visualization-state revisions |
+
+`LiveStatus.solver_energy_current_available` is a thin availability hint computed by the same qualified-source selector as the current-energy resource. It may change between the status read and the resource request. Clients must accept an empty 204 response as no current sample, retain request-scope and API-instance checks, and hide data from an earlier run or stage. The hint does not authorize a historical fallback during active Docker execution or synthesize a zero-energy sample.
 
 Analytic mesh-region projection is fail-closed. Singular or non-finite affine
 transforms, imported solids without a qualified analytic occupancy evaluator,
@@ -564,6 +603,27 @@ porównania ProblemIR oryginału z ProblemIR sceny wyrenderowanej z powrotem do
 Pythona (geometria, materiały, komórka FDM, dynamika i etapy badania);
 `verified` nie oznacza, że scena jest skryptem. Aktualizacja authoring, open i
 save nie zmieniają osadzonego skryptu. Odpowiedź ma `memory_only` durability.
+Nowy producent zwraca również `scene_document`: dokładnie ten sam dokument
+`scene.v2`, który zapisał w archiwum. Pole jest opcjonalne na granicy transportu,
+ale aktywacja UI odmawia odpowiedzi bez niego. Import nie aktywuje sesji sam:
+UI wymaga pustego workspace, tworzy sesję z `replace_current: false`, potwierdza
+jej tożsamość i wykonuje istniejącą transakcję `replace_scene` z aktualnym
+`base_revision` i nagłówkiem `x-fullmag-session-scope`. Zachowuje jawnie wybrane
+`study.output_storage` przy pełnym zastąpieniu sceny oraz archive/fidelity importu.
+Podczas importu UI tworzy pustą sesję authoring w trybie CPU double
+(FEM dla jawnego `fem`, FDM dla pozostałych). Pełny `replace_scene` zachowuje authored
+backend (`auto|fdm|fem|hybrid`), device (`auto|cpu|gpu`) i precision (`single|double`);
+niepoprawne wartości są odrzucane przed create. Przygotowanie obliczeń odczytuje
+intencję z `scene.study` i podlega istniejącym bramkom możliwości, bez gwarancji
+wykonalności każdej kombinacji. Źródła: `crates/fullmag-api/src/router_v2/handlers/sessions/create.rs::validated_execution`
+oraz `crates/fullmag-application/src/run_spec.rs::RequestedExecution::validate`.
+Nie uruchamia Compute. Zapis projektu później korzysta z bindingu potwierdzonej
+sesji. Nieznany wynik create lub transakcji nie jest automatycznie ponawiany.
+Latch create jest związany z generacją operacji; potwierdzony ACK lub odmowa
+400/409 przed publikacją zamykają próbę, unknown jej nie resetuje. Jeden
+guard PendingFormRegistry obejmuje create, replace_scene i finalizację bindingu
+oraz historii. Nowy draft po create jest zachowany i blokuje dalszą aktywację.
+
 
 `POST /v2/persistence/projects/authoring` aktualizuje dostarczone archiwum
 przez ten sam use case dokumentu. Wymaga oczekiwanego ProjectId i rewizji oraz
@@ -633,6 +693,50 @@ The event carries no descriptor or mask data. HTTP v2 remains authoritative,
 and the recommended fetch invalidates the descriptor and its revision-scoped
 binary membership consumers.
 
+(checkpoint-restore-admission)=
+### Checkpoint restore admission — źródłowa odmowa transportu A
+
+Status A: **`IMPLEMENTED_SOURCE_ONLY`, `NOT_COMPILED`, `NOT_EXECUTED`**.
+`crates/fullmag-session/src/types.rs::RestoreClass` zawiera jawne `Unsupported`
+(wire `unsupported`). To odmowa continuation, bez automatycznego przejścia do
+`InitialConditionImport`, `LogicalResume`, portable importu lub innego restore.
+
+Wspólny owner `crates/fullmag-runner/src/lib.rs::validate_fdm_transport_checkpoint_resume_support`
+odmawia dla rzeczywistego typed CPU M1/M2/M3 spin workflow, również z frozen.
+`Ok(())` oznacza tylko, że ten konkretny CPU guard nie dotyczy planu; dalsze
+schema/identity/backend gates nadal obowiązują. Brak wymaganej transportowej
+metadata/identity daje odmowę. Sam schema M3 v1/v2, study-kind string ani
+prywatny codec v2/original-stage helper B nie nadają ExactResume.
+
+`crates/fullmag-api/src/session_persistence.rs::checkpoint_resume_unsupported_reason`
+i `supported_checkpoint_restore_class` stosują tę odmowę w create/list/detail;
+`restore_checkpoint_with_context` odmawia 409 przed odczytem common state oraz
+mutacją snapshotu. Wpis `CheckpointEntry` nie ma nowego pola ze szczegółowym
+powodem; endpoint zachowuje powód w odpowiedzi błędu, UI pokazuje klasę.
+Dla pozostałych przypadków catalog nadal używa wcześniejszego
+self-compatibility; ta zmiana nie dowodzi zgodności katalogu z aktualną runtime
+identity ani pełnego pozytywnego admission innych checkpointów.
+
+`crates/fullmag-cli/src/main.rs::main` stosuje ten sam support preflight w ResumeJson
+przed odczytem payloadu/schema. `crates/fullmag-cli/src/orchestrator.rs::capture_pause_checkpoint`
+odmawia pause capture przed store; `run_script_mode` odmawia resume/frozen hot-apply przed `take()`,
+zachowując paused state po odmowie. UI
+`apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts::restoreCheckpointDisabledReason`
+dopuszcza restore wyłącznie dla `exact_resume`;
+`apps/control-room/src/modules/start/model/continueModel.ts::REASON_NOT_EXACT` opisuje `unsupported`
+bez własnego solverowego walidatora. Nie dodano globalnego guard dla pure
+magnetic/frozen/ABM3 bez spin workflow; GPU/FEM ownerzy pozostają odrębni.
+
+Full v2 common/primary carriers/generation, activation/spin history, immutable
+original context, committed output/CAS prefix i atomic restore pozostają OPEN;
+[§13 frozen spec](frozen-spins-v1.md#frozen-v2-composite-checkpoint) nie stanowi
+publicznego admission. Aktualny #80 nie zawiera A. Nowy wariant wire wymaga
+oficjalnej generacji OpenAPI oraz TS typów/klienta z udanego przyszłego managed
+pakietu zawierającego piny A, z jego source/snapshot receipt; plików generowanych
+nie aktualizowano ręcznie. HTTP/native/browser i pełne ExactResume są nadal
+NOT VERIFIED. Source freeze A:
+`77afed0bb488f115d3692e27044d5209daa876e33eceafbe34e78566c8267844`.
+
 ### Relaxation solver contract
 
 The simulation resources expose one algorithm-specific relaxation contract:
@@ -650,6 +754,14 @@ The simulation resources expose one algorithm-specific relaxation contract:
   threshold, and diagnostics. Budget exhaustion is completed/non-converged;
   numerical stagnation is failed/non-converged. Table rows and artifacts do
   not infer completion.
+  Ścieżka accepted przenosi oryginalny `RunResult.completion` przez receipt
+  `fullmag.accepted_worker_execution.v4` i osobny, wersjonowany dowód CAS
+  `accepted_terminal_completion.v1`. Projekcja przyjmuje go wyłącznie dla
+  zakończonego zadania `Succeeded`, po weryfikacji run/task/step/attempt/epoch,
+  referencji accepted state, digestu końcowego stanu oraz jego zegara.
+  Ten jawny dowód przenosi istniejący wynik solvera; nie wyprowadza zbieżności
+  ze statusu zadania, tabeli ani ostatniego torque. Odczyt starszych receiptów
+  V1–V3 pozostaje dozwolony, ale brak dowodu nie promuje `converged=true`.
 - `time_to_tolerance_seconds` uses stage start/completion timestamps only
   when `status=completed`, `converged=true`, the reason and canonical metric
   kind/name form a coherent torque or energy tolerance, both value and
@@ -677,6 +789,72 @@ clients must not add counters with different semantics to reconstruct a wall
 time. The profile resource is opt-in and bounded; missing timing samples are
 represented by zero counters plus an empty semantic list and are not evidence
 that a zero-time operation was measured.
+
+#### Opcjonalny profil zaakceptowanej operacji anteny
+
+Istniejące `set_solver_profile` oraz `diagnostics/solver-profile` obejmują
+również jednorazowe obliczenie zamkniętego obwodu z operatorem analytic RT0
+surface. Jest to diagnostyka, nie zmiana `ProblemIR`, fizyki, tolerancji,
+polityki pola ani naukowego bundla V/J/H. Brak konfiguracji zachowuje OFF:
+nie powstaje próbka operacji ani dodatkowy pomiar zegara natywnego profilera.
+Istniejący protokół poleceń workera v4 pozostaje niezmieniony.
+
+W runtime API-only polecenie konfiguruje **następne admission**, nigdy przyjęty
+już RunIntent. Znormalizowana konfiguracja jest utrwalana w istniejącym
+command journal. Przy admission kopiowana jest do niezmiennego
+`RunSpecification.parameters.solver_profile`:
+
+```json
+{"schema_version":"accepted_solver_profile.v1","config":{"enabled":true,"sample_every":1,"sample_interval_wall_ms":0,"max_samples":128,"emit_engine_log":false,"persist_artifact":true}}
+```
+
+Obsługiwane klucze konfiguracji są dokładnie kluczami `SolverProfileConfig`.
+Nieznane klucze lub wersja są odrzucane. Pierwsza realizacja accepted ON
+wymaga jawnego `persist_artifact=true` i odrzuca `emit_engine_log=true`.
+Obecność tego parametru jest dozwolona wyłącznie dla Study z aktywnymi etapami
+closed-loop inspection; dla LLG/FEM Run/Relax oraz external-lead należy
+usunąć parametr. Brak parametru nie zmienia ich dotychczasowego profilowania.
+
+`SolverProfileState` zachowuje osobny, ograniczony bufor `operation_samples`.
+Nie tworzy fikcyjnego kroku LLG, nie zmienia `latest_samples`, agregatów ani
+liczników szybkości LLG. Jedna zakończona operacja daje jedną próbkę, niezależnie
+od bramek `sample_every` i `sample_interval_wall_ms` dla kroków czasowych.
+Wynik operacji to `completed`, `failed` lub `cancelled`; kontrolowana odmowa
+operatora może zachować częściowe czasy diagnostyczne, bez publikacji
+częściowego wyniku naukowego.
+
+Próbka `antenna.closed_loop.inspect` zawiera całkowity czas monotoniczny
+w ns, opcjonalny czas natywnego operatora oraz wyłączne fazy:
+`antenna.surface.source_prepare`, `exact_geometry`, `binary64`, `precision80`,
+`precision120`, `consistency`, `reduction`, `serialization`, `unattributed`
+(każda nazwa po pierwszej ma ten sam prefiks `antenna.surface.`).
+`unattributed` obejmuje resztę całej operacji runnera, w tym transport i
+opakowanie artefaktów poza mierzonym jądrem. Brak natywnego pomiaru oznacza
+`native_operator_wall_ns=null`, nie pomiar zerowego czasu. Flaga
+`accounting_issue` ujawnia niespójność zegara/sumy zamiast ukrywać ją.
+
+Osobny `worker_operation_profile.v1.json` jest niezmiennym receiptem
+próby: wiąże Run/task/attempt/ownership epoch, tożsamość wykonania oraz digest
+znormalizowanej konfiguracji. Odczyt sprawdza te powiązania, kształt próbki,
+kolejność faz, sumę i procenty. Zapis następuje przed obsługą wyniku operacji;
+błąd zapisu jawnie włączonej diagnostyki blokuje publikację i zachowuje
+pierwotny typowany błąd native jako przyczynę, jeśli taki wystąpił.
+Do bieżącej sesji trafia wyłącznie profil jej własnej zaakceptowanej próby;
+nie wolno podstawiać wyniku obcego headless runu. Aktualna konfiguracja
+następnego admission i konfiguracja wykonanego pomiaru muszą pozostać
+rozróżnialne. Późniejsze Disable nie jest cofane przez projekcję historii.
+
+Właściciele: `accepted_study_worker::accepted_solver_profile::{config,validate_study_profile,persist,load_projection}`
+w `crates/fullmag-api/src/accepted_solver_profile.rs`,
+`execute_antenna_closed_loop_inspection_profiled_typed` w runnerze,
+`SolverProfileState` w `crates/fullmag-runner/src/solver_profile.rs`,
+`SurfaceRt0PhaseReport` w prywatnym jądrze
+`backends/fem/cpu/mfem/interactions/oersted/surface_rt0.hpp`.
+Dodatkowy C ABI `fullmag_fem_solve_prepared_closed_loop_rt0_surface_profiled_v1`
+przyjmuje osobny bufor profilu; stare struktury i stare wywołanie OFF zachowują
+układ. Alias bufora profilu z wejściem lub innym wyjściem jest odrzucany
+przed mutacją. Sam opis i przegląd kodu nie zastępują buildu oraz rzeczywistych
+porównań OFF/ON i pozytywnych/negatywnych sprawdzeń HTTP.
 
 The Study Explorer node and its Inspector consume these typed v2 resources
 through the generated transport, handwritten facade, and resource hooks. They
@@ -822,6 +1000,45 @@ ID and is resolved through the model resource. Public v9 patches validate a
 finite `position_fraction` in `[0,1]` and a positive finite slab thickness;
 legacy v8 persistence input is migrated privately and is never dual-written
 as `active_monitor_id`.
+
+`visualization/state.planar.field_overlays` is an additive presentation list
+(default `[]` for persisted documents without the property), with at most four
+entries and unique non-empty `id` values. Each entry owns `quantity_id`,
+`component`, `view_scope`, `colormap`, `range`, `raster_opacity`,
+`raster_visible`, `vectors_visible`, and `vector_style`, using the existing
+planar types and validation. `view_scope: {"kind":"object","scope_id":"<object_id>"}`
+selects a canonical scene object for FDM or FEM, intersected with the source
+target. Object ids are validated against the current visualization target
+registry; membership is resolved by the existing object-target machinery.
+An omitted PATCH property preserves the list; a
+supplied list replaces it atomically, including `[]` to clear it. Source,
+default slice/operator, resolution, quality, and camera/interaction remain
+shared by the single planar view. Profiles do not modify the scene, Python,
+ProblemIR, or solver fields.
+
+Default-source planar reads accept either `position_fraction` (existing
+carrier-relative layer/node snapping) or `position_m` (finite SI world
+coordinate on the selected plane's normal axis), never both. `position_m`
+samples the exact physical plane without per-carrier FDM/FEM snapping; the
+other two frame coordinates retain the source's origin. The request is not
+clamped to a carrier's extent: occupancy describes missing intersections.
+Section metadata publishes the exact requested/resolved coordinate and its
+carrier-relative fraction (which may lie outside `[0,1]`). Absolute position
+is part of source/sample identity and is preserved in scalar, vector, mask,
+mesh, probe, profile and PNG request replay. Probe and profile queries also
+preserve fractional position overrides. Authored-monitor reads reject either
+override and retain their authored physical frame. Composition clients align
+samples using physical frames and verify shared plane/operator and resource
+revisions; equal pixel indices or equal fractions across scopes are insufficient.
+
+Planar metadata exposes nullable `observation_frame` using the existing
+`AcceptedObservationFrameRef`. Two quantities prove temporal coherence when
+both references are present and `observation_frame_id` matches. Quantity and
+carrier revisions are local identities and need not match across quantities.
+The reference comes from the exact selected publication; accepted target-only
+Airbox layouts inherit their publication's frame. Historical Airbox artifacts
+and persisted snapshots without this proof publish null. Clients must report
+unknown coherence instead of substituting the current session step.
 
 Default-source target resolution is quantity-domain aware: `magnetic_only`
 quantities such as `m` select `magnetic_domain`, while full-domain quantities
@@ -1077,7 +1294,22 @@ GET    /v2/sessions/current/model/field-drives
 POST   /v2/sessions/current/model/field-drives
 PATCH  /v2/sessions/current/model/field-drives/{drive_id}
 DELETE /v2/sessions/current/model/field-drives/{drive_id}
+GET    /v2/sessions/current/model/mask-field-drives
+POST   /v2/sessions/current/model/mask-field-drives
+PUT    /v2/sessions/current/model/mask-field-drives/{drive_id}
+DELETE /v2/sessions/current/model/mask-field-drives/{drive_id}
+GET    /v2/sessions/current/model/ready-antennas
+POST   /v2/sessions/current/model/ready-antennas/terms
 ```
+
+A mask antenna (`mask_field_drive.v1`, ADR 0081) is one resource: target,
+support shape, position, frame and the list of terms with their equations. A
+replacement sends the whole antenna; the server compiles every equation and
+answers 400 with the code and path of each error
+(`docs/specs/mask-function-v1.md`). `ready-antennas` lists the functions of
+`fullmag.antennas`; `ready-antennas/terms` calls one with numeric arguments and
+returns its terms with their origin, which the client then stores in an antenna.
+The scene resource carries the antennas in `field_drives.mask_drives`.
 
 Every model mutation uses `base_revision` and returns the new
 `scene_revision`. New control-room code does not rewrite the loose
@@ -1144,6 +1376,24 @@ nie posiada jeszcze certyfikatu projekcji na docelową siatkę. Sama liczba
 deklarowanych targetów, także równa jeden, nie zmienia tego stanu. Mapa
 podpisów targetów wewnątrz `signatures` pozostaje metadanymi zależności
 planowania i nie może być użyta jako dowód materializacji projekcji.
+
+Wspólny `ArtifactFieldLocatorResource` przenosi również opcjonalny
+`sample_carrier` zweryfikowanego wyniku zamkniętego obwodu. Dla `H_ant`
+wiąże on `domain`, `carrier_kind`, `location` i `topology_digest` producenta
+z własnymi próbkami wyniku. `Global` wymaga `fem_domain_mesh_asset` i scope
+`full`; `Object` wymaga `fem_mesh_asset:<geometry key>` i scope właściwego
+`object_id`. Klucz geometrii nie musi być identyfikatorem obiektu. V i J nie
+otrzymują opisu siatki H. Starszy locator bez tego pola pozostaje czytelny,
+ale nie stanowi dowodu domeny Universe.
+
+Inspekcja historycznego Universe może wyświetlać własną niezmienną siatkę
+zaakceptowanego wyniku, z jawną tożsamością runu, etapu i źródła. Wymaga
+zgodnych ownerów, sesji, próbek i topologii FMVP/FMMT tego samego carriera;
+nie przypisuje tych wartości do bieżącej, edytowalnej siatki. Zwykły
+`carrier_scope_kind=full`, liczba punktów ani nazwa nie potwierdzają Universe.
+`topology_digest` pełnego MeshIR producenta i `topology_fingerprint` bieżącej
+siatki mają różne definicje i nie mogą być porównywane jak ten sam hash.
+Adopcja do bieżącej geometrii nadal wymaga osobnego dowodu zgodności.
 
 Every field advertises a `domain_ref`: V and J live on conductor topology,
 field bases may live on an antenna inspection grid, and LLG projections live
@@ -1303,6 +1553,41 @@ Warunki zamknięcia T14 obejmują build bieżących źródeł, regenerację Open
 typowanego klienta, facade/resource hooks, runtime HTTP oraz UI. Sama obecność
 tras i niewykonanych regresji Rust pozostaje `source_only`, nie dowodzi
 działającej powierzchni użytkownika.
+
+### Odczyt zaakceptowanej inspekcji anteny po restarcie
+
+Istniejąca rodzina `persistence/projects/{project_id}/runs/{run_id}/antenna-inspections`
+obsługuje inspekcję z zewnętrznymi leadami oraz jawną operację Study
+`ClosedLoopInspection`. Katalog zwraca tożsamości publikacji, bez dekodowania
+pakietów liczbowych. ID w ścieżce wybranego wyniku jest ID kroku Study;
+`owner.native_stage_id` pozostaje osobnym ID etapu anteny.
+
+Metadane `/{step_id}` i bajty `/{step_id}/payloads/{payload_kind}` wymagają
+przypiętych parametrów `attempt_id`, `ownership_epoch`, `package_object_ref`.
+Próba musi być bieżąca i zakończona sukcesem, a manifest oraz CAS zgodne
+z zaakceptowanym krokiem i dokładnym kodekiem jego rodziny. Zmienione
+katalogi lub nieaktualne piny dają konflikt przed odpowiedzią warunkową.
+Przejściowe zajęcie natywnej blokady zapisu daje `409` z kodem
+`antenna_store_busy`; można ponowić wyłącznie odczyt, z ograniczoną liczbą prób. Uszkodzony
+deskryptor i pozostałe błędy integralności nadal są błędami, bez fallbacku.
+Odczyt pełnej pętli dodatkowo korzysta z istniejącego `load_saved_inspection`:
+sprawdza przygotowanie, fingerprint wejścia, trwałe `Completed`, journal,
+zaakceptowany problem i cały pakiet pod blokadą odczytu. Metadane i payloady
+współdzielą ograniczone dopuszczenie z istniejącym czytnikiem pól inspekcji.
+
+Dotychczasowy JSON `accepted_antenna_inspection.v1` pozostaje bez zmian.
+Pełna pętla ma wariant `accepted_antenna_inspection.closed_loop.v1`, wspólne
+`owner`, `port_mode_id`, `output_id` oraz bounded `closed_loop_display`
+z deskryptorami istniejącego pakietu. Nie powstają fikcyjne identyfikatory
+sesji live. Liczbowe `v_raw`, `j_local_raw`, `h_raw` są odczytywane binarnie
+wraz z geometrią przez nazwy payloadów właściwe dla tej rodziny. ETag wiąże
+publikację i zawartość; GET obsługuje warunkowe `304` i pojedynczy Range.
+Nieaktualny owner nie może otrzymać `304` ani fragmentu starego wyniku.
+
+`validation_scope=full_cold_bundle` potwierdza integralność odczytu.
+`qualification=NOT VERIFIED`, `per_ampere_basis=false` i `llg_drive=false`
+pozostają jawne: odczyt archiwum nie kwalifikuje bazy pola, nie uruchamia
+Solve ani nie zastępuje istniejącej sceny użytkownika.
 
 ### Planar topological-charge analysis resource
 
@@ -1828,6 +2113,116 @@ nie jest kopiowany przez zmianę domain/topology. Dowód bundle wymaga
 obowiązkowego nonnull carrier/frame/physical-row match w positive fixture;
 warunkowe sprawdzenie tylko gdy bundle istnieje jest niewystarczające.
 
+## Inspekcja artefaktów anteny: FMVP v6 z mapowaniem u64
+
+Status: producent, codec i dopuszczenie nośnika są zaimplementowane w źródłach.
+Build po integracji, wygenerowany kontrakt OpenAPI, rzeczywiste HTTP/cold-load
+oraz browser/WebGL pozostają **NOT VERIFIED**. Opis formatu nie kwalifikuje
+źródła do bazy per-A, FFT ani LLG.
+
+Ten wariant korzysta z istniejącego zasobu
+`/v2/sessions/current/data/fields/{quantity_id}/samples/vector` i jego
+wspólnego klienta. `FMVP v5` opisany w ADR0053 nadal obsługuje pełne quantity
+IDs. `FMVP v6` oznacza odrębny układ immutable artifact inspection, którego
+natywne identyfikatory próbek wymagają `u64`. O wyborze układu decyduje wyłącznie
+zewnętrzny bajt wersji FMVP. Samo `FMMI version=4` nie rozróżnia tych układów;
+decoder nie zgaduje schematu na podstawie długości lub zawartości.
+
+### Nagłówek i metadane v6
+
+Nagłówek ma 48 bajtów. Liczby wielobajtowe są little-endian. Magic to `FMVP`,
+wersja na offsecie4 wynosi6, kind na offsecie5 wynosi1 (`float64`), offset6
+zawiera liczbę komponentów, a offset7 jest zerem. Offset8 zawiera długość
+metadanych `u32`, offset12 liczbę skalarnych wartości `u32`, zaś offsety16/20/24
+grid `u32`: `[sample_count, 1, 1]`. Quantity ID zajmuje16 bajtów UTF-8 od
+offsetu28 i jest dopełniony zerami; zastrzeżone bajty44–47 są zerami.
+Obsługiwane tu kanoniczne `V_electric`, `J_charge` i `H_ant` mieszczą się
+w tym polu. V6 nie przejmuje rozszerzenia pełnego ID z v5.
+
+Metadane zaczynają się bezpośrednio po nagłówku. Ich część stała ma88 bajtów:
+
+| Offset względem FMMI | Typ | Znaczenie |
+|---:|---|---|
+| 0 | 4 bajty | Magic `FMMI` |
+| 4 | `u16` | Wersja metadanych4 |
+| 6 | `u16` | Flags, zero |
+| 8 / 10 / 12 / 14 | 4 × `u16` | Długości UTF-8: domain generation, source kind, source ID, field generation |
+| 16 | `u64` | Rewizja nośnika, niezerowa |
+| 24 | 32 bajty | SHA256 nośnika |
+| 56 | `u32` | Kod indeksowania |
+| 60 | `u32` | Liczba rekordów mapowania, równa sample_count |
+| 64 / 66 | 2 × `u16` | Długości UTF-8: scope kind i scope ID |
+| 68 | `u64` | Rewizja źródła |
+| 76 | `u32` | Rozmiar rekordu mapowania:8 lub24 bajty |
+| 80 | `u32` | Powtórzony kod indeksowania |
+| 84 | `u32` | Pole zastrzeżone, zero |
+
+Po części stałej występują kolejno napisy: scope kind, scope ID, domain
+generation, source kind, source ID, field generation. Następnie zapisane
+jest mapowanie próbek, zerowe dopełnienie do wielokrotności8 bajtów i wartości
+`float64`. Długość odpowiedzi musi być dokładnie
+`48 + metadata_length + 8 * value_count`; wszystkie długości i iloczyny
+podlegają kontroli zakresu. Klient odrzuca bufory przekraczające128 MiB,
+niepoprawne UTF-8/NUL, zastrzeżone pola, padding i wartości nieskończone lub NaN.
+API ma dodatkowe niezależne budżety materializacji i zatrzymanych nośników;
+limit frontendowy nie jest zgodą na większe payloady w pozostałych warstwach.
+
+### Tożsamość i reprezentacja próbek
+
+| Kod | Indeksowanie | Rekord |
+|---:|---|---|
+| 4 | `source_nodes` | Stabilny identyfikator wierzchołka `u64` |
+| 5 | `sample_nodes` | Numer porządkowy próbki `u64`, równy pozycji rekordu |
+| 6 | `point_samples` | Numer porządkowy próbki `u64`, równy pozycji rekordu |
+| 7 | `tet4_cell_local_nodes` | Element `u64`, lokalny wierzchołek `u8`, siedem zerowych bajtów, stabilny identyfikator wierzchołka `u64` |
+| 8 | `cell_centers` | Stabilny identyfikator elementu `u64` |
+
+Dla kodu7 cztery kolejne rekordy mają wspólny element, lokalne indeksy
+0,1,2,3 i cztery różne identyfikatory wierzchołków. Mapowanie nie może mieć
+duplikatów tożsamości próbki. Ten nośnik zachowuje lokalne ślady prądu;
+nie dopuszcza współdzielenia/średniowania geometrii między komórkami RT0.
+Identyfikatory i rewizje nie przechodzą przez JavaScript `Number`.
+
+`source_kind` wynosi `artifact_inspection`. `domain_generation_id` jest
+bare lowercase SHA256 nośnika i odpowiada32 bajtom jego digestu. Rewizja
+nośnika jest interpretacją pierwszych8 bajtów tego digestu jako little-endian
+`u64`; zgodność nadal wymaga całego digestu, nie tylko jego prefiksu.
+`source_id` zachowuje dokładne `owner.source_digest`, zaś
+`field_generation_id` dokładne `owner.content_digest` z prefiksem `sha256:`.
+Nie zastępuje się tych tożsamości bieżącym krokiem magnetyzacji ani licznikiem
+zasobu. V pozostaje na węzłach przewodnika, J na swoim nośniku lokalnym albo
+centrach, a H na rzeczywistym nośniku próbkowania. Ich jednostki pochodzą
+z kanonicznego katalogu quantities; inspekcja nie tworzy fikcyjnego m/Ms/Aex.
+
+### HTTP, dopuszczenie i odtworzenie
+
+Nagłówek `x-fullmag-encoding` ma postać `FMVP;version=6`, natomiast
+`resolved_capability.carriers[].payload_version` wynosi `FMVP.v6`.
+Nagłówki `x-fullmag-carrier-id`, `x-fullmag-carrier-revision` oraz
+`x-fullmag-carrier-digest` wskazują dokładny nośnik z JSON locatora.
+Rewizje są dziesiętnymi napisami bez utraty precyzji. Nagłówki źródła i field
+generation muszą zgadzać się z binarnym payloadem. Klient porównuje również
+locator, session/epoch, request scope, run/stage, źródło, quantity i własną
+geometrię FMMT.v2. Dla zaakceptowanych zadań zachowuje dodatkowo przypięte
+project/task/attempt/ownership epoch i CAS. Brak zgodnego nośnika daje odmowę,
+a nie fallback do bieżącej domeny magnetycznej.
+
+ETag reprezentacji v6 ma oddzielny prefiks `artifact-field-v6` i uwzględnia
+owner/content, nośnik, rewizję quantity, ID oraz projekcję komponentów.
+Walidacja właściciela i zawartości poprzedza warunkową odpowiedź304.
+Archiwum przechowuje dotychczasowe schematy CAS/tensorów/geometrii; FMVP jest
+transportową reprezentacją odczytu. Odtworzenie nie może przyjąć starego
+framingu artefaktowego v5 jako wariantu v5 z pełnym ID ani odgadywać jego
+wersji po rozmiarze. Rollout wymaga zgodnego nowego pakietu API i frontendu.
+
+Bramki odbioru obejmują rzeczywiste200/304/409, obce owner/session/carrier,
+zmianę bajtów o tej samej długości, zmianę generation w trakcie odczytu,
+uszkodzony payload, archive/cold-load i widoczny canvas bez utraty WebGL.
+Kontrole źródeł i syntetyczne bufory pozostają dowodami wyłącznie swojego
+zakresu. OpenAPI i generated transport/types należy odtworzyć z nowego
+produkcyjnego eksportera; nie edytuje się ich ręcznie.
+
+
 ### Dostępność energii obiektu
 
 `simulation/objects/{object_id}/metrics` zachowuje sześć kluczy `energies`.
@@ -1852,3 +2247,77 @@ Po publikacji zaakceptowanego stanu kompletna tożsamość `resolved` obejmuje
 backend, device, precision i mode z tego samego zweryfikowanego planu.
 Dostępność pól oraz planera nie zastępuje tej tożsamości. Ukończenie zadania
 nie usuwa jej ze statusu sesji ani nie blokuje odczytu wyników.
+
+
+### Archiwalny wynik anteny w istniejącym FMS
+
+Istniejący `POST /v2/sessions/current/persistence/exports` przyjmuje opcjonalne
+`accepted_run` z `project_id`, `run_id`, `run_catalog_revision` i
+`artifact_catalog_revision`. Jest to jawny wybór źródła historycznego dla
+pobrania profilu `solved`; zapis obok źródła, dodatkowa ścieżka i nadpisanie UI
+są w tym trybie odrzucane. Pominięcie selektora zachowuje dotychczasowy eksport
+bieżącej sesji. Żądanie nadal podlega kontekstowi bieżącej sesji, ale nie
+zastępuje jej ani nie uruchamia obliczeń.
+
+Źródło historyczne musi być zakończonym, zaakceptowanym Study z typowanym
+`ClosedLoopInspection`. Eksporter kontroluje przypięte rewizje katalogów,
+niezmienne wejścia, oryginalną tożsamość sesji i sceny oraz rzeczywisty zapis
+ukończenia przez wspólną bramkę cold-read. Do dokumentów archiwum trafia scena
+zaakceptowanego runu, bez skopiowanych pól, siatki i ustawień bieżącego
+workspace. Oryginalny skrypt pochodzi z zaakceptowanego capture CAS; nie jest
+wykonywany podczas eksportu ani importu. Rozstrzygnięte wykonanie pozostaje
+w receiptach i pakiecie wyniku; eksport nie dopisuje nieznanego runtime.
+
+Po istniejącym imporcie `visualization_only` katalog ilości, pola i topologia
+czytają dane z prywatnego magazynu importu. Importer przypina zweryfikowany
+`closure_sha256` w metadanych obserwacji; nie przyjmuje znacznika dostarczonego
+przez archiwum. Czytnik kontroluje domknięcie, długości i hashe CAS,
+RunSpec/Study/ProblemIR, przygotowanie i dokładne powiązanie
+run/task/attempt/epoch/port/codec/artifact. Nie rekonstruuje claimów, lease'ów
+ani journala i nie korzysta awaryjnie z pierwotnego magazynu zaakceptowanych
+runów. Dane nadal mają status `inspection_only` i nie przyznają kwalifikacji
+bazy pola ani prawa do Compute/LLG. Starsze archiwa bez tego domknięcia
+zachowują dotychczasowy odczyt zarejestrowanych artefaktów.
+
+Odkrywanie i materializacja pól korzystają z tej samej ograniczonej kolejki
+czytników. Metadane domknięcia mają łącznie limit 64 MiB, pojedynczy rekord
+zachowuje istniejący limit 16 MiB, a pakiet wyniku używa istniejącego limitu
+kodeka. Ta obsługa dotyczy dostępnych punktów próbkowania; nie tworzy pola H
+na pełnej siatce Universe i nie potwierdza kwalifikacji naukowej obliczenia.
+
+
+Historyczna scena ma jawny znacznik
+`accepted_definition_readonly_projection.v1`: `project_id`, `run_id`,
+`definition_sha256`, `projection_sha256` i zachowane bez zmian
+`authored_execution_input`. Nie oznacza dokładnego odtworzenia dawnego
+workspace authoring. Definicja zaakceptowanego wykonania może zawierać już
+rozstrzygnięte ustawienia wyjścia lub projekcję zgodną ze schematem czytnika;
+jej hash nie zastępuje oryginalnego hasha authored input. Zwykły eksport
+bieżącej sesji nadal wymaga niezmienionej kontroli `validate_input_binding`.
+
+Historyczny Python czyta osobny, wewnętrzny helper dopiero po walidacji
+zaakceptowanego Study/Catalog i captured source assets. Nie ma fallbacku do
+aktualnego skryptu. Zarówno inspekcja, jak i commit importu sprawdzają
+znacznik względem RunSpec oraz definicji w przenośnym CAS i odrzucają inną
+scenę, hash albo przypisanie projektu/runu. Obie odpowiedzi wyraźnie
+sygnalizują projekcję tylko do odczytu; nie deklarują zgodności z dawnym
+stanem authoring ani kwalifikacji naukowej. Dane wynikowe pozostają związane
+z niezmiennymi wejściami przyjętego obliczenia.
+
+### Rewizja optymistyczna poleceń po zakończeniu Solve
+
+`precondition.command_revision` porównuje tę samą rewizję, którą publikują
+`status.resources.commands_revision` i zasób `simulation/commands`. Dla trwałego
+journalu jest to jego monotoniczna rewizja, także po zmianach lifecycle; liczba
+wpisów ograniczonej historii nie zastępuje tej rewizji. Legacy bez trwałego
+journalu zachowuje dotychczasowy licznik. Niezgodność odmawia przed przyjęciem
+polecenia i nie uruchamia Solve ani materializacji.
+
+### Urządzenie i precyzja pustej sesji
+
+`POST /v2/sessions` przyjmuje FDM CPU double, FEM CPU double i FDM GPU
+w precyzji single albo double. Pozostałe kombinacje otrzymują HTTP 400 przed
+utworzeniem sesji. Capabilities pustej sesji opisują żądaną konfigurację.
+Pierwsze przygotowanie sprawdza możliwości topologii, solvera i urządzenia.
+Jawne żądanie GPU zachowuje tryb strict i nie przełącza wykonania na CPU.
+Dołączany runtime CLI odczytuje precyzję z kanonicznego skryptu sesji.

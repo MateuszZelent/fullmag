@@ -9,13 +9,14 @@
 //! * [`manifest`]: `fullmag-run.json`, written by every run and read here,
 //! * [`scanner`] and [`link`]: finding items and tying results to their source.
 //!
-//! No Tauri, no HTTP, no solver. Nothing in this crate executes a script or
-//! reads an array chunk.
+//! No Tauri, no HTTP, no solver. Nothing in this crate executes a script;
+//! only an explicit playback-frame request reads a bounded array chunk.
 
 pub mod detail;
 mod frames;
 pub mod link;
 pub mod manifest;
+pub mod playback;
 pub mod project;
 mod project_detail;
 pub mod provenance;
@@ -30,6 +31,11 @@ pub use detail::{
     ScriptSyntax,
 };
 pub use frames::{read_frames, read_frames_page, FramesIndexData, FRAMES_PAGE_MAX};
+pub use playback::{
+    read_playback, read_playback_frame, read_playback_geometry, read_playback_with_geometry,
+    PlaybackError, SavedPlaybackFemMesh, SavedPlaybackInspection, SavedPlaybackResource,
+    SavedPlaybackStage,
+};
 pub use project_detail::inspect_project;
 pub use result_detail::{display_path, inspect_result, is_result_dir, read_layout, Layout};
 pub use script_detail::{apply_python_inspection, inspect_script};

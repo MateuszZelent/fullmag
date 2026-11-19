@@ -66,8 +66,9 @@ function formatStatusFreshnessLabel(status: ResourceStatus): string {
   switch (status) {
     case "ready":
       return "ready";
+    // Retained data while the status resource refetches, not a failure.
     case "stale":
-      return "stale";
+      return "refreshing";
     case "loading":
       return "loading";
     case "error":
@@ -220,7 +221,7 @@ export default function StatusBarModule() {
       </button>
       <SimulationPreparationStatusEntry />
       <span className="fm-status-bar__spacer" aria-hidden="true" />
-      <span
+      <span role="group"
         className="fm-status-bar__axis fm-status-bar__axis--connection"
         data-state={realtimeConnection.status}
         aria-label={`Realtime connection ${realtimeLabel}`}
@@ -228,7 +229,7 @@ export default function StatusBarModule() {
       >
         Realtime {realtimeLabel}
       </span>
-      <span
+      <span role="group"
         className="fm-status-bar__axis fm-status-bar__axis--freshness"
         data-state={statusFreshness}
         aria-label={`Session status data ${formatStatusFreshnessLabel(statusFreshness)}`}
@@ -263,7 +264,7 @@ export default function StatusBarModule() {
           {compute.pending ? "Submitting…" : "Compute"}
         </Button>
       ) : null}
-      <span
+      <span role="group"
         className="fm-status-bar__engine"
         data-state={method.state}
         data-method={method.method ?? "unresolved"}

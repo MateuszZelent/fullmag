@@ -122,6 +122,76 @@ class RetirementTransportTests(unittest.TestCase):
         self.monkeypatch = _Patches(self.stack)
         self.stack.enter_context(patch.object(helper, "_retirement_operator_token", return_value="0123456789abcdef0123456789abcdef"))
 
+    def test_imported_observation_keeps_historical_outcome_separate(self):
+        for historical in ("completed", "failed", "cancelled", "interrupted"):
+            with self.subTest(historical=historical):
+                response = _retirement()
+                response.update(schema="fullmag.live-workspace-retirement-response.v2", terminal_outcome="observation_closed")
+                evidence = {"import_id": "import-1", "session_id": response["session_id"], "run_id": response["run_id"],
+                            "snapshot_sha256": "1" * 64, "closure_sha256": "sha256:" + "2" * 64,
+                            "historical_terminal_outcome": historical, "historical_catalog_revision": 673}
+                response["imported_observation"] = evidence
+                response["terminal_evidence_sha256"] = hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                opener = _patch_opener(self.monkeypatch, [_Response(200, _status()), _Response(200, response)])
+                result = helper._retire_current_workspace_transport("docker-volume-op-1")
+                self.assertEqual(result["terminal_outcome"], "observation_closed")
+                self.assertEqual(result["imported_observation"]["historical_terminal_outcome"], historical)
+                self.assertEqual(len(opener.requests), 2)
+
+    def test_observation_cannot_be_disguised_as_native_completion(self):
+        response = _retirement()
+        evidence = {"import_id": "import-1", "session_id": response["session_id"], "run_id": response["run_id"],
+                    "snapshot_sha256": "1" * 64, "closure_sha256": "sha256:" + "2" * 64,
+                    "historical_terminal_outcome": "failed", "historical_catalog_revision": 673}
+        response.update(schema="fullmag.live-workspace-retirement-response.v2", terminal_outcome="observation_closed", imported_observation=evidence)
+        response["terminal_evidence_sha256"] = hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        for field, bad in [("schema", helper.RETIREMENT_RESPONSE_SCHEMA), ("terminal_outcome", "completed"),
+                           ("terminal_evidence_sha256", "f" * 64)]:
+            with self.subTest(field=field):
+                corrupt = dict(response, **{field: bad})
+                with self.assertRaises(helper.StartupScriptError):
+                    helper._validate_retirement_response(corrupt, operation_id=response["operation_id"],
+                        session_id=response["session_id"], run_id=response["run_id"],
+                        request_scope_epoch="api:7", api_request_scope_epoch="api:7")
+        for field, bad in [("run_id", "other-run"), ("session_id", "other-session"), ("import_id", "../escape"),
+                           ("snapshot_sha256", "z" * 64), ("closure_sha256", "2" * 64),
+                           ("historical_terminal_outcome", "running"), ("historical_terminal_outcome", []),
+                           ("historical_terminal_outcome", {}), ("historical_catalog_revision", True)]:
+            with self.subTest(field=field):
+                corrupt = dict(response, imported_observation=dict(evidence, **{field: bad}))
+                with self.assertRaises(helper.StartupScriptError):
+                    helper._validate_retirement_response(corrupt, operation_id=response["operation_id"],
+                        session_id=response["session_id"], run_id=response["run_id"],
+                        request_scope_epoch="api:7", api_request_scope_epoch="api:7")
+
+    def test_observation_archive_predecessor_rejects_malformed_history(self):
+        evidence = {"import_id": "import-1", "session_id": "session-1", "run_id": "run-1",
+                    "snapshot_sha256": "1" * 64, "closure_sha256": "sha256:" + "2" * 64,
+                    "historical_terminal_outcome": "failed", "historical_catalog_revision": 673}
+        proof = {"schema": "fullmag.live-workspace-retirement-proof.v3", "state": "retired",
+                 "operation_id": "docker-volume-op-1", "session_id": "session-1", "run_id": "run-1",
+                 "request_scope_epoch": "old-api:7", "terminal_outcome": "observation_closed",
+                 "terminal_catalog_revision": 673, "accepted_proof_sha256": None, "host_released_reservations": [],
+                 "imported_observation": evidence}
+        with tempfile.TemporaryDirectory() as directory:
+            runs_root = Path(directory) / "runs"
+            manifest = runs_root / "session-store/retirements/docker-volume-op-1/project/retirement-manifest.json"
+            manifest.parent.mkdir(parents=True)
+            self.monkeypatch.setenv("FULLMAG_RUNS_ROOT", str(runs_root))
+            for outcome in ("failed", "completed", [], {}):
+                with self.subTest(outcome=outcome):
+                    evidence["historical_terminal_outcome"] = outcome
+                    proof["terminal_evidence_sha256"] = hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                    raw = json.dumps(proof).encode()
+                    manifest.write_bytes(raw)
+                    call = lambda: helper._retirement_archive_receipt("docker-volume-op-1",
+                        session_id="session-1", run_id="run-1", api_request_scope_epoch="new-api:8")
+                    if isinstance(outcome, str):
+                        self.assertEqual(call()["archive_sha256"], hashlib.sha256(raw).hexdigest())
+                    else:
+                        with self.assertRaises(helper.StartupScriptError):
+                            call()
+
     def test_5xx_with_refusal_code_is_still_unknown(self):
         for status in (500, 503):
             for as_exception in (False, True):

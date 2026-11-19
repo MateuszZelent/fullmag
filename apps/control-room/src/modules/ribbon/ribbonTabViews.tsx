@@ -22,6 +22,21 @@ import {
   Activity,
   Blend,
   Maximize2,
+  ChartSpline,
+  CircleDashed,
+  Crop,
+  Crosshair,
+  FileDown,
+  Grip,
+  Hand,
+  LayoutGrid,
+  Maximize,
+  MoveUpRight,
+  Palette,
+  ScanSearch,
+  Waves,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 
 import type { RibbonTabContent } from "./ribbonTypes";
@@ -39,6 +54,7 @@ import {
   quantityCatalogPickerItem,
 } from "@/kernel/api/quantityIds";
 import { RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND } from "./ribbonCommands";
+import { VIEWPORT_3D_QUALITY_PROFILE_LABELS } from "@/shared/viewport3dQualityLabels";
 
 import type {
   FieldCatalogResource,
@@ -53,6 +69,7 @@ import type {
   VisualizationRenderMode,
   VisualizationTargetKind,
 } from "@/kernel/visualization/ObjectVisualizationController";
+import { SCALAR_COLOR_PALETTE_ITEMS } from "@/shared/visualization/scalarColorPalette";
 
 export type FieldComponentPatch = NonNullable<VisualizationStatePatch["field_component"]>;
 export type VectorColorModePatch = NonNullable<
@@ -300,6 +317,25 @@ export const homeTab: RibbonTabContent = {
   ],
 };
 
+const PLANAR_TOOLBAR_RIBBON_ACTIONS: RibbonTabContent["groups"][number]["actions"] = ([
+  ["field-map.tool.navigate", Hand, "Navigate"],
+  ["field-map.tool.zoom-box", ScanSearch, "Zoom box"],
+  ["field-map.tool.crop", Crop, "Crop"],
+  ["field-map.tool.inspect", Crosshair, "Inspect"],
+  ["field-map.tool.profile", ChartSpline, "Profile"],
+  ["field-map.tool.measure", Ruler, "Measure"],
+  ["field-map.zoom-in", ZoomIn, "Zoom in"],
+  ["field-map.zoom-out", ZoomOut, "Zoom out"],
+  ["field-map.fit", Maximize, "Fit"],
+  ["field-map.toggle-vectors", MoveUpRight, "Vectors"],
+  ["field-map.toggle-points", Grip, "Points"],
+  ["field-map.toggle-mesh", Triangle, "Mesh"],
+  ["field-map.toggle-streamlines", Waves, "Field lines"],
+  ["field-map.toggle-contours", CircleDashed, "Contours"],
+  ["field-map.toggle-multislice", LayoutGrid, "Slices"],
+  ["field-map.toggle-legend", Palette, "Legend"],
+] as const).map(([id, Icon, label]) => ({ id, icon: icon(Icon), label, size: "compact" as const }));
+
 export const viewTab: RibbonTabContent = {
   tabId: "view",
   groups: [
@@ -335,22 +371,22 @@ export const viewTab: RibbonTabContent = {
               items: [
                 {
                   commandId: "viewport-3d.profile-interactive-lite",
-                  label: "Interactive Lite",
+                  label: VIEWPORT_3D_QUALITY_PROFILE_LABELS["interactive-lite"],
                   value: "interactive-lite",
                 },
                 {
                   commandId: "viewport-3d.profile-interactive",
-                  label: "Interactive",
+                  label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.interactive,
                   value: "interactive",
                 },
                 {
                   commandId: "viewport-3d.profile-balanced",
-                  label: "Balanced",
+                  label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.balanced,
                   value: "balanced",
                 },
                 {
                   commandId: "viewport-3d.profile-figure",
-                  label: "Figure",
+                  label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.figure,
                   value: "figure",
                 },
                 {
@@ -420,13 +456,7 @@ export const viewTab: RibbonTabContent = {
                   id: "quantity:shader",
                   label: "Colormap",
                   value: "viridis",
-                  items: [
-                    { value: "viridis",  label: "Viridis" },
-                    { value: "inferno",  label: "Inferno" },
-                    { value: "magma",    label: "Magma" },
-                    { value: "coolwarm", label: "Coolwarm" },
-                    { value: "jet",      label: "Jet" },
-                  ],
+                  items: SCALAR_COLOR_PALETTE_ITEMS,
                 },
                 { type: "checkbox",    id: "quantity:auto-scale",         label: "Auto-scale range",       checked: true },
                 { type: "separator",   id: "quantity:colormap:s0" },
@@ -638,12 +668,22 @@ export const viewTab: RibbonTabContent = {
           iconColor: "text-sky-300",
           tooltip: "Open the active monitor in 2D View",
         },
+        // Same command ids as the 2D view toolbar (spec 12 §5.1): tools,
+        // navigation and whole-view masks.
+        ...PLANAR_TOOLBAR_RIBBON_ACTIONS,
         {
           id: "field-map.export-png",
           icon: icon(Download),
           label: "Export",
           iconColor: "text-amber-300",
           tooltip: "Export the current 2D field map",
+        },
+        {
+          id: "field-map.export-data",
+          icon: icon(FileDown),
+          label: "Data",
+          size: "compact",
+          tooltip: "Export the current 2D field data",
         },
       ],
     },

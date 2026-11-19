@@ -8,6 +8,17 @@
 
 **Technologie:** React 19 / Next.js 16, istniejący moduł `field-map`, `ControlRoomApi` + resource hooks, OpenAPI v2, Canvas 2D, Web Worker, ECharts 6 tylko dla wykresów analitycznych, Radix/shadcn primitives, kodery binarne FMFG/FMCS.
 
+### Aktualizacja z 2026-10-27: zmiana referencji i decyzji o kontrolkach
+
+Od 2026-10-27 `external_solvers/3` wskazuje fork MuMax3 użytkownika
+(`984c6e9d`) z frontendem SvelteKit, który zastępuje `amumax` jako wzorzec 2D.
+Fork usunął część ograniczeń opisanych w §1.3 (ma `XY/YZ/XZ`, renderer canvas,
+poprawny resize, zakres liczony po masce, przechwycenie w stanie bezczynnym).
+Na prośbę użytkownika decyzja z 2026-08-17 została zmieniona: nad powierzchnią
+2D jest pasek sekcji (płaszczyzna, `Single layer | Average`, warstwa/pozycja)
+edytujący ten sam `default_slice` co Inspector. Stan realizacji i pozostałe
+luki: `docs/audits/2026-10-27-viewport-2d-mumax3-fork-parity-audit.md`.
+
 ### Decyzja wykonawcza z 2026-08-17
 
 W trakcie implementacji doprecyzowano własność interfejsu: `Source`, `Quantity`, `Component`, `Plane`, pozycja normalna, operator/grubość, zakres, paleta i warstwy są kontrolowane wyłącznie przez Inspector wizualizacji. `FieldMapModule` pokazuje tylko pasywny opis aktywnego pola, osie, colorbar, tooltip/probe oraz akcje powierzchni (`fit`, pan, zoom, eksport). Pozycje z pierwotnego szkicu, które zakładały selektory nad Canvasem, są tym samym zastąpione i nie mogą być ponownie dodane.

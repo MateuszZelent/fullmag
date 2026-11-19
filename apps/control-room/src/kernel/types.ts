@@ -1,3 +1,4 @@
+import type { SavedResultsPlaybackController } from "./saved-results/SavedResultsPlaybackController";
 import type { ComponentType } from "react";
 
 import type { ControlRoomApi } from "./api/ControlRoomApi";
@@ -72,6 +73,7 @@ export interface ModuleManifest {
 }
 
 export interface KernelApi {
+  readonly savedResultsPlayback?: SavedResultsPlaybackController;
   readonly api: ControlRoomApi;
   readonly analysisFieldOverlay: AnalysisFieldOverlayController;
   readonly authoringHistory?: AuthoringHistoryController;

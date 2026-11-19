@@ -180,8 +180,10 @@ pub(crate) enum Command {
         /// Explicit CPU/memory/storage minimum reservation JSON.
         #[arg(long)] resources: PathBuf,
         #[arg(long)] idempotency_key: String,
-        #[arg(long)] api_url: String,
-        #[arg(long, default_value_t=false)] submit_only: bool,
+        #[arg(long, required_unless_present = "prepare_only")] api_url: Option<String>,
+        #[arg(long, default_value_t=false, conflicts_with = "prepare_only")] submit_only: bool,
+        /// Capture and compile the exact request without Submit or Solve; preparation may run Python/meshing.
+        #[arg(long, default_value_t=false)] prepare_only: bool,
     },
     /// Deprecated compatibility alias for `run-json`.
     #[command(hide = true)]
@@ -375,6 +377,26 @@ pub(crate) enum RuntimeCommand {
         #[arg(long)]
         config_sha256: String,
     },
+    /// Read-only canonical terminal-run evidence for a pinned application.
+    #[command(name = "service-inspect-terminal-run", hide = true)]
+    ServiceInspectTerminalRun {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        config_sha256: String,
+        #[arg(long)]
+        run_id: String,
+    },
+    /// Read-only canonical held-manual evidence for explicit v4 recovery.
+    #[command(name = "service-inspect-held-manual-run", hide = true)]
+    ServiceInspectHeldManualRun {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        config_sha256: String,
+        #[arg(long)]
+        run_id: String,
+    },
     /// Recover one exactly pinned unknown native service owner after a durable
     /// empty-store and host-quiescence proof.
     ServiceRecover {
@@ -385,6 +407,23 @@ pub(crate) enum RuntimeCommand {
         #[arg(long)]
         request_sha256: String,
     },
+    /// Validate a retained runtime snapshot without changing the runtime or store.
+    #[command(name = "validate-retained-snapshot")]
+    ValidateRetainedSnapshot {
+        #[arg(long)]
+        store: PathBuf,
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        config_sha256: String,
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long)]
+        request_sha256: String,
+    },
+    /// Report recovery request support without opening a store or config.
+    #[command(name = "service-container-recovery-capabilities", hide = true)]
+    ServiceContainerRecoveryCapabilities,
     /// Recover one exactly pinned stopped Docker service container namespace
     /// after an authoritative managed teardown attestation.
     #[command(name = "service-recover-container", hide = true)]

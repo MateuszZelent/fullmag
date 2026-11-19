@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
+  PlanarFieldOverlayState,
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "../api/apiTypes";
@@ -194,6 +195,32 @@ function visualizationState(
   } as VisualizationStateResource;
 }
 
+function planarFieldOverlay(
+  id: string,
+  overrides: Partial<PlanarFieldOverlayState> = {},
+): PlanarFieldOverlayState {
+  return {
+    id,
+    quantity_id: "m",
+    component: "magnitude",
+    view_scope: { kind: "object", scope_id: id.replace(/^object:/, "") },
+    colormap: "viridis",
+    range: { mode: "auto", min: null, max: null },
+    raster_opacity: 1,
+    raster_visible: true,
+    vectors_visible: false,
+    vector_style: {
+      color_mode: "orientation",
+      length_mode: "uniform",
+      monochrome_color: "#cdd6f4",
+      opacity: 1,
+      scale: 1,
+      thickness: 1,
+    },
+    ...overrides,
+  };
+}
+
 function createController({
   now,
   patch,
@@ -302,6 +329,50 @@ describe("VisualizationRegistrySyncController", () => {
     expect(patchSpy).toHaveBeenLastCalledWith({
       camera: { position: [2, 0, 1], target: [0, 0, 0] },
     });
+  });
+
+  it("sends a crop at once and resets the view to fit it (ADR 0080)", async () => {
+    const { controller, patchSpy } = createController({ now: () => 0 });
+    const crop = { u_min_m: -2.5e-8, u_max_m: 2.5e-8, v_min_m: 0, v_max_m: 1e-8 };
+
+    controller.queuePlanarCropPatch(crop);
+    await Promise.resolve();
+    expect(patchSpy).toHaveBeenCalledTimes(1);
+    expect(patchSpy).toHaveBeenLastCalledWith({
+      planar: { crop, interaction: { zoom: 1, pan_u_m: 0, pan_v_m: 0 } },
+    });
+    await controller.flushNow();
+
+    controller.queuePlanarCropPatch(null);
+    await Promise.resolve();
+    expect(patchSpy).toHaveBeenLastCalledWith({
+      planar: { crop: null, interaction: { zoom: 1, pan_u_m: 0, pan_v_m: 0 } },
+    });
+  });
+
+  it("sends a patch queued during an explicit in-flight flush right after it (D2D-12)", async () => {
+    let time = 0;
+    const inflight: { release?: () => void } = {};
+    const patchSpy = vi.fn((nextPatch: VisualizationStatePatch) =>
+      new Promise<VisualizationStateResource>((resolve) => {
+        inflight.release = () => resolve(visualizationState(2, nextPatch as Partial<VisualizationStateResource>));
+      }));
+    const { controller } = createController({ now: () => time, patch: patchSpy });
+
+    controller.queuePatch({ field_component: "x" } as VisualizationStatePatch);
+    const first = controller.flushNow();
+    expect(patchSpy).toHaveBeenCalledTimes(1);
+    // A second layer step while the first request is in flight.
+    controller.queuePatch({ field_component: "y" } as VisualizationStatePatch);
+    void controller.flushNow();
+    time = 10;
+    inflight.release?.();
+    await first;
+    await Promise.resolve();
+    await Promise.resolve();
+    // Sent without waiting for the 600 ms quiet window.
+    expect(patchSpy).toHaveBeenCalledTimes(2);
+    expect(patchSpy).toHaveBeenLastCalledWith(expect.objectContaining({ field_component: "y" }));
   });
 
   it("skips optimistic overlay for camera-only patches to avoid busting rendering memos", () => {
@@ -947,6 +1018,235 @@ describe("VisualizationRegistrySyncController", () => {
 
     expect(controller.getSnapshot().inflightTargetIds).toEqual([]);
     expect(controller.getSnapshot().pendingTargetIds).toEqual([]);
+  });
+
+  it("keeps inflight A, stale-closure B, and remote C when rebasing touched overlay ids", async () => {
+    const sentPatches: VisualizationStatePatch[] = [];
+    const resolvers: Array<(state: VisualizationStateResource) => void> = [];
+    const patchSpy = vi.fn((patch: VisualizationStatePatch) => {
+      sentPatches.push(patch);
+      return new Promise<VisualizationStateResource>((resolve) => {
+        resolvers.push(resolve);
+      });
+    });
+    const { controller } = createController({ now: () => 0, patch: patchSpy });
+    const overlayA = planarFieldOverlay("object:a");
+    const overlayB = planarFieldOverlay("object:b");
+    const overlayC = planarFieldOverlay("object:c");
+    const planarState = (revision: number, fieldOverlays: PlanarFieldOverlayState[]) =>
+      visualizationState(revision, {
+        planar: { field_overlays: fieldOverlays } as NonNullable<VisualizationStateResource["planar"]>,
+      });
+    controller.observeRemoteState(planarState(1, []));
+
+    controller.queuePlanarFieldOverlayPatch(
+      { planar: { field_overlays: [overlayA] } },
+      overlayA.id,
+    );
+    const firstFlush = controller.flushNow();
+    expect(sentPatches[0]?.planar?.field_overlays).toEqual([overlayA]);
+
+    // B was authored from a stale closure that did not contain A.
+    controller.queuePlanarFieldOverlayPatch(
+      { planar: { field_overlays: [overlayB] } },
+      overlayB.id,
+    );
+    expect(controller.getSnapshot()).toMatchObject({
+      inflightPlanarFieldOverlayIds: [overlayA.id],
+      pendingPlanarFieldOverlayIds: [overlayB.id],
+    });
+
+    const remoteWithC = planarState(2, [overlayC]);
+    controller.observeRemoteState(remoteWithC);
+    expect(controller.applyOptimisticState(remoteWithC)?.planar?.field_overlays).toEqual([
+      overlayC,
+      overlayA,
+      overlayB,
+    ]);
+
+    void controller.flushNow();
+    resolvers[0]?.(planarState(3, [overlayA, overlayC]));
+    await firstFlush;
+
+    expect(sentPatches).toHaveLength(2);
+    expect(sentPatches[1]?.planar?.field_overlays).toEqual([
+      overlayA,
+      overlayC,
+      overlayB,
+    ]);
+    const secondFlush = controller.flushNow();
+    resolvers[1]?.(planarState(4, [overlayA, overlayB, overlayC]));
+    await secondFlush;
+  });
+
+  it("keeps the order of a full field-layer list: a reorder and a layer added on top", async () => {
+    // The list order is the draw order (ADR 0080); found in the browser: the
+    // merge kept the remote order, so Alt+Up and "add on top" were lost.
+    const sentPatches: VisualizationStatePatch[] = [];
+    const overlayA = planarFieldOverlay("object:a");
+    const overlayB = planarFieldOverlay("object:b");
+    const overlayN = planarFieldOverlay("object:n");
+    const remote = visualizationState(10, {
+      planar: { field_overlays: [overlayA, overlayB] } as NonNullable<VisualizationStateResource["planar"]>,
+    });
+    const { controller } = createController({
+      now: () => 0,
+      patch: async (patch) => {
+        sentPatches.push(patch);
+        return visualizationState(11 + sentPatches.length, {
+          planar: { field_overlays: patch.planar?.field_overlays ?? [] } as NonNullable<VisualizationStateResource["planar"]>,
+        });
+      },
+    });
+    controller.observeRemoteState(remote);
+
+    controller.queuePlanarFieldOverlayPatch({ planar: { field_overlays: [overlayB, overlayA] } }, overlayB.id);
+    expect(controller.applyOptimisticState(remote)?.planar?.field_overlays).toEqual([overlayB, overlayA]);
+    await controller.flushNow();
+    expect(sentPatches[0]?.planar?.field_overlays).toEqual([overlayB, overlayA]);
+
+    controller.observeRemoteState(visualizationState(20, {
+      planar: { field_overlays: [overlayB, overlayA] } as NonNullable<VisualizationStateResource["planar"]>,
+    }));
+    controller.queuePlanarFieldOverlayPatch({ planar: { field_overlays: [overlayN, overlayB, overlayA] } }, overlayN.id);
+    await controller.flushNow();
+    expect(sentPatches[1]?.planar?.field_overlays).toEqual([overlayN, overlayB, overlayA]);
+  });
+
+  it("removes only the explicitly touched overlay id and preserves other remote profiles", async () => {
+    const sentPatches: VisualizationStatePatch[] = [];
+    const overlayA = planarFieldOverlay("object:a");
+    const overlayB = planarFieldOverlay("object:b");
+    const overlayC = planarFieldOverlay("object:c");
+    const remote = visualizationState(10, {
+      planar: { field_overlays: [overlayA, overlayB, overlayC] } as NonNullable<VisualizationStateResource["planar"]>,
+    });
+    const { controller } = createController({
+      now: () => 0,
+      patch: async (patch) => {
+        sentPatches.push(patch);
+        return visualizationState(11, {
+          planar: { field_overlays: [overlayB, overlayC] } as NonNullable<VisualizationStateResource["planar"]>,
+        });
+      },
+    });
+    controller.observeRemoteState(remote);
+
+    controller.queuePlanarFieldOverlayPatch(
+      { planar: { field_overlays: [overlayB, overlayC] } },
+      overlayA.id,
+    );
+
+    expect(controller.applyOptimisticState(remote)?.planar?.field_overlays).toEqual([
+      overlayB,
+      overlayC,
+    ]);
+    await controller.flushNow();
+    expect(sentPatches[0]?.planar?.field_overlays).toEqual([overlayB, overlayC]);
+  });
+
+  it("filters stale untouched profiles when the remote planar record is absent", () => {
+    const { controller } = createController({ now: () => 0 });
+    const overlayA = planarFieldOverlay("object:a");
+    const staleOverlayB = planarFieldOverlay("object:b");
+    const remote = visualizationState(1);
+    controller.observeRemoteState(remote);
+
+    controller.queuePlanarFieldOverlayPatch(
+      { planar: { field_overlays: [overlayA, staleOverlayB] } },
+      overlayA.id,
+    );
+
+    expect(controller.applyOptimisticState(remote)?.planar?.field_overlays).toEqual([
+      overlayA,
+    ]);
+  });
+
+  it("satisfies an overlay patch by touched profile identity while retaining remote siblings", () => {
+    const { controller } = createController({ now: () => 0 });
+    const overlayA = planarFieldOverlay("object:a");
+    const overlayB = planarFieldOverlay("object:b");
+    controller.queuePlanarFieldOverlayPatch(
+      { planar: { field_overlays: [overlayA] } },
+      overlayA.id,
+    );
+
+    const remote = visualizationState(2, {
+      planar: { field_overlays: [overlayA, overlayB] } as NonNullable<VisualizationStateResource["planar"]>,
+    });
+    controller.observeRemoteState(remote);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      pendingPatch: null,
+      pendingPlanarFieldOverlayIds: [],
+      pendingTransactionIds: [],
+    });
+    expect(controller.applyOptimisticState(remote)?.planar?.field_overlays).toEqual([
+      overlayA,
+      overlayB,
+    ]);
+  });
+
+  it("carries touched overlay ids into explicit retry rebasing", async () => {
+    const sentPatches: VisualizationStatePatch[] = [];
+    const overlayA = planarFieldOverlay("object:a");
+    const overlayB = planarFieldOverlay("object:b");
+    const overlayC = planarFieldOverlay("object:c");
+    const patchSpy = vi
+      .fn()
+      .mockImplementationOnce(async (patch: VisualizationStatePatch) => {
+        sentPatches.push(patch);
+        throw new ControlRoomApiError("invalid profile", 400, "req-profile");
+      })
+      .mockImplementationOnce(async (patch: VisualizationStatePatch) => {
+        sentPatches.push(patch);
+        return visualizationState(12, {
+          planar: { field_overlays: [overlayB, overlayC] } as NonNullable<VisualizationStateResource["planar"]>,
+        });
+      });
+    const controller = new VisualizationRegistrySyncController({
+      api: { patch: patchSpy },
+      retryBaseDelayMs: 0,
+    });
+    controller.observeRemoteState(visualizationState(10, {
+      planar: { field_overlays: [overlayA, overlayB, overlayC] } as NonNullable<VisualizationStateResource["planar"]>,
+    }));
+    controller.queuePlanarFieldOverlayPatch(
+      { planar: { field_overlays: [overlayB, overlayC] } },
+      overlayA.id,
+    );
+    await controller.flushNow();
+
+    expect(controller.getSnapshot().rejectedPlanarFieldOverlayIds).toEqual([overlayA.id]);
+    await controller.retryRejectedMutation();
+
+    expect(sentPatches[1]?.planar?.field_overlays).toEqual([overlayB, overlayC]);
+    expect(controller.getSnapshot().mutation?.status).toBe("succeeded");
+  });
+
+  it("drops pending overlay edits when the visualization session scope changes", async () => {
+    const patchSpy = vi.fn(async () => visualizationState(2));
+    const controller = new VisualizationRegistrySyncController({
+      api: { patch: patchSpy },
+      now: () => 0,
+    });
+    const overlayA = planarFieldOverlay("object:a");
+    controller.setSessionScopeKey("session-a");
+    controller.queuePlanarFieldOverlayPatch(
+      { planar: { field_overlays: [overlayA] } },
+      overlayA.id,
+    );
+
+    controller.setSessionScopeKey("session-b");
+    await controller.flushNow();
+
+    expect(patchSpy).not.toHaveBeenCalled();
+    expect(controller.getSnapshot()).toMatchObject({
+      pendingPatch: null,
+      pendingPlanarFieldOverlayIds: [],
+      inflightPlanarFieldOverlayIds: [],
+      rejectedPlanarFieldOverlayIds: [],
+    });
   });
 });
 

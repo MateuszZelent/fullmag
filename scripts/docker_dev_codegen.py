@@ -39,6 +39,23 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CONTROL_NAMESPACE_RE = re.compile(r"^namespaces/[0-9a-f]{32}$")
 DIRECT_CODEGEN_SCHEMA = "fullmag.direct-compose-openapi-codegen.v1"
 FAILURE_RECEIPT_PATH = "/opt/fullmag/control/backend/codegen/openapi-v2/last-failure.json"
+API_ENTRYPOINT_PATH = "/opt/fullmag/entrypoint.py"
+API_BINARY_PATH = "/opt/fullmag/package/bin/fullmag-api"
+API_EXPORT_PYTHON = "/usr/local/bin/python3"
+API_OPENAPI_EXPORT_SCRIPT = r'''
+import importlib.util
+import os
+import sys
+
+entrypoint_path, api_binary, *api_arguments = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("fullmag_image_entrypoint", entrypoint_path)
+if spec is None or spec.loader is None:
+    raise RuntimeError("image entrypoint could not be imported")
+entrypoint = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(entrypoint)
+entrypoint._configure_device_access()
+os.execv(api_binary, [api_binary, *api_arguments])
+'''
 
 SOURCE_PROBE_SCRIPT = r'''
 import shutil
@@ -98,8 +115,11 @@ def digest_binary(name):
     descriptor = os.open("/opt/fullmag/package/bin/" + name, FLAGS)
     try:
         metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-            raise RuntimeError("runtime binary is not one regular file")
+        # Sealed immutable packages are legitimately hardlinked by the shared
+        # store. Mutable handoff JSON above still requires a unique inode.
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink < 1
+                or (metadata.st_nlink != 1 and metadata.st_mode & 0o222)):
+            raise RuntimeError("runtime binary is not a regular or sealed shared file")
         digest = hashlib.sha256()
         total = 0
         while True:
@@ -110,6 +130,13 @@ def digest_binary(name):
             if total > 16 * 1024 * 1024 * 1024:
                 raise RuntimeError("runtime binary exceeds its size bound")
             digest.update(block)
+        after = os.fstat(descriptor)
+        signature = lambda value: (value.st_dev, value.st_ino, value.st_size,
+                                   value.st_mtime_ns, value.st_mode)
+        if signature(metadata) != signature(after):
+            raise RuntimeError("runtime binary changed while hashing")
+        # Link-count changes from shared-cache retention do not change bytes.
+        # The caller binds this hash to both build receipt and provenance.
         return digest.hexdigest()
     finally:
         os.close(descriptor)
@@ -203,9 +230,13 @@ if root.exists():
 class CodegenError(RuntimeError):
     """The existing DEV services did not satisfy the codegen contract."""
 
-    def __init__(self, message: str, *, reconciliation_required: bool = False) -> None:
+    def __init__(self, message: str, *, reconciliation_required: bool = False,
+                 stdout: bytes = b"", stderr: bytes = b"", exit_code: int | None = None) -> None:
         super().__init__(message)
         self.reconciliation_required = reconciliation_required
+        self.stdout = stdout
+        self.stderr = stderr
+        self.exit_code = exit_code
 
 
 def _sha256(data: bytes) -> str:
@@ -405,7 +436,8 @@ def _capture(arguments: Sequence[object], *, timeout: int = 120,
     stderr = bytes(output["stderr"])
     if process.returncode:
         message = stderr.decode("utf-8", "replace").strip() or stdout.decode("utf-8", "replace").strip()
-        raise CodegenError(message or f"Docker command failed ({process.returncode})")
+        raise CodegenError(message or f"Docker command failed ({process.returncode})",
+                           stdout=stdout, stderr=stderr, exit_code=process.returncode)
     return stdout, stderr
 
 
@@ -424,6 +456,24 @@ def _exec(container: str, arguments: Sequence[object], *, timeout: int = 120,
     command.extend(arguments)
     return _capture(command, timeout=timeout, input_bytes=input_bytes,
                     stdout_limit=stdout_limit, stderr_limit=stderr_limit)
+
+
+def _api_openapi_export_arguments(
+    *,
+    python: str = API_EXPORT_PYTHON,
+    entrypoint_path: str = API_ENTRYPOINT_PATH,
+    api_binary: str = API_BINARY_PATH,
+) -> tuple[str, ...]:
+    return (
+        python,
+        "-I",
+        "-B",
+        "-c",
+        API_OPENAPI_EXPORT_SCRIPT,
+        entrypoint_path,
+        api_binary,
+        "--print-openapi-v2",
+    )
 
 
 def _inspect(container: str) -> dict[str, Any]:
@@ -533,6 +583,25 @@ def _validate_mounts(
             raise CodegenError("frontend control namespace differs from the backend environment")
 
 
+def _source_mount_matches_selected(value: object, selected: Path) -> bool:
+    """Keep exact host identity while admitting inode-proven Docker Desktop WSL aliases."""
+    if _path_identity(value) == _path_identity(str(selected)):
+        return True
+    if not isinstance(value, str):
+        return False
+    match = re.fullmatch(
+        r"/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/([A-Za-z0-9][A-Za-z0-9._-]*)/([0-9a-f]{64})",
+        value,
+    )
+    if match is None:
+        return False
+    local_alias = Path("/mnt/wsl/docker-desktop-bind-mounts") / match.group(1) / match.group(2)
+    try:
+        return local_alias.is_dir() and selected.is_dir() and local_alias.samefile(selected)
+    except OSError:
+        return False
+
+
 def _running_service(
     project: str,
     service: str,
@@ -578,7 +647,7 @@ def _running_service(
     if not source_root or _path_identity(source_root) != _path_identity(str(selected)):
         raise CodegenError(f"{service} service environment is mounted from a different source checkout")
     source_mount = _mount_for(document, "/opt/fullmag/source")
-    if _path_identity(source_mount.get("Source")) != _path_identity(str(selected)):
+    if not _source_mount_matches_selected(source_mount.get("Source"), selected):
         raise CodegenError(f"{service} inspected source mount differs from the selected checkout")
     return container, document
 
@@ -854,10 +923,17 @@ def _probe_source(container: str, token: str) -> tuple[dict[str, Any], str]:
 
 
 def _source_matches(probe: Mapping[str, Any], backend: Mapping[str, Any]) -> bool:
+    """The running package was built from the mounted build inputs.
+
+    The backend keeps a verified package when only files outside its build
+    inputs change (documentation, frontend sources); its full-tree
+    `source_digest` then differs from a fresh probe while the build-input
+    snapshot and native identity still match. OpenAPI depends only on the
+    backend binary, so the build-input identity is the binding check.
+    """
     native = probe.get("native_source_identity")
     return isinstance(native, Mapping) and (
         probe.get("resolved_commit") == backend["commit"]
-        and probe.get("source_digest") == backend["source_digest"]
         and probe.get("source_snapshot_sha256") == backend["snapshot"]
         and dict(native) == backend["native"]
     )
@@ -953,11 +1029,15 @@ def _publish_outputs(source: Path, outputs: Mapping[str, bytes], before: Mapping
         for name, data in outputs.items():
             destination = target_root / name
             handle, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=target_root)
+            temporary.append((Path(temporary_name), destination))
             with os.fdopen(handle, "wb", closefd=True) as stream:
+                # Preserve source permissions while making the temp file group-readable.
+                if os.name == "posix":
+                    source_mode = stat.S_IMODE(destination.stat().st_mode) if destination.exists() else 0o644
+                    os.fchmod(stream.fileno(), source_mode | stat.S_IRGRP)
                 stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
-            temporary.append((Path(temporary_name), destination))
         published: dict[str, str] = {}
         for temporary_name, destination in temporary:
             os.replace(temporary_name, destination)
@@ -1069,7 +1149,7 @@ def run(repo_root: Path, source_root: Path | None) -> int:
         if not _source_matches(probe_before, backend):
             raise CodegenError("backend package is stale relative to the mounted source")
         phase = "openapi-export"
-        raw, api_stderr = _exec(backend_id, ("/opt/fullmag/package/bin/fullmag-api", "--print-openapi-v2"),
+        raw, api_stderr = _exec(backend_id, _api_openapi_export_arguments(),
                                 timeout=180, stdout_limit=MAX_OPENAPI_BYTES, stderr_limit=MAX_TOOL_OUTPUT_BYTES)
         document = _read_json_bytes(raw, "backend OpenAPI export", MAX_OPENAPI_BYTES)
         raw_identity = document.get("x-fullmag-build-identity")

@@ -541,6 +541,34 @@ def _serve_startup_diagnostics(service, paths, stopping, error):
                   file=sys.stderr, flush=True)
 
 
+def _start_cache_maintenance(service, receipt_path, ready_receipt):
+    if os.environ.get("FULLMAG_AUTO_CACHE_MAINTENANCE", "0") != "1":
+        return None
+    try:
+        import backend_auto_maintenance
+        return backend_auto_maintenance.start(receipt_path, service._atomic_json, ready_receipt)
+    except Exception as error:
+        print(f"[fullmag-backend] Cache maintenance could not start: {error}", file=sys.stderr, flush=True)
+        return None
+
+
+def _observe_cache_maintenance(maintenance, *, stopping=False):
+    if maintenance is None:
+        return
+    try:
+        if stopping:
+            maintenance.stop()
+        else:
+            maintenance.poll()
+    except Exception as error:
+        print(f"[fullmag-backend] Cache maintenance failed: {error}", file=sys.stderr, flush=True)
+        if not stopping:
+            try:
+                maintenance.stop()
+            except Exception as stop_error:
+                print(f"[fullmag-backend] Cache maintenance shutdown failed: {stop_error}", file=sys.stderr, flush=True)
+
+
 def serve():
     import runtime_service as service
     import runtime_service_unclaimed_cancellation as unclaimed_cancellation
@@ -549,6 +577,10 @@ def serve():
         signal.signal(number, lambda *_: stopping.set())
     paths = service.prepare_storage()
     try:
+        if (os.environ.get("FULLMAG_ISOLATED_SNAPSHOT_START") is not None
+                or os.environ.get("FULLMAG_ISOLATED_SNAPSHOT_START_SHA256") is not None):
+            import runtime_service_snapshot
+            runtime_service_snapshot.admit(paths, service)
         bootstrap = service.initialize_accepted_store(paths)
     except Exception as error:
         return _serve_startup_diagnostics(service, paths, stopping, error)
@@ -575,6 +607,7 @@ def serve():
         )
         return 0
     try:
+        terminal_preflight = service.terminal_observation_preflight(paths)
         accepted_preflight = service.accepted_reattach_preflight(paths)
         container_recovery = service.recover_container_namespace(paths)
         # These legacy paths still require explicit authorization. Ordinary
@@ -594,12 +627,15 @@ def serve():
     failure_fence = service.process_receipt_path(paths).parent / (
         "api-failure-" + uuid.uuid4().hex + ".json"
     )
-    with service.accepted_reattach_api_input(paths, preflight=accepted_preflight) as (api_environment, restore_input):
+    with service.terminal_observation_api_input(
+        paths, terminal_preflight=terminal_preflight, accepted_preflight=accepted_preflight
+    ) as (api_environment, restore_input, terminal_launch):
         api_environment = _api_environment_with_operator_capability(api_environment)
         api_environment["FULLMAG_API_RUNTIME_FAILURE_FENCE"] = str(failure_fence)
         api = subprocess.Popen(["/opt/fullmag/package/bin/fullmag-api"],
                                env=api_environment, stdin=restore_input)
     handle = None
+    maintenance = None
     receipt = {"schema": "fullmag.docker-process-tree.v1", "state": "starting",
                "api_pid": api.pid, "accepted_store": str(paths.store),
                "bootstrap": bootstrap, "qualification": "NOT VERIFIED"}
@@ -619,7 +655,7 @@ def serve():
         service._atomic_json(receipt_path, receipt, "process tree receipt")
         api_startup_timeout = (
             service.ACCEPTED_REATTACH_API_STARTUP_TIMEOUT_SECONDS
-            if accepted_preflight is not None
+            if accepted_preflight is not None or terminal_preflight is not None
             else None
         )
         handle = service.start(paths, api_port=8081, expected_binding=bootstrap["binding"],
@@ -640,6 +676,11 @@ def serve():
                 paths, preflight=accepted_preflight, handle=handle
             )
             receipt["accepted_reattach"] = accepted_runtime
+            service._atomic_json(receipt_path, receipt, "process tree receipt")
+        if terminal_preflight is not None:
+            receipt["terminal_observation"] = service.terminal_observation_runtime_receipt(
+                paths, preflight=terminal_preflight, launch=terminal_launch, handle=handle
+            )
             service._atomic_json(receipt_path, receipt, "process tree receipt")
         last_full_api_probe = time.monotonic()
         try:
@@ -667,7 +708,9 @@ def serve():
         receipt.update(state="ready", service_owner=handle.owner)
         service._atomic_json(receipt_path, receipt, "process tree receipt")
         print("[fullmag-backend] Ready: API and runtime service", flush=True)
+        maintenance = _start_cache_maintenance(service, receipt_path, receipt)
         while not stopping.wait(1):
+            _observe_cache_maintenance(maintenance)
             status = api.poll()
             if status is not None:
                 raise RuntimeError(f"Fullmag API exited unexpectedly ({status})")
@@ -729,12 +772,13 @@ def serve():
         # Failed observation must preserve a possibly live detached service.
         # Keep PID 1 alive with admission closed until an explicit stop.
         while not stopping.wait(1):
-            pass
+            _observe_cache_maintenance(maintenance)
     finally:
         # Close this container's admission before draining its authenticated
         # scheduler owner. Never infer completion from an unconfirmed timeout.
         if api.poll() is None:
             api.terminate()
+        _observe_cache_maintenance(maintenance, stopping=True)
         try:
             receipt["api_exit_code"] = api.wait(timeout=10)
             if handle is not None:

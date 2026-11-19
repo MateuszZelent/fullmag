@@ -4,6 +4,7 @@
 //! process environment; a few router-level tests set `FULLMAG_STATE_DIR` under
 //! a lock to prove the wiring (paths, methods, status codes, headers).
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -13,7 +14,13 @@ use axum::http::{header, Method, Request, StatusCode};
 use fullmag_application::{
     FileProjectRepository, OpaqueDocument, ProjectEnvelope, ProjectId, ProjectRepository,
 };
+use fullmag_ir::MeshIR;
+use fullmag_quantities::fem_state_field::FemP1MagnetizationFieldSemantics;
+use fullmag_session::solution_field_geometry::{
+    SavedFemP1FieldGeometry, SavedFieldRepresentationEvidence, FEM_P1_GEOMETRY_SCHEMA,
+};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 use super::{body_bytes, body_json, build_v2_router, test_app_state};
@@ -631,13 +638,16 @@ fn the_openapi_document_describes_every_workspace_route_and_its_detail_union() {
         ("/v2/workspace/settings/{key}", vec!["get", "put"]),
         ("/v2/workspace/roots", vec!["get", "put"]),
         ("/v2/workspace/scan", vec!["post"]),
+        ("/v2/workspace/items/{id}/playback", vec!["get"]),
+        ("/v2/workspace/items/{id}/playback/frames/{frame_index}", vec!["get"]),
+        ("/v2/workspace/items/{id}/playback/geometry", vec!["get"]),
     ] {
         for method in methods {
             assert!(paths[path][method].is_object(), "{method} {path}");
         }
     }
     let schemas = &document["components"]["schemas"];
-    for name in ["WorkspaceItem", "WorkspaceItemList", "WorkspaceItemDetail", "ItemDetail", "ProjectDetail", "ScriptDetail", "ResultDetail", "WorkspaceScanReport"] {
+    for name in ["WorkspaceItem", "WorkspaceItemList", "WorkspaceItemDetail", "ItemDetail", "ProjectDetail", "ScriptDetail", "ResultDetail", "WorkspaceScanReport", "SavedPlaybackResource", "SavedPlaybackFemMesh", "WorkspacePlaybackGeometryQuery"] {
         assert!(schemas[name].is_object(), "{name}");
     }
     // The detail is a union tagged by `kind`.
@@ -932,6 +942,506 @@ async fn the_frame_and_settings_routes_are_wired() {
     let body = body_json(frames).await;
     assert_eq!((body["total"].as_u64(), body["frames"].as_array().map(Vec::len)), (Some(3), Some(1)));
     assert_eq!(body["frames"][0]["index"], 1);
+
+    std::env::remove_var("FULLMAG_STATE_DIR");
+}
+
+fn write_playback_descriptor(dir: &Path) -> Vec<u8> {
+    let array = dir.join("stages/relax/fields/m");
+    fs::create_dir_all(&array).unwrap();
+    fs::write(
+        &array.join(".zarray"),
+        json!({
+            "zarr_format": 2,
+            "shape": [1, 3],
+            "chunks": [1, 3],
+            "dtype": "<f8",
+            "compressor": null,
+            "fill_value": null,
+            "order": "C",
+            "filters": [],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let values = [0.25_f64, -0.5, 1.0];
+    let mut bytes = Vec::with_capacity(values.len() * 8);
+    for value in values {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(array.join("0.0"), &bytes).unwrap();
+    fs::write(
+        dir.join("stages/relax/manifest.json"),
+        r#"{"complete":true}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("playback.json"),
+        json!({
+            "schema": "fullmag.saved_playback.v1",
+            "complete": true,
+            "name": "saved result",
+            "source_note": "Recovered publication context.",
+            "grid_cells_xyz": [1, 1, 1],
+            "cell_size_m": [1e-9, 1e-9, 1e-9],
+            "origin_m": [0.0, 0.0, 0.0],
+            "stages": [{
+                "stage_id": "relax",
+                "array_path": "stages/relax/fields/m",
+                "times_s": [1e-12],
+                "quantity_ids": ["m"],
+            }],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    bytes
+}
+
+fn saved_fem_geometry_bytes() -> Vec<u8> {
+    let mesh = MeshIR::from_legacy_tet4(
+        "saved-playback-tet".into(),
+        vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        vec![[0, 1, 2, 3]],
+        vec![7],
+        vec![[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]],
+        vec![1; 4],
+        vec![],
+        vec![],
+        HashMap::new(),
+    );
+    let semantics = FemP1MagnetizationFieldSemantics::new(
+        &mesh.topology_fingerprint_v6(),
+        mesh.nodes.len(),
+        vec![true, true, true, false],
+    )
+    .unwrap();
+    let geometry = SavedFemP1FieldGeometry {
+        schema_version: FEM_P1_GEOMETRY_SCHEMA.into(),
+        coordinate_unit: "m".into(),
+        representation_evidence: SavedFieldRepresentationEvidence::NotVerified,
+        mesh,
+        field_semantics: semantics,
+    };
+    serde_json::to_vec(&geometry).unwrap()
+}
+
+fn write_fem_playback_descriptor(dir: &Path) -> (Vec<u8>, Vec<Vec<f64>>) {
+    let geometry_bytes = saved_fem_geometry_bytes();
+    let geometry_sha256 = format!("{:x}", Sha256::digest(&geometry_bytes));
+    let array = dir.join("fields/m.zarr");
+    fs::create_dir_all(&array).unwrap();
+    fs::write(
+        array.join(".zarray"),
+        json!({
+            "zarr_format": 2,
+            "shape": [2, 3, 4],
+            "chunks": [1, 3, 4],
+            "dtype": "<f8",
+            "compressor": null,
+            "fill_value": null,
+            "order": "C",
+            "filters": null,
+            "dimension_separator": ".",
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        array.join(".zattrs"),
+        json!({
+            "observable": "m",
+            "axes": ["sample", "component", "cell"],
+            "component_count": 3,
+            "component_order": ["x", "y", "z"],
+            "storage_layout": "soa_component_major",
+            "location": "node",
+            "scope": "full",
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let frames: Vec<Vec<f64>> = vec![
+        vec![0.1, 0.2, 0.3, 0.4, 1.1, 1.2, 1.3, 1.4, 2.1, 2.2, 2.3, 2.4],
+        vec![10.1, 10.2, 10.3, 10.4, 11.1, 11.2, 11.3, 11.4, 12.1, 12.2, 12.3, 12.4],
+    ];
+    for (index, values) in frames.iter().enumerate() {
+        let mut bytes = Vec::with_capacity(values.len() * 8);
+        for value in values {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        fs::write(array.join(format!("{index}.0.0")), &bytes).unwrap();
+    }
+    fs::create_dir_all(dir.join("geometry")).unwrap();
+    fs::write(dir.join("geometry/fem.json"), &geometry_bytes).unwrap();
+    // Native FEM Zarr publishes a root-level result manifest next to
+    // `fields/m.zarr`; it is provenance, not the stage `complete` marker.
+    fs::write(dir.join("manifest.json"), r#"{"status":"completed"}"#).unwrap();
+    fs::write(
+        dir.join("playback.json"),
+        json!({
+            "schema": "fullmag.saved_playback.v1",
+            "complete": true,
+            "name": "saved FEM result",
+            "fem_mesh": {
+                "geometry_path": "geometry/fem.json",
+                "geometry_sha256": geometry_sha256,
+            },
+            "stages": [{
+                "stage_id": "relax",
+                "array_path": "fields/m.zarr",
+                "times_s": [1e-12, 2e-12],
+                "quantity_ids": ["m"],
+                "field_layout": "soa_component_major",
+            }],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    (geometry_bytes, frames)
+}
+
+#[tokio::test]
+async fn saved_playback_routes_return_metadata_and_revision_checked_binary_frames() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let fixture = Fixture::new();
+    let work = fixture.work();
+    std::env::set_var("FULLMAG_STATE_DIR", fixture.dir.path().join("state"));
+    let app = build_v2_router().with_state(test_app_state());
+
+    let results = work.join("run.zarr");
+    write_results(&results, None);
+    let expected_frame = write_playback_descriptor(&results);
+    let added = call(
+        &app,
+        Method::POST,
+        "/v2/workspace/items",
+        Some(json!({"path": results.display().to_string()})),
+        &[],
+    )
+    .await;
+    assert_eq!(added.status(), StatusCode::OK);
+    let id = body_json(added).await["id"].as_str().unwrap().to_string();
+
+    let playback = call(
+        &app,
+        Method::GET,
+        &format!("/v2/workspace/items/{id}/playback"),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(playback.status(), StatusCode::OK);
+    let resource = body_json(playback).await;
+    assert_eq!(resource["schema"], "fullmag.saved_playback.v1");
+    assert_eq!(resource["source_note"], "Recovered publication context.");
+    assert_eq!(resource["stages"][0]["frame_count"], 1);
+    assert!(resource["stages"][0].get("array_path").is_none());
+    let revision = resource["revision"].as_str().unwrap();
+
+    let path = format!(
+        "/v2/workspace/items/{id}/playback/frames/0?stage_id=relax&revision={revision}"
+    );
+    let frame = call(&app, Method::GET, &path, None, &[]).await;
+    assert_eq!(frame.status(), StatusCode::OK);
+    assert_eq!(frame.headers()[header::CONTENT_TYPE], "application/octet-stream");
+    assert_eq!(body_bytes(frame).await, expected_frame);
+
+    let stale = call(
+        &app,
+        Method::GET,
+        &format!("/v2/workspace/items/{id}/playback/frames/0?stage_id=relax&revision=stale"),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let missing_revision = call(
+        &app,
+        Method::GET,
+        &format!("/v2/workspace/items/{id}/playback/frames/0?stage_id=relax"),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(missing_revision.status(), StatusCode::BAD_REQUEST);
+
+    std::env::remove_var("FULLMAG_STATE_DIR");
+}
+
+#[tokio::test]
+async fn saved_playback_fem_routes_return_canonical_metadata_geometry_and_soa_frames() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let fixture = Fixture::new();
+    let work = fixture.work();
+    std::env::set_var("FULLMAG_STATE_DIR", fixture.dir.path().join("state"));
+    let app = build_v2_router().with_state(test_app_state());
+
+    let results = work.join("fem-run.zarr");
+    write_results(&results, None);
+    let (geometry_bytes, frames) = write_fem_playback_descriptor(&results);
+    let added = call(
+        &app,
+        Method::POST,
+        "/v2/workspace/items",
+        Some(json!({"path": results.display().to_string()})),
+        &[],
+    )
+    .await;
+    assert_eq!(added.status(), StatusCode::OK);
+    let id = body_json(added).await["id"].as_str().unwrap().to_string();
+
+    let playback = call(
+        &app,
+        Method::GET,
+        &format!("/v2/workspace/items/{id}/playback"),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(playback.status(), StatusCode::OK);
+    let resource = body_json(playback).await;
+    assert!(resource.get("grid_cells_xyz").is_none());
+    assert_eq!(resource["fem_mesh"]["node_count"], 4);
+    assert_eq!(resource["fem_mesh"]["cell_count"], 1);
+    assert_eq!(resource["fem_mesh"]["facet_count"], 4);
+    assert_eq!(resource["fem_mesh"]["support_byte_length"], 25);
+    assert!(resource["fem_mesh"]["support_sha256"].as_str().unwrap().len() == 64);
+    assert!(resource["fem_mesh"]["topology_byte_length"].as_u64().unwrap() > 64);
+    let revision = resource["revision"].as_str().unwrap();
+
+    let frame = call(
+        &app,
+        Method::GET,
+        &format!(
+            "/v2/workspace/items/{id}/playback/frames/1?stage_id=relax&revision={revision}"
+        ),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(frame.status(), StatusCode::OK);
+    let frame_bytes = body_bytes(frame).await;
+    let mut expected = Vec::new();
+    for node in 0..4 {
+        for component in 0..3 {
+            let value = frames[1][component * 4 + node];
+            expected.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    assert_eq!(frame_bytes, expected);
+
+    let topology = call(
+        &app,
+        Method::GET,
+        &format!(
+            "/v2/workspace/items/{id}/playback/geometry?revision={revision}&part=topology"
+        ),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(topology.status(), StatusCode::OK);
+    let topology_bytes = body_bytes(topology).await;
+    assert_eq!(&topology_bytes[..4], b"FMMT");
+    assert_eq!(topology_bytes[4], 2);
+    assert_eq!(topology_bytes.len(), resource["fem_mesh"]["topology_byte_length"].as_u64().unwrap() as usize);
+
+    let support = call(
+        &app,
+        Method::GET,
+        &format!(
+            "/v2/workspace/items/{id}/playback/geometry?revision={revision}&part=support"
+        ),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(support.status(), StatusCode::OK);
+    let support_bytes = body_bytes(support).await;
+    assert_eq!(&support_bytes[..4], b"FMSP");
+    assert_eq!(support_bytes.len(), resource["fem_mesh"]["support_byte_length"].as_u64().unwrap() as usize);
+    assert_eq!(support_bytes[24] & 0b0000_1000, 0);
+    assert_eq!(geometry_bytes.len(), fs::metadata(results.join("geometry/fem.json")).unwrap().len() as usize);
+
+    // Native stage-autosave may flatten SoA into [sample, 3*N] and carry only
+    // its legacy dimension_order attrs; the explicit sidecar layout remains
+    // the authority and the HTTP frame stays canonical AoS.
+    let array = results.join("stages/relax/fields/m");
+    fs::create_dir_all(&array).unwrap();
+    fs::write(
+        results.join("stages/relax/manifest.json"),
+        r#"{"complete":true}"#,
+    )
+    .unwrap();
+    let playback_path = results.join("playback.json");
+    let mut flat_descriptor: Value =
+        serde_json::from_slice(&fs::read(&playback_path).unwrap()).unwrap();
+    flat_descriptor["stages"][0]["array_path"] = json!("stages/relax/fields/m");
+    fs::write(&playback_path, flat_descriptor.to_string()).unwrap();
+    fs::write(
+        array.join(".zarray"),
+        json!({
+            "zarr_format": 2,
+            "shape": [2, 12],
+            "chunks": [1, 12],
+            "dtype": "<f8",
+            "compressor": null,
+            "fill_value": 0.0,
+            "order": "C",
+            "filters": null,
+            "dimension_separator": ".",
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        array.join(".zattrs"),
+        json!({"quantity": "m", "dimension_order": ["sample", "value"]}).to_string(),
+    )
+    .unwrap();
+    for (index, values) in frames.iter().enumerate() {
+        let mut bytes = Vec::with_capacity(values.len() * 8);
+        for value in values {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        fs::write(array.join(format!("{index}.0")), bytes).unwrap();
+    }
+    let flat_playback = call(
+        &app,
+        Method::GET,
+        &format!("/v2/workspace/items/{id}/playback"),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(flat_playback.status(), StatusCode::OK);
+    let flat_resource = body_json(flat_playback).await;
+    let flat_revision = flat_resource["revision"].as_str().unwrap();
+    let flat_frame = call(
+        &app,
+        Method::GET,
+        &format!(
+            "/v2/workspace/items/{id}/playback/frames/0?stage_id=relax&revision={flat_revision}"
+        ),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(flat_frame.status(), StatusCode::OK);
+    let flat_bytes = body_bytes(flat_frame).await;
+    let mut expected_flat = Vec::new();
+    for node in 0..4 {
+        for component in 0..3 {
+            expected_flat.extend_from_slice(&frames[0][component * 4 + node].to_le_bytes());
+        }
+    }
+    assert_eq!(flat_bytes, expected_flat);
+
+    let stale = call(
+        &app,
+        Method::GET,
+        &format!(
+            "/v2/workspace/items/{id}/playback/geometry?revision=stale&part=support"
+        ),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+
+    std::env::remove_var("FULLMAG_STATE_DIR");
+}
+
+#[tokio::test]
+async fn saved_playback_fem_rejects_changed_geometry_digest_and_layout_attributes() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let fixture = Fixture::new();
+    let work = fixture.work();
+    std::env::set_var("FULLMAG_STATE_DIR", fixture.dir.path().join("state"));
+    let app = build_v2_router().with_state(test_app_state());
+    let results = work.join("fem-invalid.zarr");
+    write_results(&results, None);
+    write_fem_playback_descriptor(&results);
+    let added = call(
+        &app,
+        Method::POST,
+        "/v2/workspace/items",
+        Some(json!({"path": results.display().to_string()})),
+        &[],
+    )
+    .await;
+    let id = body_json(added).await["id"].as_str().unwrap().to_string();
+
+    let mut ambiguous: Value = serde_json::from_slice(&fs::read(results.join("playback.json")).unwrap()).unwrap();
+    ambiguous["stages"][0]["field_layout"] = json!("ambiguous");
+    fs::write(results.join("playback.json"), ambiguous.to_string()).unwrap();
+    let layout = call(
+        &app,
+        Method::GET,
+        &format!("/v2/workspace/items/{id}/playback"),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(layout.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    write_fem_playback_descriptor(&results);
+
+    fs::write(
+        results.join("fields/m.zarr/.zattrs"),
+        json!({"storage_layout": "aos_node_major", "location": "node"}).to_string(),
+    )
+    .unwrap();
+    let attrs = call(
+        &app,
+        Method::GET,
+        &format!("/v2/workspace/items/{id}/playback"),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(attrs.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    for (field, value) in [
+        ("scope", json!("surface")),
+        ("observable", json!("H_demag")),
+        ("component_order", json!(["z", "y", "x"])),
+        ("component_count", json!(2)),
+        ("axes", json!(["sample", "node"])),
+    ] {
+        write_fem_playback_descriptor(&results);
+        let attrs_path = results.join("fields/m.zarr/.zattrs");
+        let mut attrs: Value = serde_json::from_slice(&fs::read(&attrs_path).unwrap()).unwrap();
+        attrs[field] = value;
+        fs::write(&attrs_path, attrs.to_string()).unwrap();
+        let invalid = call(
+            &app,
+            Method::GET,
+            &format!("/v2/workspace/items/{id}/playback"),
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY, "{field}");
+    }
+
+    write_fem_playback_descriptor(&results);
+    fs::write(results.join("fields/m.zarr/.zattrs"), "{}").unwrap();
+    fs::write(results.join("geometry/fem.json"), b"changed").unwrap();
+    let digest = call(
+        &app,
+        Method::GET,
+        &format!("/v2/workspace/items/{id}/playback"),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(digest.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
     std::env::remove_var("FULLMAG_STATE_DIR");
 }

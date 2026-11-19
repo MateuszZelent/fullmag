@@ -161,7 +161,7 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
 
         <div className="fm-about-hero__actions">
           <Button
-            onClick={() => startScreenStore.setSection("docs")}
+            onClick={() => startScreenStore.requestDocs("index.html")}
             size="sm"
             type="button"
             variant="primary"

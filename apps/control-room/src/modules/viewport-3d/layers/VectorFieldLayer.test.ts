@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 
 import { describe, expect, it } from "vitest";
 import {
@@ -62,7 +63,11 @@ describe("VectorFieldLayer performance contracts", () => {
 
   it("clears the exact vector receipt when no build remains or the layer unmounts", () => {
     expect(vectorFieldLayerSource).toContain("adoptionRegistry.clearAdoption(");
-    expect(vectorFieldLayerSource).toContain("if (glyphBuild || !adoptionRegistry || !carrierId) return;");
+    const guard = vectorFieldLayerSource.match(/if \(([^\n]+\|\| !adoptionRegistry \|\| !carrierId)\) return;/)?.[1];
+    expect(guard).toBeDefined();
+    for (const [glyphBuild, glyphCount, skipClear] of [[null, 0, false], [{}, 0, false], [{}, 3, true]] as const) {
+      expect(runInNewContext(guard!, { glyphBuild, glyphCount, adoptionRegistry: {}, carrierId: "carrier" })).toBe(skipClear);
+    }
     expect(vectorFieldLayerSource).toContain("unregister();");
   });
   it("preserves the retained vector build source when a newer source is requested", () => {
@@ -380,27 +385,25 @@ describe("VectorFieldLayer performance contracts", () => {
       uploadHookStart,
       componentStart,
     );
-    const colorVisibleStart = uploadSource.indexOf("onVisible: () => {");
-    const matrixVisibleStart = uploadSource.indexOf(
-      "onVisible: () => {",
-      colorVisibleStart + 1,
-    );
-    const colorVisibleSource = uploadSource.slice(
-      colorVisibleStart,
-      matrixVisibleStart,
-    );
-    const matrixVisibleSource = uploadSource.slice(matrixVisibleStart);
+    const visibleStart = uploadSource.indexOf("onVisible: () => {");
+    const pendingUploadSource = uploadSource.slice(0, visibleStart);
+    const adoptedUploadSource = uploadSource.slice(visibleStart);
 
-    expect(colorVisibleSource).not.toContain("shaft.count = glyphCount");
-    expect(colorVisibleSource).not.toContain("head.count = glyphCount");
-    expect(colorVisibleSource).not.toMatch(
+    expect(uploadSource.match(/uploadManager\.enqueue\(/g)).toHaveLength(1);
+    expect(uploadSource.match(/onVisible: \(\) => \{/g)).toHaveLength(1);
+    expect(pendingUploadSource).toContain("glyphColors.subarray(batch.start * 3, batch.end * 3)");
+    expect(pendingUploadSource).toContain("activeShaft.setMatrixAt(index, matrix)");
+    expect(pendingUploadSource).not.toContain("activeShaft.count = activeGlyphs.count");
+    expect(pendingUploadSource).not.toMatch(
       /markVectorGlyphAttributeRange\(\s*instanceColorAttr/,
     );
-    expect(matrixVisibleSource).toMatch(
+    expect(adoptedUploadSource).toMatch(
       /markVectorGlyphAttributeRange\(\s*instanceColorAttr/,
     );
-    expect(matrixVisibleSource).toContain(
-      "activeShaft.count = activeGlyphs.count",
+    expect(adoptedUploadSource).toContain("activeShaft.count = activeGlyphs.count");
+    expect(adoptedUploadSource).toContain("activeHead.count = activeGlyphs.count");
+    expect(adoptedUploadSource.indexOf("syncVectorGlyphColorState")).toBeLessThan(
+      adoptedUploadSource.indexOf("onAdopted?."),
     );
   });
 

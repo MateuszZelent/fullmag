@@ -27,6 +27,8 @@ export interface ResourceStateFacets {
 
 export interface ResourceResult<TData> {
   data: TData | null;
+  /** Revision of the payload in `data`; stable while a refresh is pending. */
+  dataRevision?: ResourceRevision | null;
   error: Error | null;
   /** LR-09: błąd nieudanego odświeżenia przy zachowanych danych. */
   refreshError?: Error | null;

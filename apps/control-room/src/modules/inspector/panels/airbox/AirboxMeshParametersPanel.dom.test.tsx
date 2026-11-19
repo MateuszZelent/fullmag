@@ -32,6 +32,11 @@ vi.mock("@/kernel/resources/useSessionStatus", async (importOriginal) => ({
   useSessionResourceIdentity: () => mocks.identity,
 }));
 
+vi.mock("@/kernel/resources/studyRuntimeResources", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/resources/studyRuntimeResources")>()),
+  useRuntimeCommandControlResourceData: () => ({}),
+}));
+
 vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
   MESH_BUILD_CURRENT_RESOURCE_KEY: "meshing:build-current",
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY: "meshing:build-latest-successful",

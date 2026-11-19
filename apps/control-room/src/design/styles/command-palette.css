@@ -53,9 +53,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fm-command-palette,
-  .fm-command-palette__overlay {
-    animation: none;
+  /* Overlay is already opacity-only; the palette keeps a crossfade without scale. */
+  .fm-command-palette {
+    animation-name: fm-reduced-fade-in;
   }
 }
 

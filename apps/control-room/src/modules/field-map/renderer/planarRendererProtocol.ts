@@ -1,6 +1,8 @@
 export interface PlanarColorizeRequest {
   colormap?: string;
   contours?: { enabled: boolean; level: number };
+  /** World vector components per pixel; when present the raster is coloured by direction. */
+  directionVectors?: Float32Array | Float64Array;
   height: number;
   id: number;
   kind: "colorize";

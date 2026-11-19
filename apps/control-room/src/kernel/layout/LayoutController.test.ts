@@ -22,6 +22,56 @@ describe("LayoutController", () => {
     expect(state.focusedSlot).toBeNull();
   });
 
+  it("opens Saved results atomically before the navigator mounts and preserves the viewport", () => {
+    const { bus, controller } = setup();
+    controller.setActiveViewportMainModule("field-map");
+    controller.setPanelVisible("left", false);
+    controller.setPanelVisible("right", false);
+    const layouts = vi.fn();
+    const focuses = vi.fn();
+    bus.on("workspace:layout-changed", layouts);
+    bus.on("workspace:focus-changed", focuses);
+
+    controller.openSavedResults();
+
+    expect(controller.get()).toMatchObject({
+      activeModuleTab: "results", resultsSource: "saved",
+      activeViewportMainModuleId: "field-map", focusedSlot: "panel-left",
+      panelVisible: { left: true, right: false, bottom: true },
+    });
+    expect(layouts).toHaveBeenCalledTimes(1);
+    expect(focuses).toHaveBeenCalledTimes(1);
+    expect(layouts.mock.calls[0][0].state).toBe(controller.get());
+    controller.openSavedResults();
+    expect(layouts).toHaveBeenCalledTimes(1);
+    expect(focuses).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the source across navigator remounts and supports an explicit Current selection", () => {
+    const { bus, controller } = setup();
+    controller.openSavedResults();
+    controller.setActiveTab("geometry");
+    controller.setActiveTab("results");
+    expect(controller.get().resultsSource).toBe("saved");
+    const listener = vi.fn();
+    bus.on("workspace:layout-changed", listener);
+    controller.setResultsSource("current");
+    controller.setResultsSource("current");
+    expect(controller.get().resultsSource).toBe("current");
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("defaults legacy layout restores and frequency-domain presets to Current", () => {
+    const { controller } = setup();
+    controller.openSavedResults();
+    const { resultsSource: _source, ...legacy } = controller.get();
+    controller.replace(legacy);
+    expect(controller.get().resultsSource).toBe("current");
+    controller.openSavedResults();
+    controller.applyPreset("workspace.results.frequency-domain");
+    expect(controller.get().resultsSource).toBe("current");
+  });
+
   it("opens a requested bottom tab in one durable layout transaction", () => {
     const { bus, controller } = setup();
     const layoutListener = vi.fn();

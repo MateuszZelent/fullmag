@@ -15,6 +15,13 @@ An archive without Git requires the explicit
 base version, marked as unbound in the resolver result.  A dynamic
 ``[project]`` version in an archive may additionally provide
 ``FULLMAG_BASE_VERSION`` when no Cargo workspace is shipped with the archive.
+
+Public index uploads (PyPI/TestPyPI) cannot carry the ``+g<commit>`` local
+label of development records.  A release build therefore sets
+``FULLMAG_RELEASE_VERSION`` to a public PEP 440 version whose numeric base
+must match the authoritative package base (for example ``0.1.0``,
+``0.1.0rc1`` or ``0.1.0.dev20261028``).  The release workflow derives it from
+the pushed tag; the route never combines with a managed development record.
 """
 
 from __future__ import annotations
@@ -36,11 +43,19 @@ WINDOWS_VERSION_EPOCH = date(2000, 1, 1)
 VERSION_FILE_ENV = "FULLMAG_BUILD_VERSION_FILE"
 SOURCE_IDENTITY_FILE_ENV = "FULLMAG_SOURCE_IDENTITY_FILE"
 ALLOW_UNQUALIFIED_ENV = "FULLMAG_ALLOW_UNQUALIFIED_VERSION"
+RELEASE_VERSION_ENV = "FULLMAG_RELEASE_VERSION"
 _BASE_VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 _PEP440_VERSION = re.compile(
     r"(?P<base>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"
     r"\.dev(?P<date>[0-9]{8})\+g(?P<commit>[0-9a-f]{12})"
     r"(?P<dirty>\.dirty\.s[0-9a-f]{12})?"
+)
+# Public release versions: no local label, so PyPI accepts the upload.
+_RELEASE_VERSION = re.compile(
+    r"(?P<base>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"
+    r"(?:(?:a|b|rc)(?:0|[1-9][0-9]*))?"
+    r"(?:\.post(?:0|[1-9][0-9]*))?"
+    r"(?:\.dev(?:0|[1-9][0-9]*))?"
 )
 _SEMVER_VERSION = re.compile(
     r"(?P<base>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"
@@ -131,7 +146,7 @@ def _base_version_from_project(project_root: Path) -> str | None:
 def _base_from_package_version(value: str) -> str:
     if _BASE_VERSION.fullmatch(value) is not None:
         return value
-    match = _PEP440_VERSION.fullmatch(value)
+    match = _PEP440_VERSION.fullmatch(value) or _RELEASE_VERSION.fullmatch(value)
     if match is not None:
         return match.group("base")
     raise BuildBackendError("package metadata has an unsupported Version value")
@@ -438,6 +453,12 @@ def resolve_version(project_root: Path) -> VersionResolution:
     project_root = project_root.resolve()
     version_file = os.environ.get(VERSION_FILE_ENV)
     identity_file = os.environ.get(SOURCE_IDENTITY_FILE_ENV)
+    release_version = os.environ.get(RELEASE_VERSION_ENV)
+    if release_version is not None and (version_file is not None or identity_file is not None):
+        raise BuildBackendError(
+            f"{RELEASE_VERSION_ENV} cannot be combined with {VERSION_FILE_ENV} "
+            f"or {SOURCE_IDENTITY_FILE_ENV}"
+        )
     configured_record: Mapping[str, Any] | None = None
     if version_file is not None:
         if not version_file:
@@ -457,6 +478,25 @@ def resolve_version(project_root: Path) -> VersionResolution:
         configured_record,
         package_metadata_version,
     )
+    if release_version is not None:
+        release_match = _RELEASE_VERSION.fullmatch(release_version)
+        if release_match is None:
+            raise BuildBackendError(
+                f"{RELEASE_VERSION_ENV} must be a public PEP 440 version without a local label"
+            )
+        if release_match.group("base") != expected_base:
+            raise BuildBackendError(
+                f"{RELEASE_VERSION_ENV} base {release_match.group('base')!r} does not match "
+                f"package {expected_base!r}"
+            )
+        return VersionResolution(
+            pep440_version=release_version,
+            base_version=expected_base,
+            version_source_bound=False,
+            reason="public-release",
+            record=None,
+        )
+
     if version_file is not None:
         pep440 = _validate_version_record(configured_record or {}, expected_base)
         return VersionResolution(

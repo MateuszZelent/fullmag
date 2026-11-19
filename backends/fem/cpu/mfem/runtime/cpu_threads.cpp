@@ -9,6 +9,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
+#include "cpu/mfem/runtime/hypre_host_policy.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 
 #include <algorithm>
@@ -145,14 +146,37 @@ void configure_fem_host_runtime_threads(Context &ctx)
     ctx.cpu_threads.max_active_parallel_levels = 1;
     if (request.auto_requested) {
         const bool gpu_host_runtime = mfem_device_requests_gpu(ctx);
-        ctx.cpu_threads.effective_omp_threads =
-            !gpu_host_runtime && request.auto_resolved_threads > 0
-            ? std::min(request.requested_threads, request.auto_resolved_threads)
-            : auto_cpu_thread_cap_for_context(ctx, request.requested_threads);
-        ctx.cpu_threads.cap_reason =
-            !gpu_host_runtime && request.auto_resolved_threads > 0
-            ? FULLMAG_FEM_CPU_THREAD_CAP_EXTERNAL_AUTO_RESOLVED
-            : auto_cpu_thread_cap_reason_for_context(ctx, request.requested_threads);
+        if (gpu_host_runtime) {
+            // Preserve the deliberately conservative GPU host initialization
+            // policy regardless of CPU allocation hints.
+            ctx.cpu_threads.effective_omp_threads = 1;
+            ctx.cpu_threads.cap_reason = FULLMAG_FEM_CPU_THREAD_CAP_GPU_DEFAULT_ONE;
+        } else {
+            const int detected_threads = std::max(1, request.requested_threads);
+            const int mesh_limited_threads = auto_cpu_thread_cap_for_context(
+                ctx,
+                detected_threads
+            );
+            const bool external_allocation_limits_detected =
+                request.auto_resolved_threads > 0 &&
+                request.auto_resolved_threads < detected_threads;
+            const int allocated_threads = external_allocation_limits_detected
+                ? request.auto_resolved_threads
+                : detected_threads;
+
+            // The external resolver is an allocation ceiling, not an override
+            // for the FEM mesh policy. Apply both bounds and report the one
+            // that strictly limits the final CPU team.
+            ctx.cpu_threads.effective_omp_threads = std::min(
+                allocated_threads,
+                mesh_limited_threads
+            );
+            ctx.cpu_threads.cap_reason =
+                external_allocation_limits_detected &&
+                        request.auto_resolved_threads < mesh_limited_threads
+                ? FULLMAG_FEM_CPU_THREAD_CAP_EXTERNAL_AUTO_RESOLVED
+                : auto_cpu_thread_cap_reason_for_context(ctx, detected_threads);
+        }
     }
 #ifdef _OPENMP
     // MFEM, Hypre/AMG and BLAS may all enter OpenMP regions. Keep one runtime
@@ -187,10 +211,11 @@ void log_cpu_runtime_selection(const Context &ctx)
         return;
     }
     const char *thread_mode = ctx.cpu_threads.auto_requested ? "auto" : "manual";
+    const HypreHostPolicySnapshot hypre = current_hypre_host_policy();
 
     std::fprintf(
         stderr,
-        "[fullmag-fem] cpu runtime: poisson_solver=%s preconditioner=%s cpu_threads=%s requested_omp_threads=%d effective_omp_threads=%d cap_reason=%d dynamic_threads=disabled nested_parallelism=disabled max_active_parallel_levels=%d mesh_nodes=%u elements=%u\n",
+        "[fullmag-fem] cpu runtime: poisson_solver=%s preconditioner=%s cpu_threads=%s requested_omp_threads=%d effective_omp_threads=%d cap_reason=%d dynamic_threads=disabled nested_parallelism=disabled max_active_parallel_levels=%d mesh_nodes=%u elements=%u hypre_memory=%s hypre_execution=%s hypre_policy_owner=%s\n",
         demag_poisson_linear_solver_name(ctx.demag.solver.solver),
         demag_poisson_preconditioner_name(ctx.demag.solver.preconditioner),
         thread_mode,
@@ -199,7 +224,10 @@ void log_cpu_runtime_selection(const Context &ctx)
         ctx.cpu_threads.cap_reason,
         ctx.cpu_threads.max_active_parallel_levels,
         ctx.mesh.n_nodes,
-        ctx.mesh.n_elements);
+        ctx.mesh.n_elements,
+        hypre_memory_location_name(hypre),
+        hypre_execution_policy_name(hypre),
+        !hypre.hypre_gpu_build ? "host_build" : hypre.bound_by_cpu_lane ? "cpu_lane" : "process");
 }
 
 } // namespace fullmag::fem

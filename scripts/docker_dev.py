@@ -64,10 +64,12 @@ BASE_CONTEXT_FILES = (
     ("Dockerfile.dev", "docker/all-in-one/Dockerfile.dev"),
     ("Dockerfile.dev.dockerignore", "docker/all-in-one/Dockerfile.dev.dockerignore"),
     ("entrypoint.py", "docker/all-in-one/entrypoint.py"),
+    ("backend_auto_maintenance.py", "docker/all-in-one/backend_auto_maintenance.py"),
     ("windows_folder_probe.py", "docker/all-in-one/windows_folder_probe.py"),
     ("linux_native_probe.py", "docker/all-in-one/linux_native_probe.py"),
     ("runtime_service.py", "docker/all-in-one/runtime_service.py"),
     ("runtime_service_unclaimed_cancellation.py", "docker/all-in-one/runtime_service_unclaimed_cancellation.py"),
+    ("runtime_service_snapshot.py", "docker/all-in-one/runtime_service_snapshot.py"),
     ("frontend_dev.py", "docker/all-in-one/frontend_dev.py"),
     ("healthcheck.py", "docker/all-in-one/healthcheck.py"),
     ("docker_startup_script.py", "scripts/docker_startup_script.py"),
@@ -75,8 +77,15 @@ BASE_CONTEXT_FILES = (
 )
 RUNTIME_IMAGE_CONTEXT_FILES = (
     ("Dockerfile.backend", "docker/all-in-one/Dockerfile.backend"),
+    ("Dockerfile.backend.dockerignore", "docker/all-in-one/Dockerfile.backend.dockerignore"),
     ("backend_dev.py", "docker/all-in-one/backend_dev.py"),
+    ("backend_native_contracts.py", "docker/all-in-one/backend_native_contracts.py"),
     ("backend_source.py", "docker/all-in-one/backend_source.py"),
+    ("backend_shared_store.py", "docker/all-in-one/backend_shared_store.py"),
+    ("backend_shared_recovery.py", "docker/all-in-one/backend_shared_recovery.py"),
+    ("backend_compiler_cache.py", "docker/all-in-one/backend_compiler_cache.py"),
+    ("backend_group_cache_cleanup.py", "docker/all-in-one/backend_group_cache_cleanup.py"),
+    ("backend_group_retirement.py", "docker/all-in-one/backend_group_retirement.py"),
     ("backend_candidate_retirement.py", "docker/all-in-one/backend_candidate_retirement.py"),
     ("worker_cgroup_gate.py", "docker/all-in-one/worker_cgroup_gate.py"),
     (
@@ -1398,8 +1407,12 @@ def _prepare_backend_cache(layout: Mapping[str, object], repo: Path, image_id: s
             if not isinstance(document, Mapping):
                 raise _fail("running Docker cache-consumer inventory is malformed")
             state = document.get("State")
-            if not isinstance(state, Mapping) or state.get("Running") is not True:
-                raise _fail("Docker cache-consumer inventory changed during inspection")
+            if not isinstance(state, Mapping):
+                raise _fail("running Docker cache-consumer inventory is malformed")
+            # A helper of another DEV group that exited after `docker ps` is
+            # no longer a consumer, exactly as if it had exited before it.
+            if state.get("Running") is not True:
+                continue
             consumers.append(document)
         return tuple(consumers)
 
@@ -2512,12 +2525,53 @@ def _parser() -> argparse.ArgumentParser:
     empty_quarantine.add_argument("--activation", required=True)
     empty_quarantine.add_argument("--recovery-id", required=True)
     empty_quarantine.add_argument("--apply", action="store_true", help="commit after exact stopped-namespace and empty-store proofs; default is dry-run")
+    cold_quarantine = subparsers.add_parser(
+        "quarantine-failed-bootstrap",
+        help="cold quarantine a stopped terminal snapshot; preserve old owner, leases and active marker",
+    )
+    cold_quarantine.add_argument("--source-root", type=Path, required=True)
+    cold_quarantine.add_argument("--operation-attempt", required=True)
+    cold_quarantine.add_argument("--recovery-id", required=True)
+    cold_quarantine.add_argument("--apply", action="store_true")
+    cold_quarantine.add_argument("--expected-plan-sha256")
+    completed_cache = subparsers.add_parser(
+        "reconcile-completed-cache",
+        help="reconcile one omitted private package volume after completed worktree retirement",
+    )
+    completed_cache.add_argument("--registry", type=Path, required=True)
+    completed_cache.add_argument("--volume", required=True)
+    completed_cache.add_argument("--recovery-id", required=True)
+    completed_cache.add_argument("--apply", action="store_true")
+    completed_cache.add_argument("--expected-plan-sha256")
+    offline_reconcile = subparsers.add_parser(
+        "reconcile-offline-volume",
+        help="repair one stopped terminal-owner control lease while preserving sessions and unknown activation evidence",
+    )
+    offline_reconcile.add_argument("--source-root", type=Path, required=True)
+    offline_reconcile.add_argument("--attempt", required=True)
+    offline_reconcile.add_argument("--config-sha256", required=True)
+    offline_reconcile.add_argument("--operation-attempt", required=True)
+    offline_reconcile.add_argument("--port", type=int, required=True)
+    offline_reconcile.add_argument("--apply", action="store_true")
+    offline_reconcile.add_argument("--expected-plan-sha256")
+    reattest = subparsers.add_parser("reattest-host-device-volume", help="explicitly reattest a stopped WSL group's renumbered host device")
+    reattest.add_argument("--source-root", type=Path, required=True)
+    reattest.add_argument("--attempt", required=True)
+    reattest.add_argument("--config-sha256", required=True)
+    reattest.add_argument("--certificate-sha256", required=True)
+    reattest.add_argument("--expected-host-device", type=int, required=True)
+    reattest.add_argument("--apply", action="store_true")
+    reattest.add_argument("--interrupted-iteration", help="exact absent helper iteration to reconcile after an abrupt host stop")
     resume_parser = subparsers.add_parser("resume-volume", help="Observe one exact retained volume DEV start without restarting backend")
     resume_parser.add_argument("--attempt", required=True)
     resume_parser.add_argument("--config-sha256", required=True)
     resume_parser.add_argument("--source-root", type=Path, required=True)
     resume_parser.add_argument("--port", type=int, required=True)
     resume_parser.add_argument("--restart-backend", action="store_true", help="Start the retained stopped backend; never stop an active service")
+    resume_parser.add_argument("--build-for-recovery", help="Pinned control-volume request; build behind the closed storage gate without serving")
+    resume_parser.add_argument("--build-for-recovery-sha256", help="SHA-256 of the exact recovery build request")
+    resume_parser.add_argument("--prestart-reconciliation", help="Exact confirmed prestart iteration UUID")
+    resume_parser.add_argument("--prestart-reconciliation-sha256", help="SHA-256 of its terminal receipt")
     activate_parser = subparsers.add_parser(
         "activate-script",
         help="activate one Python script in the already-running retained backend",
@@ -2530,10 +2584,18 @@ def _parser() -> argparse.ArgumentParser:
         "--request-id",
         help="optional stable request fence; default is fresh for each explicit invocation",
     )
+    activate_parser.add_argument(
+        "--solver-profile", action="store_true",
+        help="enable the bounded accepted FEM solver profile for this activation",
+    )
+    activate_parser.add_argument(
+        "--cuda-trace", action="store_true",
+        help="enable the bounded accepted FEM CUDA activity trace for this activation",
+    )
     script_parser = subparsers.add_parser(
         "script",
         help=(
-            "activate one script in the exactly validated running DEV group; "
+            "run one script in the foreground in the exactly validated DEV group; "
             "attempt and configuration pins are discovered from control receipts"
         ),
     )
@@ -2547,6 +2609,17 @@ def _parser() -> argparse.ArgumentParser:
         help="optional frontend port override; conflicting defaults fail closed",
     )
     script_parser.add_argument("--request-id", help="optional stable request fence")
+    script_parser.add_argument(
+        "--headless", action="store_true",
+        help="require the retained explicit headless group with its frontend stopped",
+    )
+    frontend_refresh = subparsers.add_parser("refresh-frontend-volume", help="Replace only the pinned frontend metadata generation")
+    frontend_refresh.add_argument("--attempt", required=True)
+    frontend_refresh.add_argument("--config-sha256", required=True)
+    frontend_refresh.add_argument("--source-root", type=Path, required=True)
+    frontend_refresh.add_argument("--port", type=int, required=True)
+    frontend_refresh.add_argument("--frontend-frozen-resume")
+    frontend_refresh.add_argument("--frontend-frozen-resume-sha256")
     run_script_parser = subparsers.add_parser(
         "run-script",
         help="run one script in the managed DEV group and observe its result; keep API/frontend running",
@@ -2556,14 +2629,47 @@ def _parser() -> argparse.ArgumentParser:
     run_script_parser.add_argument("--port", type=int)
     run_script_parser.add_argument("--request-id")
     run_script_parser.add_argument(
+        "--solver-profile", action="store_true",
+        help="enable the bounded accepted FEM solver profile for this run",
+    )
+    run_script_parser.add_argument(
+        "--cuda-trace", action="store_true",
+        help="enable the bounded accepted FEM CUDA activity trace for this run",
+    )
+    run_script_parser.add_argument("--attempt")
+    run_script_parser.add_argument("--config-sha256")
+    run_script_parser.add_argument(
+        "--headless", action="store_true",
+        help="require the retained explicit headless group with its frontend stopped",
+    )
+    run_script_parser.add_argument(
         "--timeout-seconds", type=float, default=None,
         help="optional observation deadline; expiration does not cancel or replay the script",
     )
+    maintenance = subparsers.add_parser("maintain-cache", help="retain current/direct rollback and bound shared packages in the pinned healthy group")
+    maintenance.add_argument("--attempt", required=True)
+    maintenance.add_argument("--config-sha256", required=True)
+    maintenance.add_argument("--source-root", type=Path, required=True)
+    maintenance.add_argument("--max-shared-entries", type=int, default=8)
+    maintenance.add_argument("--max-shared-bytes", type=int, default=64 * 1024**3)
     idle_restart = subparsers.add_parser("restart-idle-volume", help="Restart the pinned healthy backend only while no session is active")
     idle_restart.add_argument("--attempt", required=True)
     idle_restart.add_argument("--config-sha256", required=True)
     idle_restart.add_argument("--source-root", type=Path, required=True)
     idle_restart.add_argument("--port", type=int, required=True)
+    idle_restart.add_argument("--saved-authoring-checkpoint")
+    idle_restart.add_argument("--saved-authoring-checkpoint-sha256")
+    idle_restart.add_argument("--stop-only", action="store_true", help="Drain and stop the pinned backend without restarting it")
+    idle_restart.add_argument(
+        "--capture-terminal-observation", action="store_true",
+        help="capture native evidence for a completed or failed run during a managed stop-only drain",
+    )
+    idle_restart.add_argument("--quiesce-api", action="store_true",
+                              help="with native capture stop-only: close only the exact pinned API before native inspection")
+    idle_restart.add_argument("--capture-native-terminal", action="store_true",
+                              help="stop-only: preserve stale public Running after exact native all-Succeeded inspection")
+    idle_restart.add_argument("--capture-prelaunch-failure", action="store_true",
+                              help="stop-only with --quiesce-api: preserve one exact released prelaunch-failed Study run for offline archival")
     idle_restart.add_argument(
         "--allow-prepared-session", action="store_true",
         help="allow graceful drain with never-started manual Studies, including held queue entries after a terminal task; retain accepted inputs and never release Solve",
@@ -2613,6 +2719,17 @@ def _parser() -> argparse.ArgumentParser:
     stop_unadmitted.add_argument("--source-sha256", required=True)
     stop_unadmitted.add_argument("--request-id", required=True)
     stop_unadmitted.add_argument("--session-id", required=True)
+    empty_abort = subparsers.add_parser(
+        "stop-empty-api-abort-volume", help="preview or stop one empty ownerless API abort; never claim a native drain",
+    )
+    empty_abort.add_argument("--attempt", required=True)
+    empty_abort.add_argument("--config-sha256", required=True)
+    empty_abort.add_argument("--source-root", type=Path, required=True)
+    empty_abort.add_argument("--port", type=int, required=True)
+    empty_abort_mode = empty_abort.add_mutually_exclusive_group(required=True)
+    empty_abort_mode.add_argument("--preview", action="store_true")
+    empty_abort_mode.add_argument("--apply", action="store_true")
+    empty_abort.add_argument("--expected-plan-sha256")
     stop_diagnostic = subparsers.add_parser(
         "stop-diagnostic-volume",
         help="stop one pinned backend that retains only its failed-owner diagnostic API",
@@ -2621,6 +2738,13 @@ def _parser() -> argparse.ArgumentParser:
     stop_diagnostic.add_argument("--config-sha256", required=True)
     stop_diagnostic.add_argument("--source-root", type=Path, required=True)
     stop_diagnostic.add_argument("--port", type=int, required=True)
+    stop_diagnostic.add_argument("--preview", action="store_true")
+    stop_diagnostic.add_argument("--reconcile-startup-stop-attempt",
+                                 help="observe and complete one retained startup-recovery stop without sending a signal")
+    stop_diagnostic.add_argument("--startup-recovery", action="store_true",
+                                 help="stop only the fenced API of an initial failed container-recovery startup")
+    stop_diagnostic.add_argument("--expected-plan-sha256",
+                                 help="apply the exact successful --startup-recovery --preview plan")
     stop_diagnostic.add_argument(
         "--resume-attempt",
         help="exact successful retained resume attempt that pins the current backend start time",
@@ -2636,6 +2760,10 @@ def _parser() -> argparse.ArgumentParser:
     stop_diagnostic.add_argument(
         "--pending-activation",
         help="close one exact unreleased preparation after native owner failure; permits only subsequent fresh-state archival",
+    )
+    stop_diagnostic.add_argument(
+        "--catalog-failure", action="store_true",
+        help="drain a Ready runtime after an exact unreleased startup catalog failure; requires --pending-activation and fresh-state archival",
     )
     stop_held = subparsers.add_parser(
         "stop-held-retirement-volume",
@@ -2656,26 +2784,102 @@ def _parser() -> argparse.ArgumentParser:
     )
     cancelled_activation.add_argument("--attempt", required=True)
     cancelled_activation.add_argument("--iteration-attempt", required=True)
+    cancelled_activation.add_argument(
+        "--runtime-phase",
+        choices=("iteration", "resume"),
+        default="iteration",
+        help="select the exact retained continuation terminal; defaults to legacy iteration",
+    )
     cancelled_activation.add_argument("--activation-attempt", required=True)
     cancelled_activation.add_argument("--config-sha256", required=True)
     cancelled_activation.add_argument("--source-root", type=Path, required=True)
     cancelled_activation.add_argument("--port", type=int, required=True)
+    cancelled_activation.add_argument(
+        "--preparation-kind",
+        choices=("failed-external", "in-process-fdm"),
+        default="failed-external",
+        help="select the exact preparation evidence contract; defaults to the legacy failed-external path",
+    )
     cancelled_activation.add_argument("--apply", action="store_true")
     cancelled_activation.add_argument("--expected-plan-sha256")
+    cancelled_activation.add_argument(
+        "--previous-recovery-sha256",
+        help="explicitly rotate the exact archived prior recovery (SHA-256 of its raw current bytes)",
+    )
+    preowner_probe = subparsers.add_parser(
+        'stop-preowner-probe-volume',
+        help='preview or gracefully stop an empty API after a pre-owner GPU probe failure',
+    )
+    for option in ('attempt', 'resume-attempt', 'config-sha256', 'source-root', 'image-id'):
+        preowner_probe.add_argument('--' + option, required=True)
+    preowner_probe.add_argument('--port', type=int, required=True)
+    preowner_probe.add_argument('--apply', action='store_true')
+    preowner_probe.add_argument('--expected-plan-sha256')
+    preowner_policy = subparsers.add_parser(
+        "stop-preowner-policy-volume",
+        help="preview or gracefully stop the exact startup-only diagnostic group after a refused budget",
+    )
+    for option in ("attempt", "config-sha256", "source-root", "backend-container-id", "image-id"):
+        preowner_policy.add_argument("--" + option, required=True)
+    preowner_policy.add_argument("--apply", action="store_true")
+    preowner_policy.add_argument("--expected-plan-sha256")
+    preowner_policy.add_argument(
+        "--variant", choices=("legacy", "cold-memory-increase-restore-stored-budget", "cold-resume-restore-stored-budget"), default="legacy")
+    preowner_policy.add_argument("--resume-attempt", help="exact failed resume for the resumed stored-budget variant")
+    preowner_policy.add_argument("--recreate-attempt", help="completed recreate bridging the historical drain")
+    preowner_policy.add_argument("--drain-attempt", help="exact historical successful idle-drain iteration")
+    preowner_policy.add_argument("--continue-intent-sha256", help="observe and finalize this exact interrupted intent without signalling again")
+    preowner_policy.add_argument("--terminal-observation-proof", dest="proof_path")
+    preowner_policy.add_argument("--terminal-observation-proof-sha256", dest="proof_sha256")
     stop_bootstrap = subparsers.add_parser(
         "stop-bootstrap-volume",
         help="stop one pinned backend retaining only its exact pre-owner startup-fenced diagnostic API",
     )
     stop_bootstrap.add_argument("--attempt", required=True)
     stop_bootstrap.add_argument("--config-sha256", required=True)
-    stop_bootstrap.add_argument("--resume-attempt", required=True)
+    stop_bootstrap.add_argument("--resume-attempt")
+    stop_bootstrap.add_argument("--development-terminal-sha256")
+    stop_bootstrap.add_argument("--process-receipt-sha256")
+    stop_bootstrap.add_argument("--stop-frontend", action="store_true")
     stop_bootstrap.add_argument("--source-root", type=Path, required=True)
     stop_bootstrap.add_argument("--port", type=int, required=True)
+    stop_bootstrap_frontend = subparsers.add_parser(
+        "stop-bootstrap-frontend-volume",
+        help="Qualify and stop the exact frontend after a preserved diagnostic bootstrap stop",
+    )
+    stop_bootstrap_frontend.add_argument("--attempt", required=True)
+    stop_bootstrap_frontend.add_argument("--config-sha256", required=True)
+    stop_bootstrap_frontend.add_argument("--source-root", type=Path, required=True)
+    stop_bootstrap_frontend.add_argument("--port", type=int, required=True)
+    stop_bootstrap_frontend.add_argument("--bootstrap-stop-attempt", required=True)
+    stop_bootstrap_frontend.add_argument("--bootstrap-stop-sha256", required=True)
+    stop_bootstrap_frontend.add_argument("--historical-namespace-proof",
+                                        help="immutable control-relative historical namespace absence proof")
+    stop_bootstrap_frontend.add_argument("--historical-namespace-proof-sha256",
+                                        help="exact raw SHA-256 of the historical namespace proof")
+    stop_bootstrap_frontend.add_argument("--apply", action="store_true")
+    stop_bootstrap_frontend.add_argument("--expected-plan-sha256")
     recreate_volume = subparsers.add_parser("recreate-volume", help="Replace exact stopped-backend DEV services while retaining Docker caches")
+    recreate_volume.add_argument("--retire-only", action="store_true", help="archive an exact stopped and genuinely drained group without starting replacements")
     recreate_volume.add_argument("--attempt", required=True)
     recreate_volume.add_argument("--config-sha256", required=True)
     recreate_volume.add_argument("--source-root", type=Path, required=True)
     recreate_volume.add_argument("--port", type=int, required=True)
+    recreate_volume.add_argument('--prepared-quarantine-sha256',
+                                 help='exact prepared quarantine digest; permits fresh archival only after native cancellation')
+    recreate_volume.add_argument("--native-contract", action="append", default=None,
+                                 choices=("fem-demag-poisson", "fem-cuda-activity-trace",
+                                          "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
+                                          "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads"),
+                                 help="require an allowlisted native contract before publishing the replacement backend package")
+    recreate_volume.add_argument(
+        "--helper-source-root", type=Path,
+        help="durable clean infrastructure checkout used only for managed runtime helpers",
+    )
+    recreate_volume.add_argument(
+        "--helper-source-commit",
+        help="full commit pin for --helper-source-root",
+    )
     recreate_volume.add_argument(
         "--migrate-host-capacity", action="store_true",
         help="explicitly migrate quiescent shared host capacity when rendering the replacement services",
@@ -2701,9 +2905,45 @@ def _parser() -> argparse.ArgumentParser:
             "and is never resolved as a host path"
         ),
     )
+    recreate_volume.add_argument("--completed-recreation-attempt", help="Continue this exact succeeded removal without repeating rm")
+    recreate_volume.add_argument("--completed-recreation-sha256", help="SHA-256 of the completed removal terminal receipt")
+    recreate_volume.add_argument("--drained-successor-proof", help="Exact control-volume proof of a later successful managed drain")
+    recreate_volume.add_argument("--drained-successor-proof-sha256", help="SHA-256 of the exact drained-successor proof")
+    recreate_volume.add_argument("--terminal-observation-proof", help="Exact private control-volume proof of one terminal observation")
+    recreate_volume.add_argument("--terminal-observation-proof-sha256", help="SHA-256 of the exact terminal observation proof")
+    recreate_volume.add_argument("--empty-api-abort-stop", help="Fresh-state only: exact successful ownerless API-abort stop attempt")
+    recreate_volume.add_argument("--empty-api-abort-stop-sha256", help="SHA-256 of that exact raw stop terminal receipt")
+    recreate_volume.add_argument("--native-terminal-stop", help="Fresh-state only: exact native-terminal stop attempt")
+    recreate_volume.add_argument("--native-terminal-stop-sha256", help="SHA-256 of the exact native-terminal stop terminal receipt")
+    recreate_volume.add_argument("--prelaunch-failure-stop", help="Fresh-state only: exact prelaunch-failure stop attempt")
+    recreate_volume.add_argument("--prelaunch-failure-stop-sha256", help="SHA-256 of the exact prelaunch-failure stop terminal receipt")
+    recreate_volume.add_argument("--terminal-observation-stop", help="Exact stop-only attempt containing the terminal observation capture")
+    recreate_volume.add_argument(
+        "--offline-reconciliation", metavar="OPERATION_TOKEN",
+        help="consume the exact completed offline control repair without replaying its old operation",
+    )
+    recreate_volume.add_argument("--lost-state-stop", metavar="ATTEMPT@SHA256",
+                                 help="Fresh Linux master only: bind the exact successful diagnostic-stop terminal when host state is lost")
     recreate_volume.add_argument("--fresh-state", action="store_true", help="Preserve the previous session and archive its runtime state before starting an empty session")
     recreate_volume.set_defaults(profile="dev", image=None, toolchain_image=None, source_manifest=None,
                                  include_untracked=None, script=None)
+
+    interrupted_archive = subparsers.add_parser(
+        "resume-interrupted-fresh-archive",
+        help="finish one exact outcome-unknown fresh-state archive without stopping or starting services",
+    )
+    interrupted_archive.add_argument("--prior-attempt", required=True)
+    interrupted_archive.add_argument("--config-sha256", required=True)
+    interrupted_archive.add_argument("--source-root", type=Path, required=True)
+    interrupted_archive.add_argument("--recreation-attempt", required=True)
+    interrupted_archive.add_argument("--unknown-receipt-sha256", required=True)
+    interrupted_archive.add_argument("--helper-container-id", required=True)
+    interrupted_archive.add_argument("--helper-image", required=True)
+    interrupted_archive.add_argument("--engine-id", required=True)
+    interrupted_archive.add_argument("--expected-plan-sha256")
+    interrupted_archive.add_argument("--apply", action="store_true")
+    interrupted_archive.add_argument('--prepared-quarantine-sha256')
+    interrupted_archive.add_argument('--prepared-archive-terminal-sha256')
 
     cancel_unclaimed = subparsers.add_parser(
         "cancel-unclaimed-volume",
@@ -2714,6 +2954,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     cancel_unclaimed.add_argument("--attempt", required=True,
                                   help="exact retained development attempt to replace")
+    cancel_unclaimed.add_argument('--prepared-quarantine-sha256',
+                                  help='explicit exact prepared-unclaimed stop quarantine digest')
     cancellation_resume = cancel_unclaimed.add_mutually_exclusive_group()
     cancellation_resume.add_argument(
         "--resume-maintenance-attempt",
@@ -2722,6 +2964,11 @@ def _parser() -> argparse.ArgumentParser:
             "resume only the exact failed-confirmed pre-start maintenance attempt "
             "after its pinned old services are already absent"
         ),
+    )
+    cancel_unclaimed.add_argument(
+        "--resume-backend-image-id",
+        help=("explicit immutable backend image ID from the current verified same-group "
+              "image receipt; valid only with --resume-maintenance-attempt"),
     )
     cancellation_resume.add_argument(
         "--resume-native-failure-attempt",
@@ -2788,6 +3035,11 @@ def _parser() -> argparse.ArgumentParser:
         ))
         command.add_argument("--source-root", type=Path,
                              help="registered checkout/worktree mounted live by both services")
+        command.add_argument("--native-contract", action="append", default=None,
+                             choices=("fem-demag-poisson", "fem-cuda-activity-trace",
+                                          "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
+                                          "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads"),
+                             help="qualify the package with this native contract before API startup")
         command.add_argument(
             "--profile", choices=sorted(BUILD_PROFILE_TO_CARGO_PROFILE),
             default=DEFAULT_BUILD_PROFILE,
@@ -2813,8 +3065,19 @@ def _parser() -> argparse.ArgumentParser:
         )
         command.add_argument("--port", type=int, default=None,
                              help="loopback frontend port (up only)")
+        command.add_argument("--network-subnet",
+                             help="explicit unused RFC1918 IPv4 subnet for this DEV bridge; verify host routes first")
         command.add_argument("--script", "--startup-script", dest="script", type=Path,
                              help="optional simulation script, relative to the selected checkout or absolute inside it (up only)")
+        if name == "up":
+            command.add_argument(
+                "--headless", action="store_true",
+                help="start the backend without starting the retained frontend service",
+            )
+            command.add_argument(
+                "--cuda-trace", action="store_true",
+                help="enable the bounded accepted FEM CUDA activity trace for the startup script",
+            )
         command.add_argument(
             "--migrate-host-capacity", action="store_true",
             help="explicitly migrate quiescent shared host capacity when rendering new services",
@@ -2908,6 +3171,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.port = selected.port
         if args.action == "build":
             build(args)
+        elif args.action == "refresh-frontend-volume":
+            from docker_volume_dev import refresh_frontend
+            refresh_frontend(args)
+        elif args.action == "maintain-cache":
+            from docker_volume_cache_maintenance import maintain
+            maintain(args)
         elif args.action == "restart-idle-volume":
             from docker_volume_dev import restart_idle
             restart_idle(args)
@@ -2923,10 +3192,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "stop-unadmitted":
             from docker_volume_stop_unadmitted import stop
             stop(args)
+        elif args.action == "stop-empty-api-abort-volume":
+            from docker_volume_empty_api_abort import stop
+            result = stop(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "stop-diagnostic-volume":
             from docker_volume_stop_diagnostic import stop_diagnostic
             result = stop_diagnostic(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == 'stop-preowner-probe-volume':
+            from docker_volume_preowner_probe_stop import stop
+            stop(args)
+        elif args.action == "stop-preowner-policy-volume":
+            if bool(args.proof_path) != bool(args.proof_sha256):
+                raise _fail("Terminal observation successor requires paired proof path and digest")
+            if args.variant in {"cold-memory-increase-restore-stored-budget", "cold-resume-restore-stored-budget"}:
+                if args.proof_path or not args.drain_attempt:
+                    raise _fail("Cold stored-budget restore requires drain attempt without terminal observation proof")
+                from docker_volume_cold_budget_restore import stop
+            elif args.drain_attempt or args.continue_intent_sha256 or args.resume_attempt or args.recreate_attempt:
+                raise _fail("Drain attempt and intent continuation are supported only by cold stored-budget restore")
+            elif args.proof_path:
+                from docker_volume_preowner_drained import stop
+            else:
+                from docker_volume_stop_preowner_policy import stop
+            stop(args)
         elif args.action == "stop-held-retirement-volume":
             from docker_volume_stop_held_retirement import apply, plan
             from docker_volume_retirement_probe import inspect_retirement
@@ -2937,16 +3227,74 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise _fail("Apply acknowledgement and plan digest require --apply")
                 result = plan(inspect_retirement(args))
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "quarantine-failed-bootstrap":
+            from docker_volume_failed_bootstrap_quarantine import run
+            print(json.dumps(run(args), ensure_ascii=False, sort_keys=True))
+        elif args.action == "reconcile-completed-cache":
+            from docker_completed_cache_reconcile import run, CompletedCacheReconcileError
+            if not args.apply and args.expected_plan_sha256 is not None:
+                raise _fail("A completed-cache plan digest requires --apply")
+            try:
+                result = run(argparse.Namespace(**{
+                    **vars(args), "repo_root": str(args.repo_root), "registry": str(args.registry),
+                }))
+            except CompletedCacheReconcileError as error:
+                raise _fail(str(error)) from error
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "reconcile-offline-volume":
+            from docker_volume_offline_reconcile import apply, collect
+            if not args.apply and args.expected_plan_sha256 is not None:
+                raise _fail("A plan digest requires --apply")
+            result = apply(args) if args.apply else collect(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "recover-cancelled-activation":
             from docker_volume_cancelled_activation import run as recover_cancelled_activation
             result = recover_cancelled_activation(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "resume-interrupted-fresh-archive":
+            from docker_volume_interrupted_fresh_archive import run as resume_interrupted_archive
+            return resume_interrupted_archive(args)
         elif args.action == "stop-bootstrap-volume":
             from docker_volume_stop_bootstrap import stop_bootstrap
             result = stop_bootstrap(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "stop-bootstrap-frontend-volume":
+            from docker_volume_bootstrap_frontend_stop import run as stop_bootstrap_frontend
+            result = stop_bootstrap_frontend(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "recreate-volume":
-            if args.resume_recreation is not None:
+            if args.lost_state_stop and (not args.fresh_state or any((
+                    args.retire_only, args.resume_recreation, args.recovery_authorization,
+                    args.migrate_host_capacity, args.completed_recreation_attempt,
+                    args.drained_successor_proof, args.terminal_observation_proof,
+                    args.prepared_quarantine_sha256, args.offline_reconciliation,
+                    args.helper_source_root, args.helper_source_commit))):
+                raise _fail("Lost state requires plain fresh recreation with one diagnostic stop pin")
+            if bool(args.terminal_observation_proof) != bool(args.terminal_observation_proof_sha256):
+                raise _fail("Terminal observation requires paired proof and SHA-256")
+            if args.terminal_observation_stop and args.terminal_observation_proof:
+                raise _fail("Choose one terminal observation source")
+            if (args.terminal_observation_proof or args.terminal_observation_stop) and any((args.fresh_state, args.recovery_authorization, args.resume_recreation, args.completed_recreation_attempt, args.drained_successor_proof)):
+                raise _fail("Terminal observation requires plain retained recreation without another restore or recovery request")
+            if bool(args.completed_recreation_attempt) != bool(args.completed_recreation_sha256):
+                raise _fail("completed recreation requires both attempt and terminal SHA-256")
+            if args.completed_recreation_attempt and (args.fresh_state or args.recovery_authorization or args.resume_recreation):
+                raise _fail("completed recreation cannot combine fresh state, recovery authorization, or resume recreation")
+            import docker_helper_source as helper_source
+            try:
+                helper_pair = helper_source.validate_option_pair(
+                    args.helper_source_root, args.helper_source_commit
+                )
+            except helper_source.HelperSourceError as error:
+                raise _fail(str(error)) from error
+            if args.recovery_authorization is not None and helper_pair is not None:
+                raise _fail("helper-source pins are unsupported with --recovery-authorization")
+            if args.retire_only:
+                if not args.fresh_state or args.recovery_authorization or args.resume_recreation or args.completed_recreation_attempt:
+                    raise _fail("retire-only requires fresh-state and cannot combine recovery or continuation")
+                from docker_volume_dev import retire_stopped
+                retire_stopped(args)
+            elif args.resume_recreation is not None:
                 from docker_volume_dev import resume_recreation
                 resume_recreation(args)
             elif args.recovery_authorization is not None:
@@ -2968,21 +3316,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "quarantine-empty-stopped":
             from docker_volume_empty_quarantine import quarantine
             quarantine(args)
+        elif args.action == "reattest-host-device-volume":
+            from docker_volume_host_device import run as reattest_host_device
+            print(json.dumps(reattest_host_device(args), sort_keys=True))
         elif args.action == "resume-volume":
             from docker_volume_dev import resume
             resume(args)
         elif args.action == "activate-script":
             from docker_volume_activate import activate
             activate(args)
-        elif args.action == "script":
-            from docker_dev_defaults import activate_discovered
-            activate_discovered(args)
-        elif args.action == "run-script":
+        elif args.action in {"script", "run-script"}:
             from docker_dev_run_script import run_script
             result = run_script(
                 args.repo_root, args.script, source_root=args.source_root,
                 port=args.port, request_id=args.request_id,
-                timeout_seconds=args.timeout_seconds,
+                timeout_seconds=getattr(args, "timeout_seconds", None),
+                attempt=getattr(args, "attempt", None),
+                config_sha256=getattr(args, "config_sha256", None),
+                headless=bool(getattr(args, "headless", False)),
+                solver_profile=getattr(args, "solver_profile", False),
+                cuda_trace=getattr(args, "cuda_trace", False),
             )
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return int(result["exit_code"])

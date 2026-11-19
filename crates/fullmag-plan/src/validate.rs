@@ -50,10 +50,16 @@ pub(crate) fn region_is_conformal(
                         .collect::<BTreeSet<_>>()
                 });
             return domain_asset.object_region_markers.iter().any(|marker| {
-                (marker.geometry_name == region.name || marker.geometry_name == region.region_id)
-                    && mesh_markers
-                        .as_ref()
-                        .is_some_and(|markers| markers.contains(&marker.marker))
+                if !mesh_markers
+                    .as_ref()
+                    .is_some_and(|markers| markers.contains(&marker.marker))
+                {
+                    return false;
+                }
+                crate::mesh::resolve_object_region_marker(problem, &marker.geometry_name)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|resolved| resolved.region_id == region.region_id)
             });
         }
     }
@@ -131,16 +137,8 @@ pub(crate) fn validate_region_owned_planning(
         ));
     }
     if resolved_backend == BackendTarget::Fdm && runtime_requests_cuda(problem) {
-        if problem
-            .magnets
-            .iter()
-            .any(|magnet| magnet.absorbing_boundary.is_some())
-        {
-            errors.push(
-                "fdm_cuda_absorbing_boundary_unsupported: CUDA native does not yet support cellwise damping fields; use FDM CPU reference or FEM"
-                    .to_string(),
-            );
-        }
+        // Single-grid CUDA consumes cellwise Ms/Aex/alpha (including the
+        // absorbing-boundary damping); only the multilayer lane still rejects.
         let has_cuda_region_fields = problem.material_parameter_fields.iter().any(|assignment| {
             let active = assignment.region_id.as_deref().is_none_or(|region_id| {
                 problem
@@ -213,11 +211,6 @@ pub(crate) fn validate_region_owned_planning(
                         }
                     }
                 }
-            } else {
-                errors.push(
-                    "fdm_cuda_region_material_fields_unsupported: CUDA native does not yet support cellwise material fields (Ms/Aex/alpha); use FDM CPU reference or disable region material overrides"
-                        .to_string(),
-                );
             }
         }
     }
@@ -297,7 +290,7 @@ pub(crate) fn validate_region_owned_planning(
         }
     }
     for coupling in problem.couplings.iter().filter(|coupling| coupling.enabled) {
-        if region_coupling_is_executable_for_backend(problem, coupling, resolved_backend) {
+        if region_coupling_is_executable_for_backend(coupling, resolved_backend) {
             continue;
         }
         match coupling.capability_policy {
@@ -329,12 +322,12 @@ fn coupling_kind_label(kind: CouplingKindIR) -> &'static str {
 }
 
 fn region_coupling_is_executable_for_backend(
-    problem: &ProblemIR,
     coupling: &fullmag_ir::CouplingIR,
     resolved_backend: BackendTarget,
 ) -> bool {
+    // FDM CPU and CUDA both resolve region rules through the shared
+    // per-connection exchange operator (note 0104).
     if resolved_backend != BackendTarget::Fdm
-        || !runtime_requests_cuda(problem)
         || coupling.capability_policy != CouplingCapabilityPolicyIR::RequireRuntime
     {
         return false;
@@ -580,6 +573,19 @@ fn validate_conservative_relaxation(problem: &ProblemIR, errors: &mut Vec<String
     if !matches!(problem.study, fullmag_ir::StudyIR::Relaxation { .. }) {
         return;
     }
+    for module in &problem.spin_transport_modules {
+        if module.mode != fullmag_ir::SpinTransportModeIR::Transient {
+            continue;
+        }
+        match crate::physics_graph::physics_module_execution_enabled(problem, "spin_transport", &module.id) {
+            Ok(Some(false)) => {}
+            Ok(Some(true) | None) => errors.push(format!(
+                "relaxation rejects active transient M3 spin transport '{}': no transport-convergence contract exists, including with disabled torque",
+                module.id
+            )),
+            Err(reasons) => errors.extend(reasons),
+        }
+    }
     let active_torque_modules = match crate::spin_torque::executable_spin_torque_modules(problem) {
         Ok(modules) => modules,
         Err(error) => {
@@ -783,7 +789,7 @@ pub(crate) fn validate_executable_outputs(
                     );
                 } else if name == "H_drive" && !enable_regional_field_drive {
                     errors.push(
-                        "field output 'H_drive' requires at least one RegionalFieldDrive"
+                        "field output 'H_drive' requires at least one RegionalFieldDrive or mask antenna"
                             .to_string(),
                     );
                 } else if mechanical_fields.contains(&name.as_str()) {
@@ -822,7 +828,7 @@ pub(crate) fn validate_executable_outputs(
                     );
                 } else if name == "E_drive" && !enable_regional_field_drive {
                     errors.push(
-                        "scalar output 'E_drive' requires at least one RegionalFieldDrive"
+                        "scalar output 'E_drive' requires at least one RegionalFieldDrive or mask antenna"
                             .to_string(),
                     );
                 } else if name == "E_mel" && !enable_magnetoelastic {

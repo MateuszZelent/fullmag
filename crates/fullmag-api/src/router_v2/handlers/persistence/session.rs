@@ -31,8 +31,12 @@ pub async fn export_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SessionExportRequest>,
 ) -> Result<Json<SessionExportResponse>, ApiError> {
-    let context = crate::capture_current_live_request_context(&state).await?;
-    crate::session_persistence::export_session_with_context(State(state), Json(req), Some(&context))
+    let context = if req.accepted_run.is_some() {
+        crate::capture_optional_current_live_request_context(&state).await?
+    } else {
+        Some(crate::capture_current_live_request_context(&state).await?)
+    };
+    crate::session_persistence::export_session_with_context(State(state), Json(req), context.as_ref())
         .await
 }
 

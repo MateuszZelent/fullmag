@@ -82,6 +82,55 @@ impl CasStore {
         Ok(hash)
     }
 
+    /// Store several byte strings under one writer lease, returning their
+    /// digests in input order. Equivalent to calling `put` for each item, with
+    /// the same pin-before-publication rule: every pin is durable (one pins
+    /// directory barrier) before any new object is renamed into place, and new
+    /// objects share one final directory barrier. On a slow store each `put`
+    /// paid a lease handoff and two directory barriers per item.
+    pub fn put_batch(&self, items: &[&[u8]]) -> Result<Vec<String>> {
+        let _lease = self.writer.acquire()?;
+        let mut hashes = Vec::with_capacity(items.len());
+        let mut new_objects: Vec<(String, &[u8])> = Vec::new();
+        for data in items {
+            let hash = hex_sha256(data);
+            if let Some(existing_length) = self.verified_length(&hash)? {
+                if existing_length != u64::try_from(data.len())? {
+                    anyhow::bail!("CAS object {hash} length differs from the supplied bytes");
+                }
+            } else if !new_objects.iter().any(|(pending, _)| *pending == hash) {
+                new_objects.push((hash.clone(), data));
+            }
+            hashes.push(hash);
+        }
+        let mut pinned = std::collections::HashSet::new();
+        for hash in &hashes {
+            if pinned.insert(hash.as_str()) {
+                let path = create_parent(&self.root, &format!("pins/{hash}.json"))?;
+                crate::durability::atomic_write_deferring_directory_barrier(
+                    &path,
+                    &serde_json::to_vec(&serde_json::json!({
+                        "schema": "fullmag.cas-pin.v1", "object_ref": hash
+                    }))?,
+                )?;
+            }
+        }
+        crate::durability::sync_directory(&self.root.join("pins"))?;
+        for (hash, data) in &new_objects {
+            crate::durability::atomic_write_deferring_directory_barrier(
+                &self.object_path(hash)?,
+                data,
+            )?;
+        }
+        if !new_objects.is_empty() {
+            let objects = self.root.join("sha256");
+            crate::durability::sync_directory(&objects).map_err(|error| {
+                anyhow::Error::new(crate::durability::PublicationUncertain::new(objects, error))
+            })?;
+        }
+        Ok(hashes)
+    }
+
     /// Store a verified file without materializing its contents in memory.
     ///
     /// The source is fingerprinted before pinning and verified again while it
@@ -535,6 +584,28 @@ mod tests {
         assert_eq!(hash.len(), 64); // SHA-256 hex = 64 chars
         let got = cas.get(&hash).unwrap().unwrap();
         assert_eq!(&got, data);
+    }
+
+    #[test]
+    fn put_batch_matches_individual_puts_and_pins_every_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let cas = CasStore::open(dir.path().join("objects")).unwrap();
+        let existing = cas.put(b"already stored").unwrap();
+        let items: [&[u8]; 4] = [b"chunk-a", b"already stored", b"chunk-b", b"chunk-a"];
+
+        let hashes = cas.put_batch(&items).unwrap();
+
+        assert_eq!(hashes[1], existing);
+        assert_eq!(hashes[0], hashes[3]);
+        for (hash, data) in hashes.iter().zip(items) {
+            assert_eq!(*hash, hex_sha256(data));
+            assert_eq!(cas.get(hash).unwrap().unwrap(), data);
+        }
+        let pins = cas.pinned_refs().unwrap();
+        assert!(hashes.iter().all(|hash| pins.contains(hash)));
+        assert!(!fs::read_dir(dir.path().join("objects/sha256"))
+            .unwrap()
+            .any(|entry| entry.unwrap().file_name().to_string_lossy().ends_with(".part")));
     }
 
     #[test]

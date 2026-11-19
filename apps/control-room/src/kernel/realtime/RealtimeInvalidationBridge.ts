@@ -28,21 +28,26 @@ import {
   DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELDS_PATH,
+  DATA_FIELD_META_PATH,
   DATA_QUANTITIES_PATH,
   DATA_PLANAR_FIELD_META_PATH,
   DATA_SCALARS_PATH,
+  DATA_TABLE_ROWS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_SEMANTICS_PATH,
+  MESHING_OBJECT_POLICY_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_SIZE_FIELD_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
   MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MESHING_SHARED_DOMAIN_POLICY_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+  MESHING_UNIVERSE_POLICY_PATH,
   MESHING_UNIVERSE_QUALITY_PATH,
   MESHING_UNIVERSE_REPORT_PATH,
   MESHING_SUMMARY_PATH,
@@ -62,6 +67,8 @@ import {
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_PREPARATION_PATH,
+  SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
+  SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
   SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
@@ -392,6 +399,8 @@ function escapeResourcePathTemplate(pathTemplate: string): string {
 }
 
 const SESSION_STATUS_RECOMMENDED_FETCHES = new Set<string>([
+  // Status carries resources.mesh_revision, the mesh-build precondition.
+  MESHING_SUMMARY_PATH,
   MODEL_SCENE_PATH,
   SIMULATION_PREPARATION_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
@@ -492,7 +501,7 @@ export class RealtimeInvalidationBridge {
     this.invalidateSessionScope(`realtime:reconnect:${Date.now()}`);
   }
 
-  handleEvent(event: unknown): boolean {
+  handleEvent(event: unknown, requestScopeEpoch: string | null = null): boolean {
     const sessionHandled = this.handleSessionEnvelope(event);
 
     if (isRealtimeResyncRequiredEvent(event)) {
@@ -509,6 +518,7 @@ export class RealtimeInvalidationBridge {
     if (isRealtimeScalarSampleEvent(event)) {
       const row = scalarSampleRow(event.payload.row);
       this.options.bus?.emit("telemetry:scalar-sample", {
+        requestScopeEpoch,
         revision: event.payload.revision,
         row,
         runId: event.run_id ?? null,
@@ -535,8 +545,24 @@ export class RealtimeInvalidationBridge {
         const planarFieldChange = change.resource === "planar_fields";
         const scalarChange = change.resource === "scalars";
 
+        if (
+          recommendedFetch === SIMULATION_SOLVER_ENERGIES_CURRENT_PATH &&
+          change.resource === "simulation"
+        ) {
+          this.queuePrefixInvalidation(
+            SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
+            change.revision,
+          );
+        }
+
         if (scalarChange) {
           this.queuePrefixInvalidation(DATA_SCALARS_PATH, change.revision);
+          if (
+            recommendedFetch &&
+            stageScopedRegex(DATA_TABLE_ROWS_PATH).test(recommendedFetch)
+          ) {
+            this.queueResourceInvalidation(recommendedFetch, change.revision);
+          }
           this.queuePrefixInvalidation(
             resourceFamilyPrefix(SIMULATION_OBJECT_METRICS_PATH),
             dependentResourceRevision(
@@ -583,6 +609,12 @@ export class RealtimeInvalidationBridge {
             );
             if (exactFieldResource.quantityId === "m") {
               this.queueMagnetizationFieldDependents(fieldSampleRevision);
+              if (!exactFieldResource.snapshotId && !exactFieldResource.carrierId && !exactFieldResource.view) {
+                this.queueExactResourceInvalidation(
+                  DATA_FIELD_META_PATH.replace("{quantity_id}", "m"),
+                  fieldSampleRevision,
+                );
+              }
             }
           } else if (change.broad || !change.quantity_ids?.length) {
             this.recordFieldInvalidation("broad");
@@ -1000,6 +1032,16 @@ export class RealtimeInvalidationBridge {
     this.resources.invalidate(MODEL_REGION_DIAGNOSTICS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_MATERIAL_FIELDS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_READINESS_PATH, dependentRevision);
+    this.resources.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, dependentRevision);
+    // Mesh policies are projections of the scene document; their revision is
+    // the mesh revision that the policy PUT routes check as expected_revision.
+    this.resources.invalidate(MESHING_SEMANTICS_PATH, dependentRevision);
+    this.resources.invalidate(MESHING_UNIVERSE_POLICY_PATH, dependentRevision);
+    this.resources.invalidate(MESHING_SHARED_DOMAIN_POLICY_PATH, dependentRevision);
+    this.resources.invalidatePrefix(
+      resourceFamilyPrefix(MESHING_OBJECT_POLICY_PATH),
+      dependentRevision,
+    );
     // User-created Results nodes are stored in the scene document (ADR 0054).
     this.resources.invalidate(ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH, dependentRevision);
     this.resources.invalidateMatching(

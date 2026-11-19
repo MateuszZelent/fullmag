@@ -4,6 +4,7 @@ import { Badge } from "@/shared/ui/Badge";
 
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 
 export interface ScientificInspectorProperty {
   label: string;
@@ -148,14 +149,24 @@ export function ScientificInspectorTemplate({
         physicalLabel={physicalLabel}
         title={title}
       /> : null}
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Scope", value: physicalLabel },
+          { label: "Resource", value: status.resource },
+          { label: "Execution", value: status.execution },
+          { label: "Availability", value: status.availability },
+        ]}
+      />
+      {children ? <div className="fm-scientific-inspector__content">{children}</div> : null}
+      {actions ? <div className="fm-scientific-inspector__actions">{actions}</div> : null}
       <ScientificInspectorContext
+        collapsible={Boolean(children)}
+        defaultOpen={!children}
         diagnostics={diagnostics}
         properties={properties}
         provenance={provenance}
         status={status}
       />
-      {children ? <div className="fm-scientific-inspector__content">{children}</div> : null}
-      {actions ? <div className="fm-scientific-inspector__actions">{actions}</div> : null}
     </div>
   );
 }

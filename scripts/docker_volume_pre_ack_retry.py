@@ -58,7 +58,7 @@ def _publish_raw(control, relative, raw, *, helper_name=None, maximum=MAX_CONTRO
 
 
 def _released_snapshot(control, actual):
-    from docker_volume_capture_failure_reconcile import _mount_arg
+    from docker_volume_linux_supervision_stop import readonly_mount
     code = r'''import fcntl,hashlib,json,os,pathlib,re,stat,time
 root=pathlib.Path('/state/runs/docker-all/session-store'); ledger=pathlib.Path('/host-ledger/ledger')
 locks=[]
@@ -129,7 +129,7 @@ finally:
                             "--user", "65532:65532", "--memory", "96m", "--pids-limit", "24",
                             "--label", "com.docker.compose.project=" + control.project,
                             "--label", "com.docker.compose.service=pre-ack-readonly-probe",
-                            "--mount", _mount_arg(actual, "/state"), "--mount", _mount_arg(actual, "/host-ledger"),
+                            "--mount", readonly_mount(actual, "/state"), "--mount", readonly_mount(actual, "/host-ledger"),
                             "--entrypoint", "/usr/local/bin/python3", actual["Image"], "-B", "-c", code, timeout=90)
     if result.returncode or len(result.stdout)>1024*1024:
         raise BuildControlError("Fresh read-only released-state observation failed: " + result.stderr.decode(errors="replace")[-1024:])

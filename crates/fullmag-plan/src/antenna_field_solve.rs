@@ -274,6 +274,13 @@ pub(crate) fn plan_standalone_antenna(
         // Selection is part of the canonical, content-owned input. Do not
         // substitute authored activation metadata when it is malformed.
         problem.validate().map_err(|reasons| PlanError { reasons })?;
+        if matches!(plan_antenna_field_solve_execution(
+            problem, &selection.stage_id, &selection.port_mode_id,
+        )?, AntennaFieldSolveExecutionPlan::ClosedLoopInspection { .. }) {
+            return crate::plan_antenna_field_only_carrier(
+                problem, &selection.stage_id, &selection.port_mode_id,
+            );
+        }
         return plan_antenna_external_lead_inspection(problem, &selection.stage_id, &selection.port_mode_id);
     }
     // Authored pipeline identity is not a physical solve-definition selector.
@@ -515,6 +522,7 @@ pub fn plan_antenna_field_solve_execution(
         AntennaOerstedRealizationIR::DirectTetraQuadrature => {
             fullmag_ir::OerstedRealization::BiotSavartMidpoint
         }
+        AntennaOerstedRealizationIR::AnalyticRt0Surface => return Err(fail("analytic RT0 surface requires the prepared closed-loop inspection path; no fallback")),
         AntennaOerstedRealizationIR::VectorPotentialSolver => {
             fullmag_ir::OerstedRealization::FemVectorPotential
         }

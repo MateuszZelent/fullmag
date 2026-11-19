@@ -297,6 +297,14 @@ Footer behavior is owned by the active panel's `InspectorEditSession`:
 - no edit session: no global mutation buttons. The footer explains that this
   view has no staged edits. Read-only panels need no dummy session.
 
+The footer identifies staged changes as **Draft**, viewport preferences as
+**Live**, and immediate actions as **Immediate**. A geometric draft may have a
+viewport preview without changing the applied model; Apply still commits it.
+Where a staged panel also exposes immediate display controls, group and label
+those controls as Live and explain that the draft's Apply and Revert do not
+operate on them. Do not offer automatic application for physics, mesh, material,
+geometry or study drafts.
+
 The footer must not advertise unsupported operations, including an always
 disabled Isolate placeholder. Blocked staged actions expose their reason as
 visible text, associated with the controls. Async actions must avoid duplicate

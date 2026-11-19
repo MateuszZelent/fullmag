@@ -134,6 +134,9 @@ try {
         ellipsis: getComputedStyle(item).textOverflow === "ellipsis" && getComputedStyle(item).display === "block",
       }));
       const engines = [...document.querySelectorAll(".fm-status-bar__engine-label")].map((label) => label.textContent.trim());
+      const statusDot = document.querySelector(".fm-status-bar__dot")?.getBoundingClientRect();
+      const statusState = document.querySelector(".fm-status-bar__item--state")?.getBoundingClientRect();
+      const engineBoxes = [...document.querySelectorAll(".fm-status-bar__engine")].map((el) => el.getBoundingClientRect());
       const explorer = document.querySelector('[data-panel-frame="panel-left"]').getBoundingClientRect();
       const tabs = [...document.querySelectorAll('[aria-label="Explorer resource families"] [role="tab"]')].map((tab) => {
         const box = tab.getBoundingClientRect();
@@ -143,6 +146,8 @@ try {
       const inspectorText = document.querySelector('[data-panel-frame="panel-right"]').innerText;
       return {
         statusItems,
+        statusDotGap: statusDot && statusState ? statusState.left - statusDot.right : null,
+        engineGap: engineBoxes.length >= 2 ? engineBoxes[1].left - engineBoxes[0].right : null,
         engines,
         tabs,
         treeActions: filterRow ? filterRow.querySelectorAll(".fm-explorer-toolbar__action").length : 0,
@@ -152,6 +157,8 @@ try {
       };
     });
     for (const item of followup.statusItems) assert(item.ellipsis, `${theme}: status field ellipsizes ${JSON.stringify(item)}`);
+    if (followup.statusDotGap !== null) assert(followup.statusDotGap >= 3, `${theme}: status dot separated from state label (${followup.statusDotGap}px)`);
+    if (followup.engineGap !== null) assert(followup.engineGap >= 3, `${theme}: adjacent status bar engine pills separated (${followup.engineGap}px)`);
     assert.equal(followup.tabs.length, 5, `${theme}: five Explorer tabs`);
     for (const tab of followup.tabs) assert(tab.inside, `${theme}: Explorer tab ${tab.name} fully visible`);
     assert.equal(followup.treeActions, 3, `${theme}: tree actions in the filter row`);

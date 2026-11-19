@@ -109,13 +109,11 @@ pub(crate) fn prepare(
     {
         bail!("antenna inspection has no magnetic or artifact input adapter");
     }
-    if !accepted
-        .run
-        .specification
-        .parameters
-        .as_object()
-        .is_some_and(|v| v.is_empty())
-        || !accepted.run.specification.seeds.is_empty()
+    crate::accepted_study_worker::validate_accepted_inspection_run_parameters(
+        &accepted.run.specification,
+        &step.step_id,
+    )?;
+    if !accepted.run.specification.seeds.is_empty()
         || !step.problem.problem_meta.seeds.is_empty()
     {
         bail!("antenna inspection has no RunSpec parameter or seed binding");

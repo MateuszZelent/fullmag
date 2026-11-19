@@ -93,6 +93,7 @@ impl NativeFdmBackend {
             &mut step_stats,
             &magnetization,
             self.active_mask.as_deref(),
+            self.ms_field.as_deref(),
         );
         step_stats.per_object_scalars = single_object_scalars("free", &step_stats);
         Ok(step_stats)

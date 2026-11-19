@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 660" role="img" aria-labelledby="title desc">
+  <title id="title">Bulk Micromagnetic Exchange: Continuum Model, FDM Stencil, and FEM Weak Form</title>
+  <desc id="desc">Three-panel comparison of bulk micromagnetic exchange in Fullmag: (a) continuum variational energy and natural homogeneous Neumann boundary condition, (b) finite-difference 6-neighbor stencil with inactive-cell clamping and FP64 T0/T1 sub-cell corrections, and (c) conforming P1 H1 finite-element weak form with lumped and consistent mass projections.</desc>
+  <defs>
+    <marker id="arr-m" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arr-H" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arr-T_DL" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arr-T_FL" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#147d75"/></marker>
+    <marker id="arr-DMI" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arr-Jc" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arr-axis" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#8c92a4"/></marker>
+    <marker id="arr-dark" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#24273a"/></marker>
+    <marker id="arr-fm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b97a56"/></marker>
+    <marker id="arr-hm" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#4d8098"/></marker>
+  </defs>
+  <rect x="8" y="8" width="1344" height="644" rx="10" fill="#fbfcfe" stroke="#ccd0da" stroke-width="1.5"/>
+  <text x="28" y="38" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="19" font-weight="700" fill="#24273a" text-anchor="start">Bulk Micromagnetic Exchange: Continuum Model, FDM Stencil, and FEM Weak Form</text>
+  <text x="28" y="60" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12.5" font-weight="400" fill="#525570" text-anchor="start">Shared continuum energy E<tspan baseline-shift="sub" font-size="9.2">ex</tspan> = ∫ A ‖∇m‖² dV vs discrete 6-neighbor FDM clamping and conforming P1 H¹(Ω<tspan baseline-shift="sub" font-size="9.2">m</tspan>) FEM realization</text>
+  <line x1="24" y1="74" x2="1336" y2="74" stroke="#dce0e8" stroke-width="1.2"/>
+  <rect x="24" y="88" width="348" height="548" rx="8" fill="#ffffff" stroke="#dce0e8" stroke-width="1.2"/>
+  <rect x="38" y="101" width="26" height="22" rx="6" fill="#24273a"/>
+  <text x="51" y="116.5" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="middle">(a)</text>
+  <text x="73" y="116.5" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="14.5" font-weight="700" fill="#24273a" text-anchor="start">Continuum Variational Model</text>
+  <text x="38" y="139" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="500" fill="#6c6f85" text-anchor="start">Bulk energy E<tspan baseline-shift="sub" font-size="8.5">ex</tspan> and free-surface Neumann law</text>
+  <rect x="48" y="162" width="300" height="178" rx="8" fill="#f6e8df" stroke="#b97a56" stroke-width="1.8"/>
+  <text x="60" y="184" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12" font-weight="700" fill="#b97a56" text-anchor="start">Magnetic domain Ω<tspan baseline-shift="sub" font-size="8.9">m</tspan></text>
+  <text x="338" y="184" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12" font-weight="700" fill="#24273a" text-anchor="end">∂Ω<tspan baseline-shift="sub" font-size="8.9">m</tspan></text>
+  <line x1="83.81" y1="232.45" x2="70.90" y2="227.01" stroke="#b8392b" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <line x1="120.39" y1="233.26" x2="108.41" y2="226.01" stroke="#b8392b" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <line x1="155.84" y1="234.99" x2="147.30" y2="223.90" stroke="#b8392b" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <line x1="189.00" y1="236.30" x2="189.00" y2="222.30" stroke="#b8392b" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <line x1="222.16" y1="234.99" x2="230.70" y2="223.90" stroke="#b8392b" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <line x1="257.61" y1="233.26" x2="269.59" y2="226.01" stroke="#b8392b" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <line x1="294.19" y1="232.45" x2="307.10" y2="227.01" stroke="#b8392b" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <line x1="83.81" y1="280.45" x2="70.90" y2="275.01" stroke="#b8392b" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <line x1="120.39" y1="281.26" x2="108.41" y2="274.01" stroke="#b8392b" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <line x1="155.84" y1="282.99" x2="147.30" y2="271.90" stroke="#b8392b" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <line x1="189.00" y1="284.30" x2="189.00" y2="270.30" stroke="#b8392b" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <line x1="222.16" y1="282.99" x2="230.70" y2="271.90" stroke="#b8392b" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <line x1="257.61" y1="281.26" x2="269.59" y2="274.01" stroke="#b8392b" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <line x1="294.19" y1="280.45" x2="307.10" y2="275.01" stroke="#b8392b" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <line x1="342.00" y1="256.00" x2="372.00" y2="256.00" stroke="#1d5fa7" stroke-width="2.2" stroke-linecap="round" marker-end="url(#arr-H)"/>
+  <text x="362" y="245" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12.5" font-weight="700" fill="#1d5fa7" text-anchor="middle" font-style="italic">n</text>
+  <rect x="56" y="302" width="284" height="28" rx="5" fill="#ffffff" stroke="#1d5fa7" stroke-width="1"/>
+  <text x="198" y="321" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.8" font-weight="600" fill="#1d5fa7" text-anchor="middle">Natural BC on ∂Ω<tspan baseline-shift="sub" font-size="8.7">m</tspan>:  A ∂<tspan baseline-shift="sub" font-size="8.7">n</tspan> m = 0</text>
+  <rect x="42" y="358" width="312" height="260" rx="7" fill="#f7f8fb" stroke="#dce0e8" stroke-width="1.1"/>
+  <text x="56" y="382" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12.5" font-weight="700" fill="#24273a" text-anchor="start">Continuum Variational Contract</text>
+  <text x="56" y="410" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="500" fill="#525570" text-anchor="start">Energy functional (stiffness A &gt; 0):</text>
+  <text x="60" y="432" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12.5" font-weight="700" fill="#24273a" text-anchor="start">E<tspan baseline-shift="sub" font-size="9.2">ex</tspan>[m] = ∫<tspan baseline-shift="sub" font-size="9.2">Ω_m</tspan> A(x) ∇m : ∇m dV</text>
+  <text x="56" y="462" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="500" fill="#525570" text-anchor="start">Effective field (−(μ<tspan baseline-shift="sub" font-size="8.5">0</tspan> M<tspan baseline-shift="sub" font-size="8.5">s</tspan>)⁻¹ δE<tspan baseline-shift="sub" font-size="8.5">ex</tspan>/δm):</text>
+  <text x="60" y="484" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12.5" font-weight="700" fill="#1d5fa7" text-anchor="start">H<tspan baseline-shift="sub" font-size="9.2">ex</tspan> = (2 / μ<tspan baseline-shift="sub" font-size="9.2">0</tspan> M<tspan baseline-shift="sub" font-size="9.2">s</tspan>) ∇·(A ∇m)</text>
+  <text x="56" y="514" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="500" fill="#525570" text-anchor="start">Directional derivative (test variation η):</text>
+  <text x="60" y="536" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12.2" font-weight="700" fill="#147d75" text-anchor="start">δE<tspan baseline-shift="sub" font-size="9">ex</tspan>[m; η] = 2 ∫<tspan baseline-shift="sub" font-size="9">Ω_m</tspan> A ∇m : ∇η dV</text>
+  <rect x="54" y="554" width="288" height="52" rx="5" fill="#fdf3e7" stroke="#b86b11" stroke-width="1"/>
+  <text x="64" y="574" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.2" font-weight="700" fill="#8c4e08" text-anchor="start">Scope: conforming bulk domains only.</text>
+  <text x="64" y="593" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11" font-weight="500" fill="#525570" text-anchor="start">RKKY, surface, and Dirichlet BCs are separate.</text>
+  <rect x="388" y="88" width="478" height="548" rx="8" fill="#ffffff" stroke="#dce0e8" stroke-width="1.2"/>
+  <rect x="402" y="101" width="26" height="22" rx="6" fill="#24273a"/>
+  <text x="415" y="116.5" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="middle">(b)</text>
+  <text x="437" y="116.5" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="14.5" font-weight="700" fill="#24273a" text-anchor="start">FDM 6-Neighbor Stencil N<tspan baseline-shift="sub" font-size="10.7">6</tspan>(i)</text>
+  <text x="402" y="139" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="500" fill="#6c6f85" text-anchor="start">Clamped free-surface Neumann closure and FP64 T0/T1 sub-cell lanes</text>
+  <line x1="521.00" y1="252.00" x2="491.00" y2="252.00" stroke="#246b8e" stroke-width="2" stroke-linecap="round" marker-start="url(#arr-Jc)" marker-end="url(#arr-Jc)"/>
+  <line x1="585.00" y1="252.00" x2="615.00" y2="252.00" stroke="#246b8e" stroke-width="2" stroke-linecap="round" marker-start="url(#arr-Jc)" marker-end="url(#arr-Jc)"/>
+  <line x1="553.00" y1="278.00" x2="553.00" y2="304.00" stroke="#246b8e" stroke-width="2" stroke-linecap="round" marker-start="url(#arr-Jc)" marker-end="url(#arr-Jc)"/>
+  <line x1="553" y1="226.0" x2="553" y2="200.0" stroke="#6e7b91" stroke-width="1.8" stroke-dasharray="3,3"/>
+  <line x1="575.00" y1="236.00" x2="635.00" y2="204.00" stroke="#246b8e" stroke-width="1.8" stroke-linecap="round" marker-end="url(#arr-Jc)"/>
+  <line x1="531.00" y1="268.00" x2="471.00" y2="300.00" stroke="#246b8e" stroke-width="1.8" stroke-linecap="round" marker-end="url(#arr-Jc)"/>
+  <rect x="521" y="226" width="64" height="52" rx="5" fill="#f6e8df" stroke="#b97a56" stroke-width="1.5"/>
+  <text x="553" y="244" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="700" fill="#24273a" text-anchor="middle">cell i</text>
+  <text x="553" y="268" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.2" font-weight="500" fill="#525570" text-anchor="middle">φ<tspan baseline-shift="sub" font-size="8.5">i,</tspan> m<tspan baseline-shift="sub" font-size="8.5">i</tspan></text>
+  <line x1="552.11" y1="258.49" x2="554.34" y2="249.77" stroke="#b8392b" stroke-width="1.8" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <rect x="409" y="226" width="64" height="52" rx="5" fill="#f6e8df" stroke="#b97a56" stroke-width="1.5"/>
+  <text x="441" y="244" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="700" fill="#24273a" text-anchor="middle">i − x̂</text>
+  <text x="441" y="268" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.2" font-weight="500" fill="#525570" text-anchor="middle">Δx</text>
+  <line x1="440.82" y1="258.60" x2="441.27" y2="249.61" stroke="#b8392b" stroke-width="1.8" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <rect x="633" y="226" width="64" height="52" rx="5" fill="#f6e8df" stroke="#b97a56" stroke-width="1.5"/>
+  <text x="665" y="244" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="700" fill="#24273a" text-anchor="middle">i + x̂</text>
+  <text x="665" y="268" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.2" font-weight="500" fill="#525570" text-anchor="middle">Δx</text>
+  <line x1="663.43" y1="258.24" x2="667.35" y2="250.14" stroke="#b8392b" stroke-width="1.8" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <rect x="521" y="308" width="64" height="52" rx="5" fill="#f6e8df" stroke="#b97a56" stroke-width="1.5"/>
+  <text x="553" y="326" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="700" fill="#24273a" text-anchor="middle">i − ŷ</text>
+  <text x="553" y="350" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.2" font-weight="500" fill="#525570" text-anchor="middle">Δy</text>
+  <line x1="552.28" y1="340.53" x2="554.07" y2="331.71" stroke="#b8392b" stroke-width="1.8" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <rect x="521" y="144" width="64" height="52" rx="5" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="553" y="162" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="700" fill="#6c6f85" text-anchor="middle">i + ŷ (void)</text>
+  <text x="553" y="186" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.2" font-weight="500" fill="#6e7b91" text-anchor="middle">m<tspan baseline-shift="sub" font-size="8.5">j</tspan> → m<tspan baseline-shift="sub" font-size="8.5">i</tspan></text>
+  <rect x="631" y="178" width="60" height="34" rx="5" fill="#f6e8df" stroke="#b97a56" stroke-width="1.3"/>
+  <text x="661" y="199" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#24273a" text-anchor="middle">i + ẑ</text>
+  <rect x="415" y="294" width="60" height="34" rx="5" fill="#f6e8df" stroke="#b97a56" stroke-width="1.3"/>
+  <text x="445" y="315" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#24273a" text-anchor="middle">i − ẑ</text>
+  <rect x="694" y="156" width="156" height="186" rx="6" fill="#f7f8fb" stroke="#dce0e8" stroke-width="1.1"/>
+  <text x="706" y="178" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12" font-weight="700" fill="#24273a" text-anchor="start">Boundary Closure</text>
+  <text x="706" y="200" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11" font-weight="600" fill="#6e7b91" text-anchor="start">Open / inactive cell:</text>
+  <text x="706" y="218" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.2" font-weight="700" fill="#24273a" text-anchor="start">m<tspan baseline-shift="sub" font-size="8.5">j</tspan> := m<tspan baseline-shift="sub" font-size="8.5">i</tspan> (clamp)</text>
+  <text x="706" y="236" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.2" font-weight="500" fill="#1d5fa7" text-anchor="start">⇒ m<tspan baseline-shift="sub" font-size="8.5">j</tspan> − m<tspan baseline-shift="sub" font-size="8.5">i</tspan> = 0</text>
+  <text x="706" y="254" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.8" font-weight="500" fill="#6c6f85" text-anchor="start">(zero normal flux)</text>
+  <text x="706" y="282" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11" font-weight="600" fill="#246b8e" text-anchor="start">Periodic axis:</text>
+  <text x="706" y="300" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.8" font-weight="500" fill="#525570" text-anchor="start">wraps index across</text>
+  <text x="706" y="317" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.8" font-weight="500" fill="#525570" text-anchor="start">domain (standard)</text>
+  <rect x="404" y="358" width="446" height="134" rx="7" fill="#f7f8fb" stroke="#dce0e8" stroke-width="1.1"/>
+  <text x="418" y="381" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12" font-weight="700" fill="#24273a" text-anchor="start">Standard 6-Neighbor Field &amp; Energy (CPU Ref / CUDA FP64, FP32)</text>
+  <text x="418" y="408" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12" font-weight="700" fill="#246b8e" text-anchor="start">H<tspan baseline-shift="sub" font-size="8.9">ex,i</tspan><tspan baseline-shift="super" font-size="8.9">q</tspan> = (2 / μ<tspan baseline-shift="sub" font-size="8.9">0</tspan> M<tspan baseline-shift="sub" font-size="8.9">s</tspan>) Σ<tspan baseline-shift="sub" font-size="8.9">j∈N_6(i)</tspan> A<tspan baseline-shift="sub" font-size="8.9">r_i r_j</tspan> (m<tspan baseline-shift="sub" font-size="8.9">j</tspan><tspan baseline-shift="super" font-size="8.9">q</tspan> − m<tspan baseline-shift="sub" font-size="8.9">i</tspan><tspan baseline-shift="super" font-size="8.9">q</tspan>) / Δ<tspan baseline-shift="sub" font-size="8.9">ij</tspan>²</text>
+  <text x="418" y="435" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.6" font-weight="600" fill="#24273a" text-anchor="start">E<tspan baseline-shift="sub" font-size="8.6">ex,h</tspan> = Σ<tspan baseline-shift="sub" font-size="8.6">i</tspan> Σ<tspan baseline-shift="sub" font-size="8.6">d = +x,+y,+z</tspan> A<tspan baseline-shift="sub" font-size="8.6">r_i r_j</tspan> φ<tspan baseline-shift="sub" font-size="8.6">i</tspan> V<tspan baseline-shift="sub" font-size="8.6">i</tspan> ‖m<tspan baseline-shift="sub" font-size="8.6">j</tspan> − m<tspan baseline-shift="sub" font-size="8.6">i</tspan>‖² / Δd²</text>
+  <text x="418" y="460" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11" font-weight="500" fill="#525570" text-anchor="start">CPU SoA uses scalar A; CUDA uses explicit LUT A<tspan baseline-shift="sub" font-size="8.5">r_i r_j</tspan>.</text>
+  <text x="418" y="478" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11" font-weight="500" fill="#525570" text-anchor="start">FP32 computes field in float, accumulates energy in FP64.</text>
+  <rect x="404" y="496" width="446" height="124" rx="7" fill="#fdf3e7" stroke="#b86b11" stroke-width="1.1"/>
+  <text x="416" y="517" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.8" font-weight="700" fill="#8c4e08" text-anchor="start">FDM GPU Sub-Cell Corrections (FP64 Only; FP32 Rejects)</text>
+  <text x="416" y="540" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11" font-weight="600" fill="#24273a" text-anchor="start">T0: H<tspan baseline-shift="sub" font-size="8.5">i</tspan><tspan baseline-shift="super" font-size="8.5">T0</tspan> = 2/(μ<tspan baseline-shift="sub" font-size="8.5">0</tspan> M<tspan baseline-shift="sub" font-size="8.5">s</tspan> φ<tspan baseline-shift="sub" font-size="8.5">eff</tspan>) Σ<tspan baseline-shift="sub" font-size="8.5">j</tspan> A<tspan baseline-shift="sub" font-size="8.5">ij</tspan> f<tspan baseline-shift="sub" font-size="8.5">i→j</tspan> (m<tspan baseline-shift="sub" font-size="8.5">j−m</tspan><tspan baseline-shift="sub" font-size="8.5">i</tspan>)/Δ<tspan baseline-shift="sub" font-size="8.5">ij</tspan>²</text>
+  <text x="416" y="564" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11" font-weight="600" fill="#24273a" text-anchor="start">T1: H<tspan baseline-shift="sub" font-size="8.5">i←j</tspan><tspan baseline-shift="super" font-size="8.5">T1</tspan> = 4 A<tspan baseline-shift="sub" font-size="8.5">ij</tspan>(m<tspan baseline-shift="sub" font-size="8.5">j−m</tspan><tspan baseline-shift="sub" font-size="8.5">i</tspan>) / (μ<tspan baseline-shift="sub" font-size="8.5">0</tspan> M<tspan baseline-shift="sub" font-size="8.5">s</tspan> φ<tspan baseline-shift="sub" font-size="8.5">eff</tspan> Δd [Δd + δ<tspan baseline-shift="sub" font-size="8.5">eff</tspan>])</text>
+  <text x="416" y="586" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="500" fill="#525570" text-anchor="start">where φ<tspan baseline-shift="sub" font-size="8.5">eff</tspan> = max(φ<tspan baseline-shift="sub" font-size="8.5">i,</tspan> φ<tspan baseline-shift="sub" font-size="8.5">floor</tspan>),  δ<tspan baseline-shift="sub" font-size="8.5">eff</tspan> = max(δ<tspan baseline-shift="sub" font-size="8.5">i,−d</tspan>, δ<tspan baseline-shift="sub" font-size="8.5">min</tspan>)</text>
+  <text x="416" y="607" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="500" fill="#525570" text-anchor="start">No PBC on T0/T1; multilayer CUDA has no cross-layer exchange.</text>
+  <rect x="882" y="88" width="454" height="548" rx="8" fill="#ffffff" stroke="#dce0e8" stroke-width="1.2"/>
+  <rect x="896" y="101" width="26" height="22" rx="6" fill="#24273a"/>
+  <text x="909" y="116.5" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="middle">(c)</text>
+  <text x="931" y="116.5" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="14.5" font-weight="700" fill="#24273a" text-anchor="start">FEM P1 H¹(Ω<tspan baseline-shift="sub" font-size="10.7">m</tspan>) Weak Form</text>
+  <text x="896" y="139" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="500" fill="#6c6f85" text-anchor="start">Tetrahedral/P1 stiffness assembly K<tspan baseline-shift="sub" font-size="8.5">A</tspan> and mass projection</text>
+  <polygon points="924.0,172.0 990.0,172.0 983.9,220.2" fill="#cfeae6" stroke="#147d75" stroke-width="1.6"/>
+  <polygon points="924.0,172.0 983.9,220.2 924.0,216.0" fill="#cfeae6" stroke="#147d75" stroke-width="1.6"/>
+  <polygon points="990.0,172.0 1056.0,172.0 1051.6,210.2" fill="#f6e8df" stroke="#b97a56" stroke-width="1.0"/>
+  <polygon points="990.0,172.0 1051.6,210.2 983.9,220.2" fill="#cfeae6" stroke="#147d75" stroke-width="1.6"/>
+  <polygon points="1056.0,172.0 1122.0,172.0 1122.0,216.0" fill="#f6e8df" stroke="#b97a56" stroke-width="1.0"/>
+  <polygon points="1056.0,172.0 1122.0,216.0 1051.6,210.2" fill="#f6e8df" stroke="#b97a56" stroke-width="1.0"/>
+  <polygon points="1122.0,172.0 1188.0,172.0 1190.6,220.1" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.0" stroke-dasharray="3,2"/>
+  <polygon points="1122.0,172.0 1190.6,220.1 1122.0,216.0" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.0" stroke-dasharray="3,2"/>
+  <polygon points="1188.0,172.0 1254.0,172.0 1254.0,216.0" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.0" stroke-dasharray="3,2"/>
+  <polygon points="1188.0,172.0 1254.0,216.0 1190.6,220.1" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.0" stroke-dasharray="3,2"/>
+  <polygon points="924.0,216.0 983.9,220.2 990.1,265.3" fill="#cfeae6" stroke="#147d75" stroke-width="1.6"/>
+  <polygon points="924.0,216.0 990.1,265.3 924.0,260.0" fill="#f6e8df" stroke="#b97a56" stroke-width="1.0"/>
+  <polygon points="983.9,220.2 1051.6,210.2 1063.9,259.8" fill="#cfeae6" stroke="#147d75" stroke-width="1.6"/>
+  <polygon points="983.9,220.2 1063.9,259.8 990.1,265.3" fill="#cfeae6" stroke="#147d75" stroke-width="1.6"/>
+  <polygon points="1051.6,210.2 1122.0,216.0 1122.0,260.0" fill="#f6e8df" stroke="#b97a56" stroke-width="1.0"/>
+  <polygon points="1051.6,210.2 1122.0,260.0 1063.9,259.8" fill="#f6e8df" stroke="#b97a56" stroke-width="1.0"/>
+  <polygon points="1122.0,216.0 1190.6,220.1 1180.6,265.3" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.0" stroke-dasharray="3,2"/>
+  <polygon points="1122.0,216.0 1180.6,265.3 1122.0,260.0" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.0" stroke-dasharray="3,2"/>
+  <polygon points="1190.6,220.1 1254.0,216.0 1254.0,260.0" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.0" stroke-dasharray="3,2"/>
+  <polygon points="1190.6,220.1 1254.0,260.0 1180.6,265.3" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.0" stroke-dasharray="3,2"/>
+  <polygon points="924.0,260.0 990.1,265.3 990.0,304.0" fill="#f6e8df" stroke="#b97a56" stroke-width="1.0"/>
+  <polygon points="924.0,260.0 990.0,304.0 924.0,304.0" fill="#f6e8df" stroke="#b97a56" stroke-width="1.0"/>
+  <polygon points="990.1,265.3 1063.9,259.8 1056.0,304.0" fill="#f6e8df" stroke="#b97a56" stroke-width="1.0"/>
+  <polygon points="990.1,265.3 1056.0,304.0 990.0,304.0" fill="#f6e8df" stroke="#b97a56" stroke-width="1.0"/>
+  <polygon points="1063.9,259.8 1122.0,260.0 1122.0,304.0" fill="#f6e8df" stroke="#b97a56" stroke-width="1.0"/>
+  <polygon points="1063.9,259.8 1122.0,304.0 1056.0,304.0" fill="#f6e8df" stroke="#b97a56" stroke-width="1.0"/>
+  <polygon points="1122.0,260.0 1180.6,265.3 1188.0,304.0" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.0" stroke-dasharray="3,2"/>
+  <polygon points="1122.0,260.0 1188.0,304.0 1122.0,304.0" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.0" stroke-dasharray="3,2"/>
+  <polygon points="1180.6,265.3 1254.0,260.0 1254.0,304.0" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.0" stroke-dasharray="3,2"/>
+  <polygon points="1180.6,265.3 1254.0,304.0 1188.0,304.0" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.0" stroke-dasharray="3,2"/>
+  <polyline points="1122.00,172.00 1122.00,216.00 1122.00,260.00 1122.00,304.00" fill="none" stroke="#24273a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="983.9" cy="220.2" r="5.5" fill="#147d75" stroke="#ffffff" stroke-width="1.5"/>
+  <rect x="953.946" y="191.18" width="60" height="19" rx="4" fill="#ffffff" stroke="#147d75" stroke-width="1"/>
+  <text x="983.946" y="204.18" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="700" fill="#147d75" text-anchor="middle">node i (φ<tspan baseline-shift="sub" font-size="8.5">i</tspan>)</text>
+  <text x="1014" y="324" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="700" fill="#b97a56" text-anchor="middle">Ω<tspan baseline-shift="sub" font-size="8.5">m</tspan> (active P1 H¹ patch)</text>
+  <text x="1211" y="324" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="700" fill="#6e7b91" text-anchor="middle">Ω<tspan baseline-shift="sub" font-size="8.5">air</tspan> (air nodes zeroed)</text>
+  <text x="1128" y="168" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="700" fill="#24273a" text-anchor="start">∂Ω<tspan baseline-shift="sub" font-size="8.5">m</tspan></text>
+  <rect x="898" y="358" width="422" height="260" rx="7" fill="#f7f8fb" stroke="#dce0e8" stroke-width="1.1"/>
+  <text x="912" y="381" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12" font-weight="700" fill="#24273a" text-anchor="start">MFEM Legacy Assembly &amp; CUDA CSR Projection</text>
+  <text x="912" y="407" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12.2" font-weight="700" fill="#147d75" text-anchor="start">(K<tspan baseline-shift="sub" font-size="9">A</tspan>)<tspan baseline-shift="sub" font-size="9">ij</tspan> = ∫<tspan baseline-shift="sub" font-size="9">Ω_m</tspan> A ∇φ<tspan baseline-shift="sub" font-size="9">i</tspan> · ∇φ<tspan baseline-shift="sub" font-size="9">j</tspan> dV</text>
+  <text x="912" y="428" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.3" font-weight="500" fill="#24273a" text-anchor="start">E<tspan baseline-shift="sub" font-size="8.5">ex,h</tspan> = Σ<tspan baseline-shift="sub" font-size="8.5">q = x,y,z</tspan> m<tspan baseline-shift="sub" font-size="8.5">q</tspan><tspan baseline-shift="super" font-size="8.5">T</tspan> K<tspan baseline-shift="sub" font-size="8.5">A</tspan> m<tspan baseline-shift="sub" font-size="8.5">q</tspan>   (symmetric graph Laplacian)</text>
+  <rect x="910" y="442" width="398" height="62" rx="5" fill="#ffffff" stroke="#1d5fa7" stroke-width="1.1"/>
+  <text x="920" y="461" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.2" font-weight="700" fill="#1d5fa7" text-anchor="start">Lumped Mass Projection (FEM CPU Default &amp; FEM GPU FP64 CSR):</text>
+  <text x="920" y="483" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.8" font-weight="700" fill="#24273a" text-anchor="start">H<tspan baseline-shift="sub" font-size="8.7">ex,i</tspan><tspan baseline-shift="super" font-size="8.7">q</tspan> = −2 (K<tspan baseline-shift="sub" font-size="8.7">A</tspan> m<tspan baseline-shift="sub" font-size="8.7">q</tspan>)<tspan baseline-shift="sub" font-size="8.7">i</tspan> / (μ<tspan baseline-shift="sub" font-size="8.7">0</tspan> M<tspan baseline-shift="sub" font-size="8.7">s,i</tspan> V<tspan baseline-shift="sub" font-size="8.7">i</tspan><tspan baseline-shift="super" font-size="8.7">lump</tspan>)</text>
+  <rect x="910" y="512" width="398" height="56" rx="5" fill="#ffffff" stroke="#147d75" stroke-width="1.1"/>
+  <text x="920" y="531" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.2" font-weight="700" fill="#147d75" text-anchor="start">Consistent Mass Projection (FEM CPU CG only, rtol=10⁻¹⁰):</text>
+  <text x="920" y="552" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.8" font-weight="700" fill="#24273a" text-anchor="start">M<tspan baseline-shift="sub" font-size="8.7">M_s</tspan> q<tspan baseline-shift="sub" font-size="8.7">q</tspan> = K<tspan baseline-shift="sub" font-size="8.7">A</tspan> m<tspan baseline-shift="sub" font-size="8.7">q,</tspan>   H<tspan baseline-shift="sub" font-size="8.7">ex,q</tspan> = −(2 / μ<tspan baseline-shift="sub" font-size="8.7">0</tspan>) q<tspan baseline-shift="sub" font-size="8.7">q</tspan></text>
+  <text x="912" y="588" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.8" font-weight="500" fill="#525570" text-anchor="start">• Natural A ∂<tspan baseline-shift="sub" font-size="8.5">n</tspan> m = 0 arises automatically from ∫ A ∇m : ∇η dV.</text>
+  <text x="912" y="605" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.8" font-weight="500" fill="#525570" text-anchor="start">• Conforming H¹ enforces continuous m across material interfaces.</text>
+</svg>

@@ -21,7 +21,7 @@ import {
   settleViewport3DCameraGesture,
   type Viewport3DCameraGestureRef,
 } from "../layers/viewport3DCameraGesture";
-import { beginOrientationCameraGesture, commitOrientationCameraGesture } from "./orientationCameraGesture";
+import { beginOrientationCameraGesture, clearOrientationCameraMomentum, commitOrientationCameraGesture } from "./orientationCameraGesture";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type {
@@ -124,6 +124,7 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
   );
   const applyLiveCamera = useCallback(
     (nextCamera: Viewport3DCameraState) => {
+      clearOrientationCameraMomentum(controls);
       camera.up.set(...nextCamera.up);
       camera.position.set(...nextCamera.position);
       camera.lookAt(...nextCamera.target);
@@ -167,6 +168,22 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
       invalidate();
     },
     [applyLiveCamera, cameraGestureRef, commitCameraChange, getCurrentCamera, invalidate, onCameraInteractionStart, rotationMode, tracker],
+  );
+
+  // Commands (ribbon / palette) request a view direction through the store so
+  // keyboard users reach the same snap path as a ViewCube face click.
+  const handledViewDirectionRevisionRef = useRef(
+    viewport3dStore.getSnapshot().viewDirectionRequest?.revision ?? 0,
+  );
+  useEffect(
+    () =>
+      viewport3dStore.subscribe(() => {
+        const request = viewport3dStore.getSnapshot().viewDirectionRequest;
+        if (!request || request.revision === handledViewDirectionRevisionRef.current) return;
+        handledViewDirectionRevisionRef.current = request.revision;
+        snapToDirection(request.direction);
+      }),
+    [snapToDirection],
   );
 
   const onOrbit = useCallback(

@@ -48,6 +48,7 @@ extern double launch_external_energy_fp64(Context &ctx);
 extern double reduce_uniaxial_anisotropy_energy_fp64(Context &ctx);
 extern double reduce_cubic_anisotropy_energy_fp64(Context &ctx);
 extern double reduce_dmi_energy_fp64(Context &ctx);
+extern double reduce_magnetoelastic_energy_fp64(Context &ctx);
 
 // Forward declarations from reductions_fp64.cu
 extern double reduce_max_norm_fp64(Context &ctx, const void *vx, const void *vy, const void *vz, uint64_t n);
@@ -75,10 +76,16 @@ __global__ void llg_rhs_fp64_kernel(
     double * __restrict__ out_z,
     int n,
     double gamma_bar, double alpha, int disable_precession,
-    SttParams stt, SotParams sot)
+    SttParams stt, SotParams sot,
+    const double * __restrict__ alpha_field, double gamma)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    if (alpha_field) {
+        // Cellwise damping: gamma_bar follows the local alpha.
+        alpha = alpha_field[idx];
+        gamma_bar = gamma / (1.0 + alpha * alpha);
+    }
 
     double m0 = mx[idx], m1 = my[idx], m2 = mz[idx];
     double h0 = hx[idx], h1 = hy[idx], h2 = hz[idx];
@@ -119,13 +126,26 @@ __global__ void llg_rhs_fp64_kernel(
 
         double dmx_u = 0.0, dmy_u = 0.0, dmz_u = 0.0;
 
+        auto is_active_cell = [&](int cell_idx) -> bool {
+            if (stt.active_mask != nullptr) {
+                return stt.active_mask[cell_idx] != 0;
+            }
+            return mx[cell_idx] != 0.0 || my[cell_idx] != 0.0 || mz[cell_idx] != 0.0;
+        };
+
         if (stt.zhang_li_formula == FULLMAG_FDM_ZHANG_LI_MUMAX3_CENTRAL_V1) {
-            const int xm = zhang_li_neighbor_index(x, nx, 1, idx, -1, stt.periodic_x);
-            const int xp = zhang_li_neighbor_index(x, nx, 1, idx, 1, stt.periodic_x);
-            const int ym = zhang_li_neighbor_index(y, ny, nx, idx, -1, stt.periodic_y);
-            const int yp = zhang_li_neighbor_index(y, ny, nx, idx, 1, stt.periodic_y);
-            const int zm = zhang_li_neighbor_index(z, nz, nx * ny, idx, -1, stt.periodic_z);
-            const int zp = zhang_li_neighbor_index(z, nz, nx * ny, idx, 1, stt.periodic_z);
+            int xm = zhang_li_neighbor_index(x, nx, 1, idx, -1, stt.periodic_x);
+            int xp = zhang_li_neighbor_index(x, nx, 1, idx, 1, stt.periodic_x);
+            int ym = zhang_li_neighbor_index(y, ny, nx, idx, -1, stt.periodic_y);
+            int yp = zhang_li_neighbor_index(y, ny, nx, idx, 1, stt.periodic_y);
+            int zm = zhang_li_neighbor_index(z, nz, nx * ny, idx, -1, stt.periodic_z);
+            int zp = zhang_li_neighbor_index(z, nz, nx * ny, idx, 1, stt.periodic_z);
+            if (!is_active_cell(xm)) xm = idx;
+            if (!is_active_cell(xp)) xp = idx;
+            if (!is_active_cell(ym)) ym = idx;
+            if (!is_active_cell(yp)) yp = idx;
+            if (!is_active_cell(zm)) zm = idx;
+            if (!is_active_cell(zp)) zp = idx;
             // The MuMax3 source prefactor contains the factor 1/2; its
             // central stencil uses the unhalved neighbour difference.
             const double inv_dx = 1.0 / stt.dx;
@@ -144,42 +164,54 @@ __global__ void llg_rhs_fp64_kernel(
         // Historical fullmag v0: sign-selected upwind difference for (u.grad)m.
         
         // x-derivative
-        if (ux > 0.0 && x > 0) {
-            int prev = idx - 1;
-            dmx_u += ux * (m0 - mx[prev]) / stt.dx;
-            dmy_u += ux * (m1 - my[prev]) / stt.dx;
-            dmz_u += ux * (m2 - mz[prev]) / stt.dx;
-        } else if (ux < 0.0 && x < nx - 1) {
-            int next = idx + 1;
-            dmx_u += ux * (mx[next] - m0) / stt.dx;
-            dmy_u += ux * (my[next] - m1) / stt.dx;
-            dmz_u += ux * (mz[next] - m2) / stt.dx;
+        if (ux > 0.0 && (stt.periodic_x || x > 0)) {
+            int prev = zhang_li_neighbor_index(x, nx, 1, idx, -1, stt.periodic_x);
+            if (is_active_cell(prev)) {
+                dmx_u += ux * (m0 - mx[prev]) / stt.dx;
+                dmy_u += ux * (m1 - my[prev]) / stt.dx;
+                dmz_u += ux * (m2 - mz[prev]) / stt.dx;
+            }
+        } else if (ux < 0.0 && (stt.periodic_x || x < nx - 1)) {
+            int next = zhang_li_neighbor_index(x, nx, 1, idx, 1, stt.periodic_x);
+            if (is_active_cell(next)) {
+                dmx_u += ux * (mx[next] - m0) / stt.dx;
+                dmy_u += ux * (my[next] - m1) / stt.dx;
+                dmz_u += ux * (mz[next] - m2) / stt.dx;
+            }
         }
 
         // y-derivative
-        if (uy > 0.0 && y > 0) {
-            int prev = idx - nx;
-            dmx_u += uy * (m0 - mx[prev]) / stt.dy;
-            dmy_u += uy * (m1 - my[prev]) / stt.dy;
-            dmz_u += uy * (m2 - mz[prev]) / stt.dy;
-        } else if (uy < 0.0 && y < ny - 1) {
-            int next = idx + nx;
-            dmx_u += uy * (mx[next] - m0) / stt.dy;
-            dmy_u += uy * (my[next] - m1) / stt.dy;
-            dmz_u += uy * (mz[next] - m2) / stt.dy;
+        if (uy > 0.0 && (stt.periodic_y || y > 0)) {
+            int prev = zhang_li_neighbor_index(y, ny, nx, idx, -1, stt.periodic_y);
+            if (is_active_cell(prev)) {
+                dmx_u += uy * (m0 - mx[prev]) / stt.dy;
+                dmy_u += uy * (m1 - my[prev]) / stt.dy;
+                dmz_u += uy * (m2 - mz[prev]) / stt.dy;
+            }
+        } else if (uy < 0.0 && (stt.periodic_y || y < ny - 1)) {
+            int next = zhang_li_neighbor_index(y, ny, nx, idx, 1, stt.periodic_y);
+            if (is_active_cell(next)) {
+                dmx_u += uy * (mx[next] - m0) / stt.dy;
+                dmy_u += uy * (my[next] - m1) / stt.dy;
+                dmz_u += uy * (mz[next] - m2) / stt.dy;
+            }
         }
 
         // z-derivative
-        if (uz > 0.0 && z > 0) {
-            int prev = idx - nx * ny;
-            dmx_u += uz * (m0 - mx[prev]) / stt.dz;
-            dmy_u += uz * (m1 - my[prev]) / stt.dz;
-            dmz_u += uz * (m2 - mz[prev]) / stt.dz;
-        } else if (uz < 0.0 && z < nz - 1) {
-            int next = idx + nx * ny;
-            dmx_u += uz * (mx[next] - m0) / stt.dz;
-            dmy_u += uz * (my[next] - m1) / stt.dz;
-            dmz_u += uz * (mz[next] - m2) / stt.dz;
+        if (uz > 0.0 && (stt.periodic_z || z > 0)) {
+            int prev = zhang_li_neighbor_index(z, nz, nx * ny, idx, -1, stt.periodic_z);
+            if (is_active_cell(prev)) {
+                dmx_u += uz * (m0 - mx[prev]) / stt.dz;
+                dmy_u += uz * (m1 - my[prev]) / stt.dz;
+                dmz_u += uz * (m2 - mz[prev]) / stt.dz;
+            }
+        } else if (uz < 0.0 && (stt.periodic_z || z < nz - 1)) {
+            int next = zhang_li_neighbor_index(z, nz, nx * ny, idx, 1, stt.periodic_z);
+            if (is_active_cell(next)) {
+                dmx_u += uz * (mx[next] - m0) / stt.dz;
+                dmy_u += uz * (my[next] - m1) / stt.dz;
+                dmz_u += uz * (mz[next] - m2) / stt.dz;
+            }
         }
         }
 
@@ -431,7 +463,8 @@ double reduce_current_rhs_norm_from_evaluated_transport_fp64(Context &ctx) {
         static_cast<double*>(ctx.k1.y),
         static_cast<double*>(ctx.k1.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx),
+            ctx.alpha_field, ctx.gamma);
     fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "Euler fp64 LLG RHS launch");
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return 0.0;
     if (ctx.has_frozen_mask) {
@@ -497,7 +530,8 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.k1.y),
             static_cast<double*>(ctx.k1.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx),
+            ctx.alpha_field, ctx.gamma);
         context_note_local_pipeline_unfused_rhs(ctx);
         fullmag_fdm_note_llg_rhs_torque_device_launch(
             ctx, "Heun fp64 LLG RHS launch");
@@ -567,7 +601,8 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.h_ex.y),
             static_cast<double*>(ctx.h_ex.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx),
+            ctx.alpha_field, ctx.gamma);
         context_note_local_pipeline_unfused_rhs(ctx);
         fullmag_fdm_note_llg_rhs_torque_device_launch(
             ctx, "minimize fp64 LLG RHS launch");
@@ -657,7 +692,8 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     double e_aniso = reduce_uniaxial_anisotropy_energy_fp64(ctx);
     double e_cubic = reduce_cubic_anisotropy_energy_fp64(ctx);
     double e_dmi = reduce_dmi_energy_fp64(ctx);
-    double e_total = e_ex + e_demag + e_ext + e_aniso + e_cubic + e_dmi;
+    double e_mel = reduce_magnetoelastic_energy_fp64(ctx);
+    double e_total = e_ex + e_demag + e_ext + e_aniso + e_cubic + e_dmi + e_mel;
 
     // Max |H_eff|
     double max_h_eff = reduce_max_norm_fp64(ctx, ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);

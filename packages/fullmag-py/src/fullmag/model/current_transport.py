@@ -1174,8 +1174,8 @@ def _source_mesh(mesh: object) -> dict[str, object]:
         raise ValueError("lead_mesh facet connectivity is invalid")
     for field, expected in (("element_markers", len(cells["types"])), ("boundary_markers", count)):
         markers = value[field]
-        if not isinstance(markers, list) or len(markers) != expected or any(isinstance(i, bool) or not isinstance(i, int) or not 0 < i <= (1 << 31) - 1 for i in markers):
-            raise ValueError(f"lead_mesh.{field} requires one positive native int32 marker per entity")
+        if not isinstance(markers, list) or len(markers) != expected or any(isinstance(i, bool) or not isinstance(i, int) or not 0 < i <= (1 << 32) - 1 for i in markers):
+            raise ValueError(f"lead_mesh.{field} requires one positive canonical u32 marker per entity")
     for block, fields in ((cells, ("global_ordinals", "mesh_parts")), (facets, ("global_ordinals",))):
         for field in fields:
             if field in block and (not isinstance(block[field], list) or len(block[field]) not in (0, len(block["types"]))):
@@ -1228,9 +1228,9 @@ class TerminalLeadExtension:
             object.__setattr__(self, name, _source_text(getattr(self, name), name))
         markers = tuple(self.boundary_markers)
         if not markers or len(markers) > _CURRENT_SOURCE_MAX_ITEMS or any(
-            type(value) is not int or not 0 < value < 1 << 31 for value in markers
+            type(value) is not int or not 0 < value < 1 << 32 for value in markers
         ) or len(set(markers)) != len(markers):
-            raise ValueError("boundary_markers must be unique positive native int32 markers")
+            raise ValueError("boundary_markers must be unique positive canonical u32 markers")
         object.__setattr__(self, "boundary_markers", markers)
         for name in ("length_m", "conductivity_spm"):
             value = getattr(self, name)
@@ -1246,6 +1246,40 @@ class TerminalLeadExtension:
         object.__setattr__(self, "outward_direction_xyz", tuple(float(v) for v in direction))
         if type(self.layers) is not int or not 2 <= self.layers <= 1 << 20:
             raise ValueError("layers must be an exact integer between 2 and the bounded cell budget")
+
+    @classmethod
+    def from_antenna_terminal(
+        cls,
+        *,
+        id: str,
+        observation_id: str,
+        object_id: str,
+        conductor_part_id: str,
+        selector: str,
+        length_m: float,
+        outward_direction_xyz: tuple[float, float, float],
+        conductivity_spm: float,
+        layers: int = 2,
+    ) -> TerminalLeadExtension:
+        """Select an antenna cap by semantic identity, without preparing its mesh.
+
+        The existing marker-form IR is preserved. Cap existence, ownership and
+        outward direction are still checked against the actual prepared mesh.
+        """
+        from fullmag.model._antenna_terminal import antenna_terminal_marker
+
+        id = _source_text(id, "id")
+        observation_id = _source_text(observation_id, "observation_id")
+        object_id = _source_text(object_id, "object_id")
+        conductor_part_id = _source_text(conductor_part_id, "conductor_part_id")
+        selector = _source_text(selector, "selector")
+        marker = antenna_terminal_marker(object_id, conductor_part_id, selector)
+        return cls(
+            id=id, observation_id=observation_id, object_id=object_id,
+            boundary_markers=(marker,), length_m=length_m,
+            outward_direction_xyz=outward_direction_xyz,
+            conductivity_spm=conductivity_spm, layers=layers,
+        )
 
     def to_ir(self) -> dict[str, object]:
         return {

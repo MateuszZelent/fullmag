@@ -9,7 +9,7 @@ from urllib.parse import quote, urlencode
 
 from smoke_antenna_external_lead_inspection import (
     MAX_BINARY_BYTES, MAX_METADATA_BYTES, SmokeError, json_body, request, require,
-    session_scope, validate_origin, validate_resource, verify_binary,
+    session_scope, validate_descriptor, validate_origin, validate_resource, verify_binary,
 )
 
 ROOT = "/v2/sessions/current/data"
@@ -75,6 +75,22 @@ def verify_closed_geometry(vector, topology, locator, expected):
             "connectivity_sha256": sha256(connectivity).hexdigest()}
 
 
+def verify_external_positions(topology, positions, point_count):
+    """Bind canonical field coordinates to retained display order, without fixture decoding."""
+    require(type(point_count) is int and 0 < point_count <= MAX_BINARY_BYTES // 24,
+            "invalid external sample count")
+    require(len(positions) == point_count * 24
+            and all(math.isfinite(value) for (value,) in struct.iter_unpack("<d", positions)),
+            "invalid retained external positions")
+    require(len(topology) >= 64 + len(positions) and topology[:8] == b"FMMT\x02\x01\x00\x00"
+            and struct.unpack_from("<I", topology, 8)[0] == point_count
+            and struct.unpack_from("<I", topology, 36)[0] == 64 and not any(topology[48:64]),
+            "external topology framing/cardinality differs")
+    require(topology[64:64 + len(positions)] == positions,
+            "canonical coordinates/order differ from retained external display")
+    return {"positions_sha256": sha256(positions).hexdigest()}
+
+
 def verify(origin, stage_id):
     origin = validate_origin(origin)
     require(isinstance(stage_id, str) and 0 < len(stage_id) <= 4096 and "\0" not in stage_id, "invalid stage")
@@ -100,6 +116,11 @@ def verify(origin, stage_id):
                         ("H_ant", "A/m", 3, "h_raw"), ("V_electric", "V", 1, "v_raw"),
                         ("J_charge", "A/m^2", 3, "j_local_raw"))}
     else:
+        for key in ("session_id", "session_epoch", "request_scope_epoch", "run_id", "runtime_stage_id",
+                    "stage_revision", "record_content_digest"):
+            require(display.get(key) == resource[key], f"external display owner {key} mismatch")
+        require(display.get("content_digest") == digest and display.get("source_object_id") == manifest["source_object_id"]
+                and display.get("status") == "inspection_only", "external display identity/status mismatch")
         expected = {"H_ant": ("A/m", 3, display["magnetic_field"], "magnetic_field"),
                     "V_electric": ("V", 1, display["device_potential"], "device_potential")}
         if "current_display" in manifest:
@@ -173,8 +194,26 @@ def verify(origin, stage_id):
         topology = binaries["topology"]
         require(len(topology) >= 64 and topology[:6] == b"FMMT\x02\x01"
                 and struct.unpack_from("<I", topology, 8)[0] == point_count, "topology/sample cardinality mismatch")
-        geometry_identity = verify_closed_geometry(vector, topology, locator,
-            closed_geometry(quantity, native_geometry)) if closed_loop else {}
+        if closed_loop:
+            geometry_identity = verify_closed_geometry(vector, topology, locator,
+                closed_geometry(quantity, native_geometry))
+        else:
+            if quantity == "J_charge":
+                position_kind, position_descriptor, layout = (
+                    "current_trace_positions", display["device_current"]["trace_positions"],
+                    "cell_local_vertex_xyz_interleaved")
+            else:
+                position_kind, layout = (("device_positions", "node_xyz_interleaved")
+                                         if quantity == "V_electric" else ("sample_positions", "sample_xyz_interleaved"))
+                position_descriptor = display[position_kind]
+            position_path = ("sample_positions.f64le.bin" if quantity == "H_ant"
+                             else f"display/{position_kind}.bin")
+            validate_descriptor(position_descriptor, position_kind,
+                                (position_path, "float64_le", layout, "m", 8))
+            positions, _ = verify_binary(origin,
+                f"{inspection}/payloads/{position_kind}?{urlencode({'content_digest': digest})}",
+                headers, position_kind, position_descriptor)
+            geometry_identity = verify_external_positions(topology, positions, point_count)
         results[quantity] = {**geometry_identity,"unit": unit, "components": components, "samples": point_count,
                              "carrier_id": locator["carrier_id"], "values_sha256": sha256(raw).hexdigest(),
                              "vector_sha256": sha256(vector).hexdigest(), "topology_sha256": sha256(topology).hexdigest()}

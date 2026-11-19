@@ -26,11 +26,13 @@ run_gate() {
       cargo test -p fullmag-quantities --no-fail-fast
       cargo test -p fullmag-plan --test magnetization_textures_v2_parity --test mumax3_texture_compatibility --no-fail-fast
       cargo test -p fullmag-runner quantities --no-fail-fast
+      cargo test -p fullmag-runner closed_loop_identity_v2::affinity_tests --lib --no-fail-fast
       cargo test -p fullmag-api --bin fullmag-api quantities::tests --no-fail-fast
       # Keep cross-layer rDMI regressions in the standard source/unit gate;
       # these do not claim managed FEM or CUDA physics qualification.
       cargo test -p fullmag-plan -p fullmag-engine -p fullmag-runner -p fullmag-api -p fullmag-authoring rotated --no-fail-fast
       cargo test -p fullmag-authoring manual_universe --no-fail-fast
+      cargo test -p fullmag-authoring region_revisions::tests --lib --no-fail-fast
       cargo test -p fullmag-runner capabilities::tests --no-fail-fast
       # Debug-build router tests hold very large async futures on the stack;
       # the default 2 MiB test-thread stack overflows.

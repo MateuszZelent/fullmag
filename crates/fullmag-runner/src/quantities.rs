@@ -129,7 +129,10 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::HEx => plan.enable_exchange,
         QuantityId::HDemag => plan.enable_demag,
         QuantityId::HExt => has_nonzero_external_field(plan.external_field),
-        QuantityId::HDrive => plan.field_drives.iter().any(|drive| drive.enabled),
+        QuantityId::HDrive => {
+            plan.field_drives.iter().any(|drive| drive.enabled)
+                || !plan.mask_field_term_bases.is_empty()
+        }
         QuantityId::HOe => plan.has_oersted_cylinder || plan.oersted_field_xyz.is_some()
             || plan.spin_transport_plans.iter().any(|transport| {
                 transport.fdm_cpu_double.as_ref().is_some_and(|descriptor| descriptor.oersted_source_bound)
@@ -149,7 +152,10 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::EdenEx => plan.enable_exchange,
         QuantityId::EdenDemag => plan.enable_demag,
         QuantityId::EdenExt => has_nonzero_external_field(plan.external_field),
-        QuantityId::EdenDrive => plan.field_drives.iter().any(|drive| drive.enabled),
+        QuantityId::EdenDrive => {
+            plan.field_drives.iter().any(|drive| drive.enabled)
+                || !plan.mask_field_term_bases.is_empty()
+        }
         QuantityId::EdenAni => {
             fdm_has_uniaxial_anisotropy(&plan.material) || fdm_has_cubic_anisotropy(&plan.material)
         }
@@ -305,7 +311,10 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::DemagPhi => plan.enable_demag,
         QuantityId::HExt => has_nonzero_external_field(plan.external_field),
         QuantityId::HAnt => fem_plan_has_antenna_field(plan),
-        QuantityId::HDrive => plan.field_drives.iter().any(|drive| drive.enabled),
+        QuantityId::HDrive => {
+            plan.field_drives.iter().any(|drive| drive.enabled)
+                || !plan.mask_field_term_bases.is_empty()
+        }
         QuantityId::HAni => material_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => material_has_cubic_anisotropy(&plan.material),
         QuantityId::HDmi => plan.interfacial_dmi.is_some() || has_values(&plan.dind_field),
@@ -323,7 +332,10 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::EdenEx => plan.enable_exchange,
         QuantityId::EdenDemag => plan.enable_demag,
         QuantityId::EdenExt => has_nonzero_external_field(plan.external_field),
-        QuantityId::EdenDrive => plan.field_drives.iter().any(|drive| drive.enabled),
+        QuantityId::EdenDrive => {
+            plan.field_drives.iter().any(|drive| drive.enabled)
+                || !plan.mask_field_term_bases.is_empty()
+        }
         QuantityId::EdenAni => {
             material_has_uniaxial_anisotropy(&plan.material)
                 || material_has_cubic_anisotropy(&plan.material)
@@ -436,6 +448,7 @@ mod tests {
 
     fn fdm_multilayer_plan() -> FdmMultilayerPlanIR {
         let layer = FdmLayerPlanIR {
+            rotated_interfacial_dmi: None,
             magnet_name: "layer".to_string(),
             layer_id: "layer:layer".to_string(),
             object_id: "layer".to_string(),
@@ -601,6 +614,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
             charge_transport_plans: Vec::new(),
@@ -925,19 +939,19 @@ mod tests {
         let mut fdm = fdm_plan();
         fdm.field_drives.push(drive.clone());
 
-        assert!(
+        assert_eq!(
             active_fdm_preview_quantities(
                 FdmEngine::CpuReference,
                 &fdm,
                 &["H_drive", "eden_drive"],
-            )
-            .is_empty(),
-            "CPU FDM must not advertise drive quantities missing from its preview dispatcher"
+            ),
+            vec!["H_drive"],
+            "CPU FDM advertises exactly the drive quantities of its preview dispatcher"
         );
         assert_eq!(
             active_fdm_preview_quantities(FdmEngine::CudaFdm, &fdm, &["H_drive", "eden_drive"],),
-            vec!["eden_drive"],
-            "CUDA FDM must follow its native snapshot-observable dispatcher"
+            vec!["H_drive", "eden_drive"],
+            "CUDA FDM resolves H_drive on the host and eden_drive natively"
         );
 
         let mut fem = fem_plan();

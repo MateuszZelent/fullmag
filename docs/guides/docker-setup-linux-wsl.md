@@ -68,8 +68,10 @@ kończą się błędem; launcher nie przenosi sesji do tymczasowego storage.
 Recepta uwzględnia `FULLMAG_CUDA_*`, `FULLMAG_HYPRE_GPU_ARCHITECTURES` oraz
 `FULLMAG_PETSC_CUDA_ARCHITECTURES` z `.env`. Dobierz je do GPU i wersji CUDA.
 `FULLMAG_MFEM_BUILD_JOBS` domyślnie wynosi `1`, ponieważ kompilacja szablonów
-CUDA może zużywać dużo pamięci na jeden proces. CPython budowany w obrazie
-pomija moduły testowe i helper `_testembed`.
+CUDA może zużywać dużo pamięci na jeden proces. `FULLMAG_CPU_DEPENDENCY_BUILD_JOBS`
+(domyślnie `2`) ogranicza osobno kompilację prefiksu CPU (HYPRE, libCEED, MFEM,
+PETSc, SLEPc), której pojedyncze zadanie potrzebuje znacznie mniej pamięci.
+CPython budowany w obrazie pomija moduły testowe i helper `_testembed`.
 
 `FULLMAG_MFEM_CUDA_FAST_COMPILE` wybiera poziom `0`, `min`, `mid` albo `max`
 dla kompilacji GPU biblioteki MFEM. Domyślne `0` zachowuje pełne optymalizacje.

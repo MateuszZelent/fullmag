@@ -28,6 +28,29 @@ describe("Inspector visual contract", () => {
     expect(css.match(/^\.fm-inspector__header\s*\{/gm)).toHaveLength(1);
   });
 
+  it("keeps Inspector fields and readouts readable and tokenized", () => {
+    const css = readdirSync(stylesRoot)
+      .filter((name) => /^inspector.*\.css$/.test(name))
+      .map((name) => readFileSync(join(stylesRoot, name), "utf8"))
+      .join("\n");
+    const tokens = readFileSync(join(stylesRoot, "tokens.css"), "utf8");
+
+    expect(tokens).toMatch(/--fm-inspector-control-height:\s*35px;/);
+    expect(tokens).toMatch(/--fm-inspector-control-radius:\s*8px;/);
+    expect(tokens).toMatch(/--fm-inspector-control-font-size:\s*13px;/);
+    expect(css).toContain("height: var(--fm-inspector-control-height)");
+    expect(css).toContain("border-radius: var(--fm-inspector-control-radius)");
+    expect(css).toContain("font-size: var(--fm-inspector-control-font-size)");
+    expect(css).toContain(".fm-inspector-form-field--inline:has(.fm-inspector-checkbox)");
+    expect(css).toContain(".fm-inspector-vector3-item .fm-inspector-input");
+    expect(css).toContain(".fm-select-trigger[aria-invalid=\"true\"]");
+    expect(css).toContain(".fm-select-trigger:disabled");
+    expect(css).toContain("[data-slot=\"inspector-property-row\"][data-layout=\"inline\"]:has(");
+    expect(css).toContain(".fm-inspector-field-row__value");
+    expect(css).toContain("[data-slot=\"inspector-group-heading\"] h3");
+    expect(css).toContain("fm-inspector-vector3-item:has(.fm-inspector-input[aria-invalid=\"true\"])");
+  });
+
   it("does not embed preview media in the Inspector module", () => {
     const source = filesBelow(inspectorRoot, /\.tsx?$/)
       .filter((path) => !/\.test\.tsx?$/.test(path))

@@ -221,7 +221,7 @@ pub(crate) fn dynamic_antenna_drive_terms(
         if let Some(waveform) = &mask.waveform {
             terms.push(RegionalFieldDriveTerm {
                 basis_field: mask.field_xyz.clone(),
-                waveform: waveform.clone(),
+                time: fullmag_engine::DriveTimeFunction::Waveform(waveform.clone()),
                 time_offset_s: -plan.time_stage.start_time_s,
                 enabled: true,
             });
@@ -243,7 +243,7 @@ pub(crate) fn dynamic_antenna_drive_terms(
                         ]
                     })
                     .collect(),
-                waveform: basis.drive.waveform.clone(),
+                time: fullmag_engine::DriveTimeFunction::Waveform(basis.drive.waveform.clone()),
                 time_offset_s: match basis.drive.time_origin {
                     FieldTimeOriginIR::StageLocal => {
                         plan.time_stage.waveform_origin_time_s() - plan.time_stage.start_time_s
@@ -273,7 +273,7 @@ pub(crate) fn dynamic_antenna_drive_terms(
                             ]
                         })
                         .collect(),
-                    waveform: waveform.clone(),
+                    time: fullmag_engine::DriveTimeFunction::Waveform(waveform.clone()),
                     time_offset_s: -plan.time_stage.start_time_s,
                     enabled: true,
                 });

@@ -8,14 +8,13 @@ use fullmag_authoring::{SceneDocument, SceneMaterialParameterAssignment, SceneOb
 use serde_json::Value;
 use std::path::Path as FsPath;
 
-use super::field_resolution::{flatten_current_field_values, json_field_value_count};
 use crate::artifacts::read_json_artifact_value;
 use crate::error::ApiError;
 use crate::schemas::authoring::{
     MaterialParameterFieldDataListResource, MaterialParameterFieldDataResource,
     MaterialParameterFieldDataSummaryResource,
 };
-use crate::session::{current_artifact_dir, latest_field_source_is_qualified};
+use crate::session::current_artifact_dir;
 use crate::types::{AppState, SessionStateResponse};
 
 #[utoipa::path(
@@ -116,7 +115,7 @@ pub async fn get_material_field_data(
 
 fn material_field_data_summaries(
     scene: &SceneDocument,
-    snapshot: &SessionStateResponse,
+    _snapshot: &SessionStateResponse,
     assets: &[fullmag_ir::MaterialFieldAssetIR],
 ) -> Vec<MaterialParameterFieldDataSummaryResource> {
     scene
@@ -126,9 +125,7 @@ fn material_field_data_summaries(
             object.material_parameter_fields.iter().map(|field| {
                 let parameter = material_parameter_name(field);
                 let asset = matching_material_field_asset(field, &parameter, assets);
-                let sample_count = asset
-                    .map(|asset| asset.values.len())
-                    .unwrap_or_else(|| latest_material_field_value_count(snapshot, &parameter));
+                let sample_count = asset.map(|asset| asset.values.len()).unwrap_or(0);
                 MaterialParameterFieldDataSummaryResource {
                     field_id: field.assignment_id.clone(),
                     assignment_id: field.assignment_id.clone(),
@@ -160,7 +157,7 @@ fn material_field_data_resource(
     region_coefficients_revision: u64,
     _object: &SceneObject,
     field: &SceneMaterialParameterAssignment,
-    snapshot: &SessionStateResponse,
+    _snapshot: &SessionStateResponse,
     assets: &[fullmag_ir::MaterialFieldAssetIR],
 ) -> Result<MaterialParameterFieldDataResource, ApiError> {
     let parameter = material_parameter_name(field);
@@ -168,7 +165,8 @@ fn material_field_data_resource(
     let asset = matching_material_field_asset(field, &parameter, assets);
     let values = match asset {
         Some(asset) => asset.values.clone(),
-        None => latest_material_field_values(snapshot, &parameter)?,
+        // Global solver coefficients do not identify this authored assignment.
+        None => Vec::new(),
     };
     let computed_stats = material_values_stats(&values);
     let realization_status = if asset.is_none() && values.is_empty() {
@@ -271,14 +269,15 @@ fn matching_material_field_asset<'a>(
     parameter: &str,
     assets: &'a [fullmag_ir::MaterialFieldAssetIR],
 ) -> Option<&'a fullmag_ir::MaterialFieldAssetIR> {
-    if let fullmag_authoring::SceneMaterialParameterField::Sampled { asset_id, .. } = &field.value {
-        if let Some(asset) = assets.iter().find(|asset| asset.asset_id == *asset_id) {
-            return Some(asset);
-        }
-    }
-
+    let fullmag_authoring::SceneMaterialParameterField::Sampled { asset_id, .. } = &field.value
+    else {
+        // Owner + parameter is not an assignment identity: the same owner can
+        // have several overlapping assignments contributing to a resolved field.
+        return None;
+    };
     assets.iter().find(|asset| {
-        asset.owner_object_id == field.owner_object
+        asset.asset_id == *asset_id
+            && asset.owner_object_id == field.owner_object
             && asset.source_region_id == field.region_id
             && enum_string(&asset.parameter) == parameter
     })
@@ -330,42 +329,6 @@ fn material_field_metadata(
     (unit, frame, location)
 }
 
-fn latest_material_field_values(
-    snapshot: &SessionStateResponse,
-    parameter: &str,
-) -> Result<Vec<f64>, ApiError> {
-    for quantity in material_field_lookup_keys(parameter) {
-        let Some(raw) = snapshot.latest_fields.get(quantity) else {
-            continue;
-        };
-        if !latest_field_source_is_qualified(snapshot, quantity, raw) {
-            continue;
-        }
-        return flatten_current_field_values(snapshot, quantity, raw);
-    }
-    Ok(Vec::new())
-}
-
-fn latest_material_field_value_count(snapshot: &SessionStateResponse, parameter: &str) -> usize {
-    material_field_lookup_keys(parameter)
-        .into_iter()
-        .find_map(|quantity| {
-            let raw = snapshot.latest_fields.get(quantity)?;
-            latest_field_source_is_qualified(snapshot, quantity, raw)
-                .then(|| json_field_value_count(raw))
-        })
-        .unwrap_or(0)
-}
-
-fn material_field_lookup_keys(parameter: &str) -> Vec<&str> {
-    match parameter {
-        "ms" | "Ms" => vec!["mat_ms", "Ms", "ms"],
-        "aex" | "Aex" => vec!["mat_aex", "Aex", "aex"],
-        "alpha" => vec!["mat_alpha", "alpha"],
-        other => vec![other],
-    }
-}
-
 fn material_values_stats(values: &[f64]) -> Option<(f64, f64, f64)> {
     let (&first, rest) = values.split_first()?;
     let mut min = first;
@@ -381,4 +344,37 @@ fn material_values_stats(values: &[f64]) -> Option<(f64, f64, f64)> {
         sum += value;
     }
     Some((min, max, sum / values.len() as f64))
+}
+
+#[cfg(test)]
+mod assignment_scope_tests {
+    use super::*;
+
+    #[test]
+    fn sampled_asset_id_does_not_override_owner_region_or_parameter() {
+        let field: SceneMaterialParameterAssignment = serde_json::from_value(serde_json::json!({
+            "assignment_id":"assignment", "owner_object":"body", "parameter":"ms", "region_id":"core",
+            "value":{"kind":"sampled","asset_id":"asset", "location":"node","component_count":1,"unit":"A/m"}
+        })).unwrap();
+        let asset: fullmag_ir::MaterialFieldAssetIR = serde_json::from_value(serde_json::json!({
+            "asset_id":"asset", "parameter":"ms", "owner_object_id":"body", "source_region_id":"core",
+            "mesh_id":"mesh", "mesh_generation_id":"mesh1", "location":"node", "component_count":1,
+            "unit":"A/m", "values":[800000.0], "min":800000.0, "max":800000.0,"mean":800000.0,
+            "provenance":{"source_kind":"override","algorithm":"test","timing_ms":0.0}
+        })).unwrap();
+        let mut assets = vec![asset];
+        assert!(matching_material_field_asset(&field, "ms", &assets).is_some());
+        assets[0].owner_object_id = "other".into();
+        assert!(matching_material_field_asset(&field, "ms", &assets).is_none());
+        assets[0].owner_object_id = "body".into();
+        assets[0].source_region_id = Some("other:core".into());
+        assert!(matching_material_field_asset(&field, "ms", &assets).is_none());
+        assets[0].source_region_id = Some("core".into());
+        assert!(matching_material_field_asset(&field, "aex", &assets).is_none());
+        let mut analytic = field.clone();
+        analytic.value =
+            serde_json::from_value(serde_json::json!({"kind":"constant","value":800000.0}))
+                .unwrap();
+        assert!(matching_material_field_asset(&analytic, "ms", &assets).is_none());
+    }
 }

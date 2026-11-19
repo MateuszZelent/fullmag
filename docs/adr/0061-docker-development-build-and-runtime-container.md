@@ -845,7 +845,8 @@ pozostają dokładne; nie wynikają z pomiaru CPU/RAM deskryptora H1.
 Decyzja operatora: błąd zadania nie zamyka API, konflikt writer-lock odracza
 pracę schedulera, a utrata sprawnego runtime blokuje nowe operacje bez
 odcinania diagnostyki. Nie wolno automatycznie ponawiać Solve ani restartować
-symulacji. Implementacja i weryfikacja runtime tej zmiany: **w toku**.
+symulacji. Implementacja i weryfikacja runtime tej zmiany: **w toku**;
+[aktualny odbiór i pozostałe luki](../audits/2026-10-29-runtime-failure-isolation.md).
 
 Nadzorca przekazuje każdej nowej instancji API prywatną, unikalną ścieżkę
 `FULLMAG_API_RUNTIME_FAILURE_FENCE` w wolumenie runtime-control. Po utracie
@@ -863,8 +864,10 @@ Potwierdzenie tożsamości API nie wymaga potwierdzonego ownera schedulera.
 Jeśli API zostało zweryfikowane, a późniejsze `service-ensure` zawiedzie,
 nadzorca zachowuje tę tożsamość i może uzyskać ACK blokady od tego samego API.
 Nie tworzy w tym celu zastępczego ownera ani nie wykonuje drain bez ownera.
-Nie oznacza to jeszcze diagnostycznego startu po błędzie występującym przed
-spawnem API; wydzielenie tej ścieżki pozostaje wymagane.
+Oddzielny cold-start zapisuje fence przed spawnem API i pomija inicjalizację
+oraz odtwarzanie wykonania. Odmowa konfiguracji budżetu podczas próby
+`7e0b39179f574e778e8cd7aebf5f70a3` potwierdziła health HTTP200/degraded,
+brak aktywnej sesji i zablokowane wykonanie przy nadal działającym API.
 Odczyty ostatnich opublikowanych wyników należy dopuścić na podstawie ich
 kontraktu bez uruchamiania nowego compute/materializacji. Prywatne recovery i
 retirement nadal muszą respektować bramkę i własność runtime.
@@ -873,6 +876,53 @@ Publiczny model JSON health nie zmienia kształtu. `status=degraded` oznacza
 żywe API z zablokowanymi operacjami. Istniejący zasób runtime-service zachowuje
 maszynowy kod i opis stanu właściciela. UI ma zachować workspace i pokazać
 problem oraz następne działanie, bez automatycznego restartu/replay.
+
+Uzupełnienie źródłowe 29.10: końcowy konflikt writera podczas odczytu wyniku
+zakończonego workera zachowuje `PendingTaskOutcome` do kolejnego przebiegu
+schedulera. Rekord blokuje ponowny admission/recovery dla runu i zasobu oraz
+fałszywe `drained`; ponawiane są wyłącznie odczyty katalogu i lease. Nie jest
+to ponowienie workera ani nieskończona blokująca pętla. Błąd zadania w workspace
+ma pokazać etap i `state_transition_reason` z tego samego runu oraz prowadzić
+do logu Engine i historii komend.
+
+Prywatna terminal-observation może odtworzyć również `Completed`, gdy
+hash-bound publiczny preflight ma ten sam wynik, katalog zawiera wyłącznie
+`Succeeded`, a istniejący natywny terminal fence i pełny łańcuch drain/claim/
+lease/digestów zostają spełnione. Dotychczasowe proofy `Failed` zachowują
+schemat i treść. Nie dodaje się automatycznego Solve, wznowienia workera ani
+nowych profili Cancelled/Interrupted. Wynik terminalny nie zastępuje walidacji
+artefaktów i renderu. Nowe delty wymagają odrębnego odbioru runtime; nie
+przypisuje się im wcześniejszego udanego uruchomienia CoFeB.
+
+Dla zakończonego Compute z API dowód terminal-observation v2 wiąże
+potwierdzenie żądania z tym samym RunIntent, ID instancji źródłowej,
+sesją i epoką. Run z automatyczną polityką Start nie ma pliku ręcznego
+zwolnienia. Odtworzenie wymaga rewizji sceny zgodnej z ostatnim RunIntent.
+Nowsza edycja wymaga osobnego dowodu odtworzenia modelu. Dowód v1 nadal
+obejmuje start ze skryptu oraz ręczne zwolnienie
+przygotowanego Study z potwierdzeniem Compute. Odtworzenie API zachowuje
+pierwotny czas startu sesji i uzupełnia brakujące potwierdzenie terminalne
+w pamięci na podstawie kwalifikowanego katalogu.
+
+`just docker-dev-capture-terminal <attempt> <config_sha256> <source_root> <port>`
+wykonuje zarządzane zatrzymanie. Przed wygaszeniem zapisuje pin natywnego
+odczytu, właściciela, RunIntent i katalogu w obrębie próby zatrzymania.
+`just docker-dev-restore-terminal <attempt> <config_sha256> <source_root> <stop_attempt> <port>`
+używa ID zakończonej próby zatrzymania jako źródła dowodu. Pod blokadą
+odtworzenia sprawdza ponownie tożsamość zatrzymanych kontenerów oraz
+skróty RunIntent, katalogu i ewentualnego ręcznego zwolnienia Start
+przed wymianą usług.
+
+Przy odmowie startupu przed utworzeniem nowego native ownera osobny
+`preowner-drained-stop` może zatrzymać wyłącznie dokładnie przypięte usługi
+backend/frontend. Wymaga autentycznego wcześniejszego nativeDrained i proofu
+Completed, zgodnych niezmienionych katalogów, zwolnionych lease, dostępnej
+blokady OWNER.lock oraz cold API bez procesów solvera. Jego journal zapisuje
+`native_drain_performed=false`; nie zastępuje starego drain ani nie upoważnia
+do recovery/Solve. Recreate ponownie sprawdza journal, tożsamość zatrzymanych
+kontenerów i zapisany profil zasobów przed usunięciem usług. Zapisany profil
+grupy obejmuje zarówno Docker limits, jak i native environment; samo
+podniesienie limitów działającego kontenera nie zmienia jego environment.
 
 Rollback wymaga zarządzanego zatrzymania/odzyskania konkretnej grupy; markerów,
 receiptów ani danych runu nie usuwa się w celu obejścia blokady. Build nie jest
@@ -1001,3 +1051,164 @@ przygotowania bez pozostawienia Unknown helpera. Nie zmienia Python/IR,
 OpenAPI, wyboru FEM/FDM CPU/GPU ani fizyki. Rollback zachowuje stare archiwum
 i blokuje jego wykonanie. Source review i parser nie zastępują wykonania
 zarządzanej ścieżki; runtime pozostaje NOT VERIFIED do zapisania receiptu.
+
+
+### Awaria runtime po udanym przygotowaniu, przed Start (05.11.2026)
+
+Udane przygotowanie FEM może opublikować receipt i zwolnić lokalny lease oraz
+rezerwację hosta, po czym scheduler kończy się błędem, zanim zostanie
+opublikowany Start. Taki przypadek nie jest błędem przygotowania, zdrowym drain
+ani WorkerNoSpawn z istniejącym lease solvera. Intencja automatycznego startu
+skryptu nie staje się ręcznie wstrzymanym modelem tylko dlatego, że wewnętrzna
+polityka `accepted_run_start` ma wartość `manual`.
+
+Dopuszczamy odrębny wariant `prepared-unclaimed-v1` managed failed-stop.
+Oryginalny klient aktywacji musi mieć trwały wynik Unknown oraz READY/LOGGED;
+jego przypięty helper nadal posiada własny lease operacji. Osobny observer
+używa tylko swojej blokady obserwacji w tej samej inkarnacji helpera. Nie
+przejmuje `operation.lock`, nie aktualizuje kodu żywego helpera i nie usuwa
+jego markera aktywności. Zgodność ze starszym helperem wymaga wykazanego
+kontraktu jego terminalnego handshake; sama zmiana źródeł na hoście go nie
+aktualizuje.
+
+Przed sygnałem wymagane są dokładne piny kontenera, obrazu, StartedAt,
+konfiguracji, failed ownera, zakończonych schedulerów i diagnostycznego API.
+Pod blokadami store i ledgera trzeba niezależnie wykazać brak Start, claim,
+admission, lease i workera solvera, zgodność request/API/session/epoch oraz
+autentyczny exit 0 przygotowania z pasującym Released lease i host release
+proof. Wszystkie rezerwacje tej grupy muszą być Released. Aktywny lub nieznany
+zasób, obcy proces i drift blokują operację; nie są naprawiane przez hosta.
+
+Preview nie wysyła sygnału. Apply wymaga SHA planu i przed pojedynczym TERM
+utrwala create-only signal-intent. Kontynuacja z jego dokładnym SHA służy
+wyłącznie ponownej obserwacji i domknięciu tych samych dowodów; nie powtarza
+sygnału i nie eskaluje do KILL. Po zatrzymaniu pozostają prawdziwe
+`shutdown_unknown`, owner Failed i `healthy_drain=false`. Nowy journal
+`fullmag.stop-failed-unclaimed-prepared.v1` oraz quarantine
+`fullmag.docker-prepared-unclaimed-quarantine.v1` zapisują
+`cancellation-required`. Techniczny terminal oryginalnej aktywacji jest
+publikowany ostatni, po trwałym zapisie i odczycie dowodów; helper sam zwalnia
+własny lease. Oryginalne request, Unknown receipt, katalogi, przygotowanie,
+wyniki i Zarr pozostają zachowane.
+
+Quarantine blokuje zwykły start API, wznowienie starej generacji i replay
+requestu. Dalsza ścieżka wymaga jawnego SHA quarantine: istniejący maintenance
+`cancel-unclaimed-volume` wykonuje natywne anulowanie dokładnego zadania bez
+API lub Solve. Dopiero autentyczny terminal Cancelled i dopasowane dowody
+maintenance dopuszczają osobne `recreate-volume --fresh-state`, które archiwizuje
+stary runtime-control i ledger przez istniejącego właściciela archiwizacji.
+Sam stop, quarantine albo zakończenie maintenance nie są dowodem archiwum ani
+gotowości nowego API. Nowa generacja przechodzi zwykły managed build/admission.
+Starsze konsumery nie mogą interpretować nowego journalu jako starego drain.
+
+Przerwanie po trwałym zakończeniu archiwizacji, przed publikacją quarantine
+lub terminala odtworzenia, ma odrębny wariant istniejącego
+`resume-interrupted-fresh-archive`. Przypina oryginalny Unknown receipt,
+quarantine oraz istniejący intent i terminal dokładnie tego archiwum.
+Wymaga również zgodnego, kanonicznego anchoru generacji group ledger;
+sam terminal opublikowany przed tym anchorem nie oznacza ukończonego archive.
+Weryfikuje już zakończone archiwum bez ponawiania rename, Solve lub wymogu
+istnienia usuniętych starych kontenerów. Publikacje są idempotentne i CAS;
+końcowy terminal zwalnia lease przez oryginalny helper odtworzenia. Brak lub
+drift dowodu, obcy helper i nieznany stan odmawiają kontynuacji. Nie rozszerza
+to wcześniejszego wariantu opartego na błędzie konsumenta group ledger.
+Niekompletna publikacja metadanych generacji pozostaje odrzucona i zachowana;
+ten wariant nie dorabia brakującego anchoru ani nie naprawia fizycznego archive.
+
+Właściciel: Docker DEV launcher, w szczególności
+`docker_volume_linux_supervision_stop.py`, `docker_volume_activation_reconcile.py`
+oraz istniejący konsumenci anulowania, fresh archive i
+`docker_volume_interrupted_fresh_archive.py`. Nie zmienia to fizyki,
+Python/ProblemIR, publicznego OpenAPI ani wyboru CPU/GPU. Rollback zachowuje
+quarantine i wszystkie dane, blokując uruchomienie do odtworzenia zgodnego
+konsumenta. Testy źródeł, handshake i fixtures nie kwalifikują rzeczywistego
+stop/cancel/archive. Stan runtime tej ścieżki: **NOT VERIFIED** do zachowania
+osobnych receiptów wszystkich etapów.
+
+### Zachowanie przygotowanych modeli z ręcznym startem (28.10.2026)
+
+Po nagłym zatrzymaniu runtime store może zawierać jednocześnie runy terminalne
+oraz poprawnie przygotowane modele `Accepted`, które nadal oczekują na Compute.
+Ich obecność nie upoważnia recovery do anulowania runu, utworzenia `start_release`,
+powtórzenia skryptu ani rozpoczęcia Solve lub Compute Fields.
+
+Osobny request `runtime_service_container_recovery_request.v4` przypina rozłączne
+listy `retained_terminal_runs` (dopuszczalna pusta lista) i
+`retained_held_manual_runs` (co najmniej jeden wpis). Suma musi dokładnie pokrywać
+cały inventory store, łącznie najwyżej 128 runów. Held pin zawiera SHA-256
+RunIntent i katalogu oraz jawne `start_release: absent`. Typed manual-start policy,
+fizyczny brak release, katalog Accepted/Blocked bez compute claim/attempt,
+artefaktów, cancellation intent lub aktywnych zasobów są warunkami koniecznymi.
+Zakończone preparation jest dopuszczone wyłącznie z released lease i dokładnymi
+receiptami zakończenia z kodem zero. Recovery sprawdza wszystkie referencje
+CAS i checkpointy względem sumy obu list, zachowując checkpointy i katalogi.
+
+Budżet agregatu odczytów v4 wynosi 1 GiB, limit pojedynczego obiektu CAS nadal
+128 MiB. Operator nie może zwiększyć tych limitów. Kontrakty v1/v2/v3 oraz ich
+domyślny agregat 128 MiB pozostają bez zmian. Nowy outcome
+`retained_manual_held_runs_recovered` dotyczy wyłącznie odzyskania ownera do
+Failed pod istniejącymi blokadami; nie terminalizuje oczekujących runów.
+
+Host, proof abrupt-stop v2 i bridge muszą jawnie przenosić dokładnie te same
+piny v4. Przed mutacją bridge sprawdza capabilities faktycznego natywnego
+binarium; brak v4 blokuje operację bez fallbacku. Replay również porównuje
+request i wynik. Po restarcie istniejący durable manual gate nadal wymaga
+osobnego jawnego Compute. Właściciel: native runtime service i Docker DEV
+launcher. Rollback zachowuje store i dowody, ale starsze binarium odmawia v4;
+nie wolno zmienić requestu na starszą wersję lub pominąć modeli oczekujących.
+
+Stan tej decyzji: implementacja źródłowa i review są oddzielone od kwalifikacji
+CI i rzeczywistego recovery. Do uzyskania receiptu zarządzanego wykonania oraz
+porównania zachowanych danych runtime pozostaje NOT VERIFIED.
+
+Hostowy preflight uwzględnia także opublikowane obiekty CAS z przypiętego
+katalogu artefaktów, zgodne z terminalnym task/attempt/epoch/resource i released
+lease. Nie zbiera dowolnych referencji z payloadów workerów. Izolowany helper
+pozostaje ograniczony do 64 MiB pamięci: CAS czyta i hashuje strumieniowo,
+z kontrolą limitów, liczby bajtów i niezmienności tożsamości pliku przed/po.
+
+### Odzyskanie po diagnostycznym stopie przed potwierdzeniem ownera
+
+Po odmowie `native service target/build mismatch; attach refused` nowy backend
+może uruchomić wyłącznie diagnostyczne API. Zarządzany `stop-bootstrap-volume`
+zatrzymuje ten backend, zachowując historyczny `OWNER=ready` oraz receipt
+`shutdown_unknown` bez `service_owner`. Brak tego pola nie oznacza drain ani
+uprawnienia do usunięcia właściciela. Nie wolno go dopisywać w celu spełnienia
+starszego warunku recovery.
+
+Hostowy proof `fullmag.docker-abrupt-stop-proof.v4` dopuszcza ten konkretny
+stan wyłącznie z jawnym `bootstrap_stop`. Dowód wiąże wybrany attempt i surowy
+SHA terminala stopu, zakończoną operację kontrolera, preflight nieobecności
+procesów historycznego ownera, oryginalny failed-resume process i fence oraz
+development/Compose. Cztery dokumenty native (process, OWNER, LAUNCH, config)
+pozostają niezmienione i przypięte surowymi hashami. Kanoniczny hash terminala
+w receipcie operacji jest innym hashem niż SHA pliku sidecar z końcowym LF.
+Inkarnacje backendu i frontendu muszą odpowiadać nieudanemu resume.
+
+Ten wariant obsługuje wyłącznie niepustą listę terminalnych runów i istniejący
+request native V3. Nie pozwala pomijać held, historii retry, aktywnych lease
+ani nieznanych danych. Pełne kontrole store/CAS, ledgera, urządzeń, obcych
+konsumentów i zatrzymanej pary usług pozostają obowiązkowe. Wyjątek od
+`process.service_owner` wybiera wyłącznie schemat uwierzytelnionego proof;
+ten sam walidator działa przy przygotowaniu, odczycie i granicy mutacji.
+Starsze warianty zachowują dotychczasowe wymagania.
+
+Właścicielem tej kontynuacji jest launcher Docker DEV; native recovery nadal
+odpowiada za zmianę stanu historycznego właściciela pod własnymi blokadami.
+Rollback do starszego launchera odmawia nowego proof, zachowując dane.
+Regresje wymagają odrzucenia zmienionych hashy, ownera, fence, inkarnacji,
+źródła/grupy, nieukończonego stopu i niepasującego requestu native.
+Implementacja walidatora i testy źródłowe nie stanowią dowodu odzyskania
+instancji ani wykonania symulacji. Managed recovery i następujące po nim
+profilowanie wymagają osobnych pokwitowań.
+
+`stop-bootstrap-frontend-volume` przygotowuje zatrzymaną parę po takim stopie.
+Preview sprawdza wyłącznie istniejący wolumen i dowody. Jawne apply wymaga
+SHA planu, kwalifikuje go przed `prepare`, a następnie pod blokadą grupy zapisuje
+niezmienny intent i ponownie odczytuje komplet dowodów przed SIGTERM do dokładnego
+ID frontendu. Nie wymusza zakończenia procesu. Po sygnale kontroluje tę samą
+inkarnację, zatrzymany backend oraz niezmienione dokumenty native. Już zatrzymanej
+inkarnacji nie sygnalizuje ponownie. Stop nie jest drain ani zgodą na teardown:
+obowiązują późniejsze pełne bramki recovery. Timeout zachowuje unknown i helper
+operacji; zwykłe ponowienie apply nie rozlicza takiej blokady. Wymaga ona osobnej
+kwalifikowanej finalizacji, bez ponownego wysyłania niepewnego sygnału.

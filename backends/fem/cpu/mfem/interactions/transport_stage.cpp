@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <sstream>
 
 namespace fullmag::fem {
@@ -22,6 +23,44 @@ void copy_callback_error(
     } else {
         error = fallback;
     }
+}
+
+/*
+ * The reciprocal transport torque -gamma_e hbar / (2 e Ms) (R_J + R_phi) is
+ * computed by the transport descriptor with one scalar Ms. Installing it on a
+ * context whose LLG uses element DG0 Ms, or nodal Ms that differs from that
+ * scalar on a magnetic node, would apply a wrong torque there.
+ */
+bool validate_transport_stage_ms_realization(const Context &ctx, std::string &error)
+{
+    if (!ctx.material_fields.Ms_element_field.empty()) {
+        error =
+            "stage transport torque is unsupported with Ms_element_field: the transport "
+            "torque coefficient uses one scalar saturation magnetization";
+        return false;
+    }
+    const std::vector<double> &field = ctx.material_fields.Ms_field;
+    const std::vector<uint8_t> &magnetic = ctx.mesh.magnetic_node_mask;
+    const double scalar = ctx.material_fields.material.saturation_magnetisation;
+    for (size_t node = 0; node < field.size(); ++node) {
+        if (!magnetic.empty() && (node >= magnetic.size() || magnetic[node] == 0u)) {
+            continue;
+        }
+        const double value = field[node];
+        const double scale = std::max(std::abs(value), std::abs(scalar));
+        if (!(std::abs(value - scalar) <=
+              64.0 * std::numeric_limits<double>::epsilon() * scale)) {
+            std::ostringstream message;
+            message << "stage transport torque is unsupported with spatially varying nodal "
+                       "Ms_field: node "
+                    << node << " has Ms=" << value
+                    << " A/m but the transport torque coefficient uses the scalar Ms="
+                    << scalar << " A/m";
+            error = message.str();
+            return false;
+        }
+    }
+    return true;
 }
 
 bool callback_layout_is_valid(
@@ -256,6 +295,9 @@ bool configure_transport_stage_callback(
         return true;
     }
     if (!callback_layout_is_valid(*callback, error)) {
+        return false;
+    }
+    if (!validate_transport_stage_ms_realization(ctx, error)) {
         return false;
     }
     if (ctx.stage_transport.stage_attempt_active) {

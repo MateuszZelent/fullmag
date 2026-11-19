@@ -7,6 +7,7 @@ import { homeView } from "@/kernel/layout/homeView";
 import { instanceTabs, useEmbeddedInstanceTab } from "@/kernel/layout/instanceTabs";
 import { useInstanceDiscovery } from "@/kernel/resources/instanceDiscoveryResources";
 import { useProjectDocumentSnapshot } from "@/kernel/persistence/ProjectDocumentStatus";
+import { createAndActivateScriptProject } from "@/kernel/persistence/ScriptProjectActivation";
 import { useSessionCollection } from "@/kernel/resources/useSessionCollection";
 import { useSessionResourceIdentity, useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type { ModuleProps } from "@/kernel/types";
@@ -250,6 +251,44 @@ export function StartScreen({ kernel }: ModuleProps) {
       `Could not open ${file.name}`,
     );
 
+  const importStl = async (
+    file: File,
+    units: "m" | "mm" | "um" | "nm",
+    scale: number,
+  ): Promise<string | null> => {
+    const result = await kernel.commands.execute(
+      "geometry.import-stl",
+      createCommandContext("menu", kernel, {
+        input: { file, scale, units },
+        sourceDetail: "start-screen",
+      }),
+    );
+    if (result.status === "completed") {
+      homeView.close();
+      return null;
+    }
+    return result.message ?? "The STL surface could not be imported.";
+  };
+
+  const createFemWorkspace = async (): Promise<string | null> => {
+    const result = await kernel.commands.execute(
+      "workspace.new-problem",
+      createCommandContext("menu", kernel, {
+        input: { solver: "FEM" },
+        sourceDetail: "start-screen",
+      }),
+    );
+    return result.status === "failed"
+      ? (result.message ?? "Could not open FEM workspace setup.")
+      : null;
+  };
+
+  const stlWorkspaceState = sessionIdentity !== null
+    ? "active"
+    : sessions.state === "no-session"
+      ? "none"
+      : "unconfirmed";
+
   const openRecent = async (entry: RecentEntry): Promise<string | null> => {
     if (entry.status === "missing") {
       return `${entry.name} is no longer at ${entry.path}. Rebuild the index or remove it from the list.`;
@@ -319,8 +358,7 @@ export function StartScreen({ kernel }: ModuleProps) {
   const projectCreator: ProjectCreator | null = projectDocument
     ? async (script) => {
         try {
-          const response = await projectDocument.createFromScript(buildFromScriptRequest(script));
-          kernel.authoringHistory?.clear();
+          const response = await createAndActivateScriptProject(kernel, buildFromScriptRequest(script));
           homeView.close();
           return {
             kind: "created",
@@ -333,12 +371,28 @@ export function StartScreen({ kernel }: ModuleProps) {
       }
     : null;
 
-  // Opening a project and then its saved results: the Results module of the
-  // open project is the saved-results viewer (SavedResultsBrowser).
+  // Legacy navigation for callers without the standalone playback command.
   const openResults = async (entry: RecentEntry): Promise<string | null> => {
     const failure = await openRecent(entry);
     if (failure === null) kernel.layout.setActiveTab("results");
     return failure;
+  };
+
+  const openSavedPlayback = async (item: ApiWorkspaceItem): Promise<string | null> => {
+    const result = await kernel.commands.execute(
+      "workspace.open-results-folder",
+      createCommandContext("inspector", kernel, {
+        feedback: "local",
+        input: { itemId: item.id, name: item.name },
+        sessionScopeKey: null,
+        sourceDetail: "start-screen",
+      }),
+    );
+    if (result.status === "completed") {
+      homeView.close();
+      return null;
+    }
+    return result.message ?? `Could not open saved playback for ${item.name}.`;
   };
 
   const selectedScript =
@@ -356,7 +410,8 @@ export function StartScreen({ kernel }: ModuleProps) {
       ? (results.state.items.find((item) => item.id === selectedResultId) ?? null)
       : null;
   const showInspector =
-    section !== "home" || Boolean(selectedEntry || selectedScript || selectedResult);
+    section !== "docs" &&
+    (section !== "home" || Boolean(selectedEntry || selectedScript || selectedResult));
   const isCompact = useSyncExternalStore(
     subscribeStartInspectorLayout,
     getStartInspectorLayout,
@@ -408,12 +463,14 @@ export function StartScreen({ kernel }: ModuleProps) {
   }, []);
 
   // A section change moves focus to the new content, except when it came from
-  // the rail, where the user is still navigating.
+  // the rail, where the user is still navigating, or when DocsSection focuses
+  // its own search input.
   useEffect(() => {
     if (previousSection.current === section) return;
     previousSection.current = section;
     const active = typeof document === "undefined" ? null : document.activeElement;
     if (active && railRef.current?.contains(active)) return;
+    if (section === "docs") return;
     mainRef.current?.focus();
   }, [section]);
 
@@ -444,6 +501,7 @@ export function StartScreen({ kernel }: ModuleProps) {
           void results.forget(id);
         },
         onSelectSource: selectApiItem,
+        onOpenPlayback: openSavedPlayback,
         onOpenResults: async (project) => {
           const entry =
             recent.state.kind === "ready"
@@ -521,6 +579,7 @@ export function StartScreen({ kernel }: ModuleProps) {
               scriptFlowNotice={scriptFlowNotice}
               compute={compute}
               onOpenRecent={openRecent}
+              onOpenResult={openSavedPlayback}
               onResumeContinue={resumeContinue}
               onDiscardContinue={discardContinue}
               onRunCommand={runCommand}
@@ -534,9 +593,12 @@ export function StartScreen({ kernel }: ModuleProps) {
           ) : section === "import" ? (
             <ImportSection
               onOpenFile={openFile}
+              onCreateFemWorkspace={createFemWorkspace}
+              onImportStl={importStl}
               projectCreator={projectCreator}
               scriptSaver={scriptSaver}
               openDisabledReason={browseDisabledReason}
+              stlWorkspaceState={stlWorkspaceState}
             />
           ) : section === "docs" ? (
             <DocsSection />
