@@ -2882,6 +2882,8 @@ fn accepted_fdm_execution_precision(
         ("gpu", "single") if single_grid.is_some() && !has_frozen_terminal_context => ExecutionPrecision::Single,
         _ => bail!("accepted FDM execution requires CPU/GPU double or single-grid GPU single; frozen terminal single is unsupported"),
     };
+    let has_time_expression = single_grid
+        .is_some_and(|plan| plan.slonczewski_time_expression.is_some());
     let extended_time_expression = request.mode == "extended"
         && matches!(request.device.as_str(), "cpu" | "gpu")
         && precision == ExecutionPrecision::Double
@@ -2892,8 +2894,11 @@ fn accepted_fdm_execution_precision(
                 && plan.relaxation.is_none()
                 && plan.spin_transport_plans.is_empty()
         });
-    if request.backend != "fdm" || (request.mode != "strict" && !extended_time_expression) {
-        bail!("accepted FDM execution requires strict mode or the explicit extended FP64 FDM Slonczewski time-expression lane");
+    if request.backend != "fdm"
+        || (request.mode == "strict" && has_time_expression)
+        || (request.mode != "strict" && !extended_time_expression)
+    {
+        bail!("accepted FDM execution requires strict mode for constant current or the explicit extended FP64 FDM Slonczewski time-expression lane");
     }
     if problem_precision != precision {
         bail!("accepted FDM request precision differs from immutable ProblemIR precision");
