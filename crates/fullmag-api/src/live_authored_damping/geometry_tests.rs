@@ -512,7 +512,30 @@ async fn desktop_completed_fem_build_and_regional_edits_publish_only_current_nod
     assert!(prepared.validate(&state, &changed_owner).is_err());
     let baseline = changed_owner.latest_fields.get("mat_alpha").unwrap();
     assert!(!damping::matches_publication(&changed_owner, baseline));
-    prepared.validate(&state, snapshot).unwrap();
+
+    // The idle publisher sends a session frame while Python is capturing the
+    // edited model. It re-encodes the same mesh workspace and execution plan.
+    let previous_metadata = snapshot.metadata.as_ref().unwrap().version();
+    let previous_workspace = snapshot.mesh_workspace.as_ref().unwrap().version();
+    let heartbeat = serde_json::from_value(json!({
+        "session_id": snapshot.session.session_id,
+        "metadata": request["metadata"],
+        "mesh_workspace": request["mesh_workspace"]
+    })).unwrap();
+    crate::session::apply_current_live_session_frame(snapshot, heartbeat).unwrap();
+    assert_ne!(previous_metadata, snapshot.metadata.as_ref().unwrap().version());
+    assert_ne!(previous_workspace, snapshot.mesh_workspace.as_ref().unwrap().version());
+    let mut changed_run = snapshot.clone();
+    changed_run.session.run_id = "different-run".into();
+    assert!(prepared.validate(&state, &changed_run).is_err());
+    let mut changed_plan = snapshot.clone();
+    changed_plan.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]["fe_order"] = 2.into();
+    assert!(prepared.validate(&state, &changed_plan).is_err());
+    let mut changed_receipt = snapshot.clone();
+    changed_receipt.mesh_workspace.as_mut().unwrap()["last_build_summary"]["command_id"] =
+        "new-build".into();
+    assert!(prepared.validate(&state, &changed_receipt).is_err());
+    prepared.validate(&state, snapshot).expect("identical idle publication must accept the edit");
     scene.revision = 6;
     snapshot.scene_document = Some(scene);
     prepared.publish(snapshot);

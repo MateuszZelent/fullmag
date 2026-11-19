@@ -158,12 +158,16 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
   await page.screenshot({ path: info.outputPath("semicircle-inspector.png") });
   const before = await page.evaluate(() => window.ablFemProbe.sequence);
   await page.locator("input").and(page.getByLabel("Maximum damping", { exact: true })).fill("0.12");
-  const [patch, updatedResponse] = await Promise.all([
-    page.waitForResponse(r => r.request().method() === "PATCH" && new URL(r.url()).pathname.endsWith("/model/objects/film")),
+  const [, updatedResponse] = await Promise.all([
+    page.waitForResponse(r => r.request().method() === "PATCH" && new URL(r.url()).pathname.endsWith("/model/objects/film"))
+      .then(async response => {
+        if (!response.ok()) throw new Error("FEM layer edit returned " + response.status() + ": " + (await response.text()).slice(0, 2000));
+        const saved = await response.json();
+        expect(saved.revision).toBeGreaterThan(scene.revision);
+      }),
     page.waitForResponse(isAlpha),
     page.getByRole("button", { name: "Apply", exact: true }).click(),
   ]);
-  expect(patch.status()).toBe(200);
   const updated = await checkMap(0.12, updatedResponse);
   const updatedDraw = await verifyDraw(updated, before);
   await page.screenshot({ path: info.outputPath("semicircle-after-edit.png") });

@@ -103,12 +103,18 @@ pub(crate) struct PreparedDamping {
     session_epoch: u64,
     domain: crate::session::LiveFieldDomainIdentity,
     idle_desktop_run: Option<(String, u64)>,
-    previous_metadata: Option<u64>,
-    previous_mesh_workspace: Option<u64>,
+    // Idle CLI frames recreate SharedJson wrappers even when their content
+    // is unchanged. Keep cheap COW snapshots of the actual planning inputs.
+    previous_metadata: Option<SharedJson>,
+    previous_mesh_workspace: Option<SharedJson>,
     previous_scene_revision: u64,
     previous_preparation_revision: u64,
     binding: Value,
     field: Option<Value>,
+}
+
+fn same_planning_input(previous: Option<&SharedJson>, current: Option<&SharedJson>) -> bool {
+    previous.map(SharedJson::version) == current.map(SharedJson::version) || previous == current
 }
 
 impl PreparedDamping {
@@ -117,28 +123,36 @@ impl PreparedDamping {
         state: &AppState,
         snapshot: &SessionStateResponse,
     ) -> Result<(), ApiError> {
-        if self.idle_desktop_run.as_ref().is_some_and(|(run, stage_revision)| {
+        let conflict = if self.session_id != snapshot.session.session_id
+            || self.session_epoch != state.current_live_session_epoch.load(Ordering::Acquire)
+        {
+            "session"
+        } else if self.idle_desktop_run.as_ref().is_some_and(|(run, stage_revision)| {
             run != &snapshot.session.run_id || *stage_revision != snapshot.stage_execution_revision
                 || !desktop::idle(snapshot)
-                || desktop::domain_identity(snapshot).as_ref() != self.binding.get("desktop_domain")
-        }) || self.session_id != snapshot.session.session_id
-            || self.session_epoch != state.current_live_session_epoch.load(Ordering::Acquire)
-            || self.domain != crate::session::current_live_field_domain_identity(snapshot)
-            || self.previous_metadata != snapshot.metadata.as_ref().map(SharedJson::version)
-            || self.previous_mesh_workspace != snapshot.mesh_workspace.as_ref().map(SharedJson::version)
-            || self.previous_scene_revision
-                != snapshot
-                    .scene_document
-                    .as_ref()
-                    .map_or(0, |scene| scene.revision)
-            || self.previous_preparation_revision != snapshot.simulation_preparation_revision
+        }) {
+            "execution state"
+        } else if self.idle_desktop_run.is_some()
+            && desktop::domain_identity(snapshot).as_ref() != self.binding.get("desktop_domain")
         {
-            return Err(ApiError::conflict_with_code(
-                "damping_domain_changed",
-                "the scene or prepared domain changed while evaluating damping",
-            ));
-        }
-        Ok(())
+            "desktop mesh ownership"
+        } else if self.domain != crate::session::current_live_field_domain_identity(snapshot) {
+            "field domain"
+        } else if self.previous_scene_revision != snapshot.scene_document.as_ref().map_or(0, |scene| scene.revision) {
+            "scene revision"
+        } else if self.previous_preparation_revision != snapshot.simulation_preparation_revision {
+            "preparation revision"
+        } else if !same_planning_input(self.previous_metadata.as_ref(), snapshot.metadata.as_ref()) {
+            "execution metadata"
+        } else if !same_planning_input(self.previous_mesh_workspace.as_ref(), snapshot.mesh_workspace.as_ref()) {
+            "mesh workspace"
+        } else {
+            return Ok(());
+        };
+        Err(ApiError::conflict_with_code(
+            "damping_domain_changed",
+            format!("the {conflict} changed while evaluating damping"),
+        ))
     }
 
     pub(crate) fn publish(self, snapshot: &mut SessionStateResponse) {
@@ -225,7 +239,6 @@ async fn prepare_snapshot(
     let workspace = state.current_workspace_root.clone();
     let store = state.submit_store_root.clone();
     tokio::task::spawn_blocking(move || {
-        let previous_metadata = snapshot.metadata.as_ref().map(SharedJson::version);
         let metadata = snapshot.metadata.as_ref();
         if metadata.is_some_and(|m| !m.is_object()) {
             return Err(ApiError::conflict(
@@ -299,9 +312,9 @@ async fn prepare_snapshot(
             previous_scene_revision: scene.revision,
             previous_preparation_revision: snapshot.simulation_preparation_revision,
             domain: crate::session::current_live_field_domain_identity(&snapshot),
-            previous_metadata,
+            previous_metadata: snapshot.metadata.clone(),
             idle_desktop_run,
-            previous_mesh_workspace: snapshot.mesh_workspace.as_ref().map(SharedJson::version),
+            previous_mesh_workspace: snapshot.mesh_workspace.clone(),
             binding,
             field,
         })
