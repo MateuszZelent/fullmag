@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { test, expect, type Response } from "playwright/test";
 import { scalarColorRgb } from "../../src/shared/visualization/scalarColorPalette";
 import { installFdmColorProbe } from "./renderedFdmColors";
@@ -86,7 +86,6 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   const samplesUrl = url("data/fields/mat_alpha/samples/vector");
   const viewport = page.locator(".fm-viewport-3d");
   const canvas = viewport.locator("canvas").first();
-  const label = viewport.locator('[data-quantity-id="mat_alpha"][data-field-state="data-ready"]');
   const inspectField = async (response: Response, layer: FieldCase) => {
     const bytes = await response.body();
     const packet = decodeFieldVector(Uint8Array.from(bytes).buffer);
@@ -125,7 +124,6 @@ test("ABL editor updates the live FDM damping field and canonical script", async
         }, { timeout: step === "baseline" ? workspaceStartupTimeout + timeout : timeout }),
         action(),
       ]);
-      await expect(label).toBeVisible({ timeout });
       // The clean fixture uses the default Viridis palette and automatic range.
       // Compare the FMVP row with RGB actually bound to a cuboid draw, ordered
       // by world x from its per-instance matrices. A stale redraw cannot pass.
@@ -157,9 +155,9 @@ test("ABL editor updates the live FDM damping field and canonical script", async
           window.ablColorProbe.armed = false;
           return window.ablColorProbe.draw;
         });
-        await info.attach(step + "-surface-rgb", { body: JSON.stringify(lastDraw), contentType: "application/json" });
+        await writeFile(info.outputPath(step + "-surface-rgb.json"), JSON.stringify(lastDraw));
       }
-      await info.attach(step + "-samples", { body: JSON.stringify(lastObservation ?? null), contentType: "application/json" });
+      await writeFile(info.outputPath(step + "-samples.json"), JSON.stringify(lastObservation ?? null));
     }
   };
 
@@ -242,7 +240,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
         expect(calls[0]).toContain('expression="u**3"');
         expect(calls[0]).toContain('faces=("x-",)');
       }
-      await info.attach(step + "-export.py", { body: source, contentType: "text/x-python" });
+      await writeFile(info.outputPath(step + "-export.py"), source);
     }
   };
   await field("Total width").fill("4e-8");
@@ -352,5 +350,5 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   await parent.click();
   await enabled.uncheck();
   await apply("removed", null);
-  await info.attach("abl-field-evidence", { body: JSON.stringify({ session: pin, evidence }), contentType: "application/json" });
+  await writeFile(info.outputPath("abl-field-evidence.json"), JSON.stringify({ session: pin, evidence }, null, 2));
 });

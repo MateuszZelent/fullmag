@@ -1,7 +1,10 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { expect, test, type Response } from "playwright/test";
 import { decodeTopology } from "../../src/kernel/api/codecs/topologyCodec";
 import { decodeFieldVector } from "../../src/kernel/api/codecs/fieldVectorCodec";
+
+import { scalarColorRgb } from "../../src/shared/visualization/scalarColorPalette";
+import { installFemAlphaProbe, type FemDraw } from "./renderedFemAlpha";
 
 test.use({
   browserName: "chromium",
@@ -52,8 +55,7 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
     for (let i = 0; i < segment.node_count; i++) filmNodes.add(segment.node_start + i);
   }
   expect(filmNodes.size).toBeGreaterThan(0);
-  async function checkMap(amplitude: number) {
-    const response = await get("data/fields/mat_alpha/samples/vector?format=bin&component=magnitude");
+  async function checkMap(amplitude: number, response: Response) {
     const field = decodeFieldVector(Uint8Array.from(await response.body()).buffer);
     expect(field.quantityId).toBe("mat_alpha");
     expect(field.nComp).toBe(1);
@@ -82,9 +84,29 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
     expect(covered.size).toBe(filmNodes.size);
     expect(Math.min(...Object.values(hits))).toBeGreaterThan(0);
     expect(maxError).toBeLessThan(3e-6);
-    return { amplitude, nodes: covered.size, hits, maxError };
+    const fieldMin = field.values.reduce((lo, v) => Math.min(lo, v), Infinity);
+    const fieldMax = field.values.reduce((hi, v) => Math.max(hi, v), -Infinity);
+    return { amplitude, nodes: covered.size, hits, maxError, fieldMin, fieldMax };
   }
 
+  async function verifyDraw(map: Awaited<ReturnType<typeof checkMap>>, after: number) {
+    let matched: FemDraw | undefined;
+    await expect.poll(async () => {
+      const draws = await page.evaluate(() => window.ablFemProbe.draws);
+      matched = draws.find(draw => draw.sequence > after && draw.samples.every(({ x, y, value }) => {
+        const alpha = 0.01 + Math.max(0.3 * weight(100 + x, 25, 20, 1),
+          0.6 * weight(100 - x, 40, 24, 2),
+          y >= 0 ? map.amplitude * weight(35 - Math.hypot(x - 8, y), 15, 12, 3) : 0);
+        const t = (alpha - map.fieldMin) / (map.fieldMax - map.fieldMin);
+        const expected = draw.mode === "scalar" ? [t] : scalarColorRgb(t, "viridis");
+        return value.every((channel, i) => Math.abs(channel - expected[i]) < 0.0003);
+      }));
+      return Boolean(matched);
+    }, { timeout: 30_000 }).toBe(true);
+    return matched!;
+  }
+
+  await page.addInitScript(installFemAlphaProbe);
   await page.goto(origin.origin + "/workspace", { waitUntil: "domcontentloaded", timeout: 120_000 });
   await expect(page.getByRole("tab", { name: fixture.name, exact: true })).toBeVisible({ timeout: 120_000 });
   if (await page.locator('.fm-home-overlay[data-state="home-overlay"]').isVisible()) {
@@ -97,7 +119,7 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
   await expect(quantity).toBeEnabled({ timeout: 90_000 });
   await quantity.click();
   const isAlpha = (r: Response) => new URL(r.url()).pathname.endsWith("/data/fields/mat_alpha/samples/vector") && r.status() === 200;
-  await Promise.all([
+  const [initialResponse] = await Promise.all([
     page.waitForResponse(isAlpha),
     page.getByRole("option", { name: /alpha|α/i }).first().click(),
   ]);
@@ -110,7 +132,8 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
   });
   expect(buffer).toHaveLength(2);
   expect(Math.min(...buffer)).toBeGreaterThan(0);
-  const initial = await checkMap(0.45);
+  const initial = await checkMap(0.45, initialResponse);
+  const initialDraw = await verifyDraw(initial, 0);
   await page.screenshot({ path: info.outputPath("material-alpha.png") });
   await page.locator('[data-node-id="model:object:film:magnetic-parameters:absorbing-boundary"]').click();
   const select = (name: string) => page.locator("select").and(page.getByLabel(name, { exact: true }));
@@ -119,16 +142,16 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
   await expect(select("Target material")).toHaveValue("upper-half");
   await expect(page.getByLabel("Layer name", { exact: true })).toHaveValue("Upper semicircle");
   await page.screenshot({ path: info.outputPath("semicircle-inspector.png") });
-  const before = await canvas.screenshot();
+  const before = await page.evaluate(() => window.ablFemProbe.sequence);
   await page.getByLabel("Maximum damping", { exact: true }).fill("0.12");
-  const [patch] = await Promise.all([
+  const [patch, updatedResponse] = await Promise.all([
     page.waitForResponse(r => r.request().method() === "PATCH" && new URL(r.url()).pathname.endsWith("/model/objects/film")),
     page.waitForResponse(isAlpha),
     page.getByRole("button", { name: "Apply", exact: true }).click(),
   ]);
   expect(patch.status()).toBe(200);
-  const updated = await checkMap(0.12);
-  await expect.poll(async () => (await canvas.screenshot()).equals(before)).toBe(false);
+  const updated = await checkMap(0.12, updatedResponse);
+  const updatedDraw = await verifyDraw(updated, before);
   await page.screenshot({ path: info.outputPath("semicircle-after-edit.png") });
-  await info.attach("nodal-alpha", { body: JSON.stringify({ session, buffer, initial, updated }), contentType: "application/json" });
+  await writeFile(info.outputPath("nodal-alpha.json"), JSON.stringify({ session, buffer, initial, initialDraw, updated, updatedDraw }, null, 2));
 });
