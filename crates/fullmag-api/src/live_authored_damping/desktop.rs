@@ -116,14 +116,17 @@ fn nodal_field(
 /// CLI session and runtime frames may arrive separately. Publish once both
 /// halves of the successful build match the still-committed authored settings.
 pub(crate) fn publish_completed_build(snapshot: &mut SessionStateResponse) -> bool {
-    let Some(revision) = super::publication_revision(snapshot) else {
+    let Some(previous_revision) = super::publication_revision(snapshot) else {
         return false;
     };
-    if snapshot.latest_fields.get("mat_alpha").is_some()
-        || snapshot
-            .scene_document
-            .as_ref()
-            .is_none_or(|scene| scene.revision != revision)
+    let Some(scene) = snapshot.scene_document.as_ref() else {
+        return false;
+    };
+    // The scene can advance without changing its damping. A freshly built
+    // plan is authoritative for its exact scene revision, even when the
+    // previous coefficient publication predates a metadata-only edit.
+    let revision = scene.revision;
+    if previous_revision > revision || snapshot.latest_fields.get("mat_alpha").is_some()
         || snapshot
             .mesh_workspace
             .as_ref()
@@ -133,10 +136,6 @@ pub(crate) fn publish_completed_build(snapshot: &mut SessionStateResponse) -> bo
     {
         return false;
     }
-    let scene = snapshot
-        .scene_document
-        .as_ref()
-        .expect("checked scene revision");
     let Some(plan) = qualified_plan(snapshot, scene) else {
         return false;
     };

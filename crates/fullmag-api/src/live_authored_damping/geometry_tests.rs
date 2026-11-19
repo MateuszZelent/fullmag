@@ -399,6 +399,12 @@ async fn desktop_completed_fem_build_and_regional_edits_publish_only_current_nod
         }))
         .unwrap(),
     );
+    let exit_layer = |amplitude: f64| serde_json::from_value(json!({"layers":[{
+        "layer_id":"exit-plane","name":"Exit plane","enabled":true,"frame":"object","region_id":"exit",
+        "geometry":{"kind":"plane","origin":[10e-9,0,0],"normal":[1,0,0]},
+        "total_width_m":20e-9,"ramp_width_m":5e-9,"max_damping":amplitude,"profile":"linear"
+    }]})).unwrap();
+    scene.objects[0].absorbing_boundary = Some(exit_layer(0.25));
     let mut plan = fullmag_plan::plan(&fullmag_ir::ProblemIR::bootstrap_example()).unwrap();
     let mut fem = fullmag_ir::FemPlanIR::default();
     fem.mesh.mesh_name = "film".into();
@@ -420,6 +426,7 @@ async fn desktop_completed_fem_build_and_regional_edits_publish_only_current_nod
         .unwrap(),
     );
     fem.material.damping = 0.03;
+    fem.material.alpha_field = Some(vec![0.03, 0.28, 0.03, 0.03]);
     let mesh = fullmag_runner::FemMeshPayload::from(&fem);
     plan.common.resolved_backend = fullmag_ir::BackendTarget::Fem;
     plan.common.requested_backend = fullmag_ir::BackendTarget::Fem;
@@ -468,13 +475,29 @@ async fn desktop_completed_fem_build_and_regional_edits_publish_only_current_nod
     apply(&mut snapshot, &request);
     let baseline = snapshot.latest_fields.get("mat_alpha").unwrap();
     assert!(damping::matches_publication(&snapshot, baseline));
-    assert_eq!(baseline["values"], json!(vec![0.03; 4]));
+    let original_values = json!([0.03, 0.28, 0.03, 0.03]);
+    assert_eq!(baseline["values"], original_values);
+
+    // An unrelated scene edit does not republish damping. A later Build Mesh
+    // retires the old samples before installing the plan for the renamed scene.
+    let mut renamed = snapshot.clone();
+    let renamed_scene = renamed.scene_document.as_mut().unwrap();
+    renamed_scene.scene.name = "Renamed film".into();
+    renamed_scene.revision = 6;
+    crate::session::replace_authored_damping(&mut renamed, None);
+    assert_eq!(damping::publication_revision(&renamed), Some(5));
+    let mut rebuilt = request.clone();
+    rebuilt["mesh_workspace"]["last_build_summary"]["command_id"] = "build-renamed".into();
+    rebuilt["mesh_workspace"]["last_build_summary"]["source_scene_revision"] = 6.into();
+    rebuilt["metadata"]["problem_meta"]["runtime_metadata"]["mesh_source_scene_revision"] = 6.into();
+    apply(&mut renamed, &rebuilt);
+    let rebuilt_field = renamed.latest_fields.get("mat_alpha").expect("current build restores damping");
+    assert_eq!(rebuilt_field["authored_damping_revision"], 6);
+    assert_eq!(rebuilt_field["values"], original_values);
+    assert!(damping::matches_publication(&renamed, rebuilt_field));
+
     *state.current_live_state.write().await = Some(snapshot);
-    scene.objects[0].absorbing_boundary = Some(serde_json::from_value(json!({"layers":[{
-        "layer_id":"exit-plane","name":"Exit plane","enabled":true,"frame":"object","region_id":"exit",
-        "geometry":{"kind":"plane","origin":[10e-9,0,0],"normal":[1,0,0]},
-        "total_width_m":20e-9,"ramp_width_m":5e-9,"max_damping":0.5,"profile":"linear"
-    }]})).unwrap());
+    scene.objects[0].absorbing_boundary = Some(exit_layer(0.5));
     let prepared = damping::prepare(&state, None, &scene)
         .await
         .unwrap()
@@ -498,6 +521,10 @@ async fn desktop_completed_fem_build_and_regional_edits_publish_only_current_nod
         snapshot.latest_fields.get("mat_alpha").unwrap()["values"],
         values
     );
+    let mut missing = snapshot.clone();
+    crate::session::replace_authored_damping(&mut missing, None);
+    apply(&mut missing, &request);
+    assert!(missing.latest_fields.get("mat_alpha").is_none());
     apply(snapshot, &request);
     let current = snapshot.latest_fields.get("mat_alpha").unwrap();
     assert_eq!(current["authored_damping_revision"], 6);

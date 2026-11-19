@@ -63,6 +63,7 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
     const covered = new Set<number>();
     const hits = { left: 0, right: 0, upperRing: 0, lowerControl: 0, base: 0 };
     let maxError = 0;
+    let worst: { node: number; x: number; y: number; expected: number; actual: number } | null = null;
     for (let i = 0; i < field.pointCount; i++) {
       const node = field.indexing === "full_domain" ? i : field.nodeIndices![i];
       if (!filmNodes.has(node)) continue;
@@ -75,16 +76,23 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
       const insideUpperHalf = Math.abs(y - 25) <= 25 * (1 + 1e-12);
       const ring = insideUpperHalf ? amplitude * weight(depth, 15, 12, 3) : 0;
       const expected = 0.01 + Math.max(left, right, ring);
-      maxError = Math.max(maxError, Math.abs(field.values[i] - expected));
+      const error = Math.abs(field.values[i] - expected);
+      if (!Number.isFinite(error)) throw new Error(`Nonfinite material comparison at node ${node}`);
+      if (error > maxError) {
+        maxError = error;
+        worst = { node, x, y, expected, actual: field.values[i] };
+      }
       if (left > 0.1) hits.left++;
       if (right > 0.1) hits.right++;
       if (y > 0 && ring > amplitude / 2) hits.upperRing++;
       if (y < -1 && depth > 0 && depth < 10 && expected === 0.01) hits.lowerControl++;
       if (expected === 0.01) hits.base++;
     }
+    await writeFile(info.outputPath(`fem-alpha-${amplitude}.json`),
+      JSON.stringify({ nodes: covered.size, expectedNodes: filmNodes.size, hits, maxError, worst }, null, 2));
     expect(covered.size).toBe(filmNodes.size);
     expect(Math.min(...Object.values(hits))).toBeGreaterThan(0);
-    expect(maxError).toBeLessThan(3e-6);
+    expect(maxError, JSON.stringify(worst)).toBeLessThan(3e-6);
     const fieldMin = field.values.reduce((lo, v) => Math.min(lo, v), Infinity);
     const fieldMax = field.values.reduce((hi, v) => Math.max(hi, v), -Infinity);
     return { amplitude, nodes: covered.size, hits, maxError, fieldMin, fieldMax };
