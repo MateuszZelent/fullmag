@@ -200,6 +200,7 @@ function runtimeResourceData({
   binaryFields = true,
   commands = null,
   commandCount = 0,
+  commandsRevision = commandCount,
   discretization = "fdm",
   eigenModes = false,
   explicitTopology = false,
@@ -234,6 +235,7 @@ function runtimeResourceData({
     status: string;
   }> | null;
   commandCount?: number;
+  commandsRevision?: number;
   discretization?: string;
   eigenModes?: boolean;
   explicitTopology?: boolean;
@@ -318,6 +320,7 @@ function runtimeResourceData({
         generation_id: 1,
       },
       resources: {
+        commands_revision: commandsRevision,
         mesh_revision: meshRevision,
         ...(regionCoefficientsRevision === undefined
           ? {}
@@ -596,7 +599,7 @@ describe("study runtime command contributions", () => {
 
     expect(submit).toHaveBeenCalledTimes(1);
     expect(observe).toHaveBeenCalledOnce();
-    expect(list).toHaveBeenCalledTimes(2);
+    expect(list).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       clientIntentId: submit.mock.calls[0][0].client_intent_id,
       clientIntentKind: kind,
@@ -645,7 +648,7 @@ describe("study runtime command contributions", () => {
     expect(result).toEqual({ status: "failed", message: "Compute is not ready." });
     expect(observe.mock.calls.map(([event]) => event.state)).toEqual(["started", "rejected"]);
     expect(submit).toHaveBeenCalledOnce();
-    expect(list).toHaveBeenCalledOnce();
+    expect(list).not.toHaveBeenCalled();
     expect(detail).not.toHaveBeenCalled();
   });
 
@@ -675,7 +678,7 @@ describe("study runtime command contributions", () => {
     expect(result).toEqual({ status: "failed", message: "API instance changed; reopen Fullmag" });
     expect(observe.mock.calls.map(([event]) => event.state)).toEqual(["started"]);
     expect(submit).toHaveBeenCalledOnce();
-    expect(list).toHaveBeenCalledOnce();
+    expect(list).not.toHaveBeenCalled();
   });
 
   it("waits for the displayed scene before starting the whole Study", () => {
@@ -757,22 +760,22 @@ describe("study runtime command contributions", () => {
     const pendingForms = new PendingFormRegistry();
     const owner = Symbol("texture");
     const submit = vi.fn();
-    const list = vi.fn(async () => {
+    const status = vi.fn(async () => {
       pendingForms.register(owner, {
         apply: async () => false, applying: false, dirty: true, mode: "staged",
         reset: () => undefined, valid: true,
       });
-      return { commands: [] };
+      return runtimeResourceData()[SESSION_STATUS_RESOURCE_KEY];
     });
 
     const result = await registry.execute("study.run", {
-      api: { commands: { list, submit } } as never,
+      api: { commands: { submit }, sessions: { current: { status } } } as never,
       pendingForms,
       resourceData: runtimeResourceData(),
       source: "ribbon",
     });
 
-    expect(list).toHaveBeenCalledTimes(1);
+    expect(status).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ message: expect.stringContaining("Apply or discard"), status: "failed" });
     expect(pendingForms.getTransitionSnapshot().dirtyOwnerCount).toBe(1);
     expect(submit).not.toHaveBeenCalled();
@@ -4033,7 +4036,7 @@ describe("study runtime command contributions", () => {
     expect(registry.isEnabled("study.run", context)).toBe(true);
   });
 
-  it("submits paused-state discard as a stop command with explicit intent", async () => {
+  it("submits paused-state discard with the captured ledger revision", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
@@ -4050,6 +4053,7 @@ describe("study runtime command contributions", () => {
       resourceData: runtimeResourceData({
         activeStageIndex: 1,
         commandCount: 2,
+        commandsRevision: 19,
         runtimeState: "paused",
         stageRevision: 9,
       }),
@@ -4066,7 +4070,7 @@ describe("study runtime command contributions", () => {
       expect.objectContaining({
         kind: "stop",
         precondition: {
-          command_revision: 2,
+          command_revision: 19,
           runtime_state: "paused",
           stage_execution_revision: 9,
         },
@@ -4125,7 +4129,7 @@ describe("study runtime command contributions", () => {
     );
   });
 
-  it("refreshes pause, stop, and skip preconditions from the command ledger count", async () => {
+  it("refreshes pause, stop, and skip preconditions from the canonical ledger revision", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const cases = [
       ["study.pause", "pause"],
@@ -4176,6 +4180,7 @@ describe("study runtime command contributions", () => {
       const result = await registry.execute(commandId, {
         api: {
           commands: { list, submit },
+          sessions: { current: { status: async () => ({ resources: { commands_revision: 83 } }) } },
           simulation: {
             solver: { status },
             stages: { execution },
@@ -4184,6 +4189,7 @@ describe("study runtime command contributions", () => {
         resourceData: runtimeResourceData({
           activeStageIndex: 1,
           commandCount: 3,
+          commandsRevision: 77,
           runtimeState: "running",
           stageRevision: 11,
         }),
@@ -4201,7 +4207,7 @@ describe("study runtime command contributions", () => {
         expect.objectContaining({
           kind,
           precondition: {
-            command_revision: 1,
+            command_revision: 83,
             runtime_state: "running",
             stage_execution_revision: 22,
           },
@@ -4211,7 +4217,7 @@ describe("study runtime command contributions", () => {
     }
   });
 
-  it("refreshes runtime command preconditions from the command ledger count before submit", async () => {
+  it("refreshes runtime command preconditions from the canonical ledger revision before Compute", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const submit = vi.fn(async () => ({
       accepted: true,
@@ -4245,6 +4251,17 @@ describe("study runtime command contributions", () => {
     const result = await registry.execute("study.run", {
       api: {
         commands: { list, submit },
+        sessions: { current: { status: async () => ({
+          resources: {
+            commands_revision: 41,
+            mesh_revision: 0,
+            region_coefficients_revision: 17,
+            region_initial_state_revision: 18,
+            region_membership_revision: 16,
+            region_topology_revision: 15,
+            scene_revision: 3,
+          },
+        }) } },
         simulation: {
           solver: { status },
           stages: { execution },
@@ -4271,7 +4288,7 @@ describe("study runtime command contributions", () => {
       expect.objectContaining({
         kind: "solve",
         precondition: {
-          command_revision: 0,
+          command_revision: 41,
           current_run: { kind: "none" },
           mesh_revision: 0,
           region_coefficients_revision: 17,
@@ -4342,7 +4359,7 @@ describe("study runtime command contributions", () => {
       { precondition?: Record<string, unknown> },
     ];
     expect(request.precondition).toEqual({
-      command_revision: 0,
+      command_revision: 7,
       runtime_state: "awaiting_command",
     });
   });

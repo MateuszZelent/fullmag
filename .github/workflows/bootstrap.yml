@@ -227,8 +227,12 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api rejected_accepted_admission_does_not_reserve_a_run_command
 
       - name: Verify Live Charts table ownership and binary rows
+        env:
+          RUST_MIN_STACK: 8388608
         run: |
-          cargo test --locked -p fullmag-api --bin fullmag-api live_view_continuity_
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::tables::modal_history_tests::live_view_continuity_binary_rows_header_pins_exact_a1_and_b1_attempts -- --exact
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::tables::modal_history_tests::live_view_continuity_rejects_unbound_scalar_table_rows -- --exact
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::middleware::cors::tests::live_view_continuity_browser_clients_can_read_the_table_series_identity_header -- --exact
           cargo test --locked -p fullmag-api --bin fullmag-api table_rows_binary
 
       - name: Run runtime service sampler and control contracts
