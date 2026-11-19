@@ -23,7 +23,7 @@ function fixture(lane: "fem" | "fdm") {
     registry.register(command);
   }
   const state = {
-    revision: 7, meshRevision: 4, runId: "old", meshOwner: "build-a",
+    revision: 7, meshRevision: 4, commandRevision: 43, runId: "old", meshOwner: "build-a",
     loseBuildRead: false, loseSolveAck: false, solveIntent: undefined as string | undefined,
     revealSolve: false,
   };
@@ -42,7 +42,12 @@ function fixture(lane: "fem" | "fdm") {
     },
     run: { run_id: state.runId },
     domain: { discretization: lane, generation_id: "built-domain" },
-    resources: { scene_revision: state.revision, mesh_revision: state.meshRevision, domain_generation_id: "built-domain" },
+    resources: {
+      scene_revision: state.revision,
+      mesh_revision: state.meshRevision,
+      commands_revision: state.commandRevision,
+      domain_generation_id: "built-domain",
+    },
   });
   let postedBuild: Record<string, unknown> | null = null;
   const detail = vi.fn(async () => {
@@ -63,6 +68,7 @@ function fixture(lane: "fem" | "fdm") {
       return { accepted: true, command_id: "solve-a" };
     }
     postedBuild = command;
+    state.commandRevision = 57;
     if (lane === "fem") state.meshRevision = 5;
     else state.runId = "held";
     return { accepted: true, command_id: "build-a" };
@@ -124,7 +130,11 @@ describe("Build + Study command", () => {
     ]);
     expect(submit.mock.calls[1][0]).toMatchObject({
       target: { kind: "study" },
-      precondition: { scene_revision: 7, mesh_revision: lane === "fem" ? 5 : 4 },
+      precondition: {
+        command_revision: 57,
+        scene_revision: 7,
+        mesh_revision: lane === "fem" ? 5 : 4,
+      },
     });
   });
 
