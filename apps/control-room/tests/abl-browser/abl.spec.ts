@@ -136,8 +136,26 @@ test("ABL editor updates the live FDM damping field and canonical script", async
       await Promise.all([
         page.waitForResponse(async (response) => {
           if (!issued.has(response.request()) || response.status() !== 200) return false;
-          lastObservation = await inspectField(response, layer);
-          return lastObservation.maximumError < 2e-7;
+          let sample: Awaited<ReturnType<typeof inspectField>>;
+          try {
+            sample = await inspectField(response, layer);
+          } catch (error) {
+            // Chromium can evict the body of a superseded request. Recover only
+            // the exact representation the page received, identified by its ETag.
+            if (!String(error).includes("No data found for resource with given identifier")) throw error;
+            const etag = response.headers().etag;
+            if (!etag || etag.startsWith("W/")) return false;
+            const replay = await page.request.get(response.url(), { headers });
+            try {
+              if (!replay.ok() || replay.headers().etag !== etag) return false;
+              sample = await inspectField(replay, layer);
+            } finally {
+              await replay.dispose();
+            }
+          }
+          if (!(sample.maximumError < 2e-7)) return false;
+          lastObservation = sample;
+          return true;
         }, { timeout: step === "baseline" ? workspaceStartupTimeout + timeout : timeout }),
         action(),
       ]);
