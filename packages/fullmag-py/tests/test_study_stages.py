@@ -666,6 +666,43 @@ study.stages.add_run(stage_id="pulse", until=200e-9)
             )
             self.assertEqual(reloaded.workspace_problem.magnets[0].material.alpha, 0.045)
 
+    def test_global_table_override_only_applies_until_the_first_local_change(self) -> None:
+        loaded = _load(_PREAMBLE + """
+study.stages.add_run(stage_id="initial", until=1e-12)
+study.tableautosave(1e-12, quantities=["t", "mx"])
+study.stages.add_run(stage_id="local", until=1e-12)
+study.tableautosave(enabled=False)
+study.stages.add_run(stage_id="off", until=1e-12)
+""")
+        overrides = {"table_autosave": fm.TableAutosave(t_sampl=2e-12, quantities=["t", "mx"]).to_ir()}
+        script = rewrite_loaded_problem_script(loaded, overrides=overrides)["rendered_source"]
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        scene["study"]["table_autosave"] = overrides["table_autosave"]
+        for rendered in (script, render_scene_document_as_script(scene)):
+            reloaded = _load(rendered)
+            self.assertEqual(
+                [(s.problem.study.to_ir()["sampling"].get("table_autosave") or {}).get("sample_period_s")
+                 for s in reloaded.stages],
+                [2e-12, 1e-12, None],
+            )
+
+    def test_renamed_object_replays_run_damping_by_immutable_id(self) -> None:
+        loaded = _load(_PREAMBLE + """
+body.alpha = 1.0
+study.stages.add_run(stage_id="prepare", until=1e-12)
+body.alpha = 0.045
+study.stages.add_run(stage_id="pulse", until=1e-12)
+""")
+        geometry, = export_builder_draft(loaded)["geometries"]
+        geometry["name"] = "Renamed film"
+        result = rewrite_loaded_problem_script(loaded, overrides={"geometries": [geometry]})
+        reloaded = _load(result["rendered_source"])
+        self.assertEqual(
+            [(s.problem.magnets[0].object_id, s.problem.magnets[0].name, s.problem.magnets[0].material.alpha)
+             for s in reloaded.stages],
+            [("film", "Renamed film", 1.0), ("film", "Renamed film", 0.045)],
+        )
+
     def test_tableadd_serializes_object_magnetization_expression(self) -> None:
         loaded = _load(
             _PREAMBLE

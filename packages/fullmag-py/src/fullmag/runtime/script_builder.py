@@ -772,6 +772,13 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(excitation_lines)
 
+    magnet_names = {m.object_id or m.name: m.name for m in base_problem.magnets}
+    if isinstance(overrides.get("geometries"), list):
+        magnet_names = {
+            obj.get("object_id") or obj["name"]: obj["name"]
+            for obj in overrides["geometries"]
+            if isinstance(obj, dict) and obj.get("name") and (obj.get("role") or "magnet") == "magnet"
+        }
     stage_lines = _render_stages(
         stages,
         overrides=overrides,
@@ -780,7 +787,7 @@ def render_loaded_problem_as_script(
         initial_outputs=_study_outputs(base_problem.study),
         initial_table=_study_table_autosave(base_problem.study),
         base_damping=_object_damping(base_problem),
-        magnet_names={magnet.object_id or magnet.name: magnet.name for magnet in base_problem.magnets},
+        magnet_names=magnet_names,
         region_vars=region_vars,
         source_root=source_root,
         mask_renderer=mask_renderer,
@@ -9304,7 +9311,7 @@ def _render_stages(
     is_study_surface = surface == "study"
     active_outputs = list(initial_outputs)
     table_override = _table_autosave_from_override(overrides.get("table_autosave"))
-    has_table_action = False
+    inherits_table = True
     lines = ["# Stages" if is_study_surface else "# Run"]
     magnet_vars_by_id = {
         object_id: magnet_vars[name]
@@ -9338,7 +9345,7 @@ def _render_stages(
         if stage.action is not None:
             action_kind = str(stage.action.get("kind") if isinstance(stage.action, dict) else "").strip().lower()
             if action_kind == "table_autosave":
-                has_table_action = True
+                inherits_table = False
             if action_kind == "antenna_field_solve":
                 if not is_study_surface:
                     raise ValueError("antenna_field_solve action requires the study API surface")
@@ -10067,7 +10074,8 @@ def _render_stages(
         # Reproduce non-action sampling changes between Runs without inserting
         # configuration stages into the authored pipeline.
         stage_table = _study_table_autosave(study)
-        if not has_table_action and stage_table == initial_table and table_override is not None:
+        inherits_table = inherits_table and stage_table == initial_table
+        if inherits_table and table_override is not None:
             stage_table = table_override
         if stage_table is not None:
             lines.extend(_render_table_autosave_policy(stage_table, surface=surface))
