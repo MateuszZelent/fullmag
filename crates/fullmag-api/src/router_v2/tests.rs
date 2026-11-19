@@ -13395,6 +13395,7 @@ async fn mesh_build_command_preserves_absorbing_layer_and_region_damping() {
         }))
         .unwrap(),
     );
+    let mesh_input = fullmag_session::canonical_json_sha256(&crate::scene_mesh_signature(&scene));
     {
         let mut current = state.current_live_state.write().await;
         let snapshot = current.as_mut().unwrap();
@@ -13420,6 +13421,7 @@ async fn mesh_build_command_preserves_absorbing_layer_and_region_damping() {
 
     let queue = state.current_control_queue.lock().await;
     let mesh_options = queue.front().unwrap().mesh_options.as_ref().unwrap();
+    assert_eq!(mesh_options["authored_mesh_input_sha256"], mesh_input);
     let patch = &mesh_options["scene_problem_patch"];
     let magnet: fullmag_ir::MagnetIR = serde_json::from_value(patch["magnets"][0].clone()).unwrap();
     assert_eq!(magnet.absorbing_boundary, Some(absorber));

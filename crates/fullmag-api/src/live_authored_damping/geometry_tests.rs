@@ -335,3 +335,128 @@ fn overlapping_csg_boundary_is_rejected_before_mesh_build() {
     scene.objects[0].regions[0].enabled = false;
     super::validate_region_boundaries(&scene).unwrap();
 }
+
+#[tokio::test]
+async fn desktop_completed_fem_build_and_regional_edits_publish_only_current_nodes() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut state = test_app_state_with_live_session().await;
+    let config = Arc::get_mut(&mut state).unwrap();
+    config.repo_root = crate::script::repo_root();
+    config.current_workspace_root = temp.path().to_owned();
+    let script = temp.path().join("film.py");
+    std::fs::write(&script, FILM).unwrap();
+    let mut scene =
+        crate::script::load_scene_document_state(&state.repo_root, temp.path(), &script).unwrap();
+    scene.revision = 5;
+    let owner = scene.objects[0].id.clone();
+    scene.objects[0].regions.push(
+        serde_json::from_value(json!({
+            "region_id":"exit","owner_object":owner,"name":"Exit",
+            "shape":{"kind":"box","center":[10e-9,0,0],"size":[2e-9,8e-9,8e-9]}
+        }))
+        .unwrap(),
+    );
+    let mut plan = fullmag_plan::plan(&fullmag_ir::ProblemIR::bootstrap_example()).unwrap();
+    let mut fem = fullmag_ir::FemPlanIR::default();
+    fem.mesh.mesh_name = "film".into();
+    fem.mesh_name = "film".into();
+    fem.fe_order = 1;
+    fem.mesh.nodes = vec![
+        [0., 0., 0.],
+        [10e-9, 0., 0.],
+        [0., 1e-9, 0.],
+        [0., 0., 1e-9],
+    ];
+    fem.mesh.cells = fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]);
+    fem.mesh.element_markers = vec![1];
+    fem.initial_magnetization = vec![[1., 0., 0.]; 4];
+    fem.object_segments.push(
+        serde_json::from_value(json!({"object_id":owner,"geometry_id":owner,
+        "node_start":0,"node_count":4,"element_start":0,"element_count":1,
+        "boundary_face_start":0,"boundary_face_count":0}))
+        .unwrap(),
+    );
+    fem.material.damping = 0.03;
+    let mesh = fullmag_runner::FemMeshPayload::from(&fem);
+    plan.common.resolved_backend = fullmag_ir::BackendTarget::Fem;
+    plan.common.requested_backend = fullmag_ir::BackendTarget::Fem;
+    plan.backend_plan = fullmag_ir::BackendPlanIR::Fem(fem);
+    let request = json!({"session_id":"desktop-fem","session_status":"waiting_for_compute",
+        "metadata":{"status":"waiting_for_compute", "execution_plan":plan,
+            "problem_meta":{"runtime_metadata":{"mesh_source_scene_revision":5}}},
+        "mesh_workspace":{"last_build_summary":{"command_id":"build","status":"completed",
+            "source_scene_revision":5,"mesh_generation_id":mesh.generation_id,
+            "mesh_options":{"authored_mesh_input_sha256":fullmag_session::canonical_json_sha256(
+                &crate::scene_mesh_signature(&scene))}}},
+        "fem_mesh":mesh});
+    let mut snapshot = crate::session::default_current_live_state(
+        &serde_json::from_value(json!({"session_id":"desktop-fem"})).unwrap(),
+    );
+    snapshot.scene_document = Some(scene.clone());
+    snapshot.metadata = Some(json!({"authored_damping":damping::binding(5,None)}).into());
+    let apply = |snapshot: &mut crate::types::SessionStateResponse, request: &Value| {
+        crate::session::apply_current_live_snapshot(
+            snapshot,
+            serde_json::from_value(request.clone()).unwrap(),
+        )
+        .unwrap();
+    };
+    for pointer in [
+        "/mesh_workspace/last_build_summary/source_scene_revision",
+        "/metadata/problem_meta/runtime_metadata/mesh_source_scene_revision",
+        "/mesh_workspace/last_build_summary/mesh_generation_id",
+        "/mesh_workspace/last_build_summary/mesh_options/authored_mesh_input_sha256",
+        "/fem_mesh/object_segments/0/object_id",
+    ] {
+        let mut mismatch = request.clone();
+        *mismatch.pointer_mut(pointer).unwrap() = json!("stale");
+        let mut rejected = snapshot.clone();
+        apply(&mut rejected, &mismatch);
+        assert!(
+            rejected.latest_fields.get("mat_alpha").is_none(),
+            "{pointer}"
+        );
+    }
+    let mut running = request.clone();
+    running["session_status"] = "running".into();
+    let mut rejected = snapshot.clone();
+    apply(&mut rejected, &running);
+    assert!(rejected.latest_fields.get("mat_alpha").is_none());
+    apply(&mut snapshot, &request);
+    let baseline = snapshot.latest_fields.get("mat_alpha").unwrap();
+    assert!(damping::matches_publication(&snapshot, baseline));
+    assert_eq!(baseline["values"], json!(vec![0.03; 4]));
+    *state.current_live_state.write().await = Some(snapshot);
+    scene.objects[0].absorbing_boundary = Some(serde_json::from_value(json!({"layers":[{
+        "layer_id":"exit-plane","name":"Exit plane","enabled":true,"frame":"object","region_id":"exit",
+        "geometry":{"kind":"plane","origin":[10e-9,0,0],"normal":[1,0,0]},
+        "total_width_m":20e-9,"ramp_width_m":5e-9,"max_damping":0.5,"profile":"linear"
+    }]})).unwrap());
+    let prepared = damping::prepare(&state, None, &scene)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut current = state.current_live_state.write().await;
+    let snapshot = current.as_mut().unwrap();
+    let mut running = snapshot.clone();
+    running.session.status = "running".into();
+    assert!(prepared.validate(&state, &running).is_err());
+    let mut changed_owner = snapshot.clone();
+    changed_owner.fem_mesh.as_mut().unwrap().object_segments[0].object_id = "different".into();
+    assert!(prepared.validate(&state, &changed_owner).is_err());
+    let baseline = changed_owner.latest_fields.get("mat_alpha").unwrap();
+    assert!(!damping::matches_publication(&changed_owner, baseline));
+    prepared.validate(&state, snapshot).unwrap();
+    scene.revision = 6;
+    snapshot.scene_document = Some(scene);
+    prepared.publish(snapshot);
+    let values = json!([0.03, 0.53, 0.03, 0.03]);
+    assert_eq!(
+        snapshot.latest_fields.get("mat_alpha").unwrap()["values"],
+        values
+    );
+    apply(snapshot, &request);
+    let current = snapshot.latest_fields.get("mat_alpha").unwrap();
+    assert_eq!(current["authored_damping_revision"], 6);
+    assert_eq!(current["values"], values);
+}

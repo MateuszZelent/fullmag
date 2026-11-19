@@ -2301,6 +2301,7 @@ fn finalize_current_live_apply(
             .and_then(extract_fem_mesh_from_metadata)
             .map(Into::into);
     }
+    let damping_published = crate::live_authored_damping::desktop::publish_completed_build(current);
     if let Some(node_count) = current.fem_mesh.as_ref().map(|mesh| mesh.nodes.len()) {
         expand_uniform_material_latest_fields(&mut current.latest_fields, node_count);
     }
@@ -2313,7 +2314,7 @@ fn finalize_current_live_apply(
     }
 
     refresh_runtime_status(current);
-    let quantities_inputs_changed = flags.has_metadata
+    let quantities_inputs_changed = damping_published || flags.has_metadata
         || flags.has_latest_fields
         || flags.has_preview_fields
         || flags.clear_preview_cache
