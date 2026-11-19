@@ -2882,8 +2882,18 @@ fn accepted_fdm_execution_precision(
         ("gpu", "single") if single_grid.is_some() && !has_frozen_terminal_context => ExecutionPrecision::Single,
         _ => bail!("accepted FDM execution requires CPU/GPU double or single-grid GPU single; frozen terminal single is unsupported"),
     };
-    if request.backend != "fdm" || request.mode != "strict" {
-        bail!("accepted FDM worker supports only explicit FDM CPU/GPU strict execution");
+    let extended_time_expression = request.mode == "extended"
+        && matches!(request.device.as_str(), "cpu" | "gpu")
+        && precision == ExecutionPrecision::Double
+        && !has_frozen_terminal_context
+        && single_grid.is_some_and(|plan| {
+            plan.slonczewski_time_expression.is_some()
+                && plan.integrator == Some(fullmag_ir::IntegratorChoice::Rk45)
+                && plan.relaxation.is_none()
+                && plan.spin_transport_plans.is_empty()
+        });
+    if request.backend != "fdm" || (request.mode != "strict" && !extended_time_expression) {
+        bail!("accepted FDM execution requires strict mode or the explicit extended FP64 FDM Slonczewski time-expression lane");
     }
     if problem_precision != precision {
         bail!("accepted FDM request precision differs from immutable ProblemIR precision");
@@ -3020,19 +3030,24 @@ fn execute_accepted_worker_start_with_snapshot(
             request.device.to_uppercase()
         );
     }
+    // The precision/lane check above admitted only these two concrete modes.
+    let execution_mode = if request.mode == "extended" {
+        fullmag_ir::ExecutionMode::Extended
+    } else {
+        fullmag_ir::ExecutionMode::Strict
+    };
     if accepted_step.problem.backend_policy.requested_backend != fullmag_ir::BackendTarget::Fdm
-        || accepted_step.problem.validation_profile.execution_mode
-            != fullmag_ir::ExecutionMode::Strict
+        || accepted_step.problem.validation_profile.execution_mode != execution_mode
         || accepted_step.execution_plan.common.requested_backend != fullmag_ir::BackendTarget::Fdm
         || accepted_step.execution_plan.common.resolved_backend != fullmag_ir::BackendTarget::Fdm
-        || accepted_step.execution_plan.common.execution_mode != fullmag_ir::ExecutionMode::Strict
+        || accepted_step.execution_plan.common.execution_mode != execution_mode
         || !matches!(
             &accepted_step.execution_plan.backend_plan,
             fullmag_ir::BackendPlanIR::Fdm(_) | fullmag_ir::BackendPlanIR::FdmMultilayer(_)
         )
     {
         bail!(
-            "accepted worker execution plan is outside the supported FDM CPU/GPU strict lanes"
+            "accepted worker execution plan differs from the admitted FDM mode or backend"
         );
     }
     if let fullmag_ir::BackendPlanIR::FdmMultilayer(plan) =
@@ -5151,6 +5166,33 @@ mod accepted_fdm_precision_tests {
             false
         )
         .is_err());
+    }
+
+    #[test]
+    fn admits_extended_only_for_the_fp64_rk45_current_expression_lanes() {
+        let mut single = plan(Precision::Double);
+        single.integrator = Some(fullmag_ir::IntegratorChoice::Rk45);
+        single.slonczewski_time_expression = Some(fullmag_ir::TimeExpressionIR {
+            source: "sin(t)".into(), constants: Default::default(), event_times_s: Vec::new(),
+        });
+
+        for device in ["cpu", "gpu"] {
+            let mut request = request(device, "double");
+            request.mode = "extended".into();
+            assert_eq!(
+                accepted_fdm_execution_precision(&request, Precision::Double, Some(&single), false).unwrap(),
+                Precision::Double,
+                "device={device}",
+            );
+        }
+
+        let mut strict_gpu = request("gpu", "double");
+        strict_gpu.mode = "strict".into();
+        assert!(accepted_fdm_execution_precision(&strict_gpu, Precision::Double, Some(&single), false).is_err());
+        single.integrator = Some(fullmag_ir::IntegratorChoice::Heun);
+        let mut extended_cpu = request("cpu", "double");
+        extended_cpu.mode = "extended".into();
+        assert!(accepted_fdm_execution_precision(&extended_cpu, Precision::Double, Some(&single), false).is_err());
     }
 
     #[test]
