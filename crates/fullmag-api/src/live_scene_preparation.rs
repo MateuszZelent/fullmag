@@ -3915,9 +3915,10 @@ pub(crate) async fn materialize_live_scene_preparation_model_with_fem_evidence(
             // uses the same authored SceneDocument capture and declared
             // execution binder, then enters this adapter with native evidence
             // supplied by the already-admitted FEM lane.
-            let authored = crate::script::scene_document_to_authored_problem_ir(
+            let authored = crate::script::scene_document_to_preparation_problem_ir_with_asset_root(
                 &input.repo_root,
                 &input.workspace_root,
+                None,
                 &input.scene_document,
                 &input.requested_execution,
             )?;
@@ -4997,7 +4998,13 @@ mod tests {
         problem.backend_policy.requested_backend = BackendTarget::Fem;
         problem.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
             fdm: None, hybrid: None,
-            fem: Some(FemHintsIR { order: 1, hmax: 2e-9, mesh: None, demag_solver_policy: None }),
+            fem: Some(FemHintsIR {
+                    gpu_bb_preconditioner: None,
+                    order: 1,
+                    hmax: 2e-9,
+                    mesh: None,
+                    demag_solver_policy: None,
+                }),
         });
         problem.air_box_policy = Some(AirBoxPolicyIR { boundary_marker: Some(99), ..Default::default() });
         problem.energy_terms = vec![EnergyTermIR::Exchange];

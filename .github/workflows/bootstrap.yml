@@ -498,6 +498,16 @@ jobs:
           cargo test --locked -p fullmag-authoring --lib compute_resources
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::typed_compute_resources_cross_python_scene_rust_builder_and_problem_ir -- --exact
 
+      - name: Run FEM GPU BB typed policy and provenance contracts
+        run: |
+          cargo test --locked -p fullmag-ir --lib gpu_bb
+          cargo test --locked -p fullmag-ir --test gpu_bb_pipeline
+          cargo test --locked -p fullmag-authoring --test gpu_bb_scene_bridge
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::typed_gpu_bb_policy_cross_python_scene_rust_builder_and_problem_ir -- --exact
+          cargo test --locked -p fullmag-api --bin fullmag-api script::tests::gpu_bb_preparation_borrows_only_study_and_preserves_physical_payload -- --exact
+          cargo test --locked -p fullmag-plan --lib gpu_bb_policy
+          cargo test --locked -p fullmag-runner --lib relaxation::provenance::tests
+
       - name: Run full field identity binary transport contracts
         run: |
           cargo test -p fullmag-api --bin fullmag-api field_vector_v5
