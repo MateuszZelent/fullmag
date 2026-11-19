@@ -161,7 +161,7 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
   // The existing three-layer FEM absorber should open without rewriting its settings.
   await page.locator('[data-node-id="model:object:film"]').click();
   await page.getByRole("tab", { name: "Physics", exact: true }).click();
-  await page.getByRole("button", { name: "Add Absorbing Boundary", exact: true }).click();
+  await page.getByRole("button", { name: "Add ABL", exact: true }).click();
   await expect(page.locator('[data-node-id="model:object:film:magnetic-parameters:absorbing-boundary"]'))
     .toHaveAttribute("aria-selected", "true");
   const reopened = await (await get("model/scene")).json();

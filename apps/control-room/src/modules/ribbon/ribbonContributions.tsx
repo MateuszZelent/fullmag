@@ -488,7 +488,7 @@ const physicsTab: RibbonTabContent = {
         {
           id: addAbsorbingBoundaryCommand.id,
           icon: icon(Waves),
-          label: addAbsorbingBoundaryCommand.title,
+          label: "Add ABL",
           iconColor: "text-teal-400",
           commandId: addAbsorbingBoundaryCommand.id,
           tooltip: "Add or open the selected magnetic object's absorbing boundary",

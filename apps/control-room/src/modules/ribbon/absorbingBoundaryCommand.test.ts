@@ -61,7 +61,7 @@ describe("Physics ribbon absorbing boundary", () => {
       visualization,
       visualizationSnapshot: visualization.getSnapshot(),
     })?.groups.flatMap(group => group.actions).find(action => action.commandId === id);
-    expect(action).toMatchObject({ label: "Add Absorbing Boundary", disabled: false });
+    expect(action).toMatchObject({ label: "Add ABL", disabled: false });
     expect(test.enabled()).toBe(true);
     expect(await test.execute()).toMatchObject({ status: "completed" });
     expect(test.patchObject).toHaveBeenCalledWith("body", {

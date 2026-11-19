@@ -417,7 +417,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   const object = page.locator(`[data-node-id="model:object:${fixture.object_id}"]`);
   await expect(object).toHaveAttribute("aria-selected", "true");
   await page.getByRole("tab", { name: "Physics", exact: true }).click();
-  const addBoundary = page.getByRole("button", { name: "Add Absorbing Boundary", exact: true });
+  const addBoundary = page.getByRole("button", { name: "Add ABL", exact: true });
   await expect(addBoundary).toBeEnabled();
   await page.screenshot({ path: info.outputPath("ribbon-selected-film.png") });
   const [created] = await Promise.all([
