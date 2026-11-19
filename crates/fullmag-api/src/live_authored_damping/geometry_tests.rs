@@ -174,6 +174,33 @@ async fn absorbing_boundary_build_mesh_and_patch_publish_fem_nodes_without_solve
     }
 
     let edited_scene = edited.scene_document.as_ref().unwrap();
+    let mut spatial_scene = edited_scene.clone();
+    spatial_scene.objects[0].absorbing_boundary = Some(serde_json::from_value(json!({"layers": [
+        {"layer_id":"exit","name":"Exit","enabled":true,"frame":"object","profile":"linear",
+         "geometry":{"kind":"plane","origin":[15e-9,0,0],"normal":[1,0,0]},
+         "max_damping":0.3,"total_width_m":12e-9,"ramp_width_m":8e-9},
+        {"layer_id":"ring","name":"Ring","enabled":true,"frame":"object","profile":"quadratic",
+         "geometry":{"kind":"cylinder","center":[2e-9,0,0],"axis":[0,0,1],
+                     "radius_m":10e-9,"direction":"outward"},
+         "max_damping":0.6,"total_width_m":6e-9,"ramp_width_m":4e-9}
+    ]})).unwrap());
+    let projected = super::geometry::evaluate(
+        &state.repo_root, temp.path(), Some(store.root()), &context, &edited, &spatial_scene, 7,
+    ).unwrap();
+    let super::geometry::Evaluation::Ready(field) = projected else {
+        panic!("spatial damping unavailable on retained FEM mesh");
+    };
+    assert_eq!(field["mesh_topology_sha256"], baseline["mesh_topology_sha256"]);
+    for i in segment.node_start as usize..(segment.node_start + segment.node_count) as usize {
+        let [x, y, _] = mesh.nodes[i];
+        let ramp = |d: f64, w: f64, l: f64| {
+            if (0.0..=w).contains(&d) { ((w - d) / l).min(1.0) } else { 0.0 }
+        };
+        let exit = 0.3 * ramp(15e-9 - x, 12e-9, 8e-9);
+        let ring = 0.6 * ramp(10e-9 - (x - 2e-9).hypot(y), 6e-9, 4e-9).powi(2);
+        assert!((field["values"][i].as_f64().unwrap() - (0.03 + exit.max(ring))).abs() < 1e-12);
+    }
+
     let mut wrong_owner = edited.clone();
     let segments = &mut wrong_owner.fem_mesh.as_mut().unwrap().object_segments;
     let magnetic = segments.iter_mut().find(|s| s.object_id == object_id).unwrap();
@@ -284,4 +311,27 @@ async fn absorbing_boundary_build_mesh_and_patch_publish_fem_nodes_without_solve
         .unwrap()
         .get("execution_plan")
         .is_none());
+}
+
+#[test]
+fn overlapping_csg_boundary_is_rejected_before_mesh_build() {
+    let sphere = json!({"kind":"sphere","name":"ball","radius":10e-9});
+    let translated = json!({"kind":"translate","name":"shift","base":sphere,"by":[5e-9,0,0]});
+    let mut scene = fullmag_authoring::SceneDocument::default();
+    scene.objects.push(serde_json::from_value(json!({
+        "id":"magnet","name":"Film","material_ref":"material",
+        "geometry":{"geometry_kind":"box","geometry_params":{"size":[40e-9,40e-9,40e-9]}},
+        "regions":[{"region_id":"rim","owner_object":"magnet","name":"Rim",
+                   "shape":{"kind":"csg","expression":{"kind":"union","name":"lobes","a":sphere,"b":translated}}}],
+        "absorbing_boundary":{"layers":[{
+            "layer_id":"contour","name":"Contour","enabled":true,"frame":"object","profile":"linear",
+            "geometry":{"kind":"region_boundary","region_id":"rim"},
+            "total_width_m":4e-9,"ramp_width_m":2e-9,"max_damping":0.5
+        }]}
+    })).unwrap());
+    let error = super::validate_region_boundaries(&scene).unwrap_err();
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert!(error.message.contains("contour") && error.message.contains("rim"));
+    scene.objects[0].regions[0].enabled = false;
+    super::validate_region_boundaries(&scene).unwrap();
 }

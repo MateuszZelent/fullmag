@@ -57,7 +57,7 @@ pub(crate) fn publication_revision(snapshot: &SessionStateResponse) -> Option<u6
         .as_u64()
 }
 
-fn absorbers(scene: &SceneDocument) -> BTreeMap<&str, &fullmag_ir::AbsorbingBoundaryLayerIR> {
+fn absorbers(scene: &SceneDocument) -> BTreeMap<&str, &fullmag_ir::AbsorbingBoundaryIR> {
     scene
         .objects
         .iter()
@@ -68,6 +68,33 @@ fn absorbers(scene: &SceneDocument) -> BTreeMap<&str, &fullmag_ir::AbsorbingBoun
                 .map(|layer| (object.id.as_str(), layer))
         })
         .collect()
+}
+
+/// Geometry support can be checked before a mesh or a field exists.
+fn validate_region_boundaries(scene: &SceneDocument) -> Result<(), ApiError> {
+    for object in &scene.objects {
+        let Some(fullmag_ir::AbsorbingBoundaryIR::Layers(config)) = &object.absorbing_boundary else {
+            continue;
+        };
+        for layer in config.layers.iter().filter(|layer| layer.enabled) {
+            let fullmag_ir::SpatialAbsorbingGeometryIR::RegionBoundary { region_id } = &layer.geometry else {
+                continue;
+            };
+            let region = object.regions.iter().find(|region| &region.region_id == region_id)
+                .ok_or_else(|| ApiError::bad_request(format!("missing boundary region '{region_id}' on '{}'", object.id)))?;
+            if !region.enabled || layer.region_id.as_ref().is_some_and(|id|
+                object.regions.iter().any(|mask| &mask.region_id == id && !mask.enabled)
+            ) {
+                continue;
+            }
+            fullmag_plan::validate_absorbing_region_boundary(&region.shape.clone().into())
+                .map_err(|error| ApiError::bad_request(format!(
+                    "object '{}', absorbing layer '{}', boundary region '{region_id}': {error}",
+                    object.id, layer.layer_id
+                )))?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) struct PreparedDamping {
@@ -122,6 +149,7 @@ pub(crate) async fn prepare(
     context: Option<&CurrentLiveRequestContext>,
     scene: &SceneDocument,
 ) -> Result<Option<PreparedDamping>, ApiError> {
+    validate_region_boundaries(scene)?;
     let snapshot = {
         let current = state.current_live_state.read().await;
         let Some(snapshot) = current.as_ref() else {

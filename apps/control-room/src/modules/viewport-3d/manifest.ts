@@ -310,6 +310,23 @@ export const viewport3dManifest: ModuleManifest = {
           return { status: "completed" };
         },
       },
+      {
+        id: "viewport-3d.export-model",
+        title: "Export 3D model",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isEnabled: ({ layout }) => {
+          const view = layout?.get();
+          return !view || view.activeViewportMainModuleId === "viewport-3d" ||
+            view.viewportCompanion?.moduleId === "viewport-3d";
+        },
+        disabledReason: () => "Open the 3D viewport to export a model.",
+        run: () => {
+          viewport3dStore.openExport3DDialog();
+          return { status: "completed" };
+        },
+      },
       ...VIEW_DIRECTION_COMMANDS.map((command) => ({
         id: command.id,
         title: command.title,

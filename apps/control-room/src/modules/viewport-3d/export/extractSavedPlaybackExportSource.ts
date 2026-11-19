@@ -52,7 +52,8 @@ export interface SavedPlaybackExportSource {
 
 export interface SavedFolderPlaybackExportInput {
   readonly colorPalette?: string | null;
-  readonly component?: 0 | 1 | 2 | number | null;
+  readonly component?: number | null;
+  readonly colorLimit?: number;
   readonly femSupport?: DecodedSavedSupport | null;
   readonly femTopology?: DecodedTopology | null;
   readonly frameData?: Float64Array | null;
@@ -66,7 +67,8 @@ export interface SavedFolderPlaybackExportInput {
 
 export interface StudyResultPlaybackExportInput {
   readonly colorPalette?: string | null;
-  readonly component?: 0 | 1 | 2 | number | null;
+  readonly component?: number | null;
+  readonly colorLimit?: number;
   readonly descriptor: StudyResultStateResource;
   readonly quantityId?: string | null;
   readonly result: StudyStageResult;
@@ -87,6 +89,11 @@ export interface LoadSavedPlaybackFramesInput {
   readonly quantityId?: string | null;
   readonly signal?: AbortSignal;
   readonly stageId?: string | null;
+}
+
+function savedColorMode(component: number | null | undefined): Export3DColorMode {
+  const modes = ["x", "y", "z"] as const;
+  return component === 0 || component === 1 || component === 2 ? modes[component] : "orientation";
 }
 
 function buildFemActiveNodesAndSurface(
@@ -179,8 +186,10 @@ export function extractSavedFolderPlaybackExportSource(
     input.quantityId?.trim() || stage?.quantity_ids?.[0] || "m";
   const defaultPalette = resolvePaletteFromSettings(
     input.colorPalette,
-    "viridis",
+    "coolwarm",
   );
+  const colorMode = savedColorMode(input.component);
+  const colorRange = input.colorLimit === undefined ? undefined : { min: -input.colorLimit, max: input.colorLimit };
   const targets: Export3DTargetInput[] = [];
   let femActiveNodeIndices: Uint32Array | null = null;
 
@@ -217,7 +226,8 @@ export function extractSavedFolderPlaybackExportSource(
         allowedNodes: activeNodes,
         field: rawField,
         appearance: {
-          colorMode: rawField ? "orientation" : "monochrome",
+          colorMode: rawField ? colorMode : "monochrome",
+          colorRange,
           colorPalette: defaultPalette,
           includeSurface: true,
           includeWireframe: false,
@@ -263,7 +273,8 @@ export function extractSavedFolderPlaybackExportSource(
         originM,
         field,
         appearance: {
-          colorMode: field ? "orientation" : "monochrome",
+          colorMode: field ? colorMode : "monochrome",
+          colorRange,
           colorPalette: defaultPalette,
           includeSurface: true,
           includeWireframe: false,
@@ -287,7 +298,7 @@ export function extractSavedFolderPlaybackExportSource(
     currentFrameIndex: input.frameIndex,
     defaultAnimationMode: "static",
     defaultColorMode: targets.some((t) => Boolean(t.field))
-      ? "orientation"
+      ? colorMode
       : "monochrome",
     defaultPalette,
     femActiveNodeIndices,
@@ -325,8 +336,10 @@ export function extractStudyResultPlaybackExportSource(
   const quantityId = input.quantityId?.trim() || "m";
   const defaultPalette = resolvePaletteFromSettings(
     input.colorPalette,
-    "viridis",
+    "coolwarm",
   );
+  const colorMode = savedColorMode(input.component);
+  const colorRange = input.colorLimit === undefined ? undefined : { min: -input.colorLimit, max: input.colorLimit };
   const targets: Export3DTargetInput[] = [];
   const geom = descriptor.geometry;
   let femActiveNodeIndices: Uint32Array | null = null;
@@ -359,7 +372,8 @@ export function extractStudyResultPlaybackExportSource(
         allowedNodes: activeNodes,
         field: rawField,
         appearance: {
-          colorMode: rawField ? "orientation" : "monochrome",
+          colorMode: rawField ? colorMode : "monochrome",
+          colorRange,
           colorPalette: defaultPalette,
           includeSurface: true,
           includeWireframe: false,
@@ -422,7 +436,8 @@ export function extractStudyResultPlaybackExportSource(
         ...(activeMask ? { activeMask } : {}),
         field,
         appearance: {
-          colorMode: field ? "orientation" : "monochrome",
+          colorMode: field ? colorMode : "monochrome",
+          colorRange,
           colorPalette: defaultPalette,
           includeSurface: true,
           includeWireframe: false,
@@ -466,7 +481,8 @@ export function extractStudyResultPlaybackExportSource(
         ...(activeMask ? { activeMask } : {}),
         field,
         appearance: {
-          colorMode: field ? "orientation" : "monochrome",
+          colorMode: field ? colorMode : "monochrome",
+          colorRange,
           colorPalette: defaultPalette,
           includeSurface: true,
           includeWireframe: false,
@@ -487,7 +503,7 @@ export function extractStudyResultPlaybackExportSource(
     currentFrameIndex: 0,
     defaultAnimationMode: "static",
     defaultColorMode: targets.some((t) => Boolean(t.field))
-      ? "orientation"
+      ? colorMode
       : "monochrome",
     defaultPalette,
     femActiveNodeIndices,

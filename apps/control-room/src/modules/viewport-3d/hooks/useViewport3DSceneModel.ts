@@ -6388,6 +6388,20 @@ export function useViewport3DSceneModel({
     () => getViewport3DVisualProfile(resolveViewport3DQualityProfileId(commandState.visualProfileId, commandState.captureReturnProfileId)).voxelFillRatio,
     [commandState.visualProfileId, commandState.captureReturnProfileId],
   );
+  const fdmNativeLayerActiveMasks = useMemo(() => {
+    const layout = fdmMultilayerLayout.data;
+    return new Map(
+      fdmNativeLayerDomains.map((domain) => [
+        domain.layerId,
+        layout ? resolveFdmNativeLayerActiveMaskForRendering(
+          domain,
+          layout.layout_revision,
+          layout.layers.find((layer) => layer.layer_id === domain.layerId),
+          fdmMultilayerLayerActiveMasks.data?.masks.get(domain.layerId),
+        ) : null,
+      ]),
+    );
+  }, [fdmMultilayerLayerActiveMasks.data, fdmMultilayerLayout.data, fdmNativeLayerDomains]);
   const fdmMultilayerAirboxRegionIds = useMemo(() => {
     const layout = fdmMultilayerLayout.data;
     if (!airboxCellGeometryRequested || !fdmMultilayerAirboxDomain || !layout?.available) {
@@ -6398,18 +6412,13 @@ export function useViewport3DSceneModel({
       fdmMultilayerAirboxDomain,
       fdmNativeLayerDomains.map((domain) => ({
         domain,
-        activeMask: resolveFdmNativeLayerActiveMaskForRendering(
-          domain,
-          layout.layout_revision,
-          layout.layers.find((layer) => layer.layer_id === domain.layerId),
-          fdmMultilayerLayerActiveMasks.data?.masks.get(domain.layerId) ?? null,
-        ),
+        activeMask: fdmNativeLayerActiveMasks.get(domain.layerId),
       })),
     );
   }, [
     airboxCellGeometryRequested,
     fdmMultilayerAirboxDomain,
-    fdmMultilayerLayerActiveMasks.data,
+    fdmNativeLayerActiveMasks,
     fdmMultilayerLayout.data,
     fdmNativeLayerDomains,
   ]);
@@ -6425,15 +6434,7 @@ export function useViewport3DSceneModel({
         const layerLayout = fdmMultilayerLayout.data?.layers.find(
           (layer) => layer.layer_id === domain.layerId,
         );
-        const decodedActiveMask = domain.activeMaskPresent
-          ? fdmMultilayerLayerActiveMasks.data?.masks.get(domain.layerId) ?? null
-          : null;
-        const activeMask = resolveFdmNativeLayerActiveMaskForRendering(
-          domain,
-          fdmMultilayerLayout.data!.layout_revision,
-          layerLayout,
-          decodedActiveMask,
-        );
+        const activeMask = fdmNativeLayerActiveMasks.get(domain.layerId) ?? null;
         const activeMaskRequired = domain.activeMaskPresent;
         const maskRevision = domain.activeMaskPresent
           ? layerLayout?.active_mask_hash ?? "missing"
@@ -6652,7 +6653,7 @@ export function useViewport3DSceneModel({
     fdmMultilayerAirboxField.data,
     fdmMultilayerAirboxField.payloadRevision,
     fdmMultilayerLayout.data,
-    fdmMultilayerLayerActiveMasks.data,
+    fdmNativeLayerActiveMasks,
     fdmNativeLayerDomains,
     fdmNativeLayerSettingsById,
     fdmSettings,
@@ -6769,6 +6770,7 @@ export function useViewport3DSceneModel({
         const vectorSegments = vectorBuffers.vectorSegments;
 
         return {
+          activeMask: fdmNativeLayerActiveMasks.get(domain.layerId) ?? null,
           domain,
           fieldVector,
           model,
@@ -6782,6 +6784,7 @@ export function useViewport3DSceneModel({
     },
     [
       fdmMultilayerLayout.data,
+      fdmNativeLayerActiveMasks,
       fdmNativeLayerDomains,
       fdmNativeLayerSettingsById,
       fdmSettings,
@@ -7822,6 +7825,16 @@ export function useViewport3DSceneModel({
         : fdmMultilayerAirboxBuildState?.status ?? "idle",
     fdmNativeLayerViews: savedSelectionActive ? [] : fdmNativeLayerViews,
     fdmTargetViews: savedSelectionActive ? [] : fdmTargetViews,
+    fdmExportMembership:
+      !savedSelectionActive && fdmRealizedRegionIds && fdmTargetDefinitionsResult.status === "ready"
+        ? { regionIds: fdmRealizedRegionIds, definitions: fdmTargetDefinitionsResult.definitions }
+        : null,
+    fdmExportAirboxDomain:
+      !savedSelectionActive &&
+      fdmNativeLayerDomains.length === fdmMultilayerLayout.data?.layers.length
+        ? fdmMultilayerAirboxDomain
+        : null,
+    fdmExportAirboxRegionIds: savedSelectionActive ? null : fdmMultilayerAirboxRegionIds,
     fdmSurfaceColors: savedSelectionActive ? null : fdmSurfaceColors,
     fdmVectorColors: savedSelectionActive ? null : fdmVectorColors,
     fdmVectorGlyphColors: savedSelectionActive ? null : fdmVectorGlyphColors,

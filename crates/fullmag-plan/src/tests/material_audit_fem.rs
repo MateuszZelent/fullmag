@@ -179,7 +179,7 @@ fn conformal_absorber_problem(
 ) -> ProblemIR {
     let mut ir = fem_minimal_test_ir();
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
-    ir.magnets[0].absorbing_boundary = Some(absorber_layer(frame));
+    ir.magnets[0].absorbing_boundary = Some(absorber_layer(frame).into());
     set_stable_fem_test_timestep(&mut ir);
     ir.problem_meta.runtime_metadata.remove("study_universe");
 
@@ -221,7 +221,7 @@ fn distinct_owner_absorber_problem(
 ) -> ProblemIR {
     let mut ir = fem_minimal_test_ir();
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
-    ir.magnets[0].absorbing_boundary = Some(absorber_layer(frame));
+    ir.magnets[0].absorbing_boundary = Some(absorber_layer(frame).into());
     set_stable_fem_test_timestep(&mut ir);
     ir.problem_meta.runtime_metadata.remove("study_universe");
     ir.geometry.entries.push(fullmag_ir::GeometryEntryIR::Box {
@@ -241,7 +241,7 @@ fn distinct_owner_absorber_problem(
         initial_magnetization: Some(fullmag_ir::InitialMagnetizationIR::Uniform {
             value: [0.0, 1.0, 0.0],
         }),
-        absorbing_boundary: Some(absorber_layer(frame)),
+        absorbing_boundary: Some(absorber_layer(frame).into()),
     });
     let domain_asset = ir
         .geometry_assets
@@ -260,6 +260,30 @@ fn distinct_owner_absorber_problem(
         },
     ];
     ir
+}
+
+#[test]
+fn spatial_absorber_analytic_map_matches_fdm_centers_and_fem_nodes() {
+    let config = serde_json::json!({"layers":[{
+        "layer_id":"positive-x","name":"Positive x","enabled":true,"frame":"universe",
+        "profile":"linear","total_width_m":2e-9,"ramp_width_m":2e-9,"max_damping":0.25,
+        "geometry":{"kind":"plane","origin":[2e-9,0.,0.],"normal":[1.,0.,0.]}
+    }]});
+    let expected = |x: f64| if (0.0..=2e-9).contains(&x) { 0.25*x/2e-9 } else { 0. };
+    let mut fem = conformal_absorber_problem(false, false, fullmag_ir::AbsorbingBoundaryFrameIR::Universe);
+    fem.magnets[0].absorbing_boundary = Some(serde_json::from_value(config.clone()).unwrap());
+    let (base, samples) = planned_fem_alpha_by_point(&fem);
+    for (point, alpha) in samples {
+        assert!((f64::from_bits(alpha) - base - expected(f64::from_bits(point[0]))).abs() < 1e-12);
+    }
+    let mut fdm = ProblemIR::bootstrap_example();
+    fdm.magnets[0].absorbing_boundary = Some(serde_json::from_value(config).unwrap());
+    let base = fdm.materials[0].damping;
+    let BackendPlanIR::Fdm(grid) = plan(&fdm).unwrap().backend_plan else { panic!("expected FDM") };
+    let points = crate::fdm::resolved_fdm_cell_centers(grid.grid.cells, grid.cell_size, grid.origin_m);
+    for (point, alpha) in points.iter().zip(grid.material.alpha_field.as_ref().unwrap()) {
+        assert!((*alpha - base - expected(point[0])).abs() < 1e-12);
+    }
 }
 
 fn planned_fem_alpha_by_point(

@@ -14,6 +14,111 @@
       }
     },
     "schemas": {
+      "AbsorbingBoundaryDirectionIR": {
+        "enum": [
+          "outward",
+          "inward"
+        ],
+        "type": "string"
+      },
+      "AbsorbingBoundaryFaceIR": {
+        "enum": [
+          "x+",
+          "x-",
+          "y+",
+          "y-",
+          "z+",
+          "z-"
+        ],
+        "type": "string"
+      },
+      "AbsorbingBoundaryFrameIR": {
+        "enum": [
+          "object",
+          "universe"
+        ],
+        "type": "string"
+      },
+      "AbsorbingBoundaryIR": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AbsorbingBoundaryLayerIR"
+          },
+          {
+            "$ref": "#/components/schemas/AbsorbingBoundaryLayersIR"
+          }
+        ]
+      },
+      "AbsorbingBoundaryLayerIR": {
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/AbsorbingBoundaryFaceIR"
+            },
+            "type": "array"
+          },
+          "frame": {
+            "$ref": "#/components/schemas/AbsorbingBoundaryFrameIR"
+          },
+          "max_damping": {
+            "format": "double",
+            "type": "number"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/AbsorbingBoundaryProfileIR"
+          },
+          "ramp_width_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "total_width_m": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "total_width_m",
+          "ramp_width_m",
+          "max_damping",
+          "faces",
+          "profile",
+          "frame"
+        ],
+        "type": "object"
+      },
+      "AbsorbingBoundaryLayersIR": {
+        "additionalProperties": false,
+        "properties": {
+          "layers": {
+            "items": {
+              "$ref": "#/components/schemas/SpatialAbsorbingLayerIR"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "layers"
+        ],
+        "type": "object"
+      },
+      "AbsorbingBoundaryProfileIR": {
+        "enum": [
+          "linear",
+          "quadratic",
+          "smootherstep",
+          "logarithmic",
+          "tanh",
+          "custom"
+        ],
+        "type": "string"
+      },
       "AcceptedAntennaInspectionCatalogResource": {
         "properties": {
           "entries": {
@@ -27796,9 +27901,13 @@
       "ObjectPatchRequest": {
         "properties": {
           "absorbing_boundary": {
-            "type": [
-              "object",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AbsorbingBoundaryIR"
+              }
             ]
           },
           "base_revision": {
@@ -38322,9 +38431,13 @@
       "SceneObjectResource": {
         "properties": {
           "absorbing_boundary": {
-            "type": [
-              "object",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AbsorbingBoundaryIR"
+              }
             ]
           },
           "allocated_region_ids": {
@@ -44822,6 +44935,226 @@
           "kind",
           "duration_ns",
           "clock_domain"
+        ],
+        "type": "object"
+      },
+      "SpatialAbsorbingGeometryIR": {
+        "oneOf": [
+          {
+            "properties": {
+              "faces": {
+                "items": {
+                  "$ref": "#/components/schemas/AbsorbingBoundaryFaceIR"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "faces"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "faces",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "plane"
+                ],
+                "type": "string"
+              },
+              "normal": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "origin": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "origin",
+              "normal",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "direction": {
+                "$ref": "#/components/schemas/AbsorbingBoundaryDirectionIR"
+              },
+              "kind": {
+                "enum": [
+                  "cylinder"
+                ],
+                "type": "string"
+              },
+              "radius_m": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "center",
+              "axis",
+              "radius_m",
+              "direction",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "direction": {
+                "$ref": "#/components/schemas/AbsorbingBoundaryDirectionIR"
+              },
+              "kind": {
+                "enum": [
+                  "sphere"
+                ],
+                "type": "string"
+              },
+              "radius_m": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "center",
+              "radius_m",
+              "direction",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "region_boundary"
+                ],
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "region_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expression": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "expression"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "expression",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SpatialAbsorbingLayerIR": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "expression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "frame": {
+            "$ref": "#/components/schemas/AbsorbingBoundaryFrameIR"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/SpatialAbsorbingGeometryIR"
+          },
+          "layer_id": {
+            "type": "string"
+          },
+          "max_damping": {
+            "format": "double",
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/AbsorbingBoundaryProfileIR"
+          },
+          "ramp_width_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "region_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_width_m": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "layer_id",
+          "name",
+          "enabled",
+          "frame",
+          "total_width_m",
+          "ramp_width_m",
+          "max_damping",
+          "profile",
+          "geometry"
         ],
         "type": "object"
       },

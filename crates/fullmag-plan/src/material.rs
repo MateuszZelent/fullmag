@@ -1,8 +1,6 @@
 use fullmag_ir::{
-    AbsorbingBoundaryFaceIR, AbsorbingBoundaryFrameIR, AbsorbingBoundaryLayerIR,
     GeometryEntryIR, MaterialFieldLocationIR, MaterialFieldPlan, MaterialFieldSourceKind,
     MaterialParameterFieldIR, MaterialParameterNameIR, ProblemIR, RegionFrameIR, RegionShapeIR,
-    ResolvedAbsorbingBoundaryProfile,
 };
 use std::collections::BTreeSet;
 
@@ -18,11 +16,11 @@ fn geometry_translation(entry: &GeometryEntryIR) -> [f64; 3] {
     }
 }
 
-pub(crate) fn object_translation(problem: &ProblemIR, object_id: &str) -> [f64; 3] {
+pub(crate) fn object_translation(problem: &ProblemIR, magnet_name: &str) -> [f64; 3] {
     let Some(magnet) = problem
         .magnets
         .iter()
-        .find(|magnet| magnet.name == object_id)
+        .find(|magnet| magnet.name == magnet_name)
     else {
         return [0.0, 0.0, 0.0];
     };
@@ -308,6 +306,9 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
             return Err("material sampling spacing count must match sample points".to_string());
         }
     }
+    // Solvers identify a magnet by its name; region ownership uses its immutable ID.
+    let owner_object_id = problem.magnets.iter().find(|magnet| magnet.name == owner_object_id)
+        .and_then(|magnet| magnet.object_id.as_deref()).unwrap_or(owner_object_id);
     // Gather active object regions for this owner
     let enabled_regions = problem
         .object_regions
@@ -551,95 +552,10 @@ fn universe_bounds(problem: &ProblemIR) -> Option<[f64; 6]> {
     ])
 }
 
-fn absorbing_face_weight(
-    face: AbsorbingBoundaryFaceIR,
-    point: [f64; 3],
-    bounds: [f64; 6],
-    layer: &AbsorbingBoundaryLayerIR,
-    profile: &ResolvedAbsorbingBoundaryProfile,
-) -> Result<f64, String> {
-    let (axis, positive) = match face {
-        AbsorbingBoundaryFaceIR::XPlus => (0, true),
-        AbsorbingBoundaryFaceIR::XMinus => (0, false),
-        AbsorbingBoundaryFaceIR::YPlus => (1, true),
-        AbsorbingBoundaryFaceIR::YMinus => (1, false),
-        AbsorbingBoundaryFaceIR::ZPlus => (2, true),
-        AbsorbingBoundaryFaceIR::ZMinus => (2, false),
-    };
-    let distance = if positive {
-        bounds[axis + 3] - point[axis]
-    } else {
-        point[axis] - bounds[axis]
-    };
-    if !distance.is_finite() || distance < 0.0 || distance > layer.total_width_m {
-        return Ok(0.0);
-    }
-    if distance <= layer.total_width_m - layer.ramp_width_m {
-        return Ok(1.0);
-    }
-    profile.evaluate((layer.total_width_m - distance) / layer.ramp_width_m)
-}
-
-fn apply_absorbing_boundary_layer(
-    problem: &ProblemIR,
-    owner_object_id: &str,
-    values: &mut [f64],
-    points: &[[f64; 3]],
-    active_mask: Option<&[bool]>,
-    object_translation: [f64; 3],
-) -> Result<(), String> {
-    let Some(layer) = problem
-        .magnets
-        .iter()
-        .find(|magnet| magnet.name == owner_object_id)
-        .and_then(|magnet| magnet.absorbing_boundary.as_ref())
-    else {
-        return Ok(());
-    };
-    if values.len() != points.len() {
-        return Err("absorbing boundary alpha field length does not match points".to_string());
-    }
-    let profile = layer
-        .compile_profile()
-        .map_err(|error| format!("absorbing boundary for '{owner_object_id}': {error}"))?;
-    if active_mask.is_some_and(|mask| mask.len() != points.len()) {
-        return Err("absorbing boundary active mask length does not match points".to_string());
-    }
-    let active_points = points.iter().enumerate().filter(|(i, _)| {
-        active_mask.is_none_or(|mask| mask[*i])
-    });
-    let frame_point = |world: [f64; 3]| match layer.frame {
-        AbsorbingBoundaryFrameIR::Object => std::array::from_fn(|i| world[i] - object_translation[i]),
-        AbsorbingBoundaryFrameIR::Universe => world,
-    };
-    let explicit_bounds = match layer.frame {
-        AbsorbingBoundaryFrameIR::Object => None,
-        AbsorbingBoundaryFrameIR::Universe => universe_bounds(problem),
-    };
-    let bounds = explicit_bounds.or_else(|| {
-        let (min, max) = crate::mesh::bounds_from_points(active_points.clone().map(|(_, point)| point))?;
-        let [xmin, ymin, zmin] = frame_point(min);
-        let [xmax, ymax, zmax] = frame_point(max);
-        Some([xmin, ymin, zmin, xmax, ymax, zmax])
-    }).ok_or_else(|| format!("absorbing boundary for '{owner_object_id}' requires at least one magnetic point"))?;
-    for (index, world) in active_points {
-        let value = &mut values[index];
-        let point = frame_point(*world);
-        let mut weight: f64 = 0.0;
-        for &face in &layer.faces {
-            let face_weight = absorbing_face_weight(face, point, bounds, layer, &profile)
-                .map_err(|error| format!("absorbing boundary for '{owner_object_id}': {error}"))?;
-            weight = weight.max(face_weight);
-        }
-        *value += layer.max_damping * weight;
-        if !value.is_finite() || *value < 0.0 {
-            return Err(format!(
-                "resolved absorbing boundary alpha for '{owner_object_id}' is invalid"
-            ));
-        }
-    }
-    Ok(())
-}
+#[path = "spatial_absorber.rs"]
+mod spatial_absorber;
+use spatial_absorber::apply_absorbing_boundary_layer;
+pub use spatial_absorber::validate_absorbing_region_boundary;
 
 pub(crate) fn build_material_field_plans(
     problem: &ProblemIR,
@@ -750,7 +666,7 @@ pub(crate) fn build_material_field_plans(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fullmag_ir::AbsorbingBoundaryProfileIR;
+    use fullmag_ir::{AbsorbingBoundaryFaceIR, AbsorbingBoundaryFrameIR, AbsorbingBoundaryLayerIR, AbsorbingBoundaryProfileIR};
 
     fn layer(profile: AbsorbingBoundaryProfileIR) -> AbsorbingBoundaryLayerIR {
         AbsorbingBoundaryLayerIR {
@@ -768,7 +684,7 @@ mod tests {
     fn absorbing_boundary_uses_smootherstep_and_adds_to_base_alpha() {
         let mut problem = ProblemIR::bootstrap_example();
         problem.magnets[0].absorbing_boundary =
-            Some(layer(AbsorbingBoundaryProfileIR::Smootherstep));
+            Some(layer(AbsorbingBoundaryProfileIR::Smootherstep).into());
         let points = vec![
             [0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0],
@@ -810,7 +726,7 @@ mod tests {
         ] {
             let mut config = layer(profile);
             config.expression = expression.map(str::to_string);
-            problem.magnets[0].absorbing_boundary = Some(config);
+            problem.magnets[0].absorbing_boundary = Some(config.into());
             let mut values = [0.1; 5];
             apply_absorbing_boundary_layer(&problem, "strip", &mut values, &points, None, [0.0; 3])
                 .expect("profile should materialize");
@@ -831,7 +747,7 @@ mod tests {
         config.total_width_m = 1.0;
         config.ramp_width_m = 1.0;
         config.faces = vec![AbsorbingBoundaryFaceIR::XMinus];
-        problem.magnets[0].absorbing_boundary = Some(config);
+        problem.magnets[0].absorbing_boundary = Some(config.into());
         let mut values = [0.1; 2];
         let points = [[0.0, 0.0, 0.0], [507.0 / 512.0, 0.0, 0.0]];
         let error = apply_absorbing_boundary_layer(&problem, "strip", &mut values, &points, None, [0.0; 3])
@@ -847,7 +763,7 @@ mod tests {
             AbsorbingBoundaryFaceIR::XPlus,
             AbsorbingBoundaryFaceIR::YPlus,
         ];
-        problem.magnets[0].absorbing_boundary = Some(config);
+        problem.magnets[0].absorbing_boundary = Some(config.into());
         let points = vec![[4.0, 4.0, 0.0]];
         let values = resolve_spatial_parameter(
             &problem,

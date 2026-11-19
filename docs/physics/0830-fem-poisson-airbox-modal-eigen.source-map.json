@@ -1672,6 +1672,13 @@
       "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
     },
     {
+      "id": "source-cpu-schur-krylov-basis",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "bounded_krylov_dimensions",
+      "responsibility": "Resolve the EPS Krylov basis: SLEPc default max(2 nev, nev + 15) for a standalone K0 shift, 4 nev for frequency windows.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
       "id": "source-floquet-augmented-shift",
       "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
       "symbol": "create_native_floquet_augmented_shift_solver",

@@ -5,6 +5,23 @@ import type { Export3DTargetInput } from "./export3dTypes";
 import { crc32, readStoreZipArchive } from "./export3dZipArchive";
 
 describe("export3dVtkSerializer & export3dZipArchive", () => {
+  it("omits physical vector arrays on request while retaining the field colors", async () => {
+    const result = await export3DModel({
+      targets: [{
+        kind: "fdm_grid",
+        id: "one-cell",
+        gridShape: [1, 1, 1],
+        cellSizeM: [1, 1, 1],
+        field: { kind: "real", quantityId: "m", componentCount: 3, values: new Float32Array([1, 0, 0]) },
+      }],
+      options: { format: "vtu", vtkEncoding: "ascii", vtkIncludeVectorData: false },
+    });
+
+    expect(result.text).toContain('Name="magnetic_texture_rgb"');
+    expect(result.text).not.toContain('Name="m"');
+    expect(result.stats.cellCount).toBe(1);
+  });
+
   it("exports FDM active cells to VTU hexahedra in SI meters with sRGB UInt8 magnetic_texture_rgb", async () => {
     const res = await export3DModel({
       targets: [

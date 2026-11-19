@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { OrbitControls } from "@react-three/drei";
+import { Download } from "lucide-react";
 import { useThree } from "@react-three/fiber";
 import { BoxGeometry, BufferAttribute, BufferGeometry, Color, DoubleSide, InstancedMesh, Matrix4, MeshBasicMaterial, type Mesh } from "three";
 import { useKernel } from "@/kernel/KernelContext";
@@ -11,6 +12,7 @@ import { Button } from "@/shared/ui/Button";
 import { useSavedResultsFrameResource, useSavedResultsManifestResource, useSavedResultsGeometryResource } from "@/kernel/resources/savedResultsPlaybackResources";
 import { scalarColorPaletteGradientCss } from "@/shared/visualization/scalarColorPalette";
 import { Viewport3DCanvas } from "./Viewport3DCanvas";
+import { Viewport3DExportMenu, Viewport3DExportOutlet } from "./export/Viewport3DExportSurface";
 import { useBatchedInvalidate } from "./viewport3dBatchedInvalidate";
 import { Viewport3DErrorBoundary } from "./Viewport3DErrorBoundary";
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
@@ -118,7 +120,24 @@ export default function SavedResultsPlaybackViewport() {
     : <SavedFolderPlayback source={source} />;
 }
 
+function useSavedViewportCommand() {
+  const { commands, layout } = useKernel();
+  return useCallback((id: string) => {
+    void commands.execute(id, { source: "inspector", layout });
+  }, [commands, layout]);
+}
+
+function SavedViewportExportButton({ onCommand }: { onCommand: (id: string) => void }) {
+  return (
+    <Button aria-label="Export 3D model" title="Export 3D model" variant="ghost" size="icon"
+      onClick={() => onCommand("viewport-3d.export-model")}>
+      <Download aria-hidden="true" size={16} />
+    </Button>
+  );
+}
+
 function SavedFolderPlayback({ source }: { source: SavedFolderPlaybackSelection }) {
+  const onCommand = useSavedViewportCommand();
   const metadata=useSavedResultsManifestResource(source.itemId);
   const manifest=metadata.data;
   const stage=manifest?.stages.find(s=>s.stage_id===source?.stageId) ?? (!source?.stageId ? manifest?.stages[0] : undefined);
@@ -137,9 +156,30 @@ function SavedFolderPlayback({ source }: { source: SavedFolderPlaybackSelection 
     data-saved-frame-index={index} data-saved-frame-state={currentReady ? "ready" : error ? "error" : "loading"}>
     <div className="fm-saved-playback-caption" role="status">
       {source?.name} · m_{["x","y","z"][source?.component ?? 2]} · {stage ? ((stage.times_s[index] ?? 0)*1e9).toFixed(3) : "—"} ns · {index+1}/{stage?.frame_count ?? "—"}
+      <SavedViewportExportButton onCommand={onCommand} />
       {error ? <span role="alert"> · {error}</span> : !currentReady ? " · Loading selected frame…" : null}
     </div>
-    {geometry ? <SavedPlaybackCanvas geometry={geometry} frameIndex={index} colors={currentReady ? presentation?.colors ?? null : null} /> : null}
+    {geometry ? (
+      <SavedPlaybackCanvas geometry={geometry} frameIndex={index} colors={currentReady ? presentation?.colors ?? null : null} onCommand={onCommand} />
+    ) : null}
+    <Viewport3DExportOutlet key={source.itemId} getSource={async () => {
+      if (!manifest || !stage || !frame.data || !currentReady) {
+        throw new Error("Wait for the selected saved frame to finish loading, then reopen Export.");
+      }
+      const { extractSavedFolderPlaybackExportSource } = await import("./export/extractSavedPlaybackExportSource");
+      return extractSavedFolderPlaybackExportSource({
+        itemId: source.itemId,
+        manifest,
+        stage,
+        name: source.name,
+        component: source.component,
+        colorLimit: presentation?.limit,
+        frameIndex: index,
+        frameData: frame.data,
+        femTopology: mesh.data?.topology,
+        femSupport: mesh.data?.support,
+      });
+    }} />
     {presentation && currentReady ? <div className="fm-saved-playback-legend" role="group" aria-label="Magnetization color scale">
       −{presentation.limit.toExponential(3)} <span aria-hidden="true" className="fm-saved-playback-gradient" style={{background:scalarColorPaletteGradientCss("coolwarm")}}/> +{presentation.limit.toExponential(3)} · m_{["x","y","z"][source?.component ?? 2]} [1] · {source?.colorLimit === null ? "automatic per frame" : "fixed scale"} · dimensions in µm
     </div> : null}
@@ -147,6 +187,7 @@ function SavedFolderPlayback({ source }: { source: SavedFolderPlaybackSelection 
 }
 
 function StudyResultPlayback({ source }: { source: SavedStudyPlaybackSelection }) {
+  const onCommand = useSavedViewportCommand();
   const { savedResultsPlayback } = useKernel();
   const { state, geometry, magnetization } = useStudyResultPlaybackResources(source.studyResult);
   const descriptor = state.data;
@@ -179,12 +220,28 @@ function StudyResultPlayback({ source }: { source: SavedStudyPlaybackSelection }
               onClick={() => savedResultsPlayback?.setComponent(component)}>m_{["x", "y", "z"][component]}</Button>
           ))}
         </div>
+        <SavedViewportExportButton onCommand={onCommand} />
         <Button size="sm" variant="secondary" onClick={() => savedResultsPlayback?.close()}>Return to live</Button>
       </header>
       {error ? <p role="alert" className="px-3 py-2">{error}</p> : null}
       {rendered.geometry && !error ? (
-        <SavedPlaybackCanvas geometry={rendered.geometry} frameIndex={0} colors={presentation?.colors ?? null} />
+        <SavedPlaybackCanvas geometry={rendered.geometry} frameIndex={0} colors={presentation?.colors ?? null} onCommand={onCommand} />
       ) : null}
+      <Viewport3DExportOutlet getSource={async () => {
+        if (!descriptor || !carrier || !samples || !ready) {
+          throw new Error("Wait for the saved study result to finish loading, then reopen Export.");
+        }
+        const { extractStudyResultPlaybackExportSource } = await import("./export/extractSavedPlaybackExportSource");
+        return extractStudyResultPlaybackExportSource({
+          descriptor,
+          result: source.studyResult,
+          component: source.component,
+          colorLimit: presentation?.limit,
+          samples,
+          topology: carrier.topology,
+          support: carrier.support,
+        });
+      }} />
       {presentation && ready ? (
         <div aria-label="Magnetization color scale" className="fm-saved-playback-legend" role="group">
           −{presentation.limit.toExponential(3)}{" "}
@@ -197,11 +254,12 @@ function StudyResultPlayback({ source }: { source: SavedStudyPlaybackSelection }
 }
 
 function SavedPlaybackCanvas({
-  geometry, frameIndex, colors,
+  geometry, frameIndex, colors, onCommand,
 }: {
   geometry: PlaybackGeometry;
   frameIndex: number;
   colors: Float32Array | null;
+  onCommand: (id: string) => void;
 }) {
   const { diagnosticRecorder } = useKernel();
   const { colors: themeColors } = useViewport3DColors();
@@ -214,18 +272,20 @@ function SavedPlaybackCanvas({
     };
   }, [geometry]);
   return (
-    <div className="fm-saved-playback-canvas">
-      <Viewport3DErrorBoundary diagnosticRecorder={diagnosticRecorder}>
-        <Viewport3DCanvas camera={camera} frameloop="demand" gl={{ preserveDrawingBuffer: true, antialias: true }}
-          style={{ background: typeof themeColors?.background === "string" ? themeColors.background : "var(--fm-bg-viewport)" }}>
-          <SavedCamera geometry={geometry} frameIndex={frameIndex} />
-          {geometry.kind === "instances" ? <SavedGridLayer geometry={geometry} colors={colors} /> : null}
-          {geometry.kind === "grids" ? geometry.grids.map((grid) => (
-            <SavedGridLayer key={grid.valueOffset} geometry={grid} colors={colors} />
-          )) : null}
-          {geometry.kind === "surface" ? <SavedSurfaceLayer geometry={geometry} colors={colors} /> : null}
-        </Viewport3DCanvas>
-      </Viewport3DErrorBoundary>
-    </div>
+    <Viewport3DExportMenu onCommand={onCommand}>
+      <div className="fm-saved-playback-canvas" tabIndex={0} role="region" aria-label="Saved result 3D view">
+        <Viewport3DErrorBoundary diagnosticRecorder={diagnosticRecorder}>
+          <Viewport3DCanvas camera={camera} frameloop="demand" gl={{ preserveDrawingBuffer: true, antialias: true }}
+            style={{ background: typeof themeColors?.background === "string" ? themeColors.background : "var(--fm-bg-viewport)" }}>
+            <SavedCamera geometry={geometry} frameIndex={frameIndex} />
+            {geometry.kind === "instances" ? <SavedGridLayer geometry={geometry} colors={colors} /> : null}
+            {geometry.kind === "grids" ? geometry.grids.map((grid) => (
+              <SavedGridLayer key={grid.valueOffset} geometry={grid} colors={colors} />
+            )) : null}
+            {geometry.kind === "surface" ? <SavedSurfaceLayer geometry={geometry} colors={colors} /> : null}
+          </Viewport3DCanvas>
+        </Viewport3DErrorBoundary>
+      </div>
+    </Viewport3DExportMenu>
   );
 }
