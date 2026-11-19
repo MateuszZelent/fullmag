@@ -533,7 +533,6 @@ pub fn plan_antenna_field_solve_execution(
         None
     };
     let mut conductor = AntennaConductorFemPlanIR {
-        gpu_bb_preconditioner: None,
         mesh_name: mesh.mesh_name.clone(),
         mesh_source,
         mesh,
