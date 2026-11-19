@@ -1,0 +1,100 @@
+name: ABL live browser
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/abl-live-browser.yml"
+      - "apps/control-room/tests/abl-browser/**"
+      - "apps/control-room/src/modules/inspector/panels/*Absorbing*"
+      - "apps/control-room/src/modules/inspector/panels/absorbingExpression*"
+      - "crates/fullmag-plan/src/spatial_absorber.rs"
+      - "crates/fullmag-api/src/live_authored_damping*"
+      - "crates/fullmag-api/src/live_authored_damping/**"
+      - "crates/fullmag-ir/src/absorbing_boundary.rs"
+      - "packages/fullmag-py/src/fullmag/model/*absorbing_boundary*"
+      - "examples/fem_spatial_absorbing_layers.py"
+      - "tests/fixtures/abl_browser_fdm/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: abl-live-browser-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  alpha:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [fdm, fem]
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+      RUST_MIN_STACK: "16777216"
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: abl-live-browser
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.8.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+      - name: Install application and browser dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libglu1-mesa
+          python -m pip install -e 'packages/fullmag-py[meshing]'
+          pnpm install --frozen-lockfile
+          pnpm --dir apps/control-room exec playwright install --with-deps chromium
+      - name: Build the API and CLI for the pinned CI checkout
+        run: cargo build --locked -p fullmag-api --bin fullmag-api -p fullmag-cli --bin fullmag
+      - name: Compare live alpha to the analytical profile in Chromium
+        env:
+          ABL_BACKEND: ${{ matrix.backend }}
+          FULLMAG_QA_URL: http://127.0.0.1:3246
+          FULLMAG_API_PROXY_TARGET: http://127.0.0.1:8081
+          FULLMAG_API_BIND_IP: 127.0.0.1
+          FULLMAG_QA_ALLOW_ABL_WRITE: "1"
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/abl-browser"
+          mkdir "$evidence"
+          export FULLMAG_QA_FIXTURE="$evidence/fixture.json"
+          export FULLMAG_PROJECT_STORAGE_ROOT="$(python -B scripts/fullmag_storage.py resolve --profile ci-rust-contracts --create | python -c 'import json,sys;print(json.load(sys.stdin)["storage_root"])')"
+          export FULLMAG_STATE_ROOT="$FULLMAG_PROJECT_STORAGE_ROOT/abl-live-$ABL_BACKEND"
+          export FULLMAG_REPO_ROOT="$GITHUB_WORKSPACE" FULLMAG_PYTHON="$(command -v python)"
+          mkdir "$FULLMAG_STATE_ROOT"
+          printf '%s\n' "$GITHUB_SHA" > "$evidence/commit.txt"
+          target/debug/fullmag-api > "$evidence/api.log" 2>&1 &
+          api=$!
+          pnpm --dir apps/control-room exec next dev --webpack --hostname 127.0.0.1 --port 3246 > "$evidence/ui.log" 2>&1 &
+          ui=$!
+          trap 'kill "$ui" "$api" 2>/dev/null || true' EXIT
+          curl --silent --show-error --fail --retry 15 --retry-delay 2 --retry-all-errors "$FULLMAG_API_PROXY_TARGET/v2/platform/health"
+          curl --silent --show-error --fail --retry 10 --retry-delay 2 --retry-all-errors "$FULLMAG_QA_URL/workspace" -o /dev/null
+          python tests/fixtures/abl_browser_fdm/seed.py --url "$FULLMAG_QA_URL" --fixture "$FULLMAG_QA_FIXTURE" --backend "$ABL_BACKEND" --allow-create-session
+          spec=abl.spec.ts
+          if [[ "$ABL_BACKEND" == fem ]]; then spec=fem.spec.ts; fi
+          pnpm --dir apps/control-room exec playwright test "tests/abl-browser/$spec" --workers=1 --reporter=line --output="$evidence/render"
+      - name: Preserve screenshots and measured field evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: abl-live-${{ matrix.backend }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/abl-browser
+          if-no-files-found: warn

@@ -337,6 +337,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
     expect(await inspectorSnapshot()).toEqual(baseline);
     expect(patchCount).toBe(1);
     expect(await commitCount() - beforeCommits).toBeLessThanOrEqual(48);
+    await page.screenshot({ path: info.outputPath("independent-planes-inspector.png") });
   } finally {
     await page.unroute(objectUrl);
   }
