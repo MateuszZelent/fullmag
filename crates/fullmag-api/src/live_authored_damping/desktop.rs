@@ -32,10 +32,10 @@ pub(super) fn idle(snapshot: &SessionStateResponse) -> bool {
 /// The journal's mesh command binds a scene topology digest and a scene
 /// revision. Its result binds the generation, while the plan and the selected
 /// mesh independently carry the node order, markers and object ownership.
-fn qualified_plan(
-    snapshot: &SessionStateResponse,
+fn qualified_build_generation<'a>(
+    snapshot: &'a SessionStateResponse,
     scene: &SceneDocument,
-) -> Option<Arc<ExecutionPlanIR>> {
+) -> Option<&'a str> {
     if !idle(snapshot) {
         return None;
     }
@@ -66,7 +66,35 @@ fn qualified_plan(
     {
         return None;
     }
-    let plan = metadata.execution_plan()?;
+    Some(generation)
+}
+
+pub(crate) fn published_mesh_is_current(
+    snapshot: &SessionStateResponse,
+    scene: &SceneDocument,
+) -> Option<bool> {
+    let workspace = snapshot.mesh_workspace.as_ref()?;
+    let metadata = snapshot.metadata.as_ref()?;
+    if !idle(snapshot)
+        || workspace.get("accepted_run_id").is_some()
+        || !matches!(metadata["status"].as_str(), Some("waiting_for_compute" | "awaiting_command"))
+    {
+        return None;
+    }
+    let binding = metadata.get(super::PUBLICATION)?.get("desktop_domain")?;
+    Some(
+        qualified_build_generation(snapshot, scene).is_some()
+            && domain_identity(snapshot).as_ref() == Some(binding),
+    )
+}
+
+fn qualified_plan(
+    snapshot: &SessionStateResponse,
+    scene: &SceneDocument,
+) -> Option<Arc<ExecutionPlanIR>> {
+    let generation = qualified_build_generation(snapshot, scene)?;
+    let mesh = snapshot.fem_mesh.as_ref()?;
+    let plan = snapshot.metadata.as_ref()?.execution_plan()?;
     let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
         return None;
     };

@@ -11,6 +11,9 @@ on:
       - "apps/control-room/src/modules/inspector/panels/*Absorbing*"
       - "apps/control-room/src/modules/inspector/panels/absorbingExpression*"
       - "crates/fullmag-plan/src/spatial_absorber.rs"
+      - "apps/control-room/src/modules/viewport-3d/viewport3dResources.ts"
+      - "apps/control-room/src/kernel/resources/geometryLifecycleResources.ts"
+      - "crates/fullmag-api/src/router_v2/handlers/meshing/mesh.rs"
       - "crates/fullmag-api/src/live_authored_initial_state/apply_preparation.rs"
       - "crates/fullmag-api/src/live_authored_damping*"
       - "crates/fullmag-api/src/live_authored_damping/**"
@@ -92,6 +95,7 @@ jobs:
       - name: Verify FEM mesh ownership and material publication
         if: matrix.backend == 'fem'
         run: |
+          pnpm --dir apps/control-room exec vitest run src/kernel/resources/geometryLifecycleResources.test.ts src/kernel/visualization/visualizationDisplayResolution.test.ts src/modules/viewport-3d/viewport3dTopologyStaleness.test.ts
           cargo test --locked -p fullmag-api --bin fullmag-api mesh_build_command_preserves_absorbing_layer_and_region_damping
           cargo test --locked -p fullmag-api --bin fullmag-api desktop_completed_fem_build_and_regional_edits_publish_only_current_nodes
           cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_build_mesh_and_patch_publish_fem_nodes_without_solve

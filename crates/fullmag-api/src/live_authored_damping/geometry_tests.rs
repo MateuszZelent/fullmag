@@ -549,7 +549,38 @@ async fn desktop_completed_fem_build_and_regional_edits_publish_only_current_nod
     apply(&mut missing, &request);
     assert!(missing.latest_fields.get("mat_alpha").is_none());
     apply(snapshot, &request);
-    let current = snapshot.latest_fields.get("mat_alpha").unwrap();
-    assert_eq!(current["authored_damping_revision"], 6);
-    assert_eq!(current["values"], values);
+    let field = snapshot.latest_fields.get("mat_alpha").unwrap();
+    assert_eq!(field["authored_damping_revision"], 6);
+    assert_eq!(field["values"], values);
+
+    use crate::router_v2::handlers::meshing::mesh::{mesh_source_scene_revision, shared_domain_mesh_is_current};
+    let edited = snapshot.scene_document.as_ref().unwrap();
+    assert_eq!(mesh_source_scene_revision(snapshot), Some(5));
+    assert!(shared_domain_mesh_is_current(snapshot, edited));
+    let mut solver = snapshot.clone();
+    solver.session.status = "running".into();
+    let mut built_scene = edited.clone();
+    built_scene.revision = 5;
+    assert!(damping::desktop::published_mesh_is_current(&solver, &built_scene).is_none());
+    assert!(shared_domain_mesh_is_current(&solver, &built_scene));
+
+    let mut changed_region = edited.clone();
+    changed_region.objects[0].regions[0].enabled = false;
+    assert!(!shared_domain_mesh_is_current(snapshot, &changed_region));
+    let mut changed_carrier = snapshot.clone();
+    changed_carrier.fem_mesh.as_mut().unwrap().object_segments[0].object_id = "other".into();
+    assert!(!shared_domain_mesh_is_current(&changed_carrier, edited));
+    let mut changed_mesh = snapshot.clone();
+    changed_mesh.fem_mesh.as_mut().unwrap().nodes[0][0] += 1e-9;
+    assert!(!shared_domain_mesh_is_current(&changed_mesh, edited));
+
+    drop(current);
+    let app = build_v2_router().with_state(state);
+    let response = app.oneshot(Request::get("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+        .body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    let manifest: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(manifest["source_scene_revision"], 5);
+    assert_eq!(manifest["validated_for_scene_revision"], 6);
 }
