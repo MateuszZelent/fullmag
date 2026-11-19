@@ -163,6 +163,7 @@ export interface FdmMultilayerAirboxRenderDomain extends Omit<FdmGridRenderDomai
 }
 
 export interface FdmNativeLayerRenderView {
+  activeMask?: Uint8Array | null;
   domain: FdmNativeLayerRenderDomain;
   fieldVector: DecodedFieldVector | null;
   model: FdmCuboidInstanceModel | null;

@@ -1,12 +1,15 @@
 "use client";
 
 import {
-  cloneElement,
   lazy,
   Suspense,
+  useCallback,
   useRef,
   useSyncExternalStore,
   type ComponentPropsWithRef,
+  type ElementType,
+  type MouseEventHandler,
+  type PointerEventHandler,
   type ReactElement,
 } from "react";
 import { Download } from "lucide-react";
@@ -45,25 +48,35 @@ function ViewportContextTrigger({
 }: Omit<ViewportTriggerProps, "children"> & { children: ReactElement<ViewportTriggerProps> }) {
   const rightButton = useRef<{ x: number; y: number; moved: boolean } | null>(null);
 
-  return cloneElement(children, {
-    ...props,
-    onPointerDownCapture: (event) => {
-      rightButton.current = event.button === 2 ? { x: event.clientX, y: event.clientY, moved: false } : null;
-    },
-    onPointerMoveCapture: (event) => {
-      const start = rightButton.current;
-      if (start && (event.buttons & 2) && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) {
-        start.moved = true;
-      }
-    },
-    // OrbitControls suppresses the native menu on the canvas in the target/bubble phase.
-    onContextMenuCapture: (event) => {
-      const wasDrag = event.button === 2 && rightButton.current?.moved;
-      rightButton.current = null;
-      if (wasDrag) event.preventDefault();
-      else onContextMenu?.(event);
-    },
-  });
+  const onPointerDownCapture = useCallback<PointerEventHandler<HTMLDivElement>>((event) => {
+    rightButton.current = event.button === 2 ? { x: event.clientX, y: event.clientY, moved: false } : null;
+  }, []);
+  const onPointerMoveCapture = useCallback<PointerEventHandler<HTMLDivElement>>((event) => {
+    const start = rightButton.current;
+    if (start && (event.buttons & 2) && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) {
+      start.moved = true;
+    }
+  }, []);
+  // OrbitControls suppresses the native menu on the canvas in the target/bubble phase.
+  const onContextMenuCapture = useCallback<MouseEventHandler<HTMLDivElement>>((event) => {
+    const wasDrag = event.button === 2 && rightButton.current?.moved;
+    rightButton.current = null;
+    if (wasDrag) event.preventDefault();
+    else onContextMenu?.(event);
+  }, [onContextMenu]);
+
+  const Viewport = children.type as ElementType<ViewportTriggerProps>;
+  return (
+    <Viewport
+      key={children.key}
+      {...children.props}
+      {...props}
+      style={{ ...children.props.style, ...props.style }}
+      onPointerDownCapture={onPointerDownCapture}
+      onPointerMoveCapture={onPointerMoveCapture}
+      onContextMenuCapture={onContextMenuCapture}
+    />
+  );
 }
 
 export function Viewport3DExportMenu({

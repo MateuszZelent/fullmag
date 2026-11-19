@@ -491,7 +491,7 @@ function resolveModeVectorValue(
 
 function resolveModeScalarRange(
   layer: ModeCompositionLayer,
-  projection: ComplexAttributeProjection,
+  projection: Pick<ComplexAttributeProjection, "maxAbsReal" | "maxAbsImag" | "maxAbsMagnitude">,
   amplitudeScale: number,
 ): ScalarRange | null {
   const appearance = layer.appearance;
@@ -531,7 +531,29 @@ function resolveModeScalarRange(
     : { max: maximum, min: signed ? -maximum : 0 };
 }
 
-function resolveModeColorPalette(layer: ModeCompositionLayer): string {
+export function resolveModeCompositionExportRange(
+  field: DecodedComplexFieldVector,
+  layer: ModeCompositionLayer,
+): ScalarRange | null {
+  if (layer.component === "vector") return null;
+  const maxAbsReal: [number, number, number] = [0, 0, 0];
+  const maxAbsImag: [number, number, number] = [0, 0, 0];
+  const maxAbsMagnitude: [number, number, number] = [0, 0, 0];
+  if (layer.appearance.auto_range && layer.representation !== "phase") {
+    for (let entry = 0; entry < field.pointCount * field.componentCount; entry += 1) {
+      const axis = entry % field.componentCount;
+      const real = field.values[2 * entry]!;
+      const imag = field.values[2 * entry + 1]!;
+      if (!Number.isFinite(real) || !Number.isFinite(imag)) return null;
+      maxAbsReal[axis] = Math.max(maxAbsReal[axis]!, Math.abs(real));
+      maxAbsImag[axis] = Math.max(maxAbsImag[axis]!, Math.abs(imag));
+      maxAbsMagnitude[axis] = Math.max(maxAbsMagnitude[axis]!, Math.hypot(real, imag));
+    }
+  }
+  return resolveModeScalarRange(layer, { maxAbsReal, maxAbsImag, maxAbsMagnitude }, layer.amplitude_scale);
+}
+
+export function resolveModeColorPalette(layer: ModeCompositionLayer): string {
   const configured = layer.appearance.colormap.trim().toLowerCase();
   if (layer.representation === "phase") return configured || "twilight";
   if (layer.representation === "abs" || layer.component === "magnitude") {
