@@ -9,7 +9,7 @@ import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationP
 const mocks = vi.hoisted(() => {
   const descriptor = {
     displayUnits: {},
-    liveMode: "following" as const,
+    liveMode: "following" as "following" | "paused",
     range: { mode: "follow" as const },
     selectedSeriesIds: ["my"],
     targetPoints: 800 as const,
@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => {
   const idle = { data: null, error: null, revision: null, status: "idle" };
   return {
     archivedTable: null as ChartTableWindow | null,
+    liveTable: null as ChartTableWindow | null,
+    sessionScopeKey: "session-a",
     preferences: {
       descriptor,
       isHydrated: true,
@@ -40,7 +42,8 @@ const mocks = vi.hoisted(() => {
       columns,
       range,
       rows: { data: null, error: null, revision: 7, status: mocks.rowsStatus },
-      table: null,
+      table: mocks.liveTable,
+      sessionScopeKey: mocks.sessionScopeKey,
       tableList: idle,
       tableResource: idle,
       unsupportedReason: null,
@@ -115,6 +118,48 @@ describe("useLiveChartsController chart input identity", () => {
     } finally {
       act(() => root.unmount());
       mocks.archivedTable = null;
+      dom.restore();
+    }
+  });
+
+  it.each(["live", "archived"])("freezes the %s chart through stage changes while paused and clears on session change", (source) => {
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);
+    const renders: Controller[] = [];
+    const render = () => act(() => root.render(<Probe onRender={(value) => renders.push(value)} tick={renders.length} />));
+    const table = (revision: string, y: number): ChartTableWindow => ({
+      tableId: "default", schemaRevision: 1, revision: 1, seriesRevision: revision,
+      columnCount: 2, columns: mocks.tableData().columns.data, cursorStart: 1, cursorEnd: 1,
+      totalRows: 1, rowCount: 1, resyncRequired: false, values: new Float64Array([0.1, y]),
+    });
+    const current = () => renders.at(-1)!;
+    try {
+      if (source === "archived") mocks.archivedTable = table("A", 0.25);
+      else mocks.liveTable = table("A", 0.25);
+      render();
+      const seriesA = current().series;
+      expect(seriesA[0]?.points[0]?.y).toBe(0.25);
+
+      mocks.preferences.descriptor.liveMode = "paused";
+      mocks.archivedTable = null;
+      mocks.liveTable = table("B", 0.75);
+      render();
+      expect(current().series).toBe(seriesA);
+      expect(current().series[0]?.points[0]?.y).toBe(0.25);
+
+      mocks.sessionScopeKey = "session-b";
+      render();
+      expect(current().series).toEqual([]);
+
+      mocks.preferences.descriptor.liveMode = "following";
+      render();
+      expect(current().series[0]?.points[0]?.y).toBe(0.75);
+    } finally {
+      act(() => root.unmount());
+      mocks.archivedTable = null;
+      mocks.liveTable = null;
+      mocks.sessionScopeKey = "session-a";
+      mocks.preferences.descriptor.liveMode = "following";
       dom.restore();
     }
   });

@@ -46,8 +46,7 @@ export function shouldLoadLiveChartArchivedTable(options: {
   paused: boolean;
   range: ChartRangePreference;
 }): boolean {
-  // Pause stops refreshes, but keeps the selected terminal series visible.
-  return options.active && options.range.mode === "follow";
+  return options.active && !options.paused && options.range.mode === "follow";
 }
 
 export function planLiveChartArchivePages(totalRows: number): LiveChartArchivePage[] {

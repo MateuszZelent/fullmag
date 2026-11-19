@@ -10,17 +10,14 @@ import {
   liveTableSeriesResourceScope,
   liveTableUnsupportedReason,
   shouldLoadLiveTableRows,
-  shouldPauseLiveTableRows,
   shouldReplaceLiveTableSnapshot,
   type LiveTableStateWithIdentity,
 } from "./useLiveTableData";
 
 describe("useLiveTableData", () => {
-  it("does no heavy work while inactive or paused with retained rows", () => {
+  it("does no heavy row work while inactive or paused", () => {
     expect(shouldLoadLiveTableRows({ active: false, hasSchema: true, paused: false })).toBe(false);
     expect(shouldLoadLiveTableRows({ active: true, hasSchema: true, paused: true })).toBe(false);
-    expect(shouldPauseLiveTableRows({ active: true, hasRows: true, paused: true })).toBe(true);
-    expect(shouldPauseLiveTableRows({ active: true, hasRows: true, paused: false })).toBe(false);
   });
 
   it("calls a resumed active surface eligible for exactly the latest resource fetch", () => {
@@ -34,7 +31,7 @@ describe("useLiveTableData", () => {
   it("replaces the follow window when the query identity changes", () => {
     const initial = { cursor: 8, queryKey: "follow", table: { cursorEnd: 8, resyncRequired: false, rowCount: 2 } } as never;
     const next = { cursorEnd: 3, resyncRequired: false, rowCount: 1 } as never;
-    expect(liveTableReducer(initial, { queryKey: "fixed:0:3", table: next })).toMatchObject({
+    expect(liveTableReducer(initial, { queryKey: "fixed:0:3", seriesIdentity: null, table: next })).toMatchObject({
       cursor: 3,
       queryKey: "fixed:0:3",
       table: next,
@@ -106,7 +103,7 @@ describe("useLiveTableData", () => {
     });
     expect(state.table?.values).toEqual(new Float64Array([201]));
     const acceptedB1 = state;
-    for (const staleRows of [a1, undefined]) {
+    for (const staleRows of [a1, null]) {
       state = liveTableReducer(state, {
         expectedSeriesIdentity: b1,
         queryKey: "follow:B1",
@@ -134,6 +131,43 @@ describe("useLiveTableData", () => {
     });
     expect(state.table?.values).toEqual(new Float64Array([301]));
     expect(state.table?.schemaRevision).toBe(1);
+  });
+
+  it("restarts legacy rows at a full window and waits for an exact header before appending again", () => {
+    const identity: StudyResultSeriesIdentity = {
+      run_id: "run", task_id: "task-b", step_id: "B", case_id: "default",
+      attempt_id: "attempt-b", ownership_epoch: 3,
+    };
+    const table: ChartTableWindow = {
+      columnCount: 1, columns: [{ column_id: "step", label: "Step", unit: "1" }],
+      cursorEnd: 10, cursorStart: 1, resyncRequired: false, revision: 10,
+      rowCount: 1, schemaRevision: 1, tableId: "default", totalRows: 10, values: new Float64Array([42]),
+    };
+    const request = { expectedSeriesIdentity: identity, queryKey: "series-b", table };
+    const pinned = liveTableReducer({ cursor: undefined, queryKey: null, table: null }, {
+      ...request, seriesIdentity: identity,
+    });
+    const rejected = liveTableReducer(pinned, { ...request, requestCursor: 10 });
+    expect(rejected.cursor).toBeUndefined();
+    expect(rejected.table).toBeNull();
+    const legacy = liveTableReducer(rejected, request);
+    expect(legacy.table).toBe(table);
+    expect(legacy.cursor).toBeUndefined();
+    expect(legacy.seriesIdentity).toBeUndefined();
+    expect(liveTableForCurrentSeries(legacy, identity, "series-b")).toBe(table);
+    expect(liveTableForCurrentSeries(legacy, identity, "series-c")).toBeNull();
+
+    const replacement = { ...table, values: new Float64Array([55]) };
+    const moreLegacy = liveTableReducer(legacy, { ...request, table: replacement });
+    expect(moreLegacy.table).toBe(replacement);
+    expect(moreLegacy.cursor).toBeUndefined();
+
+    const foreign = liveTableReducer(moreLegacy, { ...request, seriesIdentity: null });
+    expect(foreign).toBe(moreLegacy);
+    const exact = liveTableReducer(moreLegacy, { ...request, seriesIdentity: identity });
+    expect(exact.cursor).toBe(10);
+    expect(exact.seriesIdentity).toEqual(identity);
+    expect(exact.table?.values).toEqual(table.values);
   });
 
   it("keeps the last accepted series pin while scalar metadata is stale", () => {
@@ -186,6 +220,7 @@ describe("useLiveTableData", () => {
 
     const advanced = liveTableReducer(initial, {
       queryKey: "follow",
+      seriesIdentity: null,
       table: emptyDelta,
     });
 
@@ -207,6 +242,7 @@ describe("useLiveTableData", () => {
     };
     const reset = liveTableReducer(advanced, {
       queryKey: "follow",
+      seriesIdentity: null,
       table: resync,
     });
 
@@ -257,6 +293,7 @@ describe("useLiveTableData", () => {
     expect(liveTableReducer(initial, {
       queryKey: "fullDecimated",
       replace: true,
+      seriesIdentity: null,
       table: nextTable,
     })).toMatchObject({
       cursor: 10_001,
@@ -286,6 +323,7 @@ describe("useLiveTableData", () => {
 
     const result = liveTableReducer(initial, {
       queryKey: "tailRows",
+      seriesIdentity: null,
       replace: shouldReplaceLiveTableSnapshot({ mode: "tailRows", rows: requestedRows }),
       table: nextTable,
     });

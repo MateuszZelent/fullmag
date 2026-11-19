@@ -507,6 +507,75 @@ class RecoveryTests(unittest.TestCase):
                 stdout=b"[]", stderr=b"")):
             self.assertEqual(subject._windows_process_rows(request), [])
 
+    def test_windows_cim_repeats_full_inventory_after_confirmed_process_exit(self):
+        request, _, _ = self.qualified_request()
+        incomplete = {"ProcessId": 42, "Name": "docker.exe", "CreationDate": None,
+                      "ExecutablePath": None, "CommandLine": None}
+        responses = [
+            SimpleNamespace(stdout=json.dumps([incomplete]).encode(), stderr=b""),
+            SimpleNamespace(stdout=b"[]", stderr=b""),
+            SimpleNamespace(stdout=b"[]", stderr=b""),
+        ]
+        with patch.object(subject, "windows_powershell_capture", side_effect=responses) as capture:
+            self.assertEqual(subject._windows_process_rows(request), [])
+        self.assertEqual(capture.call_count, 3)
+        self.assertIn("ProcessId = 42", capture.call_args_list[1].args[1])
+
+    def test_final_host_census_keeps_both_full_passes_after_windows_pid_exit(self):
+        request, _, _ = self.qualified_request()
+        request.pop("foreign_control_helper")
+        subject.validate_request(request)
+        incomplete = {"ProcessId": 45, "Name": "docker.exe", "CreationDate": None,
+                      "ExecutablePath": None, "CommandLine": None}
+        responses = [
+            SimpleNamespace(stdout=json.dumps([incomplete]).encode(), stderr=b""),
+            SimpleNamespace(stdout=b"[]", stderr=b""),
+            SimpleNamespace(stdout=b"[]", stderr=b""),
+            SimpleNamespace(stdout=b"[]", stderr=b""),
+        ]
+        with patch.object(subject, "_validate_host_client_environment"), \
+             patch.object(subject, "windows_powershell_capture", side_effect=responses) as capture, \
+             patch.object(subject, "_linux_process_snapshot", return_value=(
+                 {"linux_boot_id": "boot", "linux_processes_scanned": 0}, ())) as linux:
+            result = subject.host_clients(Path.cwd(), request, final=True)
+        self.assertEqual(result["host_process_census_passes"], 2)
+        self.assertEqual(capture.call_count, 4)
+        self.assertEqual(sum("$names -contains $_.Name" in call.args[1]
+                             for call in capture.call_args_list), 3)
+        self.assertEqual(linux.call_count, 2)
+
+    def test_windows_cim_keeps_live_client_found_after_identity_refresh(self):
+        request, _, _ = self.qualified_request()
+        request.pop("foreign_control_helper")
+        subject.validate_request(request)
+        incomplete = {"ProcessId": 43, "Name": "docker.exe", "CreationDate": None,
+                      "ExecutablePath": None, "CommandLine": None}
+        live_client = {"ProcessId": 43, "Name": "docker.exe", "CreationDate": "now",
+                       "ExecutablePath": r"C:\Program Files\Docker\Docker\resources\bin\docker.exe",
+                       "CommandLine": "docker.exe build ."}
+        responses = [
+            SimpleNamespace(stdout=json.dumps([incomplete]).encode(), stderr=b""),
+            SimpleNamespace(stdout=json.dumps([live_client]).encode(), stderr=b""),
+            SimpleNamespace(stdout=json.dumps([live_client]).encode(), stderr=b""),
+        ]
+        with patch.object(subject, "windows_powershell_capture", side_effect=responses) as capture, \
+             self.assertRaisesRegex(BuildControlError, "without an exact declared helper pin"):
+            subject._windows_process_snapshot(request)
+        self.assertEqual(capture.call_count, 3)
+
+    def test_windows_cim_refuses_identity_still_incomplete_after_pid_recheck(self):
+        request, _, _ = self.qualified_request()
+        incomplete = {"ProcessId": 44, "Name": "docker.exe", "CreationDate": None,
+                      "ExecutablePath": None, "CommandLine": None}
+        responses = [
+            SimpleNamespace(stdout=json.dumps([incomplete]).encode(), stderr=b""),
+            SimpleNamespace(stdout=json.dumps([incomplete]).encode(), stderr=b""),
+        ]
+        with patch.object(subject, "windows_powershell_capture", side_effect=responses) as capture, \
+             self.assertRaisesRegex(BuildControlError, r"PID 44.*CommandLine"):
+            subject._windows_process_rows(request)
+        self.assertEqual(capture.call_count, 2)
+
     def test_windows_process_snapshot_accepts_only_exact_pinned_foreign_control_helper(self):
         request, _, _ = self.qualified_request()
         pins, control, document, process = self.foreign_helper_fixture(request)

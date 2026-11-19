@@ -66,10 +66,15 @@ function catalog(results: StudyStageResult[]): StudyStageResultsResource {
 }
 
 describe("Live Charts archived scalar history", () => {
-  it("keeps a loaded follow archive available while the chart is paused", () => {
+  it("loads archived rows only in an active, following chart", () => {
     expect(shouldLoadLiveChartArchivedTable({
       active: true,
       paused: true,
+      range: { mode: "follow" },
+    })).toBe(false);
+    expect(shouldLoadLiveChartArchivedTable({
+      active: true,
+      paused: false,
       range: { mode: "follow" },
     })).toBe(true);
     expect(shouldLoadLiveChartArchivedTable({
