@@ -154,10 +154,10 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
   await select("Layer").selectOption("ring");
   await expect(select("Geometry")).toHaveValue("cylinder");
   await expect(select("Target material")).toHaveValue("upper-half");
-  await expect(page.getByLabel("Layer name", { exact: true })).toHaveValue("Upper semicircle");
+  await expect(page.getByRole("textbox", { name: "Layer name", exact: true })).toHaveValue("Upper semicircle");
   await page.screenshot({ path: info.outputPath("semicircle-inspector.png") });
   const before = await page.evaluate(() => window.ablFemProbe.sequence);
-  await page.getByLabel("Maximum damping", { exact: true }).fill("0.12");
+  await page.locator("input").and(page.getByLabel("Maximum damping", { exact: true })).fill("0.12");
   const [patch, updatedResponse] = await Promise.all([
     page.waitForResponse(r => r.request().method() === "PATCH" && new URL(r.url()).pathname.endsWith("/model/objects/film")),
     page.waitForResponse(isAlpha),
