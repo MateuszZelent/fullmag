@@ -41,6 +41,11 @@ async fn absorbing_boundary_build_mesh_and_patch_publish_fem_nodes_without_solve
         crate::script::load_scene_document_state(&state.repo_root, temp.path(), &script).unwrap();
     scene.revision = 5;
     let object_id = scene.objects[0].id.clone();
+    scene.objects[0].regions.push(serde_json::from_value(json!({
+        "region_id": "right-half", "owner_object": object_id, "name": "Right half",
+        "realization_policy": "project", "frame": "object",
+        "shape": {"kind": "box", "size": [20e-9, 10e-9, 10e-9], "center": [10e-9, 0, 0]}
+    })).unwrap());
     let scope = {
         let mut current = state.current_live_state.write().await;
         let snapshot = current.as_mut().unwrap();
@@ -102,14 +107,33 @@ async fn absorbing_boundary_build_mesh_and_patch_publish_fem_nodes_without_solve
     assert!(selected.simulation_preparation.is_none());
     let reference = mesh_build::geometry_reuse_reference(&selected, &context).unwrap();
     assert_eq!(baseline["geometry_source"], reference.provenance());
-    assert!(
-        mesh_build::load_geometry_reuse_asset(&store, &scene, &reference)
-            .unwrap()
-            .is_some()
-    );
+    let asset = mesh_build::load_geometry_reuse_asset(&store, &scene, &reference).unwrap().unwrap();
+    assert!(asset.object_region_markers.is_empty());
+    assert!(!mesh_build::can_qualify_live_geometry_reuse(&scene, &asset));
+    let mut unbound = scene.clone();
+    let region = &mut unbound.objects[0].regions[0];
+    region.realization_policy = fullmag_authoring::SceneRegionRealizationPolicy::Conformal;
+    assert_eq!(super::geometry::projected_region_binding_error(&unbound, &asset),
+        Some("geometry_conformal_region_markers_missing"));
+    unbound.objects[0].regions[0].owner_object = "other".into();
+    assert_eq!(super::geometry::projected_region_binding_error(&unbound, &asset),
+        Some("geometry_region_owner_mismatch"));
+    let mut marked = asset;
+    marked.object_region_markers.push(fullmag_ir::FemDomainRegionMarkerIR {
+        geometry_name: "right-half".into(), marker: 42,
+    });
+    assert_eq!(super::geometry::projected_region_binding_error(&scene, &marked),
+        Some("geometry_region_marker_ownership_not_bound"));
 
-    let layer = json!({"profile":"linear","frame":"object","faces":["x+"],
-        "max_damping":0.5,"total_width_m":12e-9,"ramp_width_m":8e-9});
+    let layer = json!({"layers":[
+        {"layer_id":"exit","name":"Exit","enabled":true,"profile":"linear","frame":"object",
+         "geometry":{"kind":"faces","faces":["x+"]},
+         "max_damping":0.5,"total_width_m":12e-9,"ramp_width_m":8e-9},
+        {"layer_id":"right-arc","name":"Right arc","enabled":true,"profile":"quadratic","frame":"object",
+         "region_id":"right-half","geometry":{"kind":"cylinder","center":[0,0,0],"axis":[0,0,1],
+         "radius_m":16e-9,"direction":"outward"},
+         "max_damping":0.7,"total_width_m":10e-9,"ramp_width_m":8e-9}
+    ]});
     let app = build_v2_router().with_state(state.clone());
     let patch = app
         .clone()
@@ -147,10 +171,29 @@ async fn absorbing_boundary_build_mesh_and_patch_publish_fem_nodes_without_solve
         .clone()
         .map(|i| mesh.nodes[i][0])
         .fold(f64::NEG_INFINITY, f64::max);
+    let mut enhanced_in_region = 0;
+    let mut excluded_by_region = 0;
     for i in indices {
-        let expected = 0.03 + 0.5 * ((12e-9 - (outer - mesh.nodes[i][0])) / 8e-9).clamp(0.0, 1.0);
-        assert!((active["values"][i].as_f64().unwrap() - expected).abs() < 1e-12);
+        let [x, y, _] = mesh.nodes[i];
+        let exit = 0.5 * ((12e-9 - (outer - x)) / 8e-9).clamp(0.0, 1.0);
+        let distance = 16e-9 - x.hypot(y);
+        let ring = if (0.0..=10e-9).contains(&distance) {
+            0.7 * ((10e-9 - distance) / 8e-9).min(1.0).powi(2)
+        } else {
+            0.0
+        };
+        if ring > exit {
+            if x >= 0.0 {
+                enhanced_in_region += 1;
+            } else {
+                excluded_by_region += 1;
+            }
+        }
+        let expected = 0.03 + exit.max(if x >= 0.0 { ring } else { 0.0 });
+        assert!((active["values"][i].as_f64().unwrap() - expected).abs() < 1e-12,
+            "wrong damping on FEM node {i} at {x}, {y}");
     }
+    assert!(enhanced_in_region > 0 && excluded_by_region > 0);
     let response = app.oneshot(Request::get(
         "/v2/sessions/current/data/fields/mat_alpha/samples/vector?component=magnitude&format=bin"
     ).body(Body::empty()).unwrap()).await.unwrap();
