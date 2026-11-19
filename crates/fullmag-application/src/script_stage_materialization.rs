@@ -2690,9 +2690,10 @@ fn apply_imported_run_capture(ir: &mut ProblemIR, payload: &BTreeMap<String, Val
             _ => bail!("script-imported Run spin_wave_response must be an object"),
         }
     }
-    ir.validate().map_err(|errors| anyhow::anyhow!(
-        "script-imported Run IR validation failed: {}", errors.join("; ")
-    ))?;
+    ir.validate_before_execution_profile_binding()
+        .map_err(|errors| anyhow::anyhow!(
+            "script-imported Run IR validation failed: {}", errors.join("; ")
+        ))?;
     Ok(())
 }
 
@@ -2735,12 +2736,10 @@ pub fn materialize_pipeline_relax(
         sampling,
     };
     attach_stage_autosave_from_payload(&mut ir, payload, "relax")?;
-    ir.validate().map_err(|errors| {
-        anyhow::anyhow!(
-            "relax stage IR validation failed: {}",
-            errors.join("; ")
-        )
-    })?;
+    ir.validate_before_execution_profile_binding()
+        .map_err(|errors| anyhow::anyhow!(
+            "relax stage IR validation failed: {}", errors.join("; ")
+        ))?;
     let until_seconds = resolve_script_until_seconds(&ir, None)?;
     Ok(ResolvedScriptStage::solver(
         ir,

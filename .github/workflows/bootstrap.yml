@@ -513,6 +513,11 @@ jobs:
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast
 
+      - name: Run pinned Study execution profile entry contracts
+        run: |
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_run_and_relax_bind_auto_single_to_pinned_gpu
+          cargo test --locked -p fullmag-api --bin fullmag-api compute_preview::tests
+
       - name: Run FEM StageAutosave origin contracts
         run: |
           cargo test --locked -p fullmag-runner --lib artifact_pipeline::tests::initial_stage_autosave_table_scalar_does_not_write_legacy_scalar_trace -- --exact

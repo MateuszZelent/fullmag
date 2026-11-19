@@ -4412,7 +4412,11 @@ pub(crate) fn is_supported_llg_integrator(integrator: &str) -> bool {
     )
 }
 
-pub(crate) fn validate_runtime_selection(problem: &crate::ProblemIR, errors: &mut Vec<String>) {
+pub(crate) fn validate_runtime_selection(
+    problem: &crate::ProblemIR,
+    require_qualified_execution: bool,
+    errors: &mut Vec<String>,
+) {
     if let Some(value) = problem
         .problem_meta
         .runtime_metadata
@@ -4583,7 +4587,7 @@ pub(crate) fn validate_runtime_selection(problem: &crate::ProblemIR, errors: &mu
         crate::ExecutionPrecision::Single => "single",
         crate::ExecutionPrecision::Double => "double",
     };
-    if device == Some("auto") && typed == "single" {
+    if require_qualified_execution && device == Some("auto") && typed == "single" {
         errors.push("runtime_metadata.runtime_selection device='auto' with execution_precision='single' is not qualified; select device='gpu' explicitly".to_string());
     }
     if precision.is_some_and(|value| value != typed) {
