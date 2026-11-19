@@ -1,3 +1,4 @@
+import { initialAbsorbingBoundary } from "@/shared/domain/physics/absorbingBoundary";
 import { absorbingExpressionError } from "./absorbingExpressionValidation";
 import type {
   AbsorbingBoundaryGeometry,
@@ -41,10 +42,11 @@ export interface AbsorbingBoundaryDraft {
 type Issue = { field: keyof LayerDraft; error: string; layerId?: string };
 
 export function createLayerDraft(id: string, name: string): LayerDraft {
+  const defaults = initialAbsorbingBoundary();
   return {
-    id, name, enabled: true, region: "", kind: "faces", faces: ["x+"],
-    totalWidth: "4e-7", rampWidth: "3e-7", maxDamping: "0.5",
-    profile: "smootherstep", frame: "object", expression: "",
+    id, name, enabled: true, region: "", kind: "faces", faces: defaults.faces,
+    totalWidth: String(defaults.total_width_m), rampWidth: String(defaults.ramp_width_m),
+    maxDamping: String(defaults.max_damping), profile: defaults.profile, frame: defaults.frame, expression: "",
     point: ["0", "0", "0"], orientation: ["1", "0", "0"], radius: "5e-7",
     direction: "outward", boundaryRegion: "", distanceExpression: "",
   };

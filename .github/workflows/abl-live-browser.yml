@@ -6,6 +6,11 @@ on:
     paths:
       - ".github/workflows/abl-live-browser.yml"
       - "apps/control-room/tests/abl-browser/**"
+      - "apps/control-room/src/modules/ribbon/absorbingBoundaryCommand*"
+      - "apps/control-room/src/modules/ribbon/RibbonModule.tsx"
+      - "apps/control-room/src/shared/domain/physics/absorbingBoundary.ts"
+      - "apps/control-room/src/modules/ribbon/ribbonCommands.ts"
+      - "apps/control-room/src/modules/ribbon/ribbonContributions.tsx"
       - "apps/control-room/src/modules/inspector/panels/ObjectVisualizationPanel.tsx"
       - "apps/control-room/src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx"
       - "apps/control-room/src/modules/inspector/panels/*Absorbing*"
@@ -89,6 +94,7 @@ jobs:
         if: matrix.backend == 'fdm'
         run: |
           pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/ObjectVisualizationPanel.accessibility.test.tsx -t 'keeps Shaded selected'
+          pnpm --dir apps/control-room exec vitest run src/modules/ribbon/absorbingBoundaryCommand.test.ts src/modules/ribbon/ribbonStructure.test.ts src/modules/inspector/panels/ObjectAbsorbingBoundaryPanelModel.test.ts
           cargo test --locked -p fullmag-cli --bin fullmag grid_receipt_publishes_prepared_plan_only_after_a_successful_build
           cargo test --locked -p fullmag-api --bin fullmag-api desktop_grid_receipt_restores_plan_owned_damping_only_for_the_current_scene
           cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_patch_moves_and_clears_live_alpha_without_rebuilding_grid

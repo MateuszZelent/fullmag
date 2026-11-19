@@ -136,8 +136,26 @@ test("ABL editor updates the live FDM damping field and canonical script", async
       await Promise.all([
         page.waitForResponse(async (response) => {
           if (!issued.has(response.request()) || response.status() !== 200) return false;
-          lastObservation = await inspectField(response, layer);
-          return lastObservation.maximumError < 2e-7;
+          let sample: Awaited<ReturnType<typeof inspectField>>;
+          try {
+            sample = await inspectField(response, layer);
+          } catch (error) {
+            // Chromium can evict the body of a superseded request. Recover only
+            // the exact representation the page received, identified by its ETag.
+            if (!String(error).includes("No data found for resource with given identifier")) throw error;
+            const etag = response.headers().etag;
+            if (!etag || etag.startsWith("W/")) return false;
+            const replay = await page.request.get(response.url(), { headers });
+            try {
+              if (!replay.ok() || replay.headers().etag !== etag) return false;
+              sample = await inspectField(replay, layer);
+            } finally {
+              await replay.dispose();
+            }
+          }
+          if (!(sample.maximumError < 2e-7)) return false;
+          lastObservation = sample;
+          return true;
         }, { timeout: step === "baseline" ? workspaceStartupTimeout + timeout : timeout }),
         action(),
       ]);
@@ -394,5 +412,25 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   await parent.click();
   await enabled.uncheck();
   await apply("removed", null);
+  // Pick the rendered film, then add its absorber from the Physics ribbon.
+  await canvas.click();
+  const object = page.locator(`[data-node-id="model:object:${fixture.object_id}"]`);
+  await expect(object).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "Physics", exact: true }).click();
+  const addBoundary = page.getByRole("button", { name: "Add ABL", exact: true });
+  await expect(addBoundary).toBeEnabled();
+  await page.screenshot({ path: info.outputPath("ribbon-selected-film.png") });
+  const [created] = await Promise.all([
+    page.waitForResponse(r => r.url() === objectUrl && r.request().method() === "PATCH"),
+    addBoundary.click(),
+  ]);
+  expect(created.status()).toBe(200);
+  const ribbonScene = await readScene();
+  expect(ribbonScene.revision).toBeGreaterThan(revision);
+  expect(ribbonScene.objects[0].absorbing_boundary).toEqual(activatedScene.objects[0].absorbing_boundary);
+  await expect(child).toHaveAttribute("aria-selected", "true");
+  await expect(group).toBeVisible();
+  await page.screenshot({ path: info.outputPath("ribbon-created-absorber.png") });
+
   await writeFile(info.outputPath("abl-field-evidence.json"), JSON.stringify({ session: pin, evidence }, null, 2));
 });
