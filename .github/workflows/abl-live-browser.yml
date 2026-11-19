@@ -72,25 +72,22 @@ jobs:
           FULLMAG_QA_ALLOW_ABL_WRITE: "1"
         run: |
           set -euo pipefail
-          evidence="$RUNNER_TEMP/abl-browser"
-          mkdir "$evidence"
-          export FULLMAG_QA_FIXTURE="$evidence/fixture.json"
-          export FULLMAG_PROJECT_STORAGE_ROOT="$(python -B scripts/fullmag_storage.py resolve --profile ci-rust-contracts --create | python -c 'import json,sys;print(json.load(sys.stdin)["storage_root"])')"
+          export ABL_EVIDENCE="$RUNNER_TEMP/abl-browser"
+          mkdir "$ABL_EVIDENCE"
+          export FULLMAG_QA_FIXTURE="$ABL_EVIDENCE/fixture.json"
+          layout="$(python -B scripts/fullmag_storage.py resolve --profile ci-rust-contracts --create)"
+          export FULLMAG_PROJECT_STORAGE_ROOT="$(jq -er '.storage_root' <<< "$layout")"
+          export FULLMAG_RUNS_ROOT="$(jq -er '.runs_root' <<< "$layout")"
+          export FULLMAG_WORKTREE_ID="$(jq -er '.worktree_id' <<< "$layout")"
           export FULLMAG_STATE_ROOT="$FULLMAG_PROJECT_STORAGE_ROOT/abl-live-$ABL_BACKEND"
           export FULLMAG_REPO_ROOT="$GITHUB_WORKSPACE" FULLMAG_PYTHON="$(command -v python)"
+          export FULLMAG_API_PORT=8081 FULLMAG_WEB_HOST=127.0.0.1
           mkdir "$FULLMAG_STATE_ROOT"
-          printf '%s\n' "$GITHUB_SHA" > "$evidence/commit.txt"
-          target/debug/fullmag-api > "$evidence/api.log" 2>&1 &
-          api=$!
-          pnpm --dir apps/control-room exec next dev --webpack --hostname 127.0.0.1 --port 3246 > "$evidence/ui.log" 2>&1 &
-          ui=$!
-          trap 'kill "$ui" "$api" 2>/dev/null || true' EXIT
-          curl --silent --show-error --fail --retry 15 --retry-delay 2 --retry-all-errors "$FULLMAG_API_PROXY_TARGET/v2/platform/health"
-          curl --silent --show-error --fail --retry 10 --retry-delay 2 --retry-all-errors "$FULLMAG_QA_URL/workspace" -o /dev/null
-          python tests/fixtures/abl_browser_fdm/seed.py --url "$FULLMAG_QA_URL" --fixture "$FULLMAG_QA_FIXTURE" --backend "$ABL_BACKEND" --allow-create-session
-          spec=abl.spec.ts
-          if [[ "$ABL_BACKEND" == fem ]]; then spec=fem.spec.ts; fi
-          pnpm --dir apps/control-room exec playwright test "tests/abl-browser/$spec" --workers=1 --reporter=line --output="$evidence/render"
+          printf '%s\n' "$GITHUB_SHA" > "$ABL_EVIDENCE/commit.txt"
+          install -m 755 tests/fixtures/abl_browser_fdm/run-browser.sh target/debug/fullmag-ui
+          target/debug/fullmag ui --dev --web-port 3246 > "$ABL_EVIDENCE/launcher.log" 2>&1
+          cat "$ABL_EVIDENCE/browser.log"
+          test "$(cat "$ABL_EVIDENCE/browser.exit")" = 0
       - name: Preserve screenshots and measured field evidence
         if: always()
         uses: actions/upload-artifact@v7
