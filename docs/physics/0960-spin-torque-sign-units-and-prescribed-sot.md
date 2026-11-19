@@ -2,7 +2,7 @@
 
 - Status: active normative physics note; bounded FEM CPU/GPU stage-time implementation evidence
 - Owners: Fullmag core
-- Last updated: 2026-08-05
+- Last updated: 2026-11-19
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `zhang_li.fullmag.v1`, `slonczewski.fullmag.v2`,
@@ -766,6 +766,14 @@ hidden change to `alpha`.
 
 | Path | Symbol | Responsibility |
 |---|---|---|
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class TimeExpression` | Preserve expression source, finite constants and absolute physical event times in public Slonczewski authoring. |
+| `crates/fullmag-ir/src/time_expression.rs` | `compile` | Validate declared events and compile the existing safe field-expression dialect for time. |
+| `crates/fullmag-engine/src/fdm/shared/terms.rs` | `evaluate` | Evaluate the compiled scalar at global physical time, apply one-sided event values, and reject non-finite multipliers. |
+| `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `rk45_step_buf_with_endpoint_policy` | Sample J(t) at every Dormand–Prince stage and invalidate FSAL reuse for expression-driven current. |
+| `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `rk45_step_soa_buf_with_endpoint_policy` | Apply the same global stage times and one-sided event limits in the buffer-SoA CPU lane. |
+| `crates/fullmag-runner/src/time_events.rs` | `extend_absolute_time_expression_events` | Preserve absolute J(t) discontinuities and split FDM CPU steps at each declared event. |
+| `crates/fullmag-engine/src/fdm/shared/terms.rs` | `j_of_t_is_zero_outside_pulse_and_uses_consistent_one_sided_rk_values` | Check zero drive outside a pulse and consistent CPU left/right RK endpoint values. |
+| `backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu` | `slonczewski_time_factor` | Sample the signed multiplier on the global CUDA RK clock with one-sided event limits. |
 | `crates/fullmag-plan/src/fem.rs` | `materialize_fem_spin_torque_target_masks` | Maska STT/SOT z connectivity wszystkich elementów wybranego ownera. |
 | `crates/fullmag-plan/src/tests/material_boundary_stt.rs` | `fem_torque_object_target_mask_covers_conformal_regions_per_owner_and_order` | Regresja STT/SOT dla dwóch regionów, obu kolejności i odrębnego ownera. |
 | `backends/fem/cpu/mfem/interactions/stt_slonczewski.cpp` | `add_slonczewski_stt_rhs_aos` | FEM CPU canonical v2 algebraic oracle |
