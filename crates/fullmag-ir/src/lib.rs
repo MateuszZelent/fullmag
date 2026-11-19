@@ -7,6 +7,8 @@ pub use absorbing_boundary::{
     validate_absorbing_boundary, validate_absorbing_boundary_config, AbsorbingBoundaryCoordinate,
     ResolvedAbsorbingBoundaryProfile,
 };
+mod time_expression;
+pub use time_expression::TimeExpressionIR;
 
 pub mod antenna;
 pub mod antenna_current_source;

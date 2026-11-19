@@ -6199,6 +6199,7 @@ mod tests {
             free_layer_thickness_m: None,
             fixed_layer_position: None,
             realization: None,
+            time_expression: None,
         }];
         let execution_plan = fullmag_plan::plan(&problem).unwrap();
         let fullmag_ir::BackendPlanIR::Fdm(fdm) = &execution_plan.backend_plan else {
@@ -6382,6 +6383,7 @@ mod tests {
             free_layer_thickness_m: None,
             fixed_layer_position: None,
             realization: None,
+            time_expression: None,
         }];
         let execution_plan = fullmag_plan::plan(&problem).unwrap();
         let fullmag_ir::BackendPlanIR::Fdm(fdm) = &execution_plan.backend_plan else {

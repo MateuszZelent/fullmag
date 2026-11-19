@@ -8141,6 +8141,7 @@ fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() {
                 epsilon_prime: 0.0,
                 free_layer_thickness_m: Some(1e-9),
                 fixed_layer_position: Some("top".to_string()),
+                time_expression: None,
                 realization: None,
             },
             "slonczewski",

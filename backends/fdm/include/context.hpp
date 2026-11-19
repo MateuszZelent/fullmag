@@ -431,6 +431,9 @@ struct Context {
     double stt_lambda = 0.0;
     double stt_epsilon_prime = 0.0;
     double stt_cpp_pf = 0.0;   // Precomputed Slonczewski Omega coefficient [1/s]
+    std::vector<double> slonczewski_time_program;
+    std::vector<double> slonczewski_time_events_s;
+    double slonczewski_time_origin_s = 0.0;
     fullmag_fdm_slonczewski_formula slonczewski_formula =
         FULLMAG_FDM_SLONCZEWSKI_LEGACY_FULLMAG_V0;
     double stt_stack_normal[3] = {0.0, 0.0, 1.0};
