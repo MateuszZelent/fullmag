@@ -145,6 +145,15 @@ impl PreparedDamping {
         // ReplaceScene can atomically apply magnetization too. Its candidate
         // already owns the new execution plan. Merge only our own publication.
         let metadata = snapshot.metadata.get_or_insert_with(|| json!({}).into());
+        tracing::info!(
+            target: "fullmag_api::scene_sync",
+            scene_revision = self.binding["scene_revision"].as_u64(),
+            source_revision = self.field.as_ref().and_then(|raw| raw["source_revision"].as_u64()),
+            requires_domain_rebuild = self.binding["requires_domain_rebuild"].as_bool(),
+            pending_reason = self.binding["pending_reason"].as_str(),
+            available = self.field.is_some(),
+            "publishing authored damping"
+        );
         metadata[PUBLICATION] = self.binding;
         crate::session::replace_authored_damping(snapshot, self.field);
     }

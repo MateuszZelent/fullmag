@@ -91,18 +91,17 @@ def seed(origin, destination, backend="fdm"):
         command.wait(240)
         if command.status != "completed":
             raise RuntimeError(f"{command_key} ended with {command.status}")
-        if backend == "fdm":
-            quantity = next((entry for entry in client.data.quantities()["quantities"]
-                             if entry["id"] == "mat_alpha"), {})
-            summary = {key: quantity.get(key) for key in
-                       ("capability_state", "materialization_state", "renderable", "materialization_reason_code")}
-            try:
-                alpha = client.data.field_meta("mat_alpha")
-                summary["field"] = {key: alpha.get(key) for key in
-                                    ("domain_generation_id", "source_revision", "state", "location", "stats")}
-            except ApiError as error:
-                summary["field_error"] = {"status": error.status, "code": error.code}
-            print(f"Prepared FDM mat_alpha: {json.dumps(summary)}", flush=True)
+        quantity = next((entry for entry in client.data.quantities()["quantities"]
+                         if entry["id"] == "mat_alpha"), {})
+        summary = {key: quantity.get(key) for key in
+                   ("capability_state", "materialization_state", "renderable", "materialization_reason_code")}
+        try:
+            alpha = client.data.field_meta("mat_alpha")
+            summary["field"] = {key: alpha.get(key) for key in
+                                ("domain_generation_id", "source_revision", "state", "location", "stats")}
+        except ApiError as error:
+            summary["field_error"] = {"status": error.status, "code": error.code}
+        print(f"Prepared {backend.upper()} mat_alpha: {json.dumps(summary)}", flush=True)
         with destination.open("x", encoding="utf-8") as output:
             json.dump({"origin": origin, "name": name, "object_id": object_id, "pin": pin,
                        command_key: command.command_id}, output, indent=2)

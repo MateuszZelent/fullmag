@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
-import { test, expect, type Response } from "playwright/test";
+import { test, expect, type APIResponse, type Request, type Response } from "playwright/test";
 import { scalarColorRgb } from "../../src/shared/visualization/scalarColorPalette";
 import { installFdmColorProbe } from "./renderedFdmColors";
 import { installInspectorCommitTrace } from "../../scripts/lib/inspector-commit-trace.mjs";
@@ -86,7 +86,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   const samplesUrl = url("data/fields/mat_alpha/samples/vector");
   const viewport = page.locator(".fm-viewport-3d");
   const canvas = viewport.locator("canvas").first();
-  const inspectField = async (response: Response, layer: FieldCase) => {
+  const inspectField = async (response: Response | APIResponse, layer: FieldCase) => {
     const bytes = await response.body();
     const packet = decodeFieldVector(Uint8Array.from(bytes).buffer);
     expect(packet.quantityId).toBe("mat_alpha");
@@ -105,15 +105,32 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   const observeChange = async (step: string, layer: FieldCase, action: () => Promise<void>) => {
     // Only traffic issued by this page after the edit counts. A separate API
     // poll could otherwise make a stale viewport look like an updated field.
-    const issued = new WeakSet();
-    const onRequest = (request: import("playwright/test").Request) => {
-      if (request.url().split("?")[0] === samplesUrl) issued.add(request);
+    const issued = new WeakSet<Request>();
+    const traffic: unknown[] = [];
+    const record = (entry: unknown) => {
+      if (traffic.length === 64) traffic.shift();
+      traffic.push(entry);
+    };
+    const onRequest = (request: Request) => {
+      if (request.url().split("?")[0] !== samplesUrl) return;
+      issued.add(request);
+      record({ event: "request", query: new URL(request.url()).search,
+        ifNoneMatch: request.headers()["if-none-match"] });
+    };
+    const onResponse = (response: Response) => {
+      if (issued.has(response.request())) record({ event: "response", status: response.status(),
+        etag: response.headers().etag, revision: response.headers()["x-fullmag-field-revision"] });
+    };
+    const onFailure = (request: Request) => {
+      if (issued.has(request)) record({ event: "failure", error: request.failure()?.errorText });
     };
     const beforeDraw = page.url() === "about:blank" ? 0 : await page.evaluate(() => {
       window.ablColorProbe.armed = true;
       return window.ablColorProbe.sequence;
     });
     page.on("request", onRequest);
+    page.on("response", onResponse);
+    page.on("requestfailed", onFailure);
     let lastObservation: Awaited<ReturnType<typeof inspectField>> | undefined;
     try {
       await Promise.all([
@@ -148,8 +165,29 @@ test("ABL editor updates the live FDM damping field and canonical script", async
       expect(Math.min(...drawingBuffer)).toBeGreaterThan(0);
       await canvas.screenshot({ path: info.outputPath(step + ".png") });
       evidence.push({ step, revision, layer, drawingBuffer, rendered, ...lastObservation });
+    } catch (error) {
+      const diagnostics: Record<string, unknown> = { revision, pin, traffic };
+      try {
+        await verifyIdentity();
+        const meta = await page.request.get(url("data/fields/mat_alpha/meta"), { headers, timeout: 5000 });
+        diagnostics.metaStatus = meta.status();
+        if (meta.ok()) {
+          const field = await meta.json();
+          diagnostics.field = Object.fromEntries(["state", "field_revision", "source_revision", "domain_generation_id",
+            "location", "stats", "materialization_reason_code"].map(key => [key, field[key]]));
+        }
+        const response = await page.request.get(samplesUrl + "?component=full", { headers, timeout: 5000 });
+        diagnostics.directStatus = response.status();
+        if (response.status() === 200) diagnostics.directField = await inspectField(response, layer);
+      } catch (probeError) {
+        diagnostics.probeError = String(probeError);
+      }
+      await writeFile(info.outputPath(step + "-field-diagnostics.json"), JSON.stringify(diagnostics, null, 2));
+      throw error;
     } finally {
       page.off("request", onRequest);
+      page.off("response", onResponse);
+      page.off("requestfailed", onFailure);
       if (!page.isClosed() && page.url() !== "about:blank") {
         const lastDraw = await page.evaluate(() => {
           window.ablColorProbe.armed = false;
