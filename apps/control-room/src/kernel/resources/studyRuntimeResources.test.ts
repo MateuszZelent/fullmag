@@ -83,6 +83,7 @@ import {
   stageExecutionMatchesSessionIdentity,
   stageExecutionSessionIdentityEquals,
   studyRuntimeCommandSessionStatusEquals,
+  tableRowsBinaryResourceKey,
 } from "./studyRuntimeResources";
 
 const capability = (status: string, reason = "test fixture") => ({ status, reason });
@@ -727,7 +728,7 @@ describe("study runtime command resource bundles", () => {
     expect(dataHooks).toContain("useSessionScopedResourceKey");
     expect(dataHooks).toContain("unscopedResourceKey");
     expect(dataHooks).toContain("enabled: enabled && sessionIdentity !== null");
-    expect(dataHooks).toContain("#binary");
+    expect(source).toContain("tableRowsBinaryResourceKey(");
     expect(dataHooks).toContain("DATA_FIELDS_PATH");
     // Row hooks derive their unscoped key through the shared helper, which
     // is the single place that expands DATA_TABLE_ROWS_PATH.
@@ -1852,11 +1853,10 @@ describe("study runtime command resource bundles", () => {
     expect(tableHook).toContain("api.data.tables");
     expect(rowsHook).toContain(".rows(");
     expect(binaryRowsHook).toContain(".rowsBinary(");
-    expect(binaryRowsHook).toContain("}#binary`");
     expect(binaryRowsHook).toContain("pauseLoad = false");
     expect(binaryRowsHook).toContain("pauseLoad,");
     expect(rowsHook).toContain("tableRowsResourceKey");
-    expect(binaryRowsHook).toContain("tableRowsResourceKey");
+    expect(binaryRowsHook).toContain("tableRowsBinaryResourceKey");
     expect(rowsHook).toContain("minRefetchIntervalMs");
     expect(binaryRowsHook).toContain("minRefetchIntervalMs");
     expect(tableHook).not.toContain("setInterval");
@@ -1872,6 +1872,23 @@ describe("study runtime command resource bundles", () => {
     expect(DATA_TABLE_ROWS_PATH).toBe(
       ["", "v2", "sessions", "current", "data", "tables", "{table_id}", "rows"].join("/"),
     );
+  });
+
+  it("isolates binary row cache keys by accepted scalar series identity", () => {
+    const query = { columns: ["step", "mx"], limit: 5_000 };
+    const a1 = tableRowsBinaryResourceKey("default", query, JSON.stringify([
+      "run-1", "task-a1", "A1", "default", "attempt-a1", 4,
+    ]));
+    const b1 = tableRowsBinaryResourceKey("default", query, JSON.stringify([
+      "run-1", "task-b1", "B1", "default", "attempt-b1", 4,
+    ]));
+    const b2 = tableRowsBinaryResourceKey("default", query, JSON.stringify([
+      "run-1", "task-b2", "B2", "default", "attempt-b2", 4,
+    ]));
+
+    expect(new Set([a1, b1, b2]).size).toBe(3);
+    expect(a1).toContain("#binary#series:");
+    expect(a1).not.toContain("series_scope=");
   });
 
   it("exposes dedicated field-sweep and FMR hooks with status-gated resource keys", () => {

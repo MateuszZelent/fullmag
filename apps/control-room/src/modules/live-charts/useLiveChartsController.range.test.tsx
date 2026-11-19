@@ -71,6 +71,10 @@ vi.mock("./hooks/useLiveTableData", () => ({
   }),
 }));
 
+vi.mock("./hooks/useLiveChartArchivedTable", () => ({
+  useLiveChartArchivedTable: () => null,
+}));
+
 vi.mock("./hooks/useLiveEnergyData", () => ({
   useLiveEnergyData: () => ({
     resource: { data: null, error: null, revision: 1, status: "ready" },
@@ -117,19 +121,19 @@ describe("useLiveChartsController range controls", () => {
       expect(html).toContain('aria-label="Sample window"');
       expect(latestController?.onRangeChange).toEqual(expect.any(Function));
 
-      latestController?.onRangeChange?.({ mode: "fullDecimated" });
+      act(() => latestController?.onRangeChange?.({ mode: "fullDecimated" }));
       expect(mocks.preferences.setDescriptorRange).toHaveBeenLastCalledWith(
         "magnetization",
         { mode: "fullDecimated" },
       );
 
-      latestController?.onRangeChange?.({ mode: "fixed", fromSI: 1, toSI: 2 });
+      act(() => latestController?.onRangeChange?.({ mode: "fixed", fromSI: 1, toSI: 2 }));
       expect(mocks.preferences.setDescriptorRange).toHaveBeenLastCalledWith(
         "magnetization",
         { mode: "follow" },
       );
 
-      latestController?.onRangeChange?.({ mode: "tailTime", durationS: 1 });
+      act(() => latestController?.onRangeChange?.({ mode: "tailTime", durationS: 1 }));
       expect(mocks.preferences.setDescriptorRange).toHaveBeenLastCalledWith(
         "magnetization",
         { mode: "follow" },

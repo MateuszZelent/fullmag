@@ -603,11 +603,13 @@ import type {
   SimulationPreparationResource,
   SolverStatusResource,
   StageExecutionResource,
+  StudyResultSeriesIdentity,
   StudyResultScalarWindow,
   StudyResultStateResource,
   StudyStageResult,
   StudyStageResultsQuery,
   StudyStageResultsResource,
+  TableSeriesResponseMetadata,
   StructuredCommandRequest,
   StudyRuntimePatchRequest,
   StudyRuntimeResource,
@@ -658,6 +660,45 @@ export function parseFieldVectorResponseMetadata(
     sourceRevision: headers.get("x-fullmag-source-revision"),
     snapshotId: headers.get("x-fullmag-snapshot-id"),
     valueCount: optionalIntegerHeader(headers, "x-fullmag-value-count"),
+  };
+}
+
+export function parseTableSeriesIdentityHeader(
+  value: string | null,
+): StudyResultSeriesIdentity | null | undefined {
+  if (value === null) return undefined;
+  if (value === "none") return null;
+  const encoded = /^v1\.([A-Za-z0-9_-]+)$/.exec(value)?.[1];
+  if (!encoded || encoded.length > 4_096) {
+    throw new Error("Table row response has an invalid series identity header.");
+  }
+  let identity: unknown;
+  try {
+    const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const bytes = Uint8Array.from(atob(base64 + "=".repeat((4 - base64.length % 4) % 4)), (char) => char.charCodeAt(0));
+    identity = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    throw new Error("Table row response has an invalid series identity header.");
+  }
+  if (!identity || typeof identity !== "object" || Array.isArray(identity)) {
+    throw new Error("Table row response has an invalid series identity header.");
+  }
+  const candidate = identity as Record<string, unknown>;
+  const keys = Object.keys(candidate).sort();
+  const expectedKeys = ["attempt_id", "case_id", "ownership_epoch", "run_id", "step_id", "task_id"].sort();
+  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index]) ||
+      ["run_id", "task_id", "step_id", "case_id", "attempt_id"].some((key) =>
+        typeof candidate[key] !== "string" || candidate[key].length === 0 || candidate[key].length > 256 || /[\u0000-\u001f\u007f]/.test(candidate[key] as string)) ||
+      !Number.isSafeInteger(candidate.ownership_epoch) || (candidate.ownership_epoch as number) < 0) {
+    throw new Error("Table row response has an invalid series identity header.");
+  }
+  return {
+    run_id: candidate.run_id as string,
+    task_id: candidate.task_id as string,
+    step_id: candidate.step_id as string,
+    case_id: candidate.case_id as string,
+    attempt_id: candidate.attempt_id as string,
+    ownership_epoch: candidate.ownership_epoch as number,
   };
 }
 
@@ -3531,11 +3572,19 @@ export class ControlRoomApi {
         if (binary.status !== "ready") throw new Error("Saved Study magnetic support is unavailable.");
         return decodeSavedSupportBody(binary.data, state.sample_count);
       },
-      studyResultScalars: async (result: StudyStageResult, start: number, options?: RequestOptions) => {
+      studyResultScalars: async (
+        result: StudyStageResult,
+        start: number,
+        options?: RequestOptions & { limit?: number },
+      ) => {
+        const limit = options?.limit ?? 50;
+        if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 2_048) {
+          throw new Error("Saved Study scalar window must use a start >= 0 and limit between 1 and 2048.");
+        }
         const window = await this.requestJson<StudyResultScalarWindow>(
           PROJECT_STUDY_RESULT_SCALARS_PATH, options, {
             path: studyResultPath(result),
-            query: { start, limit: 50 },
+            query: { start, limit },
           },
         );
         return validateStudyResultScalars(window, result);
@@ -4542,7 +4591,7 @@ export class ControlRoomApi {
     pathParams: PathParams,
     query: TableRowsQuery = {},
     options: BinaryRequestOptions = {},
-  ): Promise<BinaryResourceResult<DecodedTableRows>> {
+  ): Promise<BinaryResourceResult<DecodedTableRows, TableSeriesResponseMetadata>> {
     return this.requestBinaryResource(
       path,
       "table-rows",
@@ -4550,6 +4599,9 @@ export class ControlRoomApi {
       options,
       pathParams,
       tableRowsQueryParams(query),
+      (response) => parseTableSeriesIdentityHeader(
+        response.headers.get("x-fullmag-table-series"),
+      ),
     );
   }
 

@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
+
+import type { StudyResultSeriesIdentity } from "@/kernel/api/apiTypes";
 import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 
 import {
+  liveTableForCurrentSeries,
+  liveTableReducer,
+  liveTableSeriesIdentityFromResource,
+  liveTableSeriesResourceScope,
+  liveTableUnsupportedReason,
   shouldLoadLiveTableRows,
   shouldPauseLiveTableRows,
-  liveTableUnsupportedReason,
-  liveTableReducer,
   shouldReplaceLiveTableSnapshot,
+  type LiveTableStateWithIdentity,
 } from "./useLiveTableData";
 
 describe("useLiveTableData", () => {
@@ -33,6 +39,107 @@ describe("useLiveTableData", () => {
       queryKey: "fixed:0:3",
       table: next,
     });
+  });
+
+  it("resets the cursor across A1 → B1 → B2 and keeps each replacement's first live row", () => {
+    const columns = [{ column_id: "step", label: "Step", unit: "1" }];
+    const identity = (stepId: string, attemptId: string): StudyResultSeriesIdentity => ({
+      run_id: "run-1",
+      task_id: "task-1",
+      step_id: stepId,
+      case_id: "default",
+      attempt_id: attemptId,
+      ownership_epoch: 1,
+    });
+    const row = (value: number): ChartTableWindow => ({
+      columnCount: 1,
+      columns,
+      cursorEnd: 1,
+      cursorStart: 1,
+      resyncRequired: false,
+      revision: 1,
+      rowCount: 1,
+      schemaRevision: 1,
+      tableId: "default",
+      totalRows: 1,
+      values: new Float64Array([value]),
+    });
+    const a1 = identity("A1", "attempt-a1");
+    const b1 = identity("B1", "attempt-b1");
+    const b2 = identity("B2", "attempt-b2");
+    expect(liveTableSeriesResourceScope(a1)).not.toBe(liveTableSeriesResourceScope(b1));
+    expect(liveTableSeriesResourceScope(b1)).not.toBe(liveTableSeriesResourceScope(b2));
+    let state: LiveTableStateWithIdentity = {
+      cursor: 1,
+      queryKey: "follow:A1",
+      seriesIdentity: a1,
+      table: row(101),
+    };
+    expect(liveTableForCurrentSeries(state, b1)).toBeNull();
+
+    state = liveTableReducer(state, {
+      expectedSeriesIdentity: b1,
+      queryKey: "follow:B1",
+      requestCursor: 1,
+      seriesIdentity: b1,
+      table: row(201),
+    });
+    expect(state).toMatchObject({ cursor: undefined, queryKey: "follow:B1", seriesIdentity: b1, table: null });
+    expect(liveTableForCurrentSeries({ ...state, table: row(101), seriesIdentity: a1 }, b1)).toBeNull();
+
+    state = liveTableReducer(state, {
+      expectedSeriesIdentity: b1,
+      queryKey: "follow:B1",
+      requestCursor: undefined,
+      seriesIdentity: a1,
+      table: row(199),
+    });
+    expect(state).toMatchObject({ cursor: undefined, queryKey: "follow:B1", seriesIdentity: b1, table: null });
+
+    state = liveTableReducer(state, {
+      expectedSeriesIdentity: b1,
+      queryKey: "follow:B1",
+      requestCursor: undefined,
+      seriesIdentity: b1,
+      table: row(201),
+    });
+    expect(state.table?.values).toEqual(new Float64Array([201]));
+
+    state = liveTableReducer(state, {
+      expectedSeriesIdentity: b2,
+      queryKey: "follow:B2",
+      requestCursor: 1,
+      seriesIdentity: b2,
+      table: row(301),
+    });
+    expect(state).toMatchObject({ cursor: undefined, queryKey: "follow:B2", seriesIdentity: b2, table: null });
+
+    state = liveTableReducer(state, {
+      expectedSeriesIdentity: b2,
+      queryKey: "follow:B2",
+      requestCursor: undefined,
+      seriesIdentity: b2,
+      table: row(301),
+    });
+    expect(state.table?.values).toEqual(new Float64Array([301]));
+    expect(state.table?.schemaRevision).toBe(1);
+  });
+
+  it("keeps the last accepted series pin while scalar metadata is stale", () => {
+    const a1: StudyResultSeriesIdentity = {
+      run_id: "run-1",
+      task_id: "task-a1",
+      step_id: "A1",
+      case_id: "default",
+      attempt_id: "attempt-a1",
+      ownership_epoch: 4,
+    };
+    const retainedIdentity = liveTableSeriesIdentityFromResource({
+      data: { series: a1 },
+      status: "stale",
+    });
+    expect(retainedIdentity).toEqual(a1);
+    expect(liveTableSeriesResourceScope(retainedIdentity)).toBe(liveTableSeriesResourceScope(a1));
   });
 
   it("advances the follow cursor for the empty raw [1,2] delta and retains row one", () => {

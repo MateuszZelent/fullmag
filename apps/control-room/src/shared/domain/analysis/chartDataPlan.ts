@@ -58,6 +58,8 @@ export interface ChartTableWindow {
   revision: number;
   rowCount: number;
   schemaRevision: number;
+  /** Stable archive provenance token; live tables continue to use `revision`. */
+  seriesRevision?: string;
   tableId: string;
   totalRows: number;
   values: Float64Array;

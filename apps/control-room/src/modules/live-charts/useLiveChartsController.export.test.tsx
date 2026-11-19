@@ -63,6 +63,10 @@ vi.mock("./hooks/useLiveTableData", () => ({
   }),
 }));
 
+vi.mock("./hooks/useLiveChartArchivedTable", () => ({
+  useLiveChartArchivedTable: () => null,
+}));
+
 vi.mock("./hooks/useLiveEnergyData", () => ({
   useLiveEnergyData: () => ({
     resource: { data: null, error: null, revision: 1, status: "ready" },

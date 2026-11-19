@@ -124,6 +124,7 @@ import type {
   TableColumnMeta,
   TableListResource,
   TableResource,
+  TableSeriesResponseMetadata,
   TableRowsQuery,
   TableRowsResource,
   HysteresisAdaptiveRefinementResource,
@@ -221,6 +222,7 @@ function ignoreMissingFieldMetaResource<T>({
 
 interface RuntimeResourceOptions {
   enabled?: boolean;
+  pauseLoad?: boolean;
 }
 
 interface SessionScopedResourceOptions<TData> {
@@ -1049,6 +1051,7 @@ function stageExecutionIdentityRefreshRevision(
 
 export function useStageExecutionResource({
   enabled = true,
+  pauseLoad = false,
 }: RuntimeResourceOptions = {}): ResourceResult<StageExecutionResource | null> {
   const { api, resources } = useKernel();
   const { resourceKey, sessionIdentity: resourceSessionIdentity } = useSessionScopedResourceKey(
@@ -1059,6 +1062,7 @@ export function useStageExecutionResource({
     {
       enabled: enabled && resourceSessionIdentity !== null,
       isEqual: stageExecutionSessionIdentityEquals,
+      pauseLoad,
     },
   );
   const requestedIdentityRef =
@@ -1087,6 +1091,7 @@ export function useStageExecutionResource({
   const stageExecutionResource = useResource<StageExecutionResource | null>({
     enabled: enabled && resourceSessionIdentity !== null && sessionIdentity !== null,
     load,
+    pauseLoad,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
@@ -2593,12 +2598,13 @@ export function useFieldMetaResource({
 }
 
 export function useScalarWindowResource({
+  pauseLoad = false,
   columns,
   enabled = true,
   limit = 200,
   sinceRevision,
   tail,
-}: ScalarWindowQuery & { enabled?: boolean } = {}) {
+}: ScalarWindowQuery & { enabled?: boolean; pauseLoad?: boolean } = {}) {
   const { api } = useKernel();
   const unscopedResourceKey = scalarWindowResourceKey({
     columns,
@@ -2621,6 +2627,7 @@ export function useScalarWindowResource({
     enabled: enabled && sessionIdentity !== null,
     load,
     minRefetchIntervalMs: tableRowsMinRefetchIntervalMs(),
+    pauseLoad,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
@@ -2674,7 +2681,7 @@ export function useTableResource(
 
 export function useTableColumnsResource(
   tableId = "default",
-  { enabled = true }: RuntimeResourceOptions = {},
+  { enabled = true, pauseLoad = false }: RuntimeResourceOptions = {},
 ) {
   const { api } = useKernel();
   const unscopedResourceKey = DATA_TABLE_COLUMNS_PATH.replace(
@@ -2695,6 +2702,7 @@ export function useTableColumnsResource(
   return useResource<TableColumnMeta[] | null>({
     enabled: enabled && sessionIdentity !== null,
     load,
+    pauseLoad,
     resolveRevision: (data) => data?.length ?? null,
     resourceKey,
   });
@@ -2785,6 +2793,7 @@ export function useTableRowsBinaryResource(
     decimation,
     enabled = true,
     pauseLoad = false,
+    seriesScope,
     fromRow,
     fromT,
     includeTail,
@@ -2792,21 +2801,25 @@ export function useTableRowsBinaryResource(
     targetPoints,
     toRow,
     toT,
-  }: TableRowsQuery & { enabled?: boolean; pauseLoad?: boolean } = {},
+  }: TableRowsQuery & { enabled?: boolean; pauseLoad?: boolean; seriesScope?: string } = {},
 ) {
   const { api } = useKernel();
-  const unscopedResourceKey = `${tableRowsResourceKey(tableId, {
-    columns,
-    cursor,
-    decimation,
-    fromRow,
-    fromT,
-    includeTail,
-    limit,
-    targetPoints,
-    toRow,
-    toT,
-  })}#binary`;
+  const unscopedResourceKey = tableRowsBinaryResourceKey(
+    tableId,
+    {
+      columns,
+      cursor,
+      decimation,
+      fromRow,
+      fromT,
+      includeTail,
+      limit,
+      targetPoints,
+      toRow,
+      toT,
+    },
+    seriesScope,
+  );
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
     unscopedResourceKey,
   );
@@ -2829,7 +2842,7 @@ export function useTableRowsBinaryResource(
           },
           { sessionScopeKey, signal },
         )
-        .catch(ignoreMissingResource<BinaryResourceResult<DecodedTableRows>>),
+        .catch(ignoreMissingResource<BinaryResourceResult<DecodedTableRows, TableSeriesResponseMetadata>>),
     [
       api,
       columns,
@@ -2846,7 +2859,7 @@ export function useTableRowsBinaryResource(
     ],
   );
 
-  return useResource<BinaryResourceResult<DecodedTableRows> | null>({
+  return useResource<BinaryResourceResult<DecodedTableRows, TableSeriesResponseMetadata> | null>({
     enabled: enabled && sessionIdentity !== null,
     load,
     minRefetchIntervalMs: tableRowsMinRefetchIntervalMs(),
@@ -3392,4 +3405,15 @@ function tableRowsResourceKey(
   const query = params.toString();
   const path = DATA_TABLE_ROWS_PATH.replace("{table_id}", tableId);
   return query ? `${path}?${query}` : path;
+}
+
+export function tableRowsBinaryResourceKey(
+  tableId: string,
+  query: TableRowsQuery,
+  seriesScope?: string,
+): string {
+  const baseResourceKey = `${tableRowsResourceKey(tableId, query)}#binary`;
+  return seriesScope === undefined
+    ? baseResourceKey
+    : `${baseResourceKey}#series:${encodeURIComponent(seriesScope)}`;
 }
