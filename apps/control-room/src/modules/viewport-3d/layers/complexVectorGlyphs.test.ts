@@ -227,7 +227,10 @@ describe("scalar surface phase uniform binding", () => {
       transparent: false,
     });
     expect(material.vertexShader).toContain(
-      "(scalarFromVector(projected) - fmScalarMin) / scalarSpan",
+      "vScalarValue = scalarFromVector(projected);",
+    );
+    expect(material.vertexShader).toContain(
+      "scalarSpan > 0.0 ? (vScalarValue - fmScalarMin) / scalarSpan : 0.5",
     );
     expect(material.uniforms.fmScalarMin?.value).toBe(-2);
     expect(material.uniforms.fmScalarMax?.value).toBe(2);
