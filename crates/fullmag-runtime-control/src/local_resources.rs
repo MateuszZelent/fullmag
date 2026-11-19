@@ -191,7 +191,7 @@ fn available_memory_bytes() -> Result<u64> {
 }
 
 #[cfg(unix)]
-fn available_storage_bytes(path: &Path) -> Result<u64> {
+pub fn available_storage_bytes(path: &Path) -> Result<u64> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes())
         .context("storage path contains an embedded NUL byte")?;
@@ -208,7 +208,7 @@ fn available_storage_bytes(path: &Path) -> Result<u64> {
 }
 
 #[cfg(windows)]
-fn available_storage_bytes(path: &Path) -> Result<u64> {
+pub fn available_storage_bytes(path: &Path) -> Result<u64> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
     let wide = path

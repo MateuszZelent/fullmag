@@ -2404,6 +2404,7 @@ fn prepare_live_accepted(
     let requested_gpu = requested_execution.device.eq_ignore_ascii_case("gpu");
     let mut run_budget = None;
     let mut deferred_fdm_gpu_bb = BTreeSet::new();
+    let mut deferred_response = BTreeSet::new();
     for entry in entries {
         let profile_requests_gpu = entry
             .execution_materialization()
@@ -2423,7 +2424,15 @@ fn prepare_live_accepted(
             ));
         }
         let gpu_requested = requested_gpu || profile_requests_gpu;
-        if gpu_requested && !bounded_gpu_scope(entry.problem()) {
+        if matches!(entry.problem().study, fullmag_ir::StudyIR::FrequencyResponse { .. }) {
+            crate::accepted_fem_frequency_response_worker::validate_requested_execution(
+                &requested_execution,
+            )
+            .map_err(|error| ApiError::unprocessable_with_code(
+                "accepted_frequency_response_unsupported", error.to_string(),
+            ))?;
+            deferred_response.insert(entry.step_id().to_owned());
+        } else if gpu_requested && !bounded_gpu_scope(entry.problem()) {
             if explicit_fdm_projected_bb(entry.problem()) {
                 // Geometry and operator eligibility belong to the lowered plan.
                 deferred_fdm_gpu_bb.insert(entry.step_id().to_owned());
@@ -2442,8 +2451,13 @@ fn prepare_live_accepted(
         });
     }
 
+    if deferred_response.len() > 1 {
+        return Err(ApiError::unprocessable_with_code(
+            "accepted_frequency_response_unsupported",
+            "a live study currently supports one published frequency-response sweep",
+        ));
+    }
     let mut requested_execution = requested_execution;
-    requested_execution.minimum_resources = run_budget;
 
     // Validate every lowered step before publishing RunIntent/CAS. A whole
     // startup Study must never leave an accepted durable run behind a later
@@ -2455,6 +2469,7 @@ fn prepare_live_accepted(
         )
     })?;
     let mut step_ids = Vec::new();
+    let mut response_outputs_derived = false;
     for execution_step in &lowered.steps {
         if !matches!(execution_step.status, fullmag_plan::StudyStepLoweringStatus::Planned) {
             continue;
@@ -2481,11 +2496,63 @@ fn prepare_live_accepted(
                 return Err(accepted_gpu_scope_error(&execution_step.step_id));
             }
         }
+        if let fullmag_ir::BackendPlanIR::FemFrequencyResponse(plan) = &execution_plan.backend_plan {
+            if !cfg!(feature = "fem-gpu") {
+                return Err(ApiError::unprocessable("native FEM frequency response is unavailable in this runtime"));
+            }
+            let problem = entries.iter().find(|entry| entry.step_id() == execution_step.step_id)
+                .map(|entry| entry.problem()).ok_or_else(|| ApiError::internal("missing immutable response input"))?;
+            let device = &requested_execution.device;
+            let unsupported = |error: String| ApiError::unprocessable_with_code(
+                "accepted_frequency_response_unsupported", error);
+            crate::accepted_fem_frequency_response_worker::validate_plan_scope(problem, execution_plan, device)
+                .map_err(|error| unsupported(error.to_string()))?;
+            crate::accepted_fem_frequency_response_worker::validate_native_runtime(problem, execution_plan)
+                .map_err(|error| unsupported(error.to_string()))?;
+            let step = study.steps.iter_mut().find(|step| step.step_id == execution_step.step_id)
+                .ok_or_else(|| ApiError::internal("missing response step for output binding"))?;
+            if !matches!(step.acceptance, fullmag_authoring::StudyAcceptancePolicy::Any)
+                || initial_state.is_some()
+                || solver_profile.is_some()
+                || cuda_trace.is_some()
+                || !problem.problem_meta.seeds.is_empty()
+            {
+                return Err(unsupported(
+                    "accepted driven response requires Any acceptance and its captured provided M0, without a time-domain initial-state selector, solver profile, CUDA trace or seed".into(),
+                ));
+            }
+            let estimate = fullmag_runner::preflight_frequency_response_artifact_resources(plan, Default::default())
+                .map_err(|error| unsupported(error.to_string()))?;
+            let count = plan.frequencies_hz.values_hz.len();
+            response_outputs_derived |= step.outputs.is_empty();
+            bind_live_frequency_response_outputs(step, count)
+                .map_err(|error| unsupported(error.to_string()))?;
+            let budget = run_budget.as_mut().ok_or_else(|| ApiError::internal("missing response resource budget"))?;
+            let multiply = |value: u64, factor| value.checked_mul(factor)
+                .ok_or_else(|| unsupported("frequency response reserve overflow".into()));
+            budget.memory_bytes = budget.memory_bytes.max(multiply(estimate.peak_working_bytes_upper_bound, 2)?)
+                .max(multiply(estimate.publisher_output_bytes_upper_bound, 8)?);
+            let staged_and_retained_bytes =
+                crate::accepted_fem_frequency_response_worker::storage_reservation_bytes(estimate)
+                    .ok_or_else(|| unsupported("frequency response storage reserve overflow".into()))?;
+            crate::accepted_project_storage::AcceptedProjectStorage::preflight_capacity(
+                problem, &store, &step.step_id, staged_and_retained_bytes,
+            )
+            .map_err(|error| unsupported(format!("{error:#}")))?;
+            budget.storage_bytes = budget.storage_bytes.max(staged_and_retained_bytes);
+            deferred_response.remove(&execution_step.step_id);
+        }
         step_ids.push(execution_step.step_id.clone());
     }
     if let Some(step_id) = deferred_fdm_gpu_bb.first() {
         // A skipped or unresolved deferred step must not publish RunIntent/CAS.
         return Err(accepted_gpu_scope_error(step_id));
+    }
+    if let Some(step_id) = deferred_response.first() {
+        return Err(ApiError::unprocessable_with_code(
+            "accepted_frequency_response_unsupported",
+            format!("frequency-response step `{step_id}` has no supported native FEM plan"),
+        ));
     }
     if step_ids.is_empty() {
         return Err(ApiError::unprocessable_with_code(
@@ -2493,6 +2560,16 @@ fn prepare_live_accepted(
             "accepted study has no planned executable steps",
         ));
     }
+    // Lowering supplied the exact sweep sizes above. Output declarations are
+    // part of the Study digest, so bind the preserved captured inputs to the
+    // final derived Study before RunIntent materialization lowers it again.
+    if response_outputs_derived {
+        catalog = rebind_live_frequency_response_catalog(&study, catalog)
+            .map_err(|error| ApiError::unprocessable_with_code(
+                "accepted_execution_materialization_failed", error.to_string(),
+            ))?;
+    }
+    requested_execution.minimum_resources = run_budget;
 
     // Keep the authored document identical to the execution_input pin. The
     // derived legacy profile belongs to the accepted Study, not the editable
@@ -2838,6 +2915,29 @@ fn select_live_step(
         "accepted_study_step_ambiguous",
         "a live Run/Relax command must target exactly one enabled StudyPlan step",
     ))
+}
+
+fn bind_live_frequency_response_outputs(
+    step: &mut fullmag_authoring::StudyStep,
+    frequency_count: usize,
+) -> anyhow::Result<()> {
+    if step.outputs.is_empty() {
+        use fullmag_authoring::{StudyOutputPort, StudyPortDataKind};
+        step.outputs = std::iter::once("response".to_owned())
+            .chain((0..frequency_count).map(|index| format!("response-frequency-{index:06}")))
+            .map(|port_id| StudyOutputPort { port_id, data_kind: StudyPortDataKind::Artifact })
+            .collect();
+    }
+    crate::accepted_fem_frequency_response_worker::validate_declared_outputs(
+        &step.outputs, frequency_count,
+    )
+}
+
+fn rebind_live_frequency_response_catalog(
+    study: &fullmag_authoring::StudyPlan,
+    catalog: fullmag_plan::StudyProblemCatalog,
+) -> Result<fullmag_plan::StudyProblemCatalog, fullmag_plan::StudyCatalogError> {
+    fullmag_plan::StudyProblemCatalog::from_entries(study, catalog.into_entries())
 }
 
 /// Supply the accepted-live observation outputs required by the shared FDM/FEM
@@ -3532,6 +3632,54 @@ mod tests {
         }).collect();
         let catalog = fullmag_plan::StudyProblemCatalog::from_entries(&study, entries).unwrap();
         (scene, study, catalog, problem)
+    }
+
+    #[test]
+    fn accepted_frequency_response_output_binding_rebinds_derived_study_catalog() {
+        let (_, mut study, catalog, _) = selected_b_scene_plan();
+        // This inexpensive planner fixture ordinarily binds Run state flow.
+        // Isolate its first authored input and restore the empty-output shape
+        // seen before live response ports are derived from the native sweep.
+        // Remove downstream steps so no state edge depends on those outputs.
+        study.steps.truncate(1);
+        study.steps[0].inputs.clear();
+        study.steps[0].outputs.clear();
+        let catalog = fullmag_plan::StudyProblemCatalog::from_entries(
+            &study, catalog.into_entries().into_iter().take(1).collect(),
+        ).unwrap();
+        catalog.validate_for(&study).unwrap();
+        let original_entries = catalog.entries().to_vec();
+        let revision = study.revision;
+        // The live response branch declares outputs only after the first
+        // lowering resolves the native sweep size (204 in the pilot).
+        assert!(study.steps[0].outputs.is_empty());
+        super::bind_live_frequency_response_outputs(&mut study.steps[0], 204).unwrap();
+        assert_eq!(study.steps[0].outputs.len(), 205);
+        assert_eq!(study.steps[0].outputs[0].port_id, "response");
+        assert_eq!(study.steps[0].outputs[204].port_id, "response-frequency-000203");
+        assert!(catalog.validate_for(&study).unwrap_err().to_string()
+            .contains("different study revision or digest"));
+
+        let rebound = super::rebind_live_frequency_response_catalog(&study, catalog).unwrap();
+        assert_eq!(study.revision, revision);
+        assert_eq!(rebound.entries(), original_entries.as_slice());
+        rebound.validate_for(&study).unwrap();
+        fullmag_plan::lower_study_plan_with_catalog(&study, &rebound).unwrap();
+        // Repeated preparation preserves explicit valid ports and the catalog.
+        super::bind_live_frequency_response_outputs(&mut study.steps[0], 204).unwrap();
+        assert_eq!(super::rebind_live_frequency_response_catalog(&study, rebound.clone()).unwrap(), rebound);
+    }
+
+    #[test]
+    fn accepted_frequency_response_output_binding_rejects_explicit_invalid_ports() {
+        let (_, mut study, _, _) = selected_b_scene_plan();
+        study.steps[0].outputs = vec![fullmag_authoring::StudyOutputPort {
+            port_id: "final_state".into(),
+            data_kind: fullmag_authoring::StudyPortDataKind::State,
+        }];
+        let explicit = study.steps[0].outputs.clone();
+        assert!(super::bind_live_frequency_response_outputs(&mut study.steps[0], 204).is_err());
+        assert_eq!(study.steps[0].outputs, explicit);
     }
 
     fn selected_b_authored_stage_command(scene_revision: u64) -> crate::types::SessionCommand {
