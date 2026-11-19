@@ -11293,7 +11293,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         continuation_certified_fields = None;
                     }
                     if grid_refresh_command_id.is_some() {
-                        let payload = live_workspace.grid_refresh_snapshot()?;
+                        let payload = live_workspace.grid_refresh_snapshot(remesh_succeeded)?;
                         let publisher_scope = crate::control_room::live_publisher_scope::LivePublisherScope::new(&session_id);
                         anyhow::ensure!(publisher_scope.is_bound()?, "grid refresh requires its attached publisher scope");
                         sync_current_live_snapshot(&session_id, &payload, &publisher_scope)?;

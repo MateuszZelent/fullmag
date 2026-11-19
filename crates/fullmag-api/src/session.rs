@@ -2718,7 +2718,46 @@ fn apply_current_live_snapshot_in_place(
     if let Some(fem_mesh) = req.fem_mesh {
         apply_fem_mesh_update(current, fem_mesh);
     }
-    if let Some(metadata) = req.metadata {
+    if let Some(mut metadata) = req.metadata {
+        if let Some(revision) = metadata.as_object_mut()
+            .and_then(|object| object.remove("prepared_grid_scene_revision"))
+        {
+            let receipt = req.mesh_workspace.as_ref()
+                .and_then(|workspace| workspace.get("last_build_summary"));
+            let revision = revision.as_u64()
+                .ok_or_else(|| ApiError::bad_request("invalid prepared grid scene revision"))?;
+            let plan = &metadata["execution_plan"]["backend_plan"];
+            let certificate = &plan["grid_certificate"];
+            let receipt_matches = receipt.is_some_and(|summary| {
+                summary["status"] == "completed"
+                    && summary["source_scene_revision"].as_u64() == Some(revision)
+                    && certificate.is_object()
+                    && &summary["grid_certificate"] == certificate
+                    && serde_json::from_value::<fullmag_ir::FdmGridCertificateIR>(certificate.clone())
+                        .is_ok_and(|certificate| certificate.validate().is_ok())
+            });
+            if current.scene_document.as_ref().map(|scene| scene.revision) != Some(revision)
+                || !receipt_matches
+                || !matches!(plan["kind"].as_str(), Some("fdm" | "fdm_multilayer"))
+            {
+                return Err(ApiError::conflict(
+                    "prepared grid no longer matches the current scene and build receipt",
+                ));
+            }
+            crate::live_authored_damping::retire_for_prepared_domain(current);
+            // A grid-only receipt updates the prepared domain. Keep the session and
+            // run metadata owned by the API, as for canonical scene preparation.
+            let patch = metadata.as_object_mut().expect("grid revision came from an object");
+            if let Some(previous) = current.metadata.as_ref().and_then(|meta| meta.as_object()) {
+                for (key, value) in previous {
+                    if !patch.contains_key(key)
+                        && !matches!(key.as_str(), "magnetic_state_present" | "antenna_domain_publication")
+                    {
+                        patch.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
         apply_current_live_metadata(current, metadata);
     }
     flags.clear_preview_cache |= domain_fence.is_some_and(|fence| fence.retire_if_replaced(current));
@@ -5561,6 +5600,56 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].step, 1);
         assert_eq!(rows[1].step, 3);
+    }
+
+    #[test]
+    fn desktop_grid_receipt_restores_plan_owned_damping_only_for_the_current_scene() {
+        let mut snapshot = test_current_snapshot();
+        snapshot.scene_document = Some(region_owned_scene_document(7));
+        snapshot.metadata = Some(json!({
+            "authored_damping": crate::live_authored_damping::binding(7, None),
+            "docker_startup": {"request_id": "earlier-run"},
+            "meshing_capabilities": {"available": false},
+            "magnetic_state_present": false,
+        }).into());
+        let certificate = |origin| fullmag_ir::FdmGridCertificateIR::new(
+            [origin, 0.0, 0.0], [2, 1, 1], [1.0e-9; 3], 2, 1024,
+        ).unwrap();
+        let receipt = |revision, plan_certificate, build_certificate| serde_json::from_value(json!({
+            "session_id": "test-session",
+            "mesh_workspace": {"last_build_summary": {
+                "status": "completed", "source_scene_revision": revision,
+                "grid_certificate": build_certificate,
+            }},
+            "metadata": {
+                "prepared_grid_scene_revision": revision,
+                "execution_plan": {"backend_plan": {
+                    "kind": "fdm", "grid": {"cells": [2, 1, 1]},
+                    "grid_certificate": plan_certificate,
+                    "material": {"alpha_field": [0.01, 0.3]},
+                }},
+                "artifact_layout": {"backend": "fdm", "grid_cells": [2, 1, 1]},
+                "meshing_capabilities": {"available": true},
+            },
+        })).unwrap();
+        let current = Some(certificate(0.0));
+        for invalid in [
+            receipt(6, current.clone(), current.clone()),
+            receipt(7, None, None),
+            receipt(7, current.clone(), Some(certificate(1.0e-9))),
+        ] {
+            assert!(apply_current_live_snapshot(&mut snapshot, invalid).is_err());
+            assert_eq!(crate::live_authored_damping::publication_revision(&snapshot), Some(7));
+        }
+        apply_current_live_snapshot(&mut snapshot, receipt(7, current.clone(), current)).unwrap();
+        let alpha = snapshot.latest_fields.get("mat_alpha").expect("prepared damping");
+        assert_eq!(alpha["values"], json!([0.01, 0.3]));
+        assert!(latest_field_source_is_qualified(&snapshot, "mat_alpha", alpha));
+        assert!(alpha.get("observation_frame").is_none());
+        let metadata = snapshot.metadata.as_ref().unwrap();
+        assert_eq!(metadata["docker_startup"]["request_id"], "earlier-run");
+        assert_eq!(metadata["meshing_capabilities"]["available"], true);
+        assert!(metadata.get("magnetic_state_present").is_none());
     }
 
     #[test]

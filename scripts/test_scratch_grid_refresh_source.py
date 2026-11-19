@@ -20,7 +20,7 @@ class ScratchGridRefreshSourceTests(unittest.TestCase):
 
     def test_bootstrap_still_syncs_the_current_scene_before_spawning(self):
         body = rust_block(source(OWNER), "fn run(")
-        start = body.index("if let Some(command_id) = pending_compute_command(")
+        start = body.index(" = pending_compute_command(")
         bootstrap = body[start:body.index("handled_command_id = Some(command_id)", start)]
         self.assertEqual(bootstrap.count("current_session_matches("), 2)
         self.assertLess(bootstrap.index("render_current_scene("),

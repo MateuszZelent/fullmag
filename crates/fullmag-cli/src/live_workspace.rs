@@ -394,11 +394,27 @@ impl LocalLiveWorkspace {
         }
     }
 
-    pub(crate) fn grid_refresh_snapshot(&self) -> Result<CurrentLiveSnapshotPayload> {
+    pub(crate) fn grid_refresh_snapshot(&self, completed: bool) -> Result<CurrentLiveSnapshotPayload> {
         let state = self.state.lock().map_err(|_| anyhow!("grid workspace state lock poisoned"))?;
-        // Do not clone the field/mesh carriers merely to discard them. Grid
-        // authoring publishes no run, bootstrap state or scientific fields.
+        // The API derives static material fields from this exact plan and layout.
+        // A grid preparation has no solver observation or runtime capabilities.
+        let metadata = if completed {
+            let domain = state.metadata.as_ref().context("missing prepared FDM domain")?;
+            let revision = state.mesh_workspace.as_ref()
+                .and_then(|workspace| workspace.pointer("/last_build_summary/source_scene_revision"))
+                .and_then(serde_json::Value::as_u64)
+                .context("missing prepared grid scene revision")?;
+            Some(serde_json::json!({
+                "prepared_grid_scene_revision": revision,
+                "execution_plan": domain.get("execution_plan").context("missing prepared grid plan")?,
+                "artifact_layout": domain.get("artifact_layout").context("missing prepared grid layout")?,
+                "meshing_capabilities": domain.get("meshing_capabilities"),
+            }))
+        } else {
+            None
+        };
         Ok(CurrentLiveSnapshotPayload {
+            metadata,
             mesh_workspace: state.mesh_workspace.clone(),
             engine_log: Some(state.engine_log.clone()),
             ..Default::default()
@@ -2876,6 +2892,28 @@ mod tests {
             },
             no_op_publisher(),
         )
+    }
+
+    #[test]
+    fn grid_receipt_publishes_prepared_plan_only_after_a_successful_build() {
+        let workspace = workspace_with_domain_mesh();
+        let plan = serde_json::json!({"backend_plan": {"kind": "fdm",
+            "grid": {"cells": [2, 1, 1]}, "material": {"damping": 0.01}}});
+        let layout = serde_json::json!({"backend": "fdm", "grid_cells": [2, 1, 1]});
+        workspace.update(|state| {
+            state.metadata = Some(serde_json::json!({"execution_plan": plan, "artifact_layout": layout,
+                "capabilities": {"preview_quantities": ["m"]}}));
+            state.mesh_workspace = Some(serde_json::json!({"last_build_summary": {
+                "source_scene_revision": 7, "status": "completed"}}));
+        });
+        let receipt = workspace.grid_refresh_snapshot(true).unwrap();
+        let metadata = receipt.metadata.unwrap();
+        assert_eq!(metadata["execution_plan"], plan);
+        assert_eq!(metadata["artifact_layout"], layout);
+        assert_eq!(metadata["prepared_grid_scene_revision"], 7);
+        assert!(metadata.get("capabilities").is_none());
+        assert!(receipt.run.is_none() && receipt.live_state.is_none() && receipt.latest_fields.is_none());
+        assert!(workspace.grid_refresh_snapshot(false).unwrap().metadata.is_none());
     }
 
     #[test]
