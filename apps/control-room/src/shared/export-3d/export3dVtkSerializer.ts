@@ -505,6 +505,7 @@ function serializeSingleFrameVtuXml(params: {
   frameIdx: number;
   frameCount: number;
   timeS: number;
+  includeVectorData: boolean;
   phaseRad?: number;
 }): { xml: string; pointCount: number; cellCount: number } {
   const { targets, geoms, ranges, coordinateTransform, encoding } = params;
@@ -587,30 +588,32 @@ function serializeSingleFrameVtuXml(params: {
         params.phaseRad,
       );
       const outCount = g.dataLocation === "cell" ? g.cellCount : g.pointCount;
-      const mappedValues = mapFieldValuesToOutput({
-        values: snapshotValues,
-        componentCount: field.componentCount,
-        outputCount: outCount,
-        targetIndices: g.dataTargetIndices,
-        compactActiveIndexMap: g.compactActiveIndexMap,
-        fieldNodeIndices: field.nodeIndices,
-      });
-
-      const buckets =
-        g.dataLocation === "cell" ? cellArrayBuckets : pointArrayBuckets;
-      const totalOut = g.dataLocation === "cell" ? totalCells : totalPoints;
-      const baseOut = g.dataLocation === "cell" ? cOffset : pOffset;
-
-      let bucket = buckets.get(field.quantityId);
-      if (!bucket) {
-        bucket = {
+      if (params.includeVectorData || field.componentCount !== 3) {
+        const mappedValues = mapFieldValuesToOutput({
+          values: snapshotValues,
           componentCount: field.componentCount,
-          data: new Float32Array(totalOut * field.componentCount),
-        };
-        buckets.set(field.quantityId, bucket);
-      }
-      if (bucket.componentCount === field.componentCount) {
-        bucket.data.set(mappedValues, baseOut * field.componentCount);
+          outputCount: outCount,
+          targetIndices: g.dataTargetIndices,
+          compactActiveIndexMap: g.compactActiveIndexMap,
+          fieldNodeIndices: field.nodeIndices,
+        });
+
+        const buckets =
+          g.dataLocation === "cell" ? cellArrayBuckets : pointArrayBuckets;
+        const totalOut = g.dataLocation === "cell" ? totalCells : totalPoints;
+        const baseOut = g.dataLocation === "cell" ? cOffset : pOffset;
+
+        let bucket = buckets.get(field.quantityId);
+        if (!bucket) {
+          bucket = {
+            componentCount: field.componentCount,
+            data: new Float32Array(totalOut * field.componentCount),
+          };
+          buckets.set(field.quantityId, bucket);
+        }
+        if (bucket.componentCount === field.componentCount) {
+          bucket.data.set(mappedValues, baseOut * field.componentCount);
+        }
       }
 
       const srgbUInt8 = evaluateFieldColorsSrgbUInt8({
@@ -924,6 +927,7 @@ export function serializeVtkExport(
       frameIdx: snapIdx,
       frameCount: 1,
       timeS: 0,
+      includeVectorData: options.vtkIncludeVectorData !== false,
     });
     const bytes = encoder.encode(single.xml);
     return {
@@ -970,6 +974,7 @@ export function serializeVtkExport(
       frameIdx: f,
       frameCount,
       timeS: frameTimeS,
+      includeVectorData: options.vtkIncludeVectorData !== false,
     });
     pointCount = serialized.pointCount;
     cellCount = serialized.cellCount;

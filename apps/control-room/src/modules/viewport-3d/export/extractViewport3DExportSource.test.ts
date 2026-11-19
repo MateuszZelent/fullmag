@@ -13,7 +13,7 @@ import { extractViewport3DExportSource } from "./extractViewport3DExportSource";
 describe("extractViewport3DExportSource", () => {
   useNodeBlobFileReader();
 
-  it("extracts single-grid FDM with inactive regionIds and optional visible airbox", () => {
+  it("extracts single-grid FDM with an independently exportable hidden Airbox", () => {
     const regionIds = new Uint32Array([
       1,
       FMRM_INACTIVE_REGION_ID,
@@ -122,11 +122,17 @@ describe("extractViewport3DExportSource", () => {
         quantityId: "B_demag",
         values,
       },
-      airboxSettings: { visible: true, surfaceOpacityPercent: 20 },
+      fdmSettings: { surfaceColorSource: "component_y", vectorColorMode: "orientation" },
+      airboxSettings: { visible: false, surfaceOpacityPercent: 20 },
+      includeHiddenAirbox: true,
     });
 
     expect(sourceWithAirbox.targets).toHaveLength(2);
-    expect(sourceWithAirbox.targets[1]?.id).toBe("fdm-airbox");
+    expect(sourceWithAirbox.targets[0]?.appearance).toMatchObject({
+      colorMode: "y",
+      vectorColorMode: "orientation",
+    });
+    expect(sourceWithAirbox.targets[1]).toMatchObject({ id: "fdm-airbox", role: "airbox" });
     expect(sourceWithAirbox.targets[1]?.appearance?.opacity).toBeCloseTo(0.2);
   });
 
@@ -340,6 +346,10 @@ describe("extractViewport3DExportSource", () => {
     const modeCompSource = extractViewport3DExportSource({
       fdmLaneActive: true,
       modeCompositionId: "comp-1",
+      analysisOverlay: {
+        visualizationPhaseRad: 0.5,
+        appearance: { displayGain: 7 },
+      } as never,
       modeCompositionPhaseByLayerId: new Map([["mc-l1", 1.25]]),
       modeCompositionFieldLayers: new Map([
         [
@@ -457,7 +467,7 @@ describe("extractViewport3DExportSource", () => {
           {
             part: {
               id: "part-magnet",
-              label: "Cobalt Disk",
+              label: "Cobalt Disk near airbox",
               role: "magnetic",
               boundary_face_start: 0,
               boundary_face_count: 4,
@@ -604,9 +614,9 @@ describe("extractViewport3DExportSource", () => {
           },
         ],
       },
-      getObjectSettings: (id) =>
+      getObjectSettings: ({ objectId }) =>
         ({
-          visible: id !== "obj-hidden",
+          visible: objectId !== "obj-hidden",
           shaderVisible: true,
           wireframeVisible: false,
           surfaceOpacityPercent: 100,

@@ -5,9 +5,14 @@ import type {
   DecodedTopology,
 } from "@/kernel/api/codecs";
 import { FMRM_INACTIVE_REGION_ID } from "@/kernel/api/codecs";
+import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import type { ModeCompositionFieldLayerSnapshotMap } from "@/kernel/visualization/ModeCompositionFieldLayerController";
-import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  surfaceColorSourceToColorMode,
+  type SurfaceColorSource,
+  type VisualizationTargetSettings,
+} from "@/kernel/visualization/ObjectVisualizationController";
 import {
   EXPORT_3D_INACTIVE_REGION_ID,
   type Export3DAnimationMode,
@@ -30,14 +35,17 @@ import {
   normalizeExport3DScalarPalette,
 } from "@/shared/export-3d";
 
+import type { Viewport3DFdmTargetRenderView } from "../model/viewport3DFdmTargetViews";
 import { createPrimitiveObjectGeometry } from "../layers/PrimitiveObjectLayerModel";
 import type {
   FdmGridRenderDomain,
   FdmMultilayerAirboxRenderView,
   FdmNativeLayerRenderView,
+  Viewport3DMeshPart,
 } from "../viewport3dDomainAdapter";
 import type {
   Viewport3DMagnetizationTexturePreview,
+  Viewport3DPrimitiveObject,
   Viewport3DPrimitiveRenderModel,
 } from "../viewport3dPrimitiveModel";
 import {
@@ -85,6 +93,8 @@ export interface Viewport3DExportAirboxSettings {
 
 export interface Viewport3DExportSourceInput {
   readonly airboxSettings?: Viewport3DExportAirboxSettings | null;
+  /** Expose available Airbox geometry to the export dialog, even if hidden in the view. */
+  readonly includeHiddenAirbox?: boolean;
   readonly analysisComplexField?: DecodedComplexFieldVector | null;
   readonly analysisOverlay?: AnalysisFieldOverlayState | null;
   readonly domainId?: string | null;
@@ -96,10 +106,11 @@ export interface Viewport3DExportSourceInput {
   readonly fdmNativeLayerViews?: readonly FdmNativeLayerRenderView[] | null;
   readonly fdmRegionMembershipBinary?: DecodedFdmRegionMembership | null;
   readonly fdmSettings?: Viewport3DExportFdmSettings | null;
+  readonly fdmTargetViews?: readonly Viewport3DFdmTargetRenderView[];
   readonly fieldModel?: Viewport3DFieldRenderModel | null;
   readonly fieldVector?: DecodedFieldVector | null;
-  readonly getObjectSettings?: (objectId: string) => VisualizationTargetSettings;
-  readonly getPartSettings?: (partId: string) => VisualizationTargetSettings;
+  readonly getObjectSettings?: (object: Viewport3DPrimitiveObject) => VisualizationTargetSettings;
+  readonly getPartSettings?: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
   readonly magnetizationTexturePreviews?: ReadonlyMap<
     string,
     Viewport3DMagnetizationTexturePreview
@@ -113,7 +124,7 @@ export interface Viewport3DExportSourceInput {
   readonly scalarColorPalette?: string | null;
   readonly sessionDiscretization?: "fdm" | "fem" | null;
   readonly topology?: DecodedTopology | null;
-  readonly topologyModel?: Viewport3DTopologyRenderModel | null;
+  readonly topologyModel?: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
   readonly vectorColorMode?: string | null;
   readonly visualizationDebugSource?: {
     readonly fullFieldVector?: DecodedFieldVector | null;
@@ -145,23 +156,6 @@ export function sanitizeSlug(raw: string | null | undefined, fallback: string): 
   return cleaned || fallback;
 }
 
-function isAirboxOrFarAirLabel(
-  role: string | null | undefined,
-  label: string | null | undefined,
-  id?: string | null,
-): boolean {
-  const haystack = `${role ?? ""} ${label ?? ""} ${id ?? ""}`.toLowerCase();
-  return (
-    haystack.includes("airbox") ||
-    haystack.includes("air_box") ||
-    haystack.includes("far_air") ||
-    haystack.includes("far-air") ||
-    haystack.includes("far_field") ||
-    haystack.includes("farfield") ||
-    haystack.includes("exterior_air")
-  );
-}
-
 function parseHexRgbColor(hex: string | null | undefined): Export3DRgbTuple | null {
   if (!hex) return null;
   const trimmed = hex.trim();
@@ -191,18 +185,17 @@ function resolveColorModeFromSettings(
   field: Export3DFieldInput | null | undefined,
 ): Export3DColorMode {
   const sourceLower = surfaceColorSource?.trim().toLowerCase() ?? "";
-  if (sourceLower === "monochrome") return "monochrome";
-  if (sourceLower === "hsl" || sourceLower === "rgb") return "orientation";
-  if (sourceLower === "x" || sourceLower === "y" || sourceLower === "z") {
-    return sourceLower;
-  }
-  if (vectorColorMode) {
-    return normalizeExport3DColorMode(vectorColorMode);
-  }
-  if (!field) return "monochrome";
-  if (field.componentCount === 1) return "scalar";
-  if (field.kind === "complex") return "magnitude";
-  return "orientation";
+  if (sourceLower === "solid" || sourceLower === "monochrome") return "monochrome";
+  if (field?.componentCount === 1) return "scalar";
+  const fallback = normalizeExport3DColorMode(
+    vectorColorMode,
+    field ? (field.kind === "complex" ? "magnitude" : "orientation") : "monochrome",
+  );
+  if (sourceLower === "scalar") return fallback;
+  return normalizeExport3DColorMode(
+    sourceLower === "rgb" ? "orientation" : surfaceColorSourceToColorMode(sourceLower as SurfaceColorSource),
+    fallback,
+  );
 }
 
 function resolveComplexRepresentation(
@@ -398,11 +391,14 @@ function findModeCompositionFieldForTarget(
     (layer?.layer_id
       ? input.modeCompositionPhaseByLayerId?.get(layer.layer_id)
       : undefined) ?? layer?.phase_rad;
+  const overlay = overlayComplexOptions(input.analysisOverlay);
   return convertComplexFieldToExportInput(matchedSnapshot.field, {
-    amplitudeScale: layer?.amplitude_scale,
-    complexPhaseRad: phaseRad,
-    complexRepresentation: resolveComplexRepresentation(layer?.representation),
-    ...overlayComplexOptions(input.analysisOverlay),
+    ...overlay,
+    amplitudeScale: layer?.amplitude_scale ?? overlay.amplitudeScale,
+    complexPhaseRad: phaseRad ?? overlay.complexPhaseRad,
+    complexRepresentation: layer?.representation
+      ? resolveComplexRepresentation(layer.representation)
+      : overlay.complexRepresentation,
   });
 }
 
@@ -466,6 +462,7 @@ function resolveTargetAppearance(
     includeSurface: settings?.shaderVisible ?? true,
     includeWireframe: settings?.wireframeVisible ?? false,
     includeVectors: settings?.vectorsVisible ?? Boolean(field && field.componentCount === 3),
+    ...(settings?.vectorColorMode ? { vectorColorMode: normalizeExport3DColorMode(settings.vectorColorMode) } : {}),
   };
 }
 
@@ -591,9 +588,9 @@ function extractFdmTargets(
     }
 
     if (
-      input.airboxSettings?.visible &&
       input.fdmMultilayerAirboxView &&
-      input.fdmMultilayerAirboxView.settings?.visible !== false
+      (input.includeHiddenAirbox ||
+        (input.airboxSettings?.visible && input.fdmMultilayerAirboxView.settings?.visible !== false))
     ) {
       const airView = input.fdmMultilayerAirboxView;
       const airField = airView.fieldVector
@@ -606,6 +603,7 @@ function extractFdmTargets(
       targets.push({
         kind: "fdm_grid",
         id: "airbox",
+        role: "airbox",
         name: "Airbox",
         gridShape: airView.domain.shape,
         cellSizeM: airView.domain.spacing,
@@ -640,9 +638,12 @@ function extractFdmTargets(
       ? buildActiveMaskFromRegionIds(regionIds)
       : { activeMask: null, hasInactive: false };
 
+    const objectViews = input.fdmTargetViews?.filter((view) => view.target.kind === "object");
+    const objectView = objectViews?.length === 1 ? objectViews[0] : null;
+    const settings = objectView?.settings ?? input.fdmSettings;
     const modeField = findModeCompositionFieldForTarget(
       input,
-      ["fdm-domain", FULL_VIEWPORT_3D_TARGET_ID],
+      [objectView?.target.id, "fdm-domain", FULL_VIEWPORT_3D_TARGET_ID],
       null,
       true,
     );
@@ -650,8 +651,9 @@ function extractFdmTargets(
       !modeField && input.analysisComplexField
         ? convertComplexFieldToExportInput(input.analysisComplexField, overlayOpts)
         : null;
-    const candidateReal =
-      input.fieldVector ?? input.visualizationDebugSource?.fullFieldVector ?? null;
+    const candidateReal = objectView
+      ? objectView.fieldVector
+      : input.fieldVector ?? input.visualizationDebugSource?.fullFieldVector ?? null;
     const realField =
       !modeField && !complexField && candidateReal
         ? convertRealFieldToExportInput(candidateReal)
@@ -664,24 +666,25 @@ function extractFdmTargets(
       );
     }
 
-    targets.push({
-      kind: "fdm_grid",
-      id: "fdm-domain",
-      name: input.domainId || "FDM Domain",
-      gridShape: domain.shape,
-      cellSizeM: domain.spacing,
-      originM: domain.origin,
-      ...(activeMask ? { activeMask } : {}),
-      ...(regionIds ? { regionIds } : {}),
-      field,
-      appearance: resolveTargetAppearance(
-        input.fdmSettings,
+    if (settings?.visible !== false) {
+      targets.push({
+        kind: "fdm_grid",
+        id: "fdm-domain",
+        name: input.domainId || "FDM Domain",
+        gridShape: domain.shape,
+        cellSizeM: domain.spacing,
+        originM: domain.origin,
+        ...(activeMask ? { activeMask } : {}),
+        ...(regionIds ? { regionIds } : {}),
         field,
-        defaultPalette,
-      ),
-    });
+        appearance: {
+          ...resolveTargetAppearance(settings, field, defaultPalette),
+          colorRange: objectView?.surfaceColors?.range,
+        },
+      });
+    }
 
-    if (input.airboxSettings?.visible) {
+    if (input.includeHiddenAirbox || input.airboxSettings?.visible) {
       const airField = input.fdmAirboxFieldVector
         ? convertRealFieldToExportInput(input.fdmAirboxFieldVector)
         : null;
@@ -694,6 +697,7 @@ function extractFdmTargets(
         targets.push({
           kind: "fdm_grid",
           id: "fdm-airbox",
+          role: "airbox",
           name: "Airbox",
           gridShape: domain.shape,
           cellSizeM: domain.spacing,
@@ -707,24 +711,6 @@ function extractFdmTargets(
             includeSurface: true,
             includeWireframe: false,
             includeVectors: Boolean(airField),
-          },
-        });
-      } else if (airField) {
-        targets.push({
-          kind: "fdm_grid",
-          id: "fdm-airbox",
-          name: "Airbox",
-          gridShape: domain.shape,
-          cellSizeM: domain.spacing,
-          originM: domain.origin,
-          field: airField,
-          appearance: {
-            colorMode: "magnitude",
-            colorPalette: defaultPalette,
-            opacity: airOpacity,
-            includeSurface: true,
-            includeWireframe: false,
-            includeVectors: true,
           },
         });
       }
@@ -1108,14 +1094,10 @@ function extractFemTargets(
   const rawMagneticParts = topologyModel?.magneticParts ?? [];
 
   const visibleMagneticParts = rawMagneticParts.filter((pm) => {
-    const partExt = pm.part as {
-      readonly role?: string | null;
-      readonly label?: string | null;
-    };
-    if (isAirboxOrFarAirLabel(partExt.role, partExt.label, pm.part.id)) {
+    if (isVisualizationAirboxIdentity(pm.part)) {
       return false;
     }
-    if (input.getPartSettings?.(pm.part.id)?.visible === false) {
+    if (input.getPartSettings?.(pm.part)?.visible === false) {
       return false;
     }
     return true;
@@ -1141,7 +1123,7 @@ function extractFemTargets(
       nodeCount,
       partMask,
     );
-    const partSettings = input.getPartSettings?.(pm.part.id);
+    const partSettings = input.getPartSettings?.(pm.part);
     const partLabel =
       (pm.part as { readonly label?: string | null }).label || pm.part.id;
     const built = buildFemTargetFromSelection({
@@ -1164,6 +1146,7 @@ function extractFemTargets(
     targets.length === 0 &&
     topologyModel &&
     topologyModel.magneticParts.length === 0 &&
+    topologyModel.airboxParts.length === 0 &&
     (topologyModel.fallbackSurfaceIndices.length > 0 || (topology?.cellCount ?? 0) > 0)
   ) {
     const allNodes = new Uint8Array(nodeCount).fill(1);
@@ -1211,15 +1194,16 @@ function extractFemTargets(
     if (built) targets.push(built);
   }
 
-  if (input.airboxSettings?.visible && topologyModel?.airboxParts.length) {
+  if (topologyModel && (input.includeHiddenAirbox || input.airboxSettings?.visible)) {
     for (const airPm of topologyModel.airboxParts) {
-      const partSettings = input.getPartSettings?.(airPm.part.id);
-      if (partSettings?.visible === false) continue;
+      const partSettings = input.getPartSettings?.(airPm.part);
+      if (!input.includeHiddenAirbox && partSettings?.visible === false) continue;
       const airMask = new Uint8Array(nodeCount);
+      const { surfaceIndices } = airPm;
       markNodeSelection(airPm.fullNodeSelection, airMask, nodeCount);
-      if (airPm.surfaceIndices) {
-        for (let i = 0; i < airPm.surfaceIndices.length; i += 1) {
-          const idx = airPm.surfaceIndices[i] ?? -1;
+      if (surfaceIndices) {
+        for (let i = 0; i < surfaceIndices.length; i += 1) {
+          const idx = surfaceIndices[i] ?? -1;
           if (idx >= 0 && idx < nodeCount) airMask[idx] = 1;
         }
       }
@@ -1249,7 +1233,7 @@ function extractFemTargets(
             0.2,
         },
       });
-      if (built) targets.push(built);
+      if (built) targets.push({ ...built, role: "airbox" });
     }
   }
 
@@ -1275,14 +1259,10 @@ function extractPrimitiveFallbackTargets(
   const texturePreviewsMeta: Record<string, unknown>[] = [];
 
   for (const obj of objects) {
-    const objSettings = input.getObjectSettings?.(obj.objectId);
-    if (objSettings?.visible === false) continue;
-    if (
-      isAirboxOrFarAirLabel(obj.role, obj.label, obj.objectId) &&
-      !input.airboxSettings?.visible
-    ) {
-      continue;
-    }
+    const objSettings = input.getObjectSettings?.(obj);
+    const airbox = isVisualizationAirboxIdentity({ role: obj.role, id: obj.objectId });
+    const visible = objSettings?.visible !== false && (!airbox || input.airboxSettings?.visible);
+    if (!visible && !(airbox && input.includeHiddenAirbox)) continue;
 
     const geometry = createPrimitiveObjectGeometry(obj);
     try {
@@ -1339,6 +1319,7 @@ function extractPrimitiveFallbackTargets(
       targets.push({
         kind: "surface_geometry",
         id: obj.objectId,
+        ...(airbox ? { role: "airbox" as const } : {}),
         name: obj.label || obj.fallbackLabel || obj.objectId,
         positionsM,
         indices,
@@ -1349,7 +1330,7 @@ function extractPrimitiveFallbackTargets(
           monochromeColor: settingsRgb ?? previewRgb ?? defaultRgb,
           opacity:
             resolveSettingsOpacity(objSettings) ??
-            (isAirboxOrFarAirLabel(obj.role, obj.label, obj.objectId)
+            (airbox
               ? resolveSettingsOpacity(input.airboxSettings) ?? 0.25
               : 1),
           includeSurface: objSettings?.shaderVisible ?? true,
@@ -1405,10 +1386,9 @@ export function extractViewport3DExportSource(
     primitiveMeta = fallback.texturePreviewsMeta;
   }
 
-  const primaryField = targets.find((t) => Boolean(t.field))?.field ?? null;
-  const hasComplexField =
-    Boolean(input.analysisComplexField) ||
-    targets.some((t) => t.field?.kind === "complex");
+  const primaryField = targets.find((target) => target.role !== "airbox" && target.field)?.field ??
+    targets.find((target) => target.field)?.field ?? null;
+  const hasComplexField = targets.some((t) => t.field?.kind === "complex");
 
   const defaultColorMode = resolveColorModeFromSettings(
     input.analysisOverlay?.appearance?.surfaceColorSource ??
