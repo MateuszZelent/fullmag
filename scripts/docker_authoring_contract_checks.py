@@ -132,6 +132,7 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
                 ('-p', 'fullmag-session', '--lib', 'durable_prestart_stop_fences'),
                 ('-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-scheduler',
                  'transient_pre_spawn_read_releases_slot'),
+                ('-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-worker', 'gpu_launch_'),
             )
         ),
         "fem-response-worker-contracts": (
