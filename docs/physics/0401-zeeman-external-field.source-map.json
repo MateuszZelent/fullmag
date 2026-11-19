@@ -44,6 +44,18 @@
       "responsibility": "public Zeeman authoring and lowering"
     },
     {
+      "id": "python-stage-uniform-field",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_export_stage_draft_with_identity",
+      "responsibility": "captures the script-imported Run or Relax uniform field in tesla"
+    },
+    {
+      "id": "stage-uniform-field-replay",
+      "path": "crates/fullmag-application/src/script_stage_materialization.rs",
+      "symbol": "apply_stage_external_field",
+      "responsibility": "replays the stage-local uniform field without changing the base model"
+    },
+    {
       "id": "planner-fdm",
       "path": "crates/fullmag-plan/src/fdm.rs",
       "symbol": "plan_fdm",
@@ -51,13 +63,13 @@
     },
     {
       "id": "fdm-active-field",
-      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields/zeeman.rs",
       "symbol": "external_field_add_into_soa",
       "responsibility": "adds the resolved field to active-cell FDM effective-field assembly"
     },
     {
       "id": "fdm-active-energy",
-      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields/energy.rs",
       "symbol": "external_energy_from_fields",
       "responsibility": "reduces Zeeman energy over active FDM cells"
     },

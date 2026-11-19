@@ -3549,8 +3549,10 @@ function buildSelectedVisualizationGroup(
   );
   const selectedQuantityId = normalizeQuantityIdOrDefault(
     settings?.activeQuantityId ??
-      context.visualizationState?.quantity?.active_quantity_id ??
-      context.visualizationState?.active_quantity_id,
+      (isAirboxLikeTarget
+        ? DEFAULT_AIRBOX_VISUALIZATION.activeQuantityId
+        : context.visualizationState?.quantity?.active_quantity_id ??
+          context.visualizationState?.active_quantity_id),
   );
   const selectedQuantityItems = quantityItemsForVisualizationTarget(
     selectedQuantityId,

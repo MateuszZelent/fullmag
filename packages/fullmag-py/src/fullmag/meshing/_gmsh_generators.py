@@ -86,19 +86,24 @@ def _algorithm_3d_name(algorithm: int) -> str:
     }.get(int(algorithm), str(int(algorithm)))
 
 
-def _stl_meshing_retry_algorithm(
-    algorithm_3d: int,
-    attempted_algorithms: set[int],
-    exc: Exception,
-) -> int | None:
+def _is_stl_boundary_recovery_failure(exc: Exception) -> bool:
     message = str(exc)
-    is_boundary_recovery_failure = (
+    return (
         "PLC Error" in message
         or "segment and a facet intersect" in message
         or "Recovering boundary" in message
         or "Invalid boundary mesh" in message
         or "overlapping facets" in message
     )
+
+
+def _stl_meshing_retry_algorithm(
+    algorithm_3d: int,
+    attempted_algorithms: set[int],
+    exc: Exception,
+) -> int | None:
+    message = str(exc)
+    is_boundary_recovery_failure = _is_stl_boundary_recovery_failure(exc)
     is_algorithm_failure = "3D mesh failed" in message
     if not is_boundary_recovery_failure and not is_algorithm_failure:
         return None
@@ -1017,6 +1022,8 @@ def _build_stl_volume_model(
     path: Path,
     *,
     return_topology: bool = False,
+    force_reparametrize: bool = False,
+    reparametrize_log: list[bool] | None = None,
 ):
     """Recover strict material domains, retaining nested shells as cavities.
 
@@ -1024,7 +1031,7 @@ def _build_stl_volume_model(
     generation explicitly requests the topology for airbox construction, so the
     expensive geometric classification is shared rather than repeated.
     """
-    for reparametrize in (False, True):
+    for reparametrize in ((True,) if force_reparametrize else (False, True)):
         if reparametrize:
             emit_progress('Gmsh: retrying STL geometry recovery with reparametrized surfaces')
             gmsh.clear()
@@ -1044,6 +1051,8 @@ def _build_stl_volume_model(
             if not reparametrize and 'Wrong topology of boundary mesh for parametrization' in str(exc):
                 continue
             raise
+    if reparametrize_log is not None:
+        reparametrize_log.append(reparametrize)
     volume_groups,surface_groups = material_shell_volumes(gmsh,topology)
     volumes = [tag for tags in volume_groups.values() for tag in tags]
     surfaces = [tag for tags in surface_groups.values() for tag in tags]
@@ -1063,8 +1072,10 @@ def _mesh_stl_surface(
     opts = options or MeshOptions()
     stl_opts = _sanitize_volume_mesh_options(opts, context="STL mesh")
     attempted_algorithms: set[int] = set()
+    force_reparametrize = False
     while True:
         attempted_algorithms.add(int(stl_opts.algorithm_3d))
+        reparametrize_log: list[bool] = []
         try:
             return _mesh_stl_surface_once(
                 path,
@@ -1075,8 +1086,23 @@ def _mesh_stl_surface(
                 options=stl_opts,
                 provisional_interface_markers=provisional_interface_markers,
                 geometry_name=geometry_name,
+                force_reparametrize=force_reparametrize,
+                reparametrize_log=reparametrize_log,
             )
         except Exception as exc:
+            # Ordinary classified patches can be too large to remesh without
+            # folding (overlapping facets between patches). Reparametrized
+            # patches are the geometric remedy; try them before another
+            # tetrahedralizer, which cannot repair a folded boundary mesh.
+            if (_is_stl_boundary_recovery_failure(exc)
+                    and reparametrize_log == [False]):
+                emit_progress(
+                    f"Gmsh: STL boundary mesh is invalid after ordinary surface "
+                    f"classification ({exc}); retrying with reparametrized surfaces"
+                )
+                force_reparametrize = True
+                attempted_algorithms.discard(int(stl_opts.algorithm_3d))
+                continue
             retry_algorithm = _stl_meshing_retry_algorithm(
                 int(stl_opts.algorithm_3d),
                 attempted_algorithms,
@@ -1102,6 +1128,8 @@ def _mesh_stl_surface_once(
     options: MeshOptions,
     provisional_interface_markers: set[int] | None = None,
     geometry_name: str | None = None,
+    force_reparametrize: bool = False,
+    reparametrize_log: list[bool] | None = None,
 ) -> MeshData:
     stl_opts = options
     gmsh = _import_gmsh()
@@ -1110,7 +1138,13 @@ def _mesh_stl_surface_once(
     try:
         _configure_gmsh_threads(gmsh)
         gmsh.model.add(path.stem)
-        body_vols, body_surfs, shell_topology = _build_stl_volume_model(gmsh, path, return_topology=True)
+        body_vols, body_surfs, shell_topology = _build_stl_volume_model(
+            gmsh,
+            path,
+            return_topology=True,
+            force_reparametrize=force_reparametrize,
+            reparametrize_log=reparametrize_log,
+        )
         has_airbox = airbox is not None
         airbox_field_ids: list[int] = []
         if has_airbox:
@@ -1237,6 +1271,8 @@ def _build_stl_volume_models_for_components(
     *,
     return_topology: bool = False,
     coordinate_scale: float = 1.0,
+    force_reparametrize: bool = False,
+    reparametrize_log: list[bool] | None = None,
 ):
     """Recover owned STL shells with a bounded geometry-parametrization retry."""
     names = [component.geometry_name for component in components]
@@ -1244,7 +1280,7 @@ def _build_stl_volume_models_for_components(
         raise StlTopologyError('STL source-component identities must be unique')
     # Sparse closed surfaces can stall Gmsh's forced single-map partitioning.
     # Use ordinary classified patches first, matching the single-STL importer.
-    for reparametrize in (False, True):
+    for reparametrize in ((True,) if force_reparametrize else (False, True)):
         if reparametrize:
             emit_progress('Gmsh: retrying component STL geometry with reparametrized surfaces')
             gmsh.clear()
@@ -1263,6 +1299,8 @@ def _build_stl_volume_models_for_components(
                     and 'Wrong topology of boundary mesh for parametrization' in str(exc)):
                 continue
             raise
+    if reparametrize_log is not None:
+        reparametrize_log.append(reparametrize)
     volumes,surfaces = material_shell_volumes(gmsh,topology)
     if set(volumes) != set(names):
         raise StlTopologyError('Could not recover all imported STL source-component identities')
@@ -1287,6 +1325,48 @@ def generate_shared_domain_mesh_from_components(
     volume → geometry_name mapping is established *before* mesh generation,
     giving downstream code a stable identity without bbox/centroid heuristics.
     """
+    reparametrize_log: list[bool] = []
+    try:
+        return _generate_shared_domain_mesh_from_components_once(
+            components,
+            hmax=hmax,
+            order=order,
+            airbox=airbox,
+            options=options,
+            force_reparametrize=False,
+            reparametrize_log=reparametrize_log,
+        )
+    except Exception as exc:
+        # Ordinary classified patches can be too large to remesh without
+        # folding; Gmsh then rejects overlapping boundary facets. Rebuild
+        # the shells from reparametrized patches before any fallback.
+        if not (_is_stl_boundary_recovery_failure(exc) and reparametrize_log == [False]):
+            raise
+        emit_progress(
+            f"Gmsh: component STL boundary mesh is invalid after ordinary surface "
+            f"classification ({exc}); retrying with reparametrized surfaces"
+        )
+    return _generate_shared_domain_mesh_from_components_once(
+        components,
+        hmax=hmax,
+        order=order,
+        airbox=airbox,
+        options=options,
+        force_reparametrize=True,
+        reparametrize_log=None,
+    )
+
+
+def _generate_shared_domain_mesh_from_components_once(
+    components: list[ComponentDescriptor],
+    *,
+    hmax: float,
+    order: int,
+    airbox: AirboxOptions | None,
+    options: MeshOptions | None,
+    force_reparametrize: bool,
+    reparametrize_log: list[bool] | None,
+) -> SharedDomainMeshResult:
     if not components:
         raise ValueError("at least one component is required")
 
@@ -1317,6 +1397,8 @@ def generate_shared_domain_mesh_from_components(
             components,
             return_topology=True,
             coordinate_scale=coordinate_scale,
+            force_reparametrize=force_reparametrize,
+            reparametrize_log=reparametrize_log,
         )
         for component_index, comp in enumerate(components, start=1):
             new_vols = component_volume_tags[comp.geometry_name]

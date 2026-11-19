@@ -13,6 +13,11 @@ pub(super) struct AcceptedEquilibriumCriterion {
     pub(super) status: String,
     pub(super) converged: bool,
     pub(super) stop_reason: fullmag_ir::StageStopReason,
+    /// Note 0830, eq-k0-forced-residual-torque: the user forced linearization
+    /// around a non-converged relax state. Omitted when false so converged
+    /// certificates and their digests keep their exact bytes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) forced: bool,
 }
 
 #[derive(Debug, Clone)]

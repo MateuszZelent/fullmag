@@ -3739,6 +3739,7 @@ class BackendPackageTests(unittest.TestCase):
             self.assertEqual(owner.read_bytes(), before)
             self.assertEqual((workspace / ".fullmag-build/cargo-fingerprint").read_bytes(), b"cache")
 
+    @patch.dict(os.environ, {backend.DEV_CUDA_ARCHITECTURES_ENV: "86-real"})
     def test_direct_build_keeps_runner_workspace_and_sets_explicit_mode(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3767,6 +3768,7 @@ class BackendPackageTests(unittest.TestCase):
             self.assertIn("/direct/release/build/", environment["FULLMAG_FEM_NATIVE_BUILD_ROOT"])
             self.assertNotIn("backend-dev", environment["FULLMAG_FEM_NATIVE_BUILD_ROOT"])
 
+    @patch.dict(os.environ, {backend.DEV_CUDA_ARCHITECTURES_ENV: "86-real"})
     def test_direct_build_native_cache_roots_are_stable_and_cache_scoped(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

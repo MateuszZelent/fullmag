@@ -157,7 +157,25 @@ pub(super) fn native_modal_floquet_periodic_pairs<'a>(
     Ok(pairs)
 }
 
+/// Isolated-body K0 request (note 0830, "Otwarte pudełko powietrza"): the
+/// whole outer airbox boundary is Robin and the mesh has no periodic seams.
+pub(crate) fn open_airbox_k0_modal_requested(plan: &FemEigenPlanIR) -> bool {
+    plan.magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::OpenAirboxK0
+        && plan.enable_demag
+        && plan.operator.include_demag
+        && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+        && matches!(plan.damping_policy, EigenDampingPolicyIR::Ignore)
+        && matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Free)
+        && is_gamma_k_sampling(plan.k_sampling.as_ref())
+        && plan.air_box_config.is_some()
+        && plan.mesh.periodic_node_pairs.is_empty()
+        && plan.mesh.periodic_boundary_pairs.is_empty()
+}
+
 pub(super) fn shared_domain_k0_modal_requested(plan: &FemEigenPlanIR) -> bool {
+    if open_airbox_k0_modal_requested(plan) {
+        return true;
+    }
     plan.enable_demag
         && plan.operator.include_demag
         && (matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)

@@ -21,7 +21,7 @@ from types import MappingProxyType
 import fullmag_storage as storage
 from docker_build_control import (BuildControl, BuildControlError, DockerObservationBudgetExceeded, canonical, control_read_script, docker_capture,
                                   compose_capture, build_volume_toolchain, build_volume_runtime_images, bounded_capture,
-                                  mirror_console)
+                                  DEV_CUDA_TARGET_ENV, mirror_console, receipt_dev_cuda_target)
 from docker_dev_host import docker_argv, require_host, local_volume, validate_host_path
 import docker_preclaim_cancelled_restart as preclaim_restart
 import docker_saved_authoring_history as retained_history
@@ -2397,6 +2397,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     device_access = _resolve_gpu_access(policy) if retained_device_access is None else retained_device_access
     if provided_operation is None:
         toolchain = build_volume_toolchain(selected)
+        cuda_target = receipt_dev_cuda_target(toolchain, required=True)
         control = BuildControl(identity, toolchain["inputs"]["build_args"]["FULLMAG_CUDA_BASE_IMAGE"])
         helper_repo = Path(helper_source_binding["root"]) if helper_source_binding is not None else selected
         _revalidate_helper_source_binding(helper_source_binding, selected)
@@ -2409,6 +2410,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     else:
         control = provided_control
         toolchain, images = _validate_prepared_start_context(prepared)
+        cuda_target = receipt_dev_cuda_target(toolchain)
     snapshot = _active_isolated_snapshot(control)
     if snapshot is not None and (snapshot["source_root"] != str(selected) or args.script is not None
           or getattr(args, "fresh_state", False)):
@@ -2721,6 +2723,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         environment = {**os.environ, "FULLMAG_COMPOSE_PROJECT": control.project,
             "FULLMAG_COMPOSE_NETWORK": identity["network_name"],
             "FULLMAG_DOCKER_DEVICE_ACCESS": device_access,
+            DEV_CUDA_TARGET_ENV: cuda_target or "",
             "FULLMAG_BUILD_CONTROL_VOLUME": control.volume,
             "FULLMAG_SOURCE_COMMIT": storage.git(selected, "rev-parse", "HEAD"),
             "FULLMAG_DEVELOPMENT_INPUTS_PATH": "/opt/fullmag/control/frontend/development-inputs.json",
@@ -2753,6 +2756,9 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         if configured.returncode or len(configured.stdout) > 1024 * 1024:
             raise BuildControlError("DEV Compose render failed: " + configured.stderr.decode("utf-8", "replace"))
         document = json.loads(configured.stdout)
+        backend_environment = document["services"]["backend"]["environment"]
+        if backend_environment.get(DEV_CUDA_TARGET_ENV, "") != (cuda_target or ""):
+            raise BuildControlError("DEV Compose backend CUDA target differs from the toolchain receipt")
         from docker_dev_network import apply_requested_subnet
         apply_requested_subnet(document, requested_network_subnet)
         from docker_dev_defaults import configured_group_budget
@@ -7138,9 +7144,10 @@ def _verified_frontend_recovery_image(control, selected):
     from bootstrap_docker_toolchain import read_input, tracked_input_files
     from docker_dev import BASE_CONTEXT_FILES, RUNTIME_IMAGE_CONTEXT_FILES
     from docker_build_control import toolchain_configuration
-    configured = toolchain_configuration(selected, control.identity)
-    build = configured['services']['fem-gpu-toolchain']['build']
     toolchain = control.read('toolchain/verified.json')
+    cuda_target = receipt_dev_cuda_target(toolchain)
+    configured = toolchain_configuration(selected, control.identity, cuda_target=cuda_target)
+    build = configured['services']['fem-gpu-toolchain']['build']
     expected = {'source_inputs': [{'path': p.as_posix(), 'sha256': hashlib.sha256(read_input(selected, p)).hexdigest()}
                                  for p in tracked_input_files(selected)],
                 'build_args': build.get('args', {}), 'target': build['target']}

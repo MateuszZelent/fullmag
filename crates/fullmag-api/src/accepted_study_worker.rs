@@ -982,6 +982,8 @@ const ACCEPTED_WORKER_CLAIM_RETRY_LIMIT: Duration = fullmag_runtime_control::WOR
 const ACCEPTED_WORKER_CLAIM_RETRY_DELAY: Duration = Duration::from_millis(10);
 const ACCEPTED_WORKER_GPU_INVENTORY_RETRY_LIMIT: Duration = Duration::from_secs(30);
 const ACCEPTED_WORKER_GPU_INVENTORY_RETRY_DELAY: Duration = Duration::from_secs(1);
+const ACCEPTED_WORKER_GPU_WRITER_RETRY_MIN_DELAY: Duration = Duration::from_millis(5);
+const ACCEPTED_WORKER_GPU_WRITER_RETRY_MAX_DELAY: Duration = Duration::from_millis(40);
 
 pub(crate) struct AcceptedRunnerExecution {
     pub(crate) terminal_publication: Option<fullmag_runtime_control::PreparedTerminalPublicationV4>,
@@ -1394,14 +1396,42 @@ fn retry_worker_gpu_launch_validation<T>(
     store: &SessionStore,
     run_id: &str,
     task_id: &str,
-    mut operation: impl FnMut() -> Result<T>,
+    operation: impl FnMut() -> Result<T>,
 ) -> Result<T> {
-    let deadline = Instant::now() + ACCEPTED_WORKER_GPU_INVENTORY_RETRY_LIMIT;
+    retry_worker_gpu_launch_validation_with_sleep(
+        store,
+        run_id,
+        task_id,
+        operation,
+        ACCEPTED_WORKER_GPU_INVENTORY_RETRY_LIMIT,
+        |delay| std::thread::sleep(delay),
+    )
+}
+
+fn retry_worker_gpu_launch_validation_with_sleep<T>(
+    store: &SessionStore,
+    run_id: &str,
+    task_id: &str,
+    mut operation: impl FnMut() -> Result<T>,
+    retry_limit: Duration,
+    mut sleep: impl FnMut(Duration),
+) -> Result<T> {
+    let deadline = Instant::now() + retry_limit;
+    let mut writer_busy_observations = 0_u32;
+    let mut transient_inventory_observations = 0_u32;
     let mut reported_wait = false;
     loop {
         let cancellation_intent = match store.read_task_cancellation_intent(run_id, task_id) {
             Ok(intent) => intent,
-            Err(error) if is_store_writer_busy(&error) && Instant::now() < deadline => {
+            Err(error) if is_store_writer_busy(&error) => {
+                writer_busy_observations = writer_busy_observations.saturating_add(1);
+                if Instant::now() >= deadline {
+                    return Err(gpu_launch_validation_timeout(
+                        error,
+                        writer_busy_observations,
+                        transient_inventory_observations,
+                    ));
+                }
                 if !reported_wait {
                     eprintln!(
                         "accepted worker waiting for GPU launch validation (session-store writer is busy)"
@@ -1409,13 +1439,9 @@ fn retry_worker_gpu_launch_validation<T>(
                     reported_wait = true;
                 }
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                std::thread::sleep(ACCEPTED_WORKER_GPU_INVENTORY_RETRY_DELAY.min(remaining));
+                sleep(accepted_gpu_launch_writer_retry_delay(writer_busy_observations - 1)
+                    .min(remaining));
                 continue;
-            }
-            Err(error) if is_store_writer_busy(&error) => {
-                return Err(error).context(
-                    "timed out waiting for current GPU inventory during accepted worker launch",
-                );
             }
             Err(error) => {
                 return Err(error).context(
@@ -1428,12 +1454,28 @@ fn retry_worker_gpu_launch_validation<T>(
         }
         match operation() {
             Ok(value) => return Ok(value),
-            Err(error)
-                if (is_store_writer_busy(&error)
-                    || transient_gpu_inventory_reason(&error).is_some())
-                    && Instant::now() < deadline =>
-            {
-                if let Some(reason) = transient_gpu_inventory_reason(&error) {
+            Err(error) => {
+                let writer_busy = is_store_writer_busy(&error);
+                let inventory_reason = transient_gpu_inventory_reason(&error);
+                if !writer_busy && inventory_reason.is_none() {
+                    return Err(error);
+                }
+                let retry_delay = if writer_busy {
+                    writer_busy_observations = writer_busy_observations.saturating_add(1);
+                    accepted_gpu_launch_writer_retry_delay(writer_busy_observations - 1)
+                } else {
+                    transient_inventory_observations =
+                        transient_inventory_observations.saturating_add(1);
+                    ACCEPTED_WORKER_GPU_INVENTORY_RETRY_DELAY
+                };
+                if Instant::now() >= deadline {
+                    return Err(gpu_launch_validation_timeout(
+                        error,
+                        writer_busy_observations,
+                        transient_inventory_observations,
+                    ));
+                }
+                if let Some(reason) = inventory_reason {
                     if !reported_wait {
                         eprintln!(
                             "accepted worker waiting for a fresh GPU inventory sample (probe reason: {reason:?})"
@@ -1447,21 +1489,38 @@ fn retry_worker_gpu_launch_validation<T>(
                     reported_wait = true;
                 }
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return Err(error);
-                }
-                std::thread::sleep(ACCEPTED_WORKER_GPU_INVENTORY_RETRY_DELAY.min(remaining));
+                sleep(retry_delay.min(remaining));
             }
-            Err(error) if is_store_writer_busy(&error)
-                || transient_gpu_inventory_reason(&error).is_some() =>
-            {
-                return Err(error).context(
-                    "timed out waiting for current GPU inventory during accepted worker launch",
-                );
-            }
-            Err(error) => return Err(error),
         }
     }
+}
+
+fn accepted_gpu_launch_writer_retry_delay(retry_index: u32) -> Duration {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::thread::current().id().hash(&mut hasher);
+    std::process::id().hash(&mut hasher);
+    retry_index.hash(&mut hasher);
+    let min_ms = ACCEPTED_WORKER_GPU_WRITER_RETRY_MIN_DELAY.as_millis() as u64;
+    let span_ms = ACCEPTED_WORKER_GPU_WRITER_RETRY_MAX_DELAY
+        .saturating_sub(ACCEPTED_WORKER_GPU_WRITER_RETRY_MIN_DELAY)
+        .as_millis() as u64
+        + 1;
+    Duration::from_millis(min_ms + hasher.finish() % span_ms)
+}
+
+fn gpu_launch_validation_timeout(
+    error: anyhow::Error,
+    writer_busy_observations: u32,
+    transient_inventory_observations: u32,
+) -> anyhow::Error {
+    // StoreWriterBusy must not escape as an error source: callers wrap output
+    // directory reservation in a generic store retry and would replay the
+    // whole launch validation after its own deadline.
+    anyhow::anyhow!(
+        "timed out waiting for current GPU inventory during accepted worker launch (store_writer_busy_observations={writer_busy_observations}, transient_gpu_inventory_observations={transient_inventory_observations}): {error:#}"
+    )
 }
 
 fn transient_gpu_inventory_reason(error: &anyhow::Error) -> Option<
@@ -5764,6 +5823,140 @@ mod accepted_worker_claim_retry_tests {
 
         assert_eq!(attempts, 1, "durable cancellation must stop before retry");
         assert!(format!("{error:#}").contains("cancelled by durable task cancellation"));
+    }
+
+    fn gpu_validation_store() -> (tempfile::TempDir, SessionStore) {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        store
+            .commit_run_catalog(&fullmag_session::FmsRunCatalog {
+                schema_version: fullmag_session::FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: "run-worker-gpu-launch-retry".into(),
+                revision: 1,
+                updated_at: chrono::Utc::now(),
+                tasks: vec![unclaimed_task("task-worker-gpu-launch-retry")],
+            })
+            .unwrap();
+        (directory, store)
+    }
+
+    #[test]
+    fn gpu_launch_validation_retries_a_real_writer_conflict_with_bounded_jitter() {
+        let (_directory, store) = gpu_validation_store();
+        let holder_store = SessionStore::open(store.root().to_path_buf()).unwrap();
+        let (acquired_sender, acquired_receiver) = sync_channel(1);
+        let (release_sender, release_receiver) = sync_channel(1);
+        let (released_sender, released_receiver) = sync_channel(1);
+        let holder = thread::spawn(move || {
+            let transaction = holder_store.write_transaction().unwrap();
+            acquired_sender.send(()).unwrap();
+            release_receiver
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap();
+            drop(transaction);
+            released_sender.send(()).unwrap();
+        });
+        acquired_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        let mut release_sender = Some(release_sender);
+        let mut observed_delays = Vec::new();
+        let result = retry_worker_gpu_launch_validation_with_sleep(
+            &store,
+            "run-worker-gpu-launch-retry",
+            "task-worker-gpu-launch-retry",
+            || {
+                let transaction = store.write_transaction()?;
+                drop(transaction);
+                Ok(())
+            },
+            ACCEPTED_WORKER_GPU_INVENTORY_RETRY_LIMIT,
+            |delay| {
+                observed_delays.push(delay);
+                if let Some(sender) = release_sender.take() {
+                    sender.send(()).unwrap();
+                    released_receiver
+                        .recv_timeout(Duration::from_secs(1))
+                        .unwrap();
+                }
+            },
+        );
+        if let Some(sender) = release_sender.take() {
+            sender.send(()).unwrap();
+            released_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap();
+        }
+        holder.join().unwrap();
+
+        assert!(result.is_ok(), "writer conflict must retry: {result:#?}");
+        assert!(
+            !observed_delays.is_empty(),
+            "fixture must observe and retry a typed native writer conflict"
+        );
+        assert!(observed_delays.iter().all(|delay| {
+            *delay >= ACCEPTED_WORKER_GPU_WRITER_RETRY_MIN_DELAY
+                && *delay <= ACCEPTED_WORKER_GPU_WRITER_RETRY_MAX_DELAY
+        }));
+    }
+
+    #[test]
+    fn gpu_launch_writer_retry_delay_is_bounded_and_phase_varied() {
+        let first = accepted_gpu_launch_writer_retry_delay(0);
+        assert_eq!(
+            first,
+            accepted_gpu_launch_writer_retry_delay(0),
+            "the process/thread/attempt tuple gives a reproducible delay"
+        );
+        let delays = (0..128)
+            .map(accepted_gpu_launch_writer_retry_delay)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(
+            delays.len() > 20,
+            "retry cadence should not stay phase-locked: {delays:?}"
+        );
+        assert!(delays.iter().all(|delay| {
+            *delay >= ACCEPTED_WORKER_GPU_WRITER_RETRY_MIN_DELAY
+                && *delay <= ACCEPTED_WORKER_GPU_WRITER_RETRY_MAX_DELAY
+        }));
+    }
+
+    #[test]
+    fn gpu_launch_writer_timeout_is_terminal_for_outer_store_retries() {
+        let (_directory, store) = gpu_validation_store();
+        let outer_attempts = std::cell::Cell::new(0_u32);
+        let validation_attempts = std::cell::Cell::new(0_u32);
+        let result: anyhow::Result<()> = fullmag_runtime_control::retry_worker_store_transient(|| {
+            outer_attempts.set(outer_attempts.get().saturating_add(1));
+            retry_worker_gpu_launch_validation_with_sleep(
+                &store,
+                "run-worker-gpu-launch-retry",
+                "task-worker-gpu-launch-retry",
+                || {
+                    validation_attempts.set(validation_attempts.get().saturating_add(1));
+                    Err(anyhow::Error::new(fullmag_session::StoreWriterBusy))
+                },
+                Duration::ZERO,
+                |_| {},
+            )
+        });
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(
+            !is_store_writer_busy(&error),
+            "the timeout must not preserve StoreWriterBusy as an error source"
+        );
+        let message = format!("{error:#}");
+        assert!(message.contains("store_writer_busy_observations=1"));
+        assert!(message.contains("transient_gpu_inventory_observations=0"));
+        assert_eq!(validation_attempts.get(), 1);
+        assert_eq!(
+            outer_attempts.get(),
+            1,
+            "outer writer retry must not replay output reservation"
+        );
     }
 }
 

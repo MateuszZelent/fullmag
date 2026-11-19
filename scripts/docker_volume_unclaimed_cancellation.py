@@ -30,6 +30,7 @@ from docker_build_control import (
     canonical,
     compose_capture,
     docker_capture,
+    receipt_dev_cuda_target,
     toolchain_configuration,
     build_volume_toolchain,
     build_volume_runtime_images,
@@ -1070,7 +1071,9 @@ def _reuse_prepared_images(selected: Path, control, helper_image: str,
     from bootstrap_docker_toolchain import tracked_input_files, read_input, input_files
     from docker_dev import BASE_CONTEXT_FILES, RUNTIME_IMAGE_CONTEXT_FILES
 
-    configured = toolchain_configuration(selected, control.identity)
+    toolchain = _verified_image_receipt(control, "toolchain")
+    cuda_target = receipt_dev_cuda_target(toolchain)
+    configured = toolchain_configuration(selected, control.identity, cuda_target=cuda_target)
     service = configured["services"].get("fem-gpu-toolchain", {})
     build = service.get("build", {}) if isinstance(service, Mapping) else {}
     if (configured.get("name") != control.project
@@ -1087,7 +1090,6 @@ def _reuse_prepared_images(selected: Path, control, helper_image: str,
         "build_args": build.get("args", {}),
         "target": build.get("target"),
     }
-    toolchain = _verified_image_receipt(control, "toolchain")
     toolchain_id = toolchain.get("image_id")
     if (toolchain.get("inputs") != toolchain_inputs
             or toolchain.get("source_digest") != _sha256(canonical(toolchain_inputs))

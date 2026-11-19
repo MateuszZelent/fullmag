@@ -1925,7 +1925,9 @@ fn fem_eigen_solver_policy_has_native_path(
         && (matches!(
             plan.spin_wave_bc.kind(),
             fullmag_ir::SpinWaveBoundaryKindIR::Periodic
-        ) || k0_kittel_validation)
+        ) || k0_kittel_validation
+            || plan.magnetostatic_bc
+                == fullmag_ir::MagnetostaticBoundaryConditionIR::OpenAirboxK0)
         && (gamma_sampling || k0_kittel_validation)
         && (plan.air_box_config.is_some() || k0_kittel_validation)
         && plan.count > 0
@@ -5725,6 +5727,99 @@ fn k0_kittel_periodic_airbox_execution_requested(
         })
 }
 
+/// Isolated-body K0 modal lane: Robin airbox on the whole outer boundary and
+/// no periodic seams (note 0830, "Otwarte pudełko powietrza").
+fn open_airbox_k0_execution_requested(
+    magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR,
+) -> bool {
+    magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::OpenAirboxK0
+}
+
+fn validate_open_airbox_k0_plan_inputs(
+    mesh: &fullmag_ir::MeshIR,
+    operator: &fullmag_ir::EigenOperatorConfigIR,
+    demag: Option<fullmag_ir::ResolvedFemDemagIR>,
+    air_box_config: Option<&fullmag_ir::AirBoxConfigIR>,
+) -> Result<(), PlanError> {
+    let mut reasons = Vec::new();
+    if !matches!(operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+        reasons.push("fem_eigen.open_airbox_k0_requires_full_2x2_operator; fallback=none".to_string());
+    }
+    if demag != Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin) {
+        reasons.push(
+            "fem_eigen.open_airbox_k0_requires_poisson_robin_demag; fallback=none".to_string(),
+        );
+    }
+    if air_box_config.is_none() {
+        reasons.push("fem_eigen.open_airbox_k0_requires_airbox_mesh; fallback=none".to_string());
+    }
+    if !mesh.periodic_node_pairs.is_empty() || !mesh.periodic_boundary_pairs.is_empty() {
+        reasons.push(
+            "fem_eigen.open_airbox_k0_rejects_periodic_mesh_pairs; use magnetostatic_bc='periodic_airbox_k0' for periodic meshes; fallback=none"
+                .to_string(),
+        );
+    }
+    if reasons.is_empty() {
+        Ok(())
+    } else {
+        Err(PlanError { reasons })
+    }
+}
+
+/// CPU-only resolution for `open_airbox_k0`. The GPU modal lane requires the
+/// periodic v6 certificate, so an explicit GPU request fails without fallback
+/// and `auto` resolves to CPU with a visible selection reason.
+fn resolve_open_airbox_k0_execution(
+    problem: &ProblemIR,
+) -> Result<FemEigenExecutionResolutionIR, PlanError> {
+    if problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict {
+        return Err(PlanError {
+            reasons: vec![
+                "fem_eigen.open_airbox_k0_requires_strict_execution_mode; fallback=none".to_string(),
+            ],
+        });
+    }
+    if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
+        return Err(PlanError {
+            reasons: vec![
+                "fem_eigen.open_airbox_k0_requires_double_precision; fallback=none".to_string(),
+            ],
+        });
+    }
+    let requested_device = parse_fem_eigen_runtime_device(
+        problem
+            .problem_meta
+            .runtime_metadata
+            .get("runtime_selection")
+            .and_then(|value| value.get("device"))
+            .and_then(serde_json::Value::as_str),
+        "runtime_selection",
+    )?;
+    let selection_reason = match requested_device {
+        fullmag_ir::ExecutionDevice::Cpu => "fem_eigen.open_airbox_k0.explicit_cpu",
+        fullmag_ir::ExecutionDevice::Gpu => {
+            return Err(PlanError {
+                reasons: vec![
+                    "fem_eigen.open_airbox_k0_gpu_unavailable: the GPU modal lane requires a periodic v6 mesh certificate; request device='cpu' for this stage; fallback=none"
+                        .to_string(),
+                ],
+            });
+        }
+        fullmag_ir::ExecutionDevice::Auto => "fem_eigen.open_airbox_k0.auto_cpu_only_lane",
+    };
+    Ok(FemEigenExecutionResolutionIR {
+        requested_device,
+        resolved_device: fullmag_ir::ExecutionDevice::Cpu,
+        requested_precision: problem.backend_policy.execution_precision,
+        resolved_precision: ExecutionPrecision::Double,
+        requested_engine: FemEigenEngineIR::Auto,
+        resolved_engine: FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+        fallback_used: false,
+        fallback_reason: None,
+        selection_reason: selection_reason.to_string(),
+    })
+}
+
 pub(crate) fn plan_fem_eigen(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
@@ -6473,7 +6568,15 @@ pub(crate) fn plan_fem_eigen(
         });
     }
 
-    let execution_resolution = if k0_kittel_periodic_airbox_execution_requested(
+    let execution_resolution = if open_airbox_k0_execution_requested(*magnetostatic_bc) {
+        validate_open_airbox_k0_plan_inputs(
+            &mesh,
+            operator,
+            resolved_demag_realization,
+            air_box_config.as_ref(),
+        )?;
+        Some(resolve_open_airbox_k0_execution(problem)?)
+    } else if k0_kittel_periodic_airbox_execution_requested(
         *magnetostatic_bc,
         k0_kittel_validation.as_ref(),
     ) {
@@ -6548,6 +6651,7 @@ pub(crate) fn plan_fem_eigen(
         dispersion_validation,
         k0_kittel_validation,
         solver_policy,
+        magnetostatic_bc: *magnetostatic_bc,
     };
 
     if floquet_airbox_dynamic_demag_cpu_path
@@ -6735,6 +6839,12 @@ pub(crate) fn plan_fem_frequency_response(
         if has_nonzero_k {
             errors.push("magnetostatic_bc=periodic_airbox_k0 requires k=0".to_string());
         }
+    }
+    if *magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::OpenAirboxK0 {
+        errors.push(
+            "magnetostatic_bc=open_airbox_k0 is a modal eigensolve boundary; FEM frequency response does not implement it; fallback=none"
+                .to_string(),
+        );
     }
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });

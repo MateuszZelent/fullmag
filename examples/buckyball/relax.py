@@ -1,4 +1,8 @@
-"""Zero-field buckyball relaxation, FEM GPU, double precision.
+"""Buckyball relaxation in a bias field along +x, FEM GPU, double precision.
+
+The default bias is 0.394 T (mu0*Ms = 0.503 T), which nearly saturates the
+shell so PG-BB converges quickly to a well-defined state. Set
+FULLMAG_BUCKY_BIAS_T=0 for the zero-field relaxation.
 
 Import this script into the selected managed backend. The shared STL importer
 classifies the nested shells and builds one conforming FEM mesh containing
@@ -22,6 +26,7 @@ relax_projected_gradient_bb.py. No eigenmode or subsequent field stage.
 """
 
 # %% Parameters (SI)
+import os
 from pathlib import Path
 
 import fullmag as fm
@@ -44,7 +49,10 @@ if not STL_PATH.is_file():
     raise FileNotFoundError(f"Missing buckyball geometry: {STL_PATH}")
 
 # %% FEM GPU configuration; Compute starts the registered stages
-study = fm.study("buckyball_zero_field_relax")
+BIAS_FIELD_T = float(os.environ.get("FULLMAG_BUCKY_BIAS_T", "0.394"))
+BIAS_TAG = f"{round(BIAS_FIELD_T * 1000):d}mt"
+
+study = fm.study(f"buckyball_relax_{BIAS_TAG}")
 study.engine("fem")
 study.device("gpu", precision="double")
 study.mode("strict")
@@ -53,7 +61,7 @@ study.wait_for_solve(True)
 
 # Explicit absolute storage keeps results and scratch on the admitted E: ext4 volume.
 # This path is the private user-data bind of this task's Compose group.
-RUN_DIR = Path("/user-data/buckyball-zero-field-20261115")
+RUN_DIR = Path(f"/user-data/buckyball-relax-{BIAS_TAG}")
 study.storage(
     output_dir=str(RUN_DIR / "relax_64nm.zarr"),
     temp_dir=str(RUN_DIR / "scratch_64nm"),
@@ -88,7 +96,7 @@ body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 body.mesh(maximum_element_size=MAGNETIC_MESH_M, order=1)
 
 study.demag(realization="poisson_robin")
-study.b_ext(0.0, 0.0, 0.0)
+study.b_ext(BIAS_FIELD_T, 0.0, 0.0)
 # PG-BB with demag requires rtol <= 1e-12 for strict Armijo resolution.
 # Contract: docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md.
 study.fem_demag_solver(
@@ -102,7 +110,7 @@ study.fem_demag_solver(
 # A saved candidate is an equilibrium only after the terminal stop reason and
 # max_torque_T have been checked; exhausting MAX_STEPS does not prove convergence.
 study.stages.add_relax(
-    stage_id="relax_zero_field",
+    stage_id=f"relax_{BIAS_TAG}",
     algorithm="projected_gradient_bb",
     max_steps=MAX_STEPS,
     tolT=TORQUE_TOL_T,

@@ -4,9 +4,10 @@ import type { DecodedComplexFieldVector } from "@/kernel/api/codecs";
 import type { ModeFieldComplexBinaryIdentity } from "@/kernel/resources/frequencyDomainResourceKeys";
 import type { ModeCompositionLayer } from "@/kernel/visualization/ModeCompositionController";
 
+import { projectComplexVectorGlyph } from "../layers/complexVectorGlyphs";
 import {
   buildModeCompositionScalarColorBuffer,
-  buildModeCompositionVectorLayerInput,
+  buildModeCompositionComplexGlyphInput,
   modeCompositionTargetIdForMeshPart,
   resolveModeCompositionMeshPartRenderPlan,
 } from "./modeCompositionViewportProjection";
@@ -300,32 +301,48 @@ describe("modeCompositionViewportProjection", () => {
       }),
     ).toBeNull();
 
-    const vectorInput = buildModeCompositionVectorLayerInput({
-      field: field(),
+    const positions = new Float32Array([
+      0, 0, 0,
+      1, 0, 0,
+      2, 0, 0,
+      3, 0, 0,
+      4, 0, 0,
+    ]);
+    const complexField = field();
+    const glyphInput = buildModeCompositionComplexGlyphInput({
+      field: complexField,
       layer: vectorLayer,
       topologyNodeCount: 5,
-      topologyPositions: new Float32Array([
-        0, 0, 0,
-        1, 0, 0,
-        2, 0, 0,
-        3, 0, 0,
-        4, 0, 0,
-      ]),
+      topologyPositions: positions,
       vectorScale: 1,
     });
+    const glyphs = glyphInput?.glyphs;
 
-    expect(vectorInput?.segments).toHaveLength(14);
-    const firstSegment = vectorInput?.segments?.slice(0, 7);
-    expect(firstSegment?.[0]).toBeCloseTo(1 - 1 / Math.sqrt(14));
-    expect(firstSegment?.[1]).toBeCloseTo(-2 / Math.sqrt(14));
-    expect(firstSegment?.[2]).toBeCloseTo(-3 / Math.sqrt(14));
-    expect(firstSegment?.[3]).toBeCloseTo(1 + 1 / Math.sqrt(14));
-    expect(firstSegment?.[4]).toBeCloseTo(2 / Math.sqrt(14));
-    expect(firstSegment?.[5]).toBeCloseTo(3 / Math.sqrt(14));
-    expect(firstSegment?.[6]).toBeCloseTo(Math.sqrt(14 / 77));
-    expect(vectorInput?.buildReference?.resourceKey).toBe(
-      "data/fields/analysis%3Aeigen%3Asample-a%3Amode-a",
-    );
+    expect(glyphs?.count).toBe(2);
+    expect(glyphs?.glyphLength).toBe(2);
+    expect(glyphs?.anchorMode).toBe("center");
+    expect(Array.from(glyphs?.anchors ?? [])).toEqual([1, 0, 0, 3, 0, 0]);
+    // Amplitude scale 2 is applied once, to both parts, independent of phase.
+    expect(Array.from(glyphs?.complexReal ?? [])).toEqual([2, 4, 6, 8, 10, 12]);
+    expect(Array.from(glyphs?.complexImag ?? [])).toEqual([20, 40, 60, 80, 100, 120]);
+    expect(glyphs?.magnitudeEnvelopeMax).toBeCloseTo(Math.sqrt(77 * 4 * 101));
+    expect(projectComplexVectorGlyph(glyphs!, 0, 0)).toEqual([2, 4, 6]);
+    const quarter = projectComplexVectorGlyph(glyphs!, 0, Math.PI / 2);
+    expect(quarter[0]).toBeCloseTo(-20);
+    expect(quarter[1]).toBeCloseTo(-40);
+    expect(quarter[2]).toBeCloseTo(-60);
+    expect(glyphInput?.fieldBufferId).toContain("mode-composition:run-a");
+
+    // Animation frames reuse the identical, cached glyph input.
+    expect(
+      buildModeCompositionComplexGlyphInput({
+        field: complexField,
+        layer: vectorLayer,
+        topologyNodeCount: 5,
+        topologyPositions: positions,
+        vectorScale: 1,
+      }),
+    ).toBe(glyphInput);
   });
 
   it("maps every mesh carrier to its canonical object target", () => {

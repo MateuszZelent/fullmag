@@ -4,8 +4,13 @@ import type {
   ModeCompositionFieldLayerSnapshot,
 } from "@/kernel/visualization/ModeCompositionFieldLayerController";
 
+import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
+
+import {
+  buildComplexVectorGlyphsAtNodes,
+  type Viewport3DComplexVectorGlyphs,
+} from "../layers/complexVectorGlyphs";
 import type { ScalarColorBuffer, ScalarRange } from "../viewport3dFieldMapping";
-import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
 import {
   buildModeCompositionRenderPlan,
   type ConfiguredBaseSurface,
@@ -128,7 +133,7 @@ export function buildModeCompositionScalarColorBuffer({
   geometryNodeIndices,
   identity: fieldIdentity = null,
   layer,
-  phaseRad,
+  phase,
   projectionKey,
   requiredSurfaceNodeIndices,
   topologyNodeCount,
@@ -137,7 +142,11 @@ export function buildModeCompositionScalarColorBuffer({
   identity?: ModeCompositionFieldLayerSnapshot["identity"];
   geometryNodeIndices?: Uint32Array | null;
   layer: ModeCompositionLayer;
-  phaseRad?: number | null;
+  /**
+   * The layer's live phase cell (bound into the material, never read per
+   * frame here) or a static phase. Defaults to the layer's authored phase.
+   */
+  phase?: LivePhaseUniform | number | null;
   projectionKey?: string;
   requiredSurfaceNodeIndices: Uint32Array;
   topologyNodeCount: number;
@@ -173,10 +182,10 @@ export function buildModeCompositionScalarColorBuffer({
     colorMode,
     colorPalette: resolveModeColorPalette(layer),
     complexImagValues: projection.imag,
-    complexPhaseRad:
-      typeof phaseRad === "number" && Number.isFinite(phaseRad)
-        ? phaseRad
-        : layer.phase_rad + layer.animation.phase_offset_rad,
+    complexPhaseRad: resolveLayerPhaseRad(layer, phase),
+    ...(phase !== null && typeof phase === "object"
+      ? { complexPhaseUniform: phase }
+      : {}),
     complexRealValues: projection.real,
     complexRepresentation: layer.representation,
     phasorConvention: "exp_i_omega_t",
@@ -200,11 +209,28 @@ export function buildModeCompositionScalarColorBuffer({
   };
 }
 
-export function buildModeCompositionVectorLayerInput({
+export interface ModeCompositionComplexGlyphInput {
+  readonly buildKey: string;
+  readonly fieldBufferId: string;
+  readonly glyphs: Viewport3DComplexVectorGlyphs;
+}
+
+const complexGlyphInputCache = new WeakMap<
+  DecodedComplexFieldVector,
+  Map<string, ModeCompositionComplexGlyphInput | null>
+>();
+const COMPLEX_GLYPH_CACHE_ENTRIES_PER_FIELD = 4;
+
+/**
+ * Phase-independent glyph input for a modal layer: sampled anchors with the
+ * amplitude-scaled real and imaginary parts. The phase is applied by the
+ * glyph shader from the layer's live phase cell, so the result is cached per
+ * field and layer appearance and is reused on every animation frame.
+ */
+export function buildModeCompositionComplexGlyphInput({
   field,
   identity: fieldIdentity = null,
   layer,
-  phaseRad: requestedPhaseRad,
   topologyNodeCount,
   topologyPositions,
   vectorScale,
@@ -212,14 +238,10 @@ export function buildModeCompositionVectorLayerInput({
   field: DecodedComplexFieldVector;
   identity?: ModeCompositionFieldLayerSnapshot["identity"];
   layer: ModeCompositionLayer;
-  phaseRad?: number | null;
   topologyNodeCount: number;
   topologyPositions: Float32Array;
   vectorScale: number;
-}): {
-  buildReference: Viewport3DVectorBuildReference;
-  segments: Float32Array;
-} | null {
+}): ModeCompositionComplexGlyphInput | null {
   if (
     !modeFieldMatchesLayer(field, layer, topologyNodeCount) ||
     (!layer.appearance.vectors_visible && layer.component !== "vector") ||
@@ -227,75 +249,12 @@ export function buildModeCompositionVectorLayerInput({
   ) {
     return null;
   }
-
   const nodeIndices = field.nodeIndices;
   const budget = Math.max(0, Math.floor(layer.appearance.vector_budget));
   if (!nodeIndices || budget === 0 || topologyPositions.length < topologyNodeCount * 3) {
     return null;
   }
-
-  const sampleCount = Math.min(field.pointCount, budget);
-  const sampleStride = Math.max(1, Math.floor(field.pointCount / sampleCount));
-  const samples: Array<{
-    nodeIndex: number;
-    value: readonly [number, number, number];
-  }> = [];
-  const phaseRad =
-    typeof requestedPhaseRad === "number" && Number.isFinite(requestedPhaseRad)
-      ? requestedPhaseRad
-      : layer.phase_rad + layer.animation.phase_offset_rad;
-  for (let sample = 0; sample < sampleCount; sample += 1) {
-    const pointIndex = sample * sampleStride;
-    const nodeIndex = nodeIndices[pointIndex];
-    if (
-      nodeIndex === undefined ||
-      nodeIndex < 0 ||
-      nodeIndex >= topologyNodeCount
-    ) {
-      continue;
-    }
-    const value = resolveModeVectorValue(field, pointIndex, layer, phaseRad);
-    if (!value) continue;
-    samples.push({ nodeIndex, value });
-  }
-
-  if (samples.length === 0) return null;
-  const maximum = samples.reduce(
-    (current, sample) => Math.max(current, Math.hypot(...sample.value)),
-    0,
-  );
-  if (maximum <= 0) return null;
-
-  const length = Math.max(vectorScale * layer.appearance.vector_length_scale, 1e-12);
-  const halfLength = length / 2;
-  const segments = new Float32Array(samples.length * 7);
-  let visible = 0;
-  for (const sample of samples) {
-    const magnitude = Math.hypot(...sample.value);
-    if (magnitude <= 0) continue;
-    const offset = sample.nodeIndex * 3;
-    const target = visible * 7;
-    const [vx, vy, vz] = sample.value;
-    const ux = vx / magnitude;
-    const uy = vy / magnitude;
-    const uz = vz / magnitude;
-    const x = topologyPositions[offset] ?? 0;
-    const y = topologyPositions[offset + 1] ?? 0;
-    const z = topologyPositions[offset + 2] ?? 0;
-    segments[target] = x - ux * halfLength;
-    segments[target + 1] = y - uy * halfLength;
-    segments[target + 2] = z - uz * halfLength;
-    segments[target + 3] = x + ux * halfLength;
-    segments[target + 4] = y + uy * halfLength;
-    segments[target + 5] = z + uz * halfLength;
-    segments[target + 6] = magnitude / maximum;
-    visible += 1;
-  }
-
-  if (visible === 0) return null;
-  const visibleSegments = segments.slice(0, visible * 7);
-  const topologyRevision = field.meshTopologyRevision ?? "unknown";
-  const fieldRevision = fieldIdentity?.fieldRevision ?? "unverified";
+  const glyphLength = Math.max(vectorScale * layer.appearance.vector_length_scale, 1e-12);
   const bufferIdentity = rawModeBufferKey(
     field,
     fieldIdentity,
@@ -303,19 +262,105 @@ export function buildModeCompositionVectorLayerInput({
     topologyNodeCount,
     "vectors",
   );
-  return {
-    buildReference: {
-      buildKey: `${bufferIdentity}:vector:${layer.representation}:${phaseRad}`,
-      fieldBufferId: bufferIdentity,
-      fieldRevision,
-      groupKey: `mode-composition-vector:${layer.target_id}`,
-      resourceKey: `data/fields/${encodeURIComponent(field.quantityId)}`,
-      revisionSummary: `${fieldRevision}:${topologyRevision}`,
-      targetRevision: `${bufferIdentity}:vector:${layer.representation}:${phaseRad}`,
-      topologyRevision,
-    },
-    segments: visibleSegments,
-  };
+  const buildKey = [
+    bufferIdentity,
+    "complex-vector",
+    layer.representation,
+    layer.amplitude_scale,
+    budget,
+    glyphLength,
+  ].join(":");
+  let byKey = complexGlyphInputCache.get(field);
+  if (!byKey) {
+    byKey = new Map();
+    complexGlyphInputCache.set(field, byKey);
+  }
+  if (byKey.has(buildKey)) {
+    const cached = byKey.get(buildKey) ?? null;
+    // Same positions array is required for the cached anchors to be valid.
+    if (!cached || cachedGlyphPositions.get(cached) === topologyPositions) return cached;
+  }
+
+  const sampleCount = Math.min(field.pointCount, budget);
+  const sampleStride = Math.max(1, Math.floor(field.pointCount / sampleCount));
+  const sampledNodes: number[] = [];
+  const sampledPoints: number[] = [];
+  for (let sample = 0; sample < sampleCount; sample += 1) {
+    const pointIndex = sample * sampleStride;
+    const nodeIndex = nodeIndices[pointIndex];
+    if (
+      nodeIndex === undefined ||
+      nodeIndex < 0 ||
+      nodeIndex >= topologyNodeCount ||
+      !hasFiniteNonzeroEnvelope(field, pointIndex, layer)
+    ) {
+      continue;
+    }
+    sampledNodes.push(nodeIndex);
+    sampledPoints.push(pointIndex);
+  }
+  const glyphs = sampledNodes.length > 0
+    ? buildComplexVectorGlyphsAtNodes({
+        amplitudeScale: layer.amplitude_scale,
+        buildKey,
+        complexField: field,
+        glyphLength,
+        nodeIndices: sampledNodes,
+        pointIndices: sampledPoints,
+        positions: topologyPositions,
+        representation: layer.representation as "phase_rotated_real" | "real" | "imag",
+      })
+    : null;
+  const input = glyphs ? { buildKey, fieldBufferId: bufferIdentity, glyphs } : null;
+  if (input) cachedGlyphPositions.set(input, topologyPositions);
+  byKey.set(buildKey, input);
+  while (byKey.size > COMPLEX_GLYPH_CACHE_ENTRIES_PER_FIELD) {
+    const oldest = byKey.keys().next().value;
+    if (oldest === undefined) break;
+    byKey.delete(oldest);
+  }
+  return input;
+}
+
+const cachedGlyphPositions = new WeakMap<ModeCompositionComplexGlyphInput, Float32Array>();
+
+function hasFiniteNonzeroEnvelope(
+  field: DecodedComplexFieldVector,
+  pointIndex: number,
+  layer: ModeCompositionLayer,
+): boolean {
+  let squared = 0;
+  for (let component = 0; component < 3; component += 1) {
+    const offset = (pointIndex * 3 + component) * 2;
+    const real = field.values[offset];
+    const imag = field.values[offset + 1];
+    if (
+      real === undefined ||
+      imag === undefined ||
+      !Number.isFinite(real) ||
+      !Number.isFinite(imag)
+    ) {
+      return false;
+    }
+    const value =
+      layer.representation === "real"
+        ? real
+        : layer.representation === "imag"
+          ? imag
+          : Math.hypot(real, imag);
+    squared += value * value;
+  }
+  return squared * layer.amplitude_scale > 0;
+}
+
+function resolveLayerPhaseRad(
+  layer: ModeCompositionLayer,
+  phase: LivePhaseUniform | number | null | undefined,
+): number {
+  const value = typeof phase === "number" ? phase : phase?.value;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : layer.phase_rad + layer.animation.phase_offset_rad;
 }
 
 function modeFieldMatchesLayer(
@@ -455,38 +500,6 @@ function isSignedVectorRepresentation(
     representation === "imag" ||
     representation === "phase_rotated_real"
   );
-}
-
-function resolveModeVectorValue(
-  field: DecodedComplexFieldVector,
-  pointIndex: number,
-  layer: ModeCompositionLayer,
-  phaseRad: number,
-): readonly [number, number, number] | null {
-  const values: number[] = [];
-  const cosine = Math.cos(phaseRad);
-  const sine = Math.sin(phaseRad);
-  for (let component = 0; component < 3; component += 1) {
-    const offset = (pointIndex * 3 + component) * 2;
-    const real = field.values[offset];
-    const imaginary = field.values[offset + 1];
-    if (
-      real === undefined ||
-      imaginary === undefined ||
-      !Number.isFinite(real) ||
-      !Number.isFinite(imaginary)
-    ) {
-      return null;
-    }
-    const projected =
-      layer.representation === "real"
-        ? real
-        : layer.representation === "imag"
-          ? imaginary
-          : real * cosine - imaginary * sine;
-    values.push(projected * layer.amplitude_scale);
-  }
-  return [values[0]!, values[1]!, values[2]!];
 }
 
 function resolveModeScalarRange(

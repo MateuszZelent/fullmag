@@ -523,6 +523,11 @@ jobs:
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast
 
+      - name: Run pinned Study execution profile entry contracts
+        run: |
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_run_and_relax_bind_auto_single_to_pinned_gpu
+          cargo test --locked -p fullmag-api --bin fullmag-api compute_preview::tests
+
       - name: Run FEM StageAutosave origin contracts
         run: |
           cargo test --locked -p fullmag-runner --lib artifact_pipeline::tests::initial_stage_autosave_table_scalar_does_not_write_legacy_scalar_trace -- --exact
@@ -914,6 +919,13 @@ jobs:
           CONTROL_ROOM_ANALYSIS_PLOTS_FIXTURE=1 \
             CONTROL_ROOM_ACCEPTANCE_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR/analysis-plots" \
             pnpm --dir apps/control-room run smoke:analysis-plots
+          CONTROL_ROOM_TARGET_SMOKE_PHASE=airbox-independent-visualization \
+            CONTROL_ROOM_TARGET_SMOKE_REUSE_FRONTEND_ONLY=1 \
+            CONTROL_ROOM_TARGET_SMOKE_SWIFTSHADER=1 \
+            CONTROL_ROOM_TARGET_SMOKE_TIMEOUT_MS=90000 \
+            CONTROL_ROOM_API_BASE_URL=http://fullmag-target-smoke.fixture.invalid \
+            CONTROL_ROOM_AUDIT_ARTIFACTS_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR/airbox" \
+            pnpm --dir apps/control-room run smoke:viewport-3d-explorer-inspector-targets
 
       - name: Run start screen stylesheet browser check
         # Static CSS plus inline markup: no server and no audit build are needed.
@@ -1260,9 +1272,12 @@ jobs:
       - name: Verify managed Make native contract ordering
         run: python -B -m pytest -q scripts/test_backend_dev_build_policy.py
 
-      - name: Run canonical material library script roundtrip contracts
-        run: |
-          python -m pytest -q packages/fullmag-py/tests/test_material_assets_roundtrip.py packages/fullmag-py/tests/test_accepted_source_capture.py
+      - name: Run canonical script roundtrip contracts
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_material_assets_roundtrip.py
+          packages/fullmag-py/tests/test_accepted_source_capture.py
+          packages/fullmag-py/tests/test_stage_external_field_roundtrip.py
 
       - name: Run real Gmsh exact-layer airbox grading regressions
         run: |

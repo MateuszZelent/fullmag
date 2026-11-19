@@ -183,6 +183,9 @@ pub(super) fn native_shared_domain_cpu_modal_supported(plan: &FemEigenPlanIR) ->
 }
 
 fn native_shared_domain_mesh_metadata_valid(plan: &FemEigenPlanIR) -> bool {
+    if super::eigen_policy::open_airbox_k0_modal_requested(plan) {
+        return pa_e4b_airbox_size_m(plan).is_ok();
+    }
     if plan.mesh.periodic_node_pairs.is_empty() || plan.mesh.periodic_boundary_pairs.is_empty() {
         return false;
     }
