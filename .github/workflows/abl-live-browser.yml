@@ -6,6 +6,8 @@ on:
     paths:
       - ".github/workflows/abl-live-browser.yml"
       - "apps/control-room/tests/abl-browser/**"
+      - "apps/control-room/src/modules/inspector/panels/ObjectVisualizationPanel.tsx"
+      - "apps/control-room/src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx"
       - "apps/control-room/src/modules/inspector/panels/*Absorbing*"
       - "apps/control-room/src/modules/inspector/panels/absorbingExpression*"
       - "crates/fullmag-plan/src/spatial_absorber.rs"
@@ -81,6 +83,7 @@ jobs:
       - name: Verify prepared FDM material publication
         if: matrix.backend == 'fdm'
         run: |
+          pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/ObjectVisualizationPanel.accessibility.test.tsx -t 'keeps Shaded selected'
           cargo test --locked -p fullmag-cli --bin fullmag grid_receipt_publishes_prepared_plan_only_after_a_successful_build
           cargo test --locked -p fullmag-api --bin fullmag-api desktop_grid_receipt_restores_plan_owned_damping_only_for_the_current_scene
       - name: Verify FEM mesh ownership and material publication
