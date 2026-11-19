@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo } from "react";
 
 import {
   MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH,
@@ -12,7 +12,6 @@ import type {
   CrossSectionImageQuery,
   CrossSectionQualityQuery,
   CrossSectionQuery,
-  ResourceRevision,
 } from "../api/apiTypes";
 import type {
   DecodedCrossSection,
@@ -45,22 +44,16 @@ const CROSS_SECTION_QUALITY_RESOURCE_BASE_KEY =
   MESHING_SHARED_DOMAIN_CROSS_SECTION_QUALITY_PATH;
 const DEFAULT_CROSS_SECTION_IMAGE_RESOLUTION = 1024;
 
-export function resolveCrossSectionResourceKey(
-  query: CrossSectionQuery,
-  revision: ResourceRevision | null,
-): string {
+export function resolveCrossSectionResourceKey(query: CrossSectionQuery): string {
   const params = new URLSearchParams();
   params.set("include_polygons", String(query.includePolygons));
   params.set("include_wireframe", String(query.includeWireframe));
   params.set("plane", query.plane);
   params.set("position_percent", String(query.positionPercent));
-  return `${CROSS_SECTION_RESOURCE_BASE_KEY}?${params.toString()}#revision=${encodeURIComponent(String(revision ?? "none"))}`;
+  return `${CROSS_SECTION_RESOURCE_BASE_KEY}?${params.toString()}`;
 }
 
-export function resolveCrossSectionImageResourceKey(
-  query: CrossSectionImageQuery,
-  revision: ResourceRevision | null,
-): string {
+export function resolveCrossSectionImageResourceKey(query: CrossSectionImageQuery): string {
   const stableQuery = normalizeCrossSectionImageQuery(query);
   const params = new URLSearchParams();
   params.set("color_scale", stableQuery.colorScale ?? "viridis");
@@ -77,18 +70,15 @@ export function resolveCrossSectionImageResourceKey(
   params.set("wireframe", String(stableQuery.wireframe ?? true));
   params.set("edge_width", String(stableQuery.edgeWidth ?? 1.5));
   params.set("dpr", String(stableQuery.dpr ?? 1));
-  return `${CROSS_SECTION_IMAGE_RESOURCE_BASE_KEY}?${params.toString()}#revision=${encodeURIComponent(String(revision ?? "none"))}`;
+  return `${CROSS_SECTION_IMAGE_RESOURCE_BASE_KEY}?${params.toString()}`;
 }
 
-export function resolveCrossSectionQualityResourceKey(
-  query: CrossSectionQualityQuery,
-  revision: ResourceRevision | null,
-): string {
+export function resolveCrossSectionQualityResourceKey(query: CrossSectionQualityQuery): string {
   const params = new URLSearchParams();
   params.set("metric", query.metric);
   params.set("plane", query.plane);
   params.set("position_percent", String(query.positionPercent));
-  return `${CROSS_SECTION_QUALITY_RESOURCE_BASE_KEY}?${params.toString()}#revision=${encodeURIComponent(String(revision ?? "none"))}`;
+  return `${CROSS_SECTION_QUALITY_RESOURCE_BASE_KEY}?${params.toString()}`;
 }
 
 export function useCrossSectionResource(
@@ -96,7 +86,6 @@ export function useCrossSectionResource(
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
-  const revision = useResourceRevision(CROSS_SECTION_RESOURCE_BASE_KEY);
   const stableQuery = useMemo<CrossSectionQuery>(
     () => ({
       includePolygons: query.includePolygons,
@@ -112,8 +101,8 @@ export function useCrossSectionResource(
     ],
   );
   const resourceKey = useMemo(
-    () => resolveCrossSectionResourceKey(stableQuery, revision),
-    [stableQuery, revision],
+    () => resolveCrossSectionResourceKey(stableQuery),
+    [stableQuery],
   );
   const { resourceKey: scopedResourceKey, sessionIdentity } =
     useSessionScopedResourceKey(resourceKey);
@@ -134,6 +123,7 @@ export function useCrossSectionResource(
     load,
     resolveRevision,
     resourceKey: scopedResourceKey,
+    revisionKey: CROSS_SECTION_RESOURCE_BASE_KEY,
   });
 }
 
@@ -142,14 +132,13 @@ export function useCrossSectionImageResource(
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
-  const revision = useResourceRevision(CROSS_SECTION_IMAGE_RESOURCE_BASE_KEY);
   const stableQuery = useMemo(
     () => normalizeCrossSectionImageQuery(query),
     [query],
   );
   const resourceKey = useMemo(
-    () => resolveCrossSectionImageResourceKey(stableQuery, revision),
-    [stableQuery, revision],
+    () => resolveCrossSectionImageResourceKey(stableQuery),
+    [stableQuery],
   );
   const { resourceKey: scopedResourceKey, sessionIdentity } =
     useSessionScopedResourceKey(resourceKey);
@@ -177,6 +166,7 @@ export function useCrossSectionImageResource(
     load,
     resolveRevision,
     resourceKey: scopedResourceKey,
+    revisionKey: CROSS_SECTION_IMAGE_RESOURCE_BASE_KEY,
   });
 }
 
@@ -185,7 +175,6 @@ export function useCrossSectionQualityResource(
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
-  const revision = useResourceRevision(CROSS_SECTION_QUALITY_RESOURCE_BASE_KEY);
   const stableQuery = useMemo<CrossSectionQualityQuery>(
     () => ({
       metric: query.metric,
@@ -195,8 +184,8 @@ export function useCrossSectionQualityResource(
     [query.metric, query.plane, query.positionPercent],
   );
   const resourceKey = useMemo(
-    () => resolveCrossSectionQualityResourceKey(stableQuery, revision),
-    [stableQuery, revision],
+    () => resolveCrossSectionQualityResourceKey(stableQuery),
+    [stableQuery],
   );
   const { resourceKey: scopedResourceKey, sessionIdentity } =
     useSessionScopedResourceKey(resourceKey);
@@ -224,6 +213,7 @@ export function useCrossSectionQualityResource(
     load,
     resolveRevision,
     resourceKey: scopedResourceKey,
+    revisionKey: CROSS_SECTION_QUALITY_RESOURCE_BASE_KEY,
   });
 }
 
@@ -253,21 +243,6 @@ async function loadCachedBinaryResource<TData>(
     etag: result.etag,
   });
   return result.data;
-}
-
-function useResourceRevision(resourceKey: string): ResourceRevision | null {
-  const { resources } = useKernel();
-  const subscribe = useCallback(
-    (onStoreChange: () => void) =>
-      resources.subscribe(resourceKey, onStoreChange),
-    [resourceKey, resources],
-  );
-  const getSnapshot = useCallback(
-    () => resources.getRevision(resourceKey),
-    [resourceKey, resources],
-  );
-
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 function normalizeCrossSectionImageQuery(
