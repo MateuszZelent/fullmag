@@ -51,7 +51,12 @@ def _source_hashes(selected: Path) -> dict[str, str]:
 
 def run(control, selected: Path, identity, *, scope="authoring-contracts") -> int:
     commands = {
-        "authoring-contracts": (COMMAND,),
+        "authoring-contracts": (
+            COMMAND,
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-application', '--lib', 'script_imported_run'),
+        ),
         "gpu-temperature-contracts": (
             ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
              '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',

@@ -642,6 +642,30 @@ study.stages.add_run(stage_id="after", until=1e-12)
             [False, True, False],
         )
 
+    def test_run_export_replays_damping_changes_between_preparation_and_pulse(self) -> None:
+        loaded = _load(_PREAMBLE + """
+body.alpha = 1.0
+study.stages.add_run(stage_id="prepare", until=20e-9)
+body.alpha = 0.045
+study.stages.add_run(stage_id="pulse", until=200e-9)
+""")
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        config = scene_document_to_execution_config(
+            scene, requested_backend="fem", requested_device="cpu",
+            requested_precision="double", requested_mode="strict",
+        )
+        first, second = config["study_pipeline"]["nodes"]
+        self.assertEqual(first["payload"]["gilbert_damping_by_object"], {"film": 1.0})
+        self.assertNotIn("gilbert_damping_by_object", second["payload"])
+        for script in (render_scene_document_as_script(scene),
+                       rewrite_loaded_problem_script(loaded)["rendered_source"]):
+            reloaded = _load(script)
+            self.assertEqual(
+                [s.problem.magnets[0].material.alpha for s in reloaded.stages],
+                [1.0, 0.045],
+            )
+            self.assertEqual(reloaded.workspace_problem.magnets[0].material.alpha, 0.045)
+
     def test_tableadd_serializes_object_magnetization_expression(self) -> None:
         loaded = _load(
             _PREAMBLE
