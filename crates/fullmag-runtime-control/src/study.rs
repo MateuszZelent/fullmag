@@ -825,6 +825,21 @@ struct PrevalidatedAcceptedWorkerStep {
     resolved_input: ResolvedTaskInput,
 }
 
+impl PrevalidatedAcceptedWorkerStep {
+    fn bind_claim(self, claim: TaskClaim) -> AcceptedWorkerStep {
+        AcceptedWorkerStep {
+            claim,
+            step_id: self.step_id,
+            study_inputs: self.study_inputs,
+            initial_state_overlay: self.initial_state_overlay,
+            problem: self.problem,
+            execution_plan: self.execution_plan,
+            until_seconds: self.until_seconds,
+            resolved_input: self.resolved_input,
+        }
+    }
+}
+
 /// Rehydrate one accepted study step only from its exact persisted Prepare
 /// command. This verifies the current claim/lease, coordinator outbox,
 /// preparation receipt, dependency manifest, RunSpec, and canonical plan
@@ -856,7 +871,8 @@ pub(crate) fn load_accepted_worker_step_from_snapshot(
         envelope.claim.task_id.as_str(),
     )
     .context("worker Prepare has no current durable task claim")?;
-    load_accepted_worker_step_locked(store, accepted, envelope, prepared, current_claim)
+    validate_accepted_worker_step_locked(store, accepted, envelope, &prepared, &current_claim)?;
+    Ok(prepared.bind_claim(current_claim))
 }
 
 /// Rehydrate the accepted step when a worker receives its durable Start command.
@@ -868,23 +884,40 @@ pub fn load_accepted_worker_step_for_start_from_snapshot(
     accepted: &AcceptedStudySnapshot,
     start_envelope: &WorkerCommandEnvelope,
 ) -> Result<AcceptedWorkerStep> {
+    rehydrate_worker_start(store, accepted, start_envelope, crate::WORKER_STORE_WRITER_WAIT)
+}
+
+fn rehydrate_worker_start(
+    store: &SessionStore,
+    accepted: &AcceptedStudySnapshot,
+    start_envelope: &WorkerCommandEnvelope,
+    writer_wait: std::time::Duration,
+) -> Result<AcceptedWorkerStep> {
     validate_start_envelope(accepted, start_envelope)?;
-    let prepare = {
+    let prepare = crate::retry_store_writer_busy_within(writer_wait, || {
         let _writer = store.write_transaction()?;
         require_current_accepted_study_intent(store, accepted)?;
         let current_claim = current_claim_for_start(store, start_envelope)?;
-        preceding_prepare_for_start_locked(store, &current_claim, start_envelope)?
-    };
+        preceding_prepare_for_start_locked(store, &current_claim, start_envelope)
+    })?;
 
-    let prepared = prevalidate_accepted_worker_step(store, accepted, &prepare)?;
-    let _writer = store.write_transaction()?;
-    require_current_accepted_study_intent(store, accepted)?;
-    let current_claim = current_claim_for_start(store, start_envelope)?;
-    let current_prepare = preceding_prepare_for_start_locked(store, &current_claim, start_envelope)?;
-    if current_prepare != prepare {
-        bail!("worker Start preceding Prepare changed during immutable validation");
-    }
-    load_accepted_worker_step_locked(store, accepted, &prepare, prepared, current_claim)
+    let prepared = crate::retry_store_writer_busy_within(writer_wait, || {
+        prevalidate_accepted_worker_step(store, accepted, &prepare)
+    })?;
+    // A transient error inside the mutable read releases the fence before
+    // retrying. Keep the independently verified immutable preparation.
+    let current_claim = crate::retry_store_writer_busy_within(writer_wait, || {
+        let _writer = store.write_transaction()?;
+        require_current_accepted_study_intent(store, accepted)?;
+        let current_claim = current_claim_for_start(store, start_envelope)?;
+        let current_prepare = preceding_prepare_for_start_locked(store, &current_claim, start_envelope)?;
+        if current_prepare != prepare {
+            bail!("worker Start preceding Prepare changed during immutable validation");
+        }
+        validate_accepted_worker_step_locked(store, accepted, &prepare, &prepared, &current_claim)?;
+        Ok(current_claim)
+    })?;
+    Ok(prepared.bind_claim(current_claim))
 }
 
 /// Compatibility facade for callers that do not already own a validated
@@ -895,12 +928,10 @@ pub fn load_accepted_worker_step_for_start(
     project_id: &ProjectId,
     start_envelope: &WorkerCommandEnvelope,
 ) -> Result<AcceptedWorkerStep> {
-    let accepted = load_accepted_study_snapshot(
-        store,
-        &start_envelope.claim.run_id,
-        project_id,
-    )?;
-    load_accepted_worker_step_for_start_from_snapshot(store, &accepted, start_envelope)
+    let accepted = crate::retry_store_writer_busy(|| {
+        load_accepted_study_snapshot(store, &start_envelope.claim.run_id, project_id)
+    })?;
+    rehydrate_worker_start(store, &accepted, start_envelope, crate::STORE_WRITER_WAIT)
 }
 
 fn prevalidate_accepted_worker_step(
@@ -1023,17 +1054,17 @@ fn prevalidate_accepted_worker_step(
     })
 }
 
-fn load_accepted_worker_step_locked(
+fn validate_accepted_worker_step_locked(
     store: &SessionStore,
     accepted: &AcceptedStudySnapshot,
     envelope: &WorkerCommandEnvelope,
-    prepared: PrevalidatedAcceptedWorkerStep,
-    current_claim: TaskClaim,
-) -> Result<AcceptedWorkerStep> {
+    prepared: &PrevalidatedAcceptedWorkerStep,
+    current_claim: &TaskClaim,
+) -> Result<()> {
     if prepared.prepare != *envelope {
         bail!("prevalidated worker step belongs to a different Prepare envelope");
     }
-    if !envelope.claim.matches_claim(&current_claim) {
+    if !envelope.claim.matches_claim(current_claim) {
         bail!("worker Prepare command belongs to a stale task claim");
     }
     let run_id = accepted.run.specification.run_id.as_str();
@@ -1134,7 +1165,7 @@ fn load_accepted_worker_step_locked(
         || !transition
             .checkpoint
             .claim
-            .is_same_or_renewed_by(&current_claim)
+            .is_same_or_renewed_by(current_claim)
         || transition.checkpoint.command_sequence != envelope.sequence
         || transition.checkpoint.task.input_fingerprint != durable_task.input_fingerprint
     {
@@ -1152,19 +1183,10 @@ fn load_accepted_worker_step_locked(
             bail!("frozen history cannot dispatch through another backend");
         };
         crate::frozen_stage_lifecycle::load_execution_context(store,
-            &accepted.run.specification.run_id, &prepared.step_id, plan, &current_claim, binding)?;
+            &accepted.run.specification.run_id, &prepared.step_id, plan, current_claim, binding)?;
     }
 
-    Ok(AcceptedWorkerStep {
-        claim: current_claim,
-        step_id: prepared.step_id,
-        study_inputs: prepared.study_inputs,
-        initial_state_overlay: prepared.initial_state_overlay,
-        problem: prepared.problem,
-        execution_plan: prepared.execution_plan,
-        until_seconds: prepared.until_seconds,
-        resolved_input: prepared.resolved_input,
-    })
+    Ok(())
 }
 
 /// Shared physical input owner for execution and bounded historical validation.

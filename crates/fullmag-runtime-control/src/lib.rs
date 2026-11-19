@@ -34,8 +34,10 @@ use fullmag_session::{
 /// scheduler, supervisor, and worker loops from repeatedly colliding in
 /// lockstep while preserving the five-second bounded wait.
 pub fn retry_store_writer_busy<T>(operation: impl FnMut() -> Result<T>) -> Result<T> {
-    retry_store_writer_busy_within(std::time::Duration::from_secs(5), operation)
+    retry_store_writer_busy_within(STORE_WRITER_WAIT, operation)
 }
+
+const STORE_WRITER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Bounded wait for a running worker. The writer lock is a non-blocking,
 /// unfair try-lock shared by the API, both schedulers and every worker, so a
@@ -57,7 +59,8 @@ pub fn retry_store_writer_busy_within<T>(
         match operation() {
             Ok(value) => return Ok(value),
             Err(error)
-                if (error
+                if !is_store_publication_uncertain(&error)
+                    && (error
                     .chain()
                     .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
                     || is_transient_store_io(&error))
@@ -81,12 +84,21 @@ pub fn retry_store_writer_busy_within<T>(
 /// writes with ENOMEM although the container has free memory; that failure
 /// changes no durable state, so a scheduler can defer and retry the pass.
 pub fn is_transient_store_io(error: &anyhow::Error) -> bool {
+    // An I/O error after rename has an unknown publication outcome. Its
+    // underlying errno is insufficient to authorize an ordinary retry.
+    if is_store_publication_uncertain(error) {
+        return false;
+    }
     const ENOMEM: i32 = 12;
     error.chain().any(|cause| {
         cause
             .downcast_ref::<std::io::Error>()
             .is_some_and(|io| io.raw_os_error() == Some(ENOMEM))
     })
+}
+
+fn is_store_publication_uncertain(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| cause.is::<fullmag_session::PublicationUncertain>())
 }
 
 /// Worker retry for idempotent store operations: a busy writer or transient
@@ -101,7 +113,7 @@ pub fn retry_worker_store_transient<T>(mut operation: impl FnMut() -> Result<T>)
     loop {
         match retry_store_writer_busy_within(WORKER_STORE_WRITER_WAIT, &mut operation) {
             Err(error)
-                if error.chain().any(|cause| {
+                if !is_store_publication_uncertain(&error) && error.chain().any(|cause| {
                     cause
                         .downcast_ref::<std::io::Error>()
                         .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)

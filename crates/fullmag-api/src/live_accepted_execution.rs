@@ -1622,6 +1622,17 @@ fn request_accepted_stop_for_catalog(
                 })?
                 .map(|intent| intent.expected_catalog_revision),
         };
+        let record_cancellation = |expected_catalog_revision| {
+            fullmag_runtime_control::retry_store_writer_busy(|| {
+                store.request_task_cancellation_intent(
+                    run_id,
+                    &task.task_id,
+                    &cancellation_id,
+                    expected_catalog_revision,
+                    reason,
+                )
+            })
+        };
         match task.lifecycle {
             fullmag_session::FmsTaskLifecycle::Preparing
             | fullmag_session::FmsTaskLifecycle::Running => {
@@ -1651,14 +1662,7 @@ fn request_accepted_stop_for_catalog(
                 // valid Stop retry into an IntentConflict.
                 let expected_catalog_revision =
                     cancellation_expected_revision.unwrap_or(catalog_revision);
-                let (_, _, next_catalog_revision) = store
-                    .request_task_cancellation_intent(
-                        run_id,
-                        &task.task_id,
-                        &cancellation_id,
-                        expected_catalog_revision,
-                        reason,
-                    )
+                let (_, _, next_catalog_revision) = record_cancellation(expected_catalog_revision)
                     .map_err(|error| {
                         ApiError::conflict_with_code(
                             "accepted_control_stop_conflict",
@@ -1679,14 +1683,7 @@ fn request_accepted_stop_for_catalog(
                 // successful two-stage Stop remains idempotent after worker
                 // lifecycle projection.
                 if let Some(expected_catalog_revision) = cancellation_expected_revision {
-                    let (_, _, next_catalog_revision) = store
-                        .request_task_cancellation_intent(
-                            run_id,
-                            &task.task_id,
-                            &cancellation_id,
-                            expected_catalog_revision,
-                            reason,
-                        )
+                    let (_, _, next_catalog_revision) = record_cancellation(expected_catalog_revision)
                         .map_err(|error| {
                             ApiError::conflict_with_code(
                                 "accepted_control_stop_conflict",
