@@ -813,6 +813,26 @@ pub struct AcceptedWorkerStep {
     pub resolved_input: ResolvedTaskInput,
 }
 
+/// Compact identity of the accepted state input used by the worker plan.
+/// Values remain in the execution plan; this record carries only the source
+/// port, verified artifact identity, source clock, and state digests.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AcceptedWorkerStateInputProvenance {
+    pub input_port: StudyInputPort,
+    pub artifact: ResolvedStudyArtifact,
+    pub producer_step: u64,
+    pub producer_time_s: f64,
+    pub producer_solver_dt_s: f64,
+    pub layout_sha256: String,
+    pub values_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaterializedAcceptedWorkerExecutionPlan {
+    pub execution_plan: ExecutionPlanIR,
+    pub state_input: Option<AcceptedWorkerStateInputProvenance>,
+}
+
 struct PrevalidatedAcceptedWorkerStep {
     prepare: WorkerCommandEnvelope,
     preparation_envelope: FmsTaskPreparationReceipt,
@@ -1195,6 +1215,24 @@ pub fn materialize_accepted_worker_execution_plan(
     store: &SessionStore,
     accepted_step: &AcceptedWorkerStep,
 ) -> Result<ExecutionPlanIR> {
+    Ok(materialize_accepted_worker_execution_plan_impl(store, accepted_step, false)?.execution_plan)
+}
+
+/// The same fully validated worker materialization, with compact provenance
+/// returned for readers that need to publish the consumed state clock without
+/// rereading the potentially large CAS object.
+pub fn materialize_accepted_worker_execution_plan_with_source(
+    store: &SessionStore,
+    accepted_step: &AcceptedWorkerStep,
+) -> Result<MaterializedAcceptedWorkerExecutionPlan> {
+    materialize_accepted_worker_execution_plan_impl(store, accepted_step, true)
+}
+
+fn materialize_accepted_worker_execution_plan_impl(
+    store: &SessionStore,
+    accepted_step: &AcceptedWorkerStep,
+    capture_state_input: bool,
+) -> Result<MaterializedAcceptedWorkerExecutionPlan> {
     let resolved_input = &accepted_step.resolved_input;
     if accepted_step.initial_state_overlay.is_some() && resolved_input.frozen_stage_context.is_some() {
         bail!("magnetization overlay cannot alter a frozen full-history continuation");
@@ -1244,6 +1282,7 @@ pub fn materialize_accepted_worker_execution_plan(
 
     let mut execution_plan = accepted_step.execution_plan.clone();
     let mut materialized_state = false;
+    let mut state_input_provenance = None;
     for (port_id, input) in &resolved_input.inputs {
         let port = declared.get(port_id.as_str()).with_context(|| {
             format!("resolved input `{port_id}` is not declared by the accepted study")
@@ -1288,6 +1327,17 @@ pub fn materialize_accepted_worker_execution_plan(
                 crate::frozen_stage_lifecycle::MAX_FROZEN_STATE_ENVELOPE_BYTES
                     .min(accepted_step.claim.lease.budget.storage_bytes),
             )?
+        } else if capture_state_input {
+            // The live preparation reader needs one digest-verified copy of
+            // the accepted state to build M0 provenance. Use the same bounded
+            // file-handle path as frozen input so metadata ENOMEM cannot be
+            // collapsed by Path::exists into a false missing-object result.
+            store
+                .cas()
+                .get_bounded(
+                    &artifact.object_ref,
+                    accepted_step.claim.lease.budget.storage_bytes,
+                )?
         } else {
             store.cas().get(&artifact.object_ref)?
         }
@@ -1310,6 +1360,20 @@ pub fn materialize_accepted_worker_execution_plan(
             }
             _ => bail!("accepted state input `{port_id}` decoded to a non-state artifact"),
         };
+        if capture_state_input {
+            if state_input_provenance.is_some() {
+                bail!("accepted worker cannot report multiple magnetization inputs to one initial state");
+            }
+            state_input_provenance = Some(AcceptedWorkerStateInputProvenance {
+                input_port: (**port).clone(),
+                artifact: artifact.clone(),
+                producer_step: state.step,
+                producer_time_s: state.time_s,
+                producer_solver_dt_s: state.solver_dt_s,
+                layout_sha256: state.space_fingerprint.clone(),
+                values_sha256: accepted_worker_magnetization_values_sha256(&state.values),
+            });
+        }
         execution_plan = fullmag_runner::materialize_study_magnetization_input_with_overlay(
             &execution_plan,
             &state.layout,
@@ -1326,7 +1390,18 @@ pub fn materialize_accepted_worker_execution_plan(
     if accepted_step.initial_state_overlay.is_some() && !materialized_state {
         bail!("accepted magnetization overlay requires a resolved predecessor state");
     }
-    Ok(execution_plan)
+    Ok(MaterializedAcceptedWorkerExecutionPlan {
+        execution_plan,
+        state_input: state_input_provenance,
+    })
+}
+
+fn accepted_worker_magnetization_values_sha256(values: &[[f64; 3]]) -> String {
+    let mut digest = Sha256::new();
+    for component in values.iter().flatten() {
+        digest.update(component.to_le_bytes());
+    }
+    format!("{:x}", digest.finalize())
 }
 
 fn validate_start_envelope(

@@ -3455,6 +3455,38 @@ pub(crate) fn invalidate_live_magnetization_preview(current: &mut SessionStateRe
     current.simulation_preparation = None;
 }
 
+/// Retire prior solver H publications when a new accepted stage M0 is bound.
+/// Immutable artifact fields normally survive domain replacement, but they
+/// are still the previous stage's observation when the grid is unchanged.
+pub(crate) fn retire_previous_solver_h_fields(current: &mut SessionStateResponse) {
+    let mut retired = BTreeSet::new();
+    retired.extend(
+        current
+            .latest_fields
+            .entries()
+            .filter(|(quantity, _)| quantity.starts_with("H_"))
+            .map(|(quantity, _)| quantity.clone()),
+    );
+    retired.extend(
+        current
+            .field_publication_bundles
+            .keys()
+            .filter(|quantity| quantity.starts_with("H_"))
+            .cloned(),
+    );
+    if retired.is_empty() {
+        return;
+    }
+
+    for quantity in retired {
+        current.latest_fields.remove(&quantity);
+        current.field_publication_bundles.remove(&quantity);
+        current.preview_cache.forget_quantity(&quantity);
+        bump_field_sample_revision(current, &quantity, None);
+    }
+    bump_field_catalog_revision(current);
+}
+
 pub(crate) fn apply_current_live_authored_initial_state(
     current: &mut SessionStateResponse,
     publication: crate::live_authored_initial_state::AuthoredInitialStatePublication,
