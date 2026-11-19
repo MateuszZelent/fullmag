@@ -425,7 +425,9 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     ],
   );
 
-  const activeOverlay = useAnalysisFieldOverlay(kernel.analysisFieldOverlay);
+  const activeOverlay = useAnalysisFieldOverlay(kernel.analysisFieldOverlay, {
+    ignorePhase: true,
+  });
   const activeAnalysisFieldId = activeOverlay?.fieldId ?? null;
   const activeAnalysisFieldLabel = activeOverlay?.label ?? null;
   const activeAnalysisField = useMemo(

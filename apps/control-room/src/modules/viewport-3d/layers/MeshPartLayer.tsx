@@ -71,6 +71,8 @@ import type {
 import { buildViewport3DRenderableMeshPartKey } from "../viewport3dRenderModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { BoundsBox } from "./BoundsLayers";
+import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
+import { ComplexGlyphPassLayer, ComplexVectorGlyphLayer } from "./ComplexVectorGlyphLayer";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
@@ -107,7 +109,7 @@ import {
 } from "./meshPartScalarTransition";
 import {
   buildModeCompositionScalarColorBuffer,
-  buildModeCompositionVectorLayerInput,
+  buildModeCompositionComplexGlyphInput,
   modeCompositionTargetIdForMeshPart,
   resolveModeCompositionMeshPartRenderPlan,
 } from "../model/modeCompositionViewportProjection";
@@ -578,7 +580,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   magnetizationTexturePreview,
   meshQualityColors,
   modeCompositionId,
-  modeCompositionPhaseRad,
+  modeCompositionPhase = null,
   modeCompositionSnapshot,
   settings,
   topologyModel,
@@ -602,7 +604,8 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
   meshQualityColors: ScalarColorBuffer | null;
   modeCompositionId: string | null;
-  modeCompositionPhaseRad?: number | null;
+  /** Live phase cell of the modal layer; materials bind it, renders never read it. */
+  modeCompositionPhase?: LivePhaseUniform | null;
   modeCompositionSnapshot: ModeCompositionFieldLayerSnapshot | null;
   settings: VisualizationTargetSettings;
   topologyModel: Viewport3DTopologyRenderModel | null;
@@ -759,7 +762,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       geometryNodeIndices: expandSurfaceFaces ? surfaceIndices : null,
       identity: modal.buffer.identity,
       layer: modal.buffer.layer,
-      phaseRad: modeCompositionPhaseRad,
+      phase: modeCompositionPhase,
       projectionKey: [
         part.id,
         surfaceGeometryProjection,
@@ -771,7 +774,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   }, [
     expandSurfaceFaces,
     modeRenderPlan,
-    modeCompositionPhaseRad,
+    modeCompositionPhase,
     part.id,
     partModel.surfaceNodeIndices,
     surfaceGeometryProjection,
@@ -780,26 +783,24 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     topologyRevision,
   ]);
   const modalSurfaceActive = Boolean(modeScalarColors);
-  const modalVectorLayerInput = useMemo(() => {
-    const modal = modeRenderPlan?.surfacePass;
-    if (modal?.owner !== "modal" || !topologyModel) return null;
-    return buildModeCompositionVectorLayerInput({
-      field: modal.buffer.field,
-      identity: modal.buffer.identity,
-      layer: modal.buffer.layer,
-      phaseRad: modeCompositionPhaseRad,
-      topologyNodeCount,
-      topologyPositions: topologyModel.positions,
-      vectorScale,
-    });
-  }, [
-    modeCompositionPhaseRad,
-    modeRenderPlan,
-    topologyModel,
-    topologyNodeCount,
-    vectorScale,
-  ]);
-  const modalVectorsActive = Boolean(modalVectorLayerInput?.segments);
+  // Phase-independent and cached per field and layer appearance; the glyph
+  // shader applies the layer phase from modeCompositionPhase.
+  const modalLayer =
+    modeRenderPlan?.surfacePass.owner === "modal"
+      ? modeRenderPlan.surfacePass.buffer.layer
+      : null;
+  const modalGlyphInput =
+    modeRenderPlan?.surfacePass.owner === "modal" && topologyModel
+      ? buildModeCompositionComplexGlyphInput({
+          field: modeRenderPlan.surfacePass.buffer.field,
+          identity: modeRenderPlan.surfacePass.buffer.identity,
+          layer: modeRenderPlan.surfacePass.buffer.layer,
+          topologyNodeCount,
+          topologyPositions: topologyModel.positions,
+          vectorScale,
+        })
+      : null;
+  const modalVectorsActive = Boolean(modalGlyphInput);
   const scalarColorMode = fieldColorLayersEnabled
     ? surfaceScalarColorModeFromSettings(renderSettings)
     : null;
@@ -1170,7 +1171,11 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     wireframeReady: Boolean(edgeGeometry),
     pointsReady: Boolean(pointGeometry),
     vectorsReady: viewport3DVectorLayersEnabledFromBrowserConfig() &&
-      Boolean(modalVectorLayerInput?.segments ?? vectorLayerInput.segments),
+      Boolean(
+        modalGlyphInput ??
+          vectorLayerInput.complexGlyphs ??
+          vectorLayerInput.segments,
+      ),
     modalSurfaceActive,
     modalVectorsActive,
   });
@@ -1383,34 +1388,53 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         </points>
       ) : null}
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
-      (modalVectorsActive || renderPlan.vectors.visible) ? (
+      modalGlyphInput &&
+      modalLayer ? (
+        <ComplexVectorGlyphLayer
+          adoptionRegistry={adoptionRegistry}
+          carrierId={part.id}
+          colorMode="orientation"
+          fallbackColor={String(colors.field)}
+          fieldBufferId={modalGlyphInput.fieldBufferId}
+          glyphs={modalGlyphInput.glyphs}
+          opacity={modalLayer.appearance.opacity}
+          phase={
+            modeCompositionPhase ??
+            modalLayer.phase_rad + modalLayer.animation.phase_offset_rad
+          }
+          sessionIdentity={sessionIdentity}
+          style={vectorStyleFromSettings(renderSettings, vectorStyle)}
+          tracker={tracker}
+        />
+      ) : viewport3DVectorLayersEnabledFromBrowserConfig() &&
+        renderPlan.vectors.visible &&
+        vectorLayerInput.complexGlyphs ? (
+        <ComplexGlyphPassLayer
+          adoptionRegistry={adoptionRegistry}
+          carrierId={part.id}
+          fallbackColor={String(colors.field)}
+          fieldBufferId={requestedFieldBufferId}
+          opacity={renderPlan.vectors.opacity}
+          pass={vectorLayerInput.complexGlyphs}
+          sessionIdentity={sessionIdentity}
+          style={vectorStyleFromSettings(renderSettings, vectorStyle)}
+          tracker={tracker}
+        />
+      ) : viewport3DVectorLayersEnabledFromBrowserConfig() &&
+        renderPlan.vectors.visible ? (
         <VectorFieldLayer
           adoptionRegistry={adoptionRegistry}
-          buildReference={
-            modalVectorLayerInput?.buildReference ?? vectorLayerInput.buildReference
-          }
+          buildReference={vectorLayerInput.buildReference}
           carrierId={part.id}
           colors={colors}
-          colorMode={
-            modalVectorsActive
-              ? "orientation"
-              : vectorColorModeFromSettings(renderSettings, vectorColorMode)
-          }
+          colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}
           sessionIdentity={sessionIdentity}
-          opacity={
-            modalVectorsActive
-              ? modeRenderPlan?.surfacePass.owner === "modal"
-                ? modeRenderPlan.surfacePass.buffer.layer.appearance.opacity
-                : 1
-              : renderPlan.vectors.opacity
-          }
-          segments={modalVectorLayerInput?.segments ?? vectorLayerInput.segments}
-          glyphColorsOverride={modalVectorsActive ? undefined : vectorLayerInput.glyphColors}
-          colorScale={modalVectorsActive ? undefined : vectorLayerInput.colorScale}
-          fieldBufferId={
-            modalVectorLayerInput?.buildReference.fieldBufferId ?? requestedFieldBufferId
-          }
+          opacity={renderPlan.vectors.opacity}
+          segments={vectorLayerInput.segments}
+          glyphColorsOverride={vectorLayerInput.glyphColors}
+          colorScale={vectorLayerInput.colorScale}
+          fieldBufferId={requestedFieldBufferId}
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}
         />

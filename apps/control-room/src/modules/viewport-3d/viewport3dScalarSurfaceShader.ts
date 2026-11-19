@@ -11,6 +11,11 @@ import {
   phasorAdapter,
 } from "@/shared/domain/analysis/phasorConventionAdapter";
 
+import {
+  isLivePhaseUniform,
+  type LivePhaseUniform,
+} from "@/kernel/visualization/livePhaseUniform";
+
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 import {
   normalizeViewport3DColorPalette,
@@ -112,7 +117,7 @@ export function createScalarSurfaceShaderMaterial(
       fmAmplitudeScale: { value: finiteAmplitudeScale(buffer.amplitudeScale) },
       fmOpacity: { value: options.opacity },
       fmPaletteId: { value: scalarPaletteId(buffer.colorPalette) },
-      fmPhaseRad: { value: finitePhaseRad(buffer.complexPhaseRad) ?? 0 },
+      fmPhaseRad: scalarSurfacePhaseUniform(buffer),
       fmRepresentationId: {
         value: complexRepresentationId(buffer.complexRepresentation),
       },
@@ -200,7 +205,7 @@ export function updateScalarSurfaceShaderMaterial(
     material.uniforms.fmShadeStrength.value = shadeStrength;
   }
   material.uniforms.fmPaletteId.value = scalarPaletteId(buffer.colorPalette);
-  material.uniforms.fmPhaseRad.value = finitePhaseRad(buffer.complexPhaseRad) ?? 0;
+  bindScalarSurfacePhaseUniform(material, buffer);
   material.uniforms.fmRepresentationId.value = complexRepresentationId(
     buffer.complexRepresentation,
   );
@@ -211,6 +216,35 @@ export function updateScalarSurfaceShaderMaterial(
   material.uniforms.fmSpatialPhaseSign.value = spatialPhaseSign;
   material.uniforms.fmTemporalPhaseSign.value = temporalPhaseSign;
   material.uniforms.fmFloquetActive.value = floquetActive;
+}
+
+/**
+ * A buffer with a live phase uniform shares that cell with the material, so
+ * phase animation never touches the buffer or the material. Without one the
+ * material owns a private cell holding the buffer's static phase.
+ */
+function scalarSurfacePhaseUniform(buffer: ScalarColorBuffer): LivePhaseUniform | { value: number } {
+  return buffer.complexPhaseUniform ?? { value: finitePhaseRad(buffer.complexPhaseRad) ?? 0 };
+}
+
+export function bindScalarSurfacePhaseUniform(
+  material: Viewport3DScalarSurfaceMaterial,
+  buffer: ScalarColorBuffer,
+): void {
+  const current = material.uniforms.fmPhaseRad;
+  if (buffer.complexPhaseUniform) {
+    if (current !== buffer.complexPhaseUniform) {
+      material.uniforms.fmPhaseRad = buffer.complexPhaseUniform;
+    }
+    return;
+  }
+  const staticPhaseRad = finitePhaseRad(buffer.complexPhaseRad) ?? 0;
+  if (!current || isLivePhaseUniform(current)) {
+    // Never write a static phase into a shared live cell.
+    material.uniforms.fmPhaseRad = { value: staticPhaseRad };
+    return;
+  }
+  current.value = staticPhaseRad;
 }
 
 function canApplyComplexShaderColorBuffer(
@@ -240,7 +274,7 @@ function finiteAmplitudeScale(value: number | null | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 1;
 }
 
-function complexRepresentationId(
+export function complexRepresentationId(
   representation: ScalarColorBuffer["complexRepresentation"],
 ): number {
   switch (representation) {
@@ -299,14 +333,15 @@ const SHADER_PALETTES: readonly (ScalarColorPalette | "twilight")[] = [
   ),
 ];
 
-function scalarPaletteId(palette: string | null | undefined): number {
+export function scalarPaletteId(palette: string | null | undefined): number {
   const normalized = palette?.trim().toLowerCase().replace(/[\s-]+/g, "_");
   return SHADER_PALETTES.indexOf(
     normalized === "twilight" ? "twilight" : normalizeViewport3DColorPalette(palette),
   );
 }
 
-function scalarPaletteGlsl(): string {
+/** GLSL body of `vec3 paletteColor(float t)`; requires `uniform int fmPaletteId`. */
+export function scalarPaletteGlsl(): string {
   const number = (value: number) => value.toFixed(10);
   return SHADER_PALETTES.map((palette, id) => {
     const stops = getScalarColorPaletteStops(palette);

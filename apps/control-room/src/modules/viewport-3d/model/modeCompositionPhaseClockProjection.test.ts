@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { DecodedComplexFieldVector } from "@/kernel/api/codecs";
 import type { ModeCompositionLayer } from "@/kernel/visualization/ModeCompositionController";
 
+import { createLivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
+
 import { buildModeCompositionScalarColorBuffer } from "./modeCompositionViewportProjection";
 
 function field(): DecodedComplexFieldVector {
@@ -68,8 +70,9 @@ function layer(): ModeCompositionLayer {
 }
 
 describe("mode composition phase-clock projection", () => {
-  it("updates only the phase uniform from the live layer clock", () => {
+  it("binds the layer's live phase cell instead of baking the phase into data", () => {
     const complex = field();
+    const uniform = createLivePhaseUniform(1.75);
     const staticProjection = buildModeCompositionScalarColorBuffer({
       field: complex,
       layer: layer(),
@@ -79,12 +82,15 @@ describe("mode composition phase-clock projection", () => {
     const animatedProjection = buildModeCompositionScalarColorBuffer({
       field: complex,
       layer: layer(),
-      phaseRad: 1.75,
+      phase: uniform,
       requiredSurfaceNodeIndices: new Uint32Array([0]),
       topologyNodeCount: 1,
     });
 
+    expect(staticProjection?.complexPhaseRad).toBe(0.75);
+    expect(staticProjection?.complexPhaseUniform).toBeUndefined();
     expect(animatedProjection).not.toBeNull();
+    expect(animatedProjection?.complexPhaseUniform).toBe(uniform);
     expect(animatedProjection?.complexPhaseRad).toBe(1.75);
     expect(animatedProjection?.complexRealValues).toBe(
       staticProjection?.complexRealValues,
@@ -92,5 +98,7 @@ describe("mode composition phase-clock projection", () => {
     expect(animatedProjection?.complexImagValues).toBe(
       staticProjection?.complexImagValues,
     );
+    expect(animatedProjection?.buildKey).toBe(staticProjection?.buildKey);
+    expect(animatedProjection?.range).toEqual(staticProjection?.range);
   });
 });

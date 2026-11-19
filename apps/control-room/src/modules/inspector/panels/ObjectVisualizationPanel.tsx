@@ -1457,7 +1457,9 @@ function ObjectVisualizationPanelView({
   panel: ResolvedObjectVisualizationPanelState;
 }) {
   const { analysisFieldOverlay } = useKernel();
-  const shownAnalysisField = useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
+  const shownAnalysisField = useRenderableAnalysisFieldOverlay(analysisFieldOverlay, {
+    ignorePhase: true,
+  });
   const {
     appliedBaseline: currentAppliedBaseline,
     airboxFieldCarrierIdentity,
