@@ -1086,7 +1086,8 @@ mod tests {
             &mut report_bufs.h_scratch,
             &mut report_bufs.rhs,
             EvaluationRequest::Full,
-        );
+        )
+        .expect("step observables should evaluate");
 
         let mut aos_ws = problem.create_workspace();
         let aos_energy = problem.total_energy_from_vectors_ws(&magnetization, &mut aos_ws);
@@ -1163,7 +1164,8 @@ mod tests {
             &mut report_bufs.h_scratch,
             &mut report_bufs.rhs,
             EvaluationRequest::Full,
-        );
+        )
+        .expect("step observables should evaluate");
         let mut aos_ws = problem.create_workspace();
         let aos_energy = problem.total_energy_from_vectors_ws(state.magnetization(), &mut aos_ws);
         let soa_m = VectorFieldSoA::from_aos(state.magnetization());
@@ -3606,7 +3608,8 @@ mod tests {
             &mut buffers.h_scratch,
             &mut buffers.rhs,
             EvaluationRequest::Full,
-        );
+        )
+        .expect("step observables should evaluate");
         let mut aos_workspace = problem.create_workspace();
         let aos_energy = problem.total_energy_from_vectors_ws(&magnetization, &mut aos_workspace);
         let soa_magnetization = VectorFieldSoA::from_aos(&magnetization);
