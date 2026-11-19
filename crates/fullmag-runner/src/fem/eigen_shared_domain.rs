@@ -25,7 +25,7 @@ use super::eigen_reduction::validate_shared_domain_tangent_frame_transport;
 use super::eigen_reduction::ReductionMap;
 use super::eigen_shared_domain_geometry::{
     build_modal_certificate_map_binding, modal_shared_domain_equivalence_classes,
-    pa_e4b_airbox_size_m, periodic_domain_pair_stats, shared_domain_robin_beta_m,
+    pa_e4b_airbox_size_m, periodic_domain_pair_stats, shared_domain_modal_outer_boundary,
     OwnedModalEigenCsrMatrix, OwnedModalEigenPoissonAirboxBlockProblem,
 };
 use super::eigen_types::SharedDomainLinearizationState;
@@ -902,23 +902,7 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
                     .to_string(),
         });
     }
-    let boundary_kind = match config.bc_kind.as_deref() {
-        Some("dirichlet") => "dirichlet",
-        Some("pure_neumann") => "pure_neumann",
-        Some("robin") | None => "robin",
-        Some(other) => {
-            return Err(RunError {
-                message: format!("unsupported shared-domain modal airbox boundary kind '{other}'"),
-            });
-        }
-    };
-    let robin_beta = if boundary_kind == "robin" {
-        shared_domain_robin_beta_m(plan)?.ok_or_else(|| RunError {
-            message: "shared-domain modal Robin beta is unavailable".to_string(),
-        })?
-    } else {
-        0.0
-    };
+    let (boundary_kind, robin_beta) = shared_domain_modal_outer_boundary(plan)?;
     let (scalar_classes, scalar_count, magnetic_classes, magnetic_count) =
         modal_shared_domain_equivalence_classes(topology)?;
     let mesh_certificate = modal_mesh_certificate_v6(plan)
@@ -1233,19 +1217,8 @@ fn validate_native_shared_domain_certificate_producer(
         .air_box_config
         .as_ref()
         .ok_or_else(|| modal_v6_error("airbox_config_missing"))?;
-    let boundary_kind = match config.bc_kind.as_deref() {
-        Some("dirichlet") => "dirichlet",
-        Some("pure_neumann") => "pure_neumann",
-        Some("robin") | None => "robin",
-        Some(_) => return Err(modal_v6_error("airbox_boundary_kind_unsupported")),
-    };
-    let robin_beta = if boundary_kind == "robin" {
-        shared_domain_robin_beta_m(plan)
-            .map_err(|_| modal_v6_error("airbox_robin_gauge_invalid"))?
-            .ok_or_else(|| modal_v6_error("airbox_robin_gauge_invalid"))?
-    } else {
-        0.0
-    };
+    let (boundary_kind, robin_beta) = shared_domain_modal_outer_boundary(plan)
+        .map_err(|_| modal_v6_error("airbox_boundary_kind_unsupported"))?;
     let bias_field = plan.external_field.unwrap_or([0.0, 0.0, 0.0]);
     build_owned_modal_certificate_v6_binding(
         &plan.mesh,

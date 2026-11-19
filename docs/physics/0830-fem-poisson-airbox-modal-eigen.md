@@ -2541,4 +2541,128 @@ klasami, zerowymi licznikami par i schematem `open_airbox_identity.v1`, a
 | source-open-airbox-k0-ir | crates/fullmag-ir/src/execution.rs + MagnetostaticBoundaryConditionIR | Token `open_airbox_k0` w `ProblemIR` |
 | source-open-airbox-k0-plan | crates/fullmag-plan/src/fem.rs + open_airbox_k0_execution_requested | Rozwiązanie wykonania CPU i błąd GPU bez fallbacku |
 | source-open-airbox-k0-runner | crates/fullmag-runner/src/fem/eigen_policy.rs + shared_domain_k0_modal_requested | Trasa shared-domain K0 dla planu otwartego |
-| source-open-airbox-k0-native | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp + validate_open_airbox_identity_payload | Walidacja tożsamościowych klas i brzegu Robin bez par |
+| source-open-airbox-k0-native | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp + assemble_poisson_airbox_shared_domain_payload | Walidacja tożsamościowych klas i brzegu Robin bez par |
+
+## Brzeg zewnętrzny filmu periodycznego k=0 (korekta 2026-11-19)
+
+Status: korekta ścieżki shared-domain K0 dla siatek periodycznych w dwóch
+osiach. Źródło: patrz tabela niżej. Runtime: **NOT VERIFIED** do czasu
+pomiaru sondą demag opisanego niżej.
+
+Dla filmu periodycznego w $x$ i $y$ składowa $\mathbf G=0$ potencjału zależy
+tylko od $z$. Na zewnątrz filmu $\partial_z^2\phi_0=0$, a fizyczne
+rozwiązanie bez pola przyłożonego ma $H_z=-\partial_z\phi_0=0$. Dokładnym
+warunkiem k=0 na ścianach $z=z_{\min},z_{\max}$ jest więc Neumann:
+
+```{math}
+:label: eq-k0-film-neumann
+\frac{\partial\,\delta\phi}{\partial n}=0\quad\text{na }\Gamma_{\mathrm{open}},
+\qquad
+\int_D w\,\delta\phi\,\mathrm dV=0 ,
+```
+
+z cechowaniem `mean_zero_augmented` (`gauge_reason=pure_neumann_nullspace`),
+bo $P$ ma wtedy stałe jądro. Składowe $\mathbf G\neq0$ zanikają jak
+$e^{-|\mathbf G|d}$, więc błąd Neumanna dla nich jest wykładniczo mały w
+grubości warstwy powietrza $d$.
+
+Dipolowy warunek {eq}`eq-open-airbox-k0-robin` jest na tych ścianach błędny
+rzędu jedności. Rozwiązanie 1D dla jednorodnego $M_z$, filmu grubości $t$ i
+warstw powietrza $d$ z Robinem daje
+
+```{math}
+:label: eq-k0-film-robin-defect
+N_{zz}^{\mathrm{Robin}}
+=\Bigl(1+\frac{\beta t/2}{1+\beta d}\Bigr)^{-1},
+```
+
+czyli $N_{zz}=13/15$ dla $t=10\,\mathrm{nm}$, $d=20\,\mathrm{nm}$ i
+$\beta=8\cdot10^{7}\,\mathrm{m^{-1}}$ zamiast $N_{zz}=1$. Sonda
+`poisson_airbox_k0_demag_operator_probe` zmierzyła dokładnie
+$0.86666666666667$.
+
+Reguła runnera (`shared_domain_modal_outer_boundary`): jeśli plan wybiera
+Robina, a siatka ma translacje periodyczne w dokładnie dwóch osiach, operator
+modalny K0 używa `pure_neumann` z $\beta=0$. Jawne `dirichlet` lub
+`pure_neumann` z planu pozostają bez zmian. Ciała izolowane
+(`open_airbox_k0`) i struktury periodyczne w jednej osi zachowują
+{eq}`eq-open-airbox-k0-robin`.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $\mathbf G$ | wektor sieci odwrotnej w płaszczyźnie filmu | $\mathrm{m^{-1}}$ |
+| $\phi_0$ | składowa $\mathbf G=0$ potencjału | $\mathrm A$ |
+| $t$ | grubość filmu | $\mathrm m$ |
+| $d$ | grubość warstwy powietrza po każdej stronie | $\mathrm m$ |
+| $w$ | wagi cechowania średniej zerowej | $1$ |
+| $N_{zz}^{\mathrm{Robin}}$ | współczynnik odmagnesowania z brzegiem Robina | $1$ |
+
+## Spójne pole statyczne w linearyzacji K0 (korekta 2026-11-19)
+
+Status: korekta źródła; runtime **NOT VERIFIED** do czasu ponownego testu
+kuli {eq}`eq-open-airbox-k0-sphere-kittel`.
+
+Część dynamiczna operatora K0 jest P1:
+$\mathbf h_d(\mathbf q)=-A_{q\phi}P^{-1}A_{\phi q}\mathbf q$. Człon
+przywracający $h_\parallel=\mathbf m_0\cdot\mathbf H_{\mathrm{eff},0}$ w
+$A_{qq}$ pochodzi natomiast z producenta równowagi. Statyczny solver relaksacji
+używa potencjału P2 dla siatek nieperiodycznych bez piramid
+(`potential_order=2`). Hesjan łączy wtedy dwa różne dyskretne funkcjonały
+energii. Dla kuli o siatce 4/25 nm zmierzono $N^{\mathrm{P1}}=0.3189$
+(sonda dynamiczna) i $N^{\mathrm{P2}}=0.333$ (pole relaksacji). Mod
+jednorodny przesuwa się wtedy o
+
+```{math}
+:label: eq-k0-static-dynamic-mismatch
+f=\frac{\gamma_0}{2\pi}\bigl(H_b+(N_\perp^{\mathrm{P1}}-N_\parallel^{\mathrm{P2}})M_s\bigr)
+\approx2.405\,\mathrm{GHz}
+```
+
+zamiast 2.8025 GHz. Zmierzono 2.402 GHz.
+
+Korekta: natywny ładunek shared-domain rozwiązuje statyczny problem P1 z tym
+samym $P$, tymi samymi klasami skalarnymi i tym samym brzegiem co blok
+dynamiczny:
+
+```{math}
+:label: eq-k0-consistent-static-demag
+P\,\phi_0^{\mathrm{P1}}=\mathbf b,\qquad
+b_i=\int_{\Omega_m}M_s\,\mathbf m_{0,h}\cdot\nabla v_i\,\mathrm dV,
+\qquad
+\mathbf H^{\mathrm{P1}}_{d,0,i}=
+-\frac{\int_{\Omega_m}N_i\nabla\phi_0^{\mathrm{P1}}\,\mathrm dV}
+{\int_{\Omega_m}N_i\,\mathrm dV}.
+```
+
+Następnie podmienia tylko składową równoległą pola efektywnego:
+
+```{math}
+:label: eq-k0-consistent-h-parallel
+\mathbf H_{\mathrm{eff},0,i}'=\mathbf H_{\mathrm{eff},0,i}
++\mathbf m_{0,i}\,\bigl[\mathbf m_{0,i}\cdot
+(\mathbf H^{\mathrm{P1}}_{d,0,i}-\mathbf H^{\mathrm{prod}}_{d,0,i})\bigr].
+```
+
+Składowa poprzeczna (kryterium momentu równowagi) i wszystkie digesty
+wejściowe pozostają bez zmian. Dla Neumanna $\mathbf b$ jest rzutowane na
+średnią zerową przed rozwiązaniem. Dirichlet zeruje $\mathbf b$ na węzłach
+istotnych. Dla kuli zastąpienie przywraca symetrię
+$N_\perp=N_\parallel$, a więc {eq}`eq-open-airbox-k0-sphere-kittel` z
+dokładnością do błędu rozwiązania liniowego. Bezwzględna dokładność $N$
+pozostaje dokładnością P1 i maleje z zagęszczeniem siatki powietrza przy
+ciele. Moment poprzeczny pola P1 (różnica P1/P2) nie wchodzi do Hesjanu; to
+przybliżenie pierwszego rzędu w różnicy dyskretyzacji.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $\phi_0^{\mathrm{P1}}$ | statyczny potencjał P1 dla $\mathbf m_0$ | $\mathrm A$ |
+| $\mathbf b$ | wektor źródła ładunków magnetycznych | $\mathrm{A\,m}$ |
+| $v_i$, $N_i$ | funkcje bazowe P1 | $1$ |
+| $\mathbf H^{\mathrm{P1}}_{d,0,i}$ | węzłowe statyczne pole demag P1 | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H^{\mathrm{prod}}_{d,0,i}$ | pole demag producenta równowagi | $\mathrm{A\,m^{-1}}$ |
+| $N_\perp$, $N_\parallel$ | dynamiczny i statyczny współczynnik odmagnesowania | $1$ |
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-k0-film-neumann-runner | crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs + shared_domain_modal_outer_boundary | Wybór Neumanna dla filmu periodycznego w dwóch osiach |
+| source-k0-consistent-static-demag | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp + recompute_shared_domain_static_demag_p1 | Statyczne pole P1 i podmiana $h_\parallel$ przed złożeniem $A_{qq}$ |
