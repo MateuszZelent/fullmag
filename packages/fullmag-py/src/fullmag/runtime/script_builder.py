@@ -47,6 +47,7 @@ from fullmag.model.spin_torque import (
     InterfaceCppSTT,
     PrescribedSpinOrbitTorque,
     SlonczewskiSTT,
+    TimeExpression,
     SpinOrbitTorque,
     ZhangLiSTT,
 )
@@ -7288,6 +7289,8 @@ def _render_spin_torques(
                 kwargs.append(f"free_layer_thickness_m={_py_number(module.free_layer_thickness_m)}")
             if module.formula_version == "slonczewski.legacy_fullmag.v0" and module.fixed_layer_position is not None:
                 kwargs.append(f"fixed_layer_position={_py_repr(module.fixed_layer_position)}")
+            if module.time_expression is not None:
+                kwargs.append(f"time_expression={_render_time_expression(module.time_expression)}")
             lines.append(f"fm.SlonczewskiSTT({', '.join(kwargs)})")
             continue
         if isinstance(module, ZhangLiSTT):
@@ -7451,6 +7454,14 @@ def _render_region_ref(entry: Mapping[str, object]) -> str:
             raise ValueError("prescribed_sot.target.region_id must be a non-empty string")
         kwargs.append(_py_repr(region_id))
     return f"fm.RegionRef({', '.join(kwargs)})"
+
+
+def _render_time_expression(expression: TimeExpression) -> str:
+    return (
+        f"fm.TimeExpression({_py_repr(expression.source)}, "
+        f"constants={_roundtrip_literal(dict(expression.constants), context='time_expression.constants')}, "
+        f"event_times_s={_roundtrip_literal(list(expression.event_times_s), context='time_expression.event_times_s')})"
+    )
 
 
 def _render_sot_envelope(entry: Mapping[str, object]) -> str:
@@ -7684,7 +7695,7 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
             "kind", "current_density", "current_source", "spin_polarization", "degree",
             "lambda_asymmetry", "epsilon_prime", "free_layer_thickness_m",
             "fixed_layer_position", "formula_version", "schema_version", "id", "target",
-            "stack_normal", "realization",
+            "stack_normal", "realization", "time_expression",
         },
         "zhang_li": {
             "kind", "schema_version", "id", "target", "formula_version",
@@ -7733,6 +7744,9 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
                 f"{field}={_required_roundtrip_number(entry, field, context=str(kind))}"
             )
     if kind == "slonczewski":
+        if "time_expression" in entry:
+            expression = TimeExpression.from_ir(entry["time_expression"])
+            kwargs.append(f"time_expression={_render_time_expression(expression)}")
         formula_version = entry.get("formula_version", "slonczewski.legacy_fullmag.v0")
         if formula_version == "slonczewski.fullmag.v2":
             if _required_entry(entry, "schema_version", context=str(kind)) != "slonczewski_torque.v1":

@@ -105,19 +105,31 @@ fn interactive_time_event_schedule(
     stage_start_s: f64,
     waveform_origin_time_s: f64,
     duration_s: f64,
+    time_expression: Option<&fullmag_ir::TimeExpressionIR>,
     output_periods_s: impl IntoIterator<Item = f64>,
 ) -> Vec<f64> {
     let stage_end_s = stage_start_s + duration_s;
-    let mut times = crate::time_events::build_resolved_stage_event_schedule_with_origin(
+    let tolerance_s = if time_expression.is_some() {
+        0.0
+    } else {
+        crate::schedules::OUTPUT_TIME_TOLERANCE
+    };
+    let mut schedule = crate::time_events::build_resolved_stage_event_schedule_with_origin(
         drives,
         solved_bases,
         stage_start_s,
         waveform_origin_time_s,
         stage_end_s,
         &[],
-        crate::schedules::OUTPUT_TIME_TOLERANCE,
-    )
-    .times_s;
+        tolerance_s,
+    );
+    crate::time_events::extend_absolute_time_expression_events(
+        &mut schedule,
+        time_expression,
+        stage_start_s,
+        stage_end_s,
+    );
+    let mut times = schedule.times_s;
     for period_s in output_periods_s {
         if period_s.is_finite() && period_s > 0.0 {
             let count = (duration_s / period_s).floor() as u64;
@@ -125,7 +137,13 @@ fn interactive_time_event_schedule(
         }
     }
     times.sort_by(f64::total_cmp);
-    times.dedup_by(|right, left| (*right - *left).abs() <= crate::schedules::OUTPUT_TIME_TOLERANCE);
+    if time_expression.is_some() {
+        times.dedup_by(|right, left| *right == *left);
+    } else {
+        times.dedup_by(|right, left| {
+            (*right - *left).abs() <= crate::schedules::OUTPUT_TIME_TOLERANCE
+        });
+    }
     times
 }
 
@@ -2917,6 +2935,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            plan.slonczewski_time_expression.as_ref(),
             std::iter::empty(),
         );
         let mut dt = crate::resolve_timestep_policy(
@@ -3014,7 +3033,11 @@ impl CpuInteractiveFdmPreviewRuntime {
                 self.state.time_seconds,
                 proposed_dt,
                 &time_events,
-                crate::schedules::OUTPUT_TIME_TOLERANCE,
+                if plan.slonczewski_time_expression.is_some() {
+                    0.0
+                } else {
+                    crate::schedules::OUTPUT_TIME_TOLERANCE
+                },
             );
             let wall_start = std::time::Instant::now();
             let report = self.step(dt_step)?;
@@ -3272,6 +3295,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            plan.slonczewski_time_expression.as_ref(),
             output_periods,
         );
         let mut dt = crate::resolve_timestep_policy(
@@ -3353,7 +3377,11 @@ impl CpuInteractiveFdmPreviewRuntime {
                 self.state.time_seconds,
                 proposed_dt,
                 &time_events,
-                crate::schedules::OUTPUT_TIME_TOLERANCE,
+                if plan.slonczewski_time_expression.is_some() {
+                    0.0
+                } else {
+                    crate::schedules::OUTPUT_TIME_TOLERANCE
+                },
             );
             let wall_start = std::time::Instant::now();
             let report = self.step(dt_step)?;
@@ -3686,6 +3714,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            plan.slonczewski_time_expression.as_ref(),
             std::iter::empty(),
         );
         reject_non_llg_interactive_relaxation(
@@ -3785,7 +3814,11 @@ impl CudaInteractiveFdmPreviewRuntime {
                 self.total_time,
                 proposed_dt,
                 &time_events,
-                crate::schedules::OUTPUT_TIME_TOLERANCE,
+                if plan.slonczewski_time_expression.is_some() {
+                    0.0
+                } else {
+                    crate::schedules::OUTPUT_TIME_TOLERANCE
+                },
             );
             let Some(total_stats) = self
                 .backend
@@ -4059,6 +4092,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            plan.slonczewski_time_expression.as_ref(),
             output_periods,
         );
         reject_non_llg_interactive_relaxation(
@@ -4155,7 +4189,11 @@ impl CudaInteractiveFdmPreviewRuntime {
                 self.total_time,
                 proposed_dt,
                 &time_events,
-                crate::schedules::OUTPUT_TIME_TOLERANCE,
+                if plan.slonczewski_time_expression.is_some() {
+                    0.0
+                } else {
+                    crate::schedules::OUTPUT_TIME_TOLERANCE
+                },
             );
             let Some(total_stats) = self
                 .backend
@@ -4478,6 +4516,7 @@ impl CpuInteractiveFemPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            None,
             std::iter::empty(),
         );
         reject_non_llg_interactive_relaxation(
@@ -4827,6 +4866,7 @@ impl CpuInteractiveFemPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            None,
             output_periods,
         );
         reject_non_llg_interactive_relaxation(
@@ -5254,6 +5294,7 @@ impl GpuInteractiveFemPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            None,
             std::iter::empty(),
         );
         reject_non_llg_interactive_relaxation(
@@ -5550,6 +5591,7 @@ impl GpuInteractiveFemPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            None,
             output_periods,
         );
         reject_non_llg_interactive_relaxation(

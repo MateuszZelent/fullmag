@@ -6,6 +6,7 @@
 use crate::fdm::cpu::fft::{combine_fields_4, zero_vectors};
 use crate::fdm::cpu::fft_backend::FdmFftBackend;
 use crate::fdm::cpu::soa_par::soa_fill;
+use crate::fdm::shared::terms::TimeEvaluationSide;
 #[cfg(test)]
 use crate::fdm::shared::types::AxisBoundary;
 use crate::telemetry::{sections, StepTelemetry};
@@ -607,6 +608,29 @@ impl ExchangeLlgProblem {
         h_eff: &VectorFieldSoA,
         out: &mut VectorFieldSoA,
     ) {
+        self.llg_rhs_soa_with_slonczewski_multiplier(magnetization, h_eff, out, 1.0);
+    }
+
+    pub(crate) fn llg_rhs_soa_into_at_time(
+        &self,
+        magnetization: &VectorFieldSoA,
+        h_eff: &VectorFieldSoA,
+        out: &mut VectorFieldSoA,
+        time_seconds: f64,
+        side: TimeEvaluationSide,
+    ) -> crate::Result<()> {
+        let multiplier = self.slonczewski_current_multiplier_at_time(time_seconds, side)?;
+        self.llg_rhs_soa_with_slonczewski_multiplier(magnetization, h_eff, out, multiplier);
+        Ok(())
+    }
+
+    fn llg_rhs_soa_with_slonczewski_multiplier(
+        &self,
+        magnetization: &VectorFieldSoA,
+        h_eff: &VectorFieldSoA,
+        out: &mut VectorFieldSoA,
+        current_multiplier: f64,
+    ) {
         let n = magnetization.len();
         debug_assert!(h_eff.len() >= n);
         debug_assert!(out.len() >= n);
@@ -617,7 +641,11 @@ impl ExchangeLlgProblem {
                 [h_eff.x[i], h_eff.y[i], h_eff.z[i]],
             )
         });
-        self.direct_torques_add_into_soa(magnetization, out);
+        self.direct_torques_add_into_soa_with_slonczewski_multiplier(
+            magnetization,
+            out,
+            current_multiplier,
+        );
         if let Some(frozen) = &self.frozen_spins {
             frozen.mask_final_rhs_soa(out);
         }
@@ -629,13 +657,45 @@ impl ExchangeLlgProblem {
         h_eff: &[Vector3],
         out: &mut [Vector3],
     ) {
+        self.llg_rhs_from_fields_with_slonczewski_multiplier_into(magnetization, h_eff, out, 1.0);
+    }
+
+    pub(crate) fn llg_rhs_from_fields_with_direct_torques_at_time_into(
+        &self,
+        magnetization: &[Vector3],
+        h_eff: &[Vector3],
+        out: &mut [Vector3],
+        time_seconds: f64,
+        side: TimeEvaluationSide,
+    ) -> crate::Result<()> {
+        let multiplier = self.slonczewski_current_multiplier_at_time(time_seconds, side)?;
+        self.llg_rhs_from_fields_with_slonczewski_multiplier_into(
+            magnetization,
+            h_eff,
+            out,
+            multiplier,
+        );
+        Ok(())
+    }
+
+    fn llg_rhs_from_fields_with_slonczewski_multiplier_into(
+        &self,
+        magnetization: &[Vector3],
+        h_eff: &[Vector3],
+        out: &mut [Vector3],
+        current_multiplier: f64,
+    ) {
         let n = magnetization.len();
         debug_assert!(h_eff.len() >= n);
         debug_assert!(out.len() >= n);
         for i in 0..n {
             out[i] = self.llg_rhs_from_field_at(i, magnetization[i], h_eff[i]);
         }
-        self.direct_torques_add_into(magnetization, out);
+        self.direct_torques_add_into_with_slonczewski_multiplier(
+            magnetization,
+            out,
+            current_multiplier,
+        );
         if let Some(frozen) = &self.frozen_spins {
             frozen.mask_final_rhs(&mut out[..n]);
         }

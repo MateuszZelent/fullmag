@@ -75,6 +75,7 @@ from fullmag.model.spin_torque import (
     SincEnvelope,
     SinusoidalEnvelope,
     SlonczewskiSTT,
+    TimeExpression,
     TabulatedEnvelope,
     TimeEnvelopePoint,
     VectorCurrentDrive,
@@ -1298,6 +1299,8 @@ def _decode_spin_torque(value: object) -> object:
             "lambda_asymmetry": _finite_number(entry.get("lambda_asymmetry"), "slonczewski.lambda_asymmetry"),
             "epsilon_prime": _finite_number(entry.get("epsilon_prime"), "slonczewski.epsilon_prime"),
         }
+        if "time_expression" in entry:
+            common["time_expression"] = TimeExpression.from_ir(entry["time_expression"])
         thickness = entry.get("free_layer_thickness_m")
         if thickness is not None:
             common["free_layer_thickness_m"] = _finite_number(thickness, "slonczewski.free_layer_thickness_m")

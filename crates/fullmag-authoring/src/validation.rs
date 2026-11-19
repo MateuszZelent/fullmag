@@ -3181,6 +3181,7 @@ fn validate_spin_torque(
             target,
             stack_normal,
             realization,
+            time_expression,
             ..
         } => {
             validate_current_binding(
@@ -3189,6 +3190,19 @@ fn validate_spin_torque(
                 current_source.as_deref(),
                 transport_ids,
             )?;
+            if let Some(expression) = time_expression {
+                if !matches!(formula_version, SlonczewskiFormulaVersion::FullmagV2)
+                    || current_density.is_none()
+                    || realization.is_none()
+                {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "spin_torques[{index}].time_expression requires canonical thin-layer prescribed current density"
+                    )));
+                }
+                expression.compile().map_err(|error| SceneDocumentValidationError::new(format!(
+                    "spin_torques[{index}].time_expression: {error}"
+                )))?;
+            }
             finite_vec3(
                 *spin_polarization,
                 &format!("spin_torques[{index}].spin_polarization"),

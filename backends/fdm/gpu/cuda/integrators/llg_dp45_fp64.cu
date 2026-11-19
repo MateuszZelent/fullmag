@@ -11,6 +11,8 @@
  */
 
 #include "context.hpp"
+#include "fullmag_time_expression.h"
+#include <algorithm>
 #include "../runtime/adaptive_controller.cuh"
 #include "../runtime/adaptive_metrics.cuh"
 #include "fsal_policy.hpp"
@@ -273,6 +275,29 @@ static void copy_field_d2d(DeviceVectorField &dst, const DeviceVectorField &src,
  * Stores result in the specified output buffer.
  */
 
+static double slonczewski_time_factor(const Context &ctx, double evaluation_time, uint64_t stage_id) {
+    if (ctx.slonczewski_time_program.empty()) return 1.0;
+    double physical_time = ctx.slonczewski_time_origin_s + evaluation_time;
+    const double tolerance = 8.0 * DBL_EPSILON * std::abs(physical_time);
+    const auto upper = std::lower_bound(
+        ctx.slonczewski_time_events_s.begin(), ctx.slonczewski_time_events_s.end(),
+        physical_time);
+    auto event = upper;
+    if (upper != ctx.slonczewski_time_events_s.begin()) {
+        const auto previous = upper - 1;
+        if (upper == ctx.slonczewski_time_events_s.end() ||
+            std::abs(*previous - physical_time) <= std::abs(*upper - physical_time)) {
+            event = previous;
+        }
+    }
+    if (event != ctx.slonczewski_time_events_s.end() && std::abs(*event - physical_time) <= tolerance) {
+        if (stage_id == 1) physical_time = std::nextafter(*event, INFINITY);
+        if (stage_id == 6 || stage_id == 7) physical_time = std::nextafter(*event, -INFINITY);
+    }
+    return fullmag_time_expression_eval(
+        ctx.slonczewski_time_program.data(), ctx.slonczewski_time_program.size(), physical_time);
+}
+
 static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
     int n, int grid, double gamma_bar, double alpha, double evaluation_time,
     uint64_t stage_id, bool allow_host_boundaries = true,
@@ -305,6 +330,16 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
             abort_step_after_interrupt(ctx);
             return false;
         }
+        auto stt = stt_params_from_ctx(ctx);
+        if (!ctx.slonczewski_time_program.empty()) {
+            stt.stt_cpp_pf *= slonczewski_time_factor(ctx, evaluation_time, stage_id);
+            if (!std::isfinite(stt.stt_cpp_pf)) {
+                ctx.last_error = "Slonczewski time expression produced a non-finite current at an RK stage";
+                ctx.fsal_valid = false;
+                restore_m_from_tmp(ctx);
+                return false;
+            }
+        }
         llg_rhs_fp64_kernel<<<grid, 256, 0, stream>>>(
             static_cast<const double*>(ctx.m.x),
             static_cast<const double*>(ctx.m.y),
@@ -316,7 +351,7 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
             static_cast<double*>(rhs_out.y),
             static_cast<double*>(rhs_out.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx),
+            stt, sot_params_from_ctx(ctx),
             ctx.alpha_field, ctx.gamma);
         context_note_local_pipeline_unfused_rhs(ctx);
         fullmag_fdm_note_llg_rhs_torque_device_launch(

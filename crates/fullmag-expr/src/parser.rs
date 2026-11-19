@@ -62,6 +62,7 @@ pub(crate) enum Func1 {
     Log,
     Sqrt,
     Abs,
+    Heaviside,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +88,7 @@ impl Func1 {
             Self::Log => "log",
             Self::Sqrt => "sqrt",
             Self::Abs => "abs",
+            Self::Heaviside => "heaviside",
         }
     }
 
@@ -105,7 +107,20 @@ impl Func1 {
             Self::Log => value.ln(),
             Self::Sqrt => value.sqrt(),
             Self::Abs => value.abs(),
+            Self::Heaviside => heaviside(value),
         }
+    }
+}
+
+pub(crate) fn heaviside(value: f64) -> f64 {
+    if !value.is_finite() {
+        f64::NAN
+    } else if value == 0.0 {
+        0.5
+    } else if value > 0.0 {
+        1.0
+    } else {
+        0.0
     }
 }
 
@@ -177,6 +192,7 @@ pub(crate) fn function1(name: &str) -> Option<Func1> {
         "log" => Func1::Log,
         "sqrt" => Func1::Sqrt,
         "abs" => Func1::Abs,
+        "heaviside" => Func1::Heaviside,
         _ => return None,
     })
 }

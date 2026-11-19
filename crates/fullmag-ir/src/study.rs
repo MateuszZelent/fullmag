@@ -356,6 +356,8 @@ pub enum SpinTorqueModuleIR {
         fixed_layer_position: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         realization: Option<SlonczewskiRealizationIR>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        time_expression: Option<crate::TimeExpressionIR>,
     },
     ZhangLi {
         #[serde(default, skip_serializing_if = "Option::is_none")]

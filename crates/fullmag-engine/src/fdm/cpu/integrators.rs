@@ -4,6 +4,7 @@
 //! across multiple files within the same crate.
 
 use crate::fdm::cpu::soa_par::{soa_for_each_mut, soa_try_fill};
+use crate::fdm::shared::terms::TimeEvaluationSide;
 use crate::vector::{add, cross, norm, scale};
 use crate::{
     AdaptiveAttemptDecision, AdaptiveAttemptReason, AdaptiveAttemptRecord, AdaptiveStepController,
@@ -1350,6 +1351,7 @@ impl ExchangeLlgProblem {
             .oersted_cylinder
             .as_ref()
             .is_some_and(|cfg| cfg.time_dep_kind != 0)
+            || self.has_slonczewski_time_expression()
             || self.temperature > 0.0
     }
 
@@ -2610,11 +2612,13 @@ impl ExchangeLlgProblem {
                 bufs.k[0][..n].copy_from_slice(&fsal);
             } else {
                 self.effective_field_into_ws_at_time(&bufs.m0[..n], ws, &mut bufs.h_eff[..n], t0);
-                self.llg_rhs_from_fields_with_direct_torques_into(
+                self.llg_rhs_from_fields_with_direct_torques_at_time_into(
                     &bufs.m0[..n],
                     &bufs.h_eff[..n],
                     &mut bufs.k[0][..n],
-                );
+                    t0,
+                    TimeEvaluationSide::RightLimit,
+                )?;
                 rhs_evals.record();
             }
 
@@ -2643,11 +2647,13 @@ impl ExchangeLlgProblem {
                 &mut bufs.h_eff[..n],
                 t0 + (1.0 / 5.0) * dt,
             );
-            self.llg_rhs_from_fields_with_direct_torques_into(
+            self.llg_rhs_from_fields_with_direct_torques_at_time_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
                 &mut bufs.k[1][..n],
-            );
+                t0 + (1.0 / 5.0) * dt,
+                TimeEvaluationSide::Exact,
+            )?;
             rhs_evals.record();
 
             // Stage 3
@@ -2681,11 +2687,13 @@ impl ExchangeLlgProblem {
                 &mut bufs.h_eff[..n],
                 t0 + (3.0 / 10.0) * dt,
             );
-            self.llg_rhs_from_fields_with_direct_torques_into(
+            self.llg_rhs_from_fields_with_direct_torques_at_time_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
                 &mut bufs.k[2][..n],
-            );
+                t0 + (3.0 / 10.0) * dt,
+                TimeEvaluationSide::Exact,
+            )?;
             rhs_evals.record();
 
             // Stage 4
@@ -2725,11 +2733,13 @@ impl ExchangeLlgProblem {
                 &mut bufs.h_eff[..n],
                 t0 + (4.0 / 5.0) * dt,
             );
-            self.llg_rhs_from_fields_with_direct_torques_into(
+            self.llg_rhs_from_fields_with_direct_torques_at_time_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
                 &mut bufs.k[3][..n],
-            );
+                t0 + (4.0 / 5.0) * dt,
+                TimeEvaluationSide::Exact,
+            )?;
             rhs_evals.record();
 
             // Stage 5
@@ -2780,11 +2790,13 @@ impl ExchangeLlgProblem {
                 &mut bufs.h_eff[..n],
                 t0 + (8.0 / 9.0) * dt,
             );
-            self.llg_rhs_from_fields_with_direct_torques_into(
+            self.llg_rhs_from_fields_with_direct_torques_at_time_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
                 &mut bufs.k[4][..n],
-            );
+                t0 + (8.0 / 9.0) * dt,
+                TimeEvaluationSide::Exact,
+            )?;
             rhs_evals.record();
 
             // Stage 6
@@ -2839,11 +2851,13 @@ impl ExchangeLlgProblem {
                 &mut bufs.h_eff[..n],
                 t0 + dt,
             );
-            self.llg_rhs_from_fields_with_direct_torques_into(
+            self.llg_rhs_from_fields_with_direct_torques_at_time_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
                 &mut bufs.k[5][..n],
-            );
+                t0 + dt,
+                TimeEvaluationSide::LeftLimit,
+            )?;
             rhs_evals.record();
 
             // 5th-order solution → m_stage
@@ -2897,11 +2911,13 @@ impl ExchangeLlgProblem {
                 &mut bufs.h_eff[..n],
                 t0 + dt,
             );
-            self.llg_rhs_from_fields_with_direct_torques_into(
+            self.llg_rhs_from_fields_with_direct_torques_at_time_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
                 &mut bufs.k[6][..n],
-            );
+                t0 + dt,
+                TimeEvaluationSide::LeftLimit,
+            )?;
             rhs_evals.record();
 
             // Error estimate
@@ -3064,7 +3080,13 @@ impl ExchangeLlgProblem {
                 bufs.soa.k[0].scatter_from_aos(&fsal);
             } else {
                 self.effective_field_into_soa_ws_at_time(&bufs.soa.m0, ws, &mut bufs.soa.h_eff, t0);
-                self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+                self.llg_rhs_soa_into_at_time(
+                    &bufs.soa.m0,
+                    &bufs.soa.h_eff,
+                    &mut bufs.soa.k[0],
+                    t0,
+                    TimeEvaluationSide::RightLimit,
+                )?;
                 rhs_evals.record();
             }
 
@@ -3081,7 +3103,13 @@ impl ExchangeLlgProblem {
                 &mut bufs.soa.h_eff,
                 t0 + (1.0 / 5.0) * dt,
             );
-            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
+            self.llg_rhs_soa_into_at_time(
+                &bufs.soa.m_stage,
+                &bufs.soa.h_eff,
+                &mut bufs.soa.k[1],
+                t0 + (1.0 / 5.0) * dt,
+                TimeEvaluationSide::Exact,
+            )?;
             rhs_evals.record();
 
             soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
@@ -3097,7 +3125,13 @@ impl ExchangeLlgProblem {
                 &mut bufs.soa.h_eff,
                 t0 + (3.0 / 10.0) * dt,
             );
-            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
+            self.llg_rhs_soa_into_at_time(
+                &bufs.soa.m_stage,
+                &bufs.soa.h_eff,
+                &mut bufs.soa.k[2],
+                t0 + (3.0 / 10.0) * dt,
+                TimeEvaluationSide::Exact,
+            )?;
             rhs_evals.record();
 
             soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
@@ -3122,7 +3156,13 @@ impl ExchangeLlgProblem {
                 &mut bufs.soa.h_eff,
                 t0 + (4.0 / 5.0) * dt,
             );
-            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
+            self.llg_rhs_soa_into_at_time(
+                &bufs.soa.m_stage,
+                &bufs.soa.h_eff,
+                &mut bufs.soa.k[3],
+                t0 + (4.0 / 5.0) * dt,
+                TimeEvaluationSide::Exact,
+            )?;
             rhs_evals.record();
 
             soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
@@ -3150,7 +3190,13 @@ impl ExchangeLlgProblem {
                 &mut bufs.soa.h_eff,
                 t0 + (8.0 / 9.0) * dt,
             );
-            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[4]);
+            self.llg_rhs_soa_into_at_time(
+                &bufs.soa.m_stage,
+                &bufs.soa.h_eff,
+                &mut bufs.soa.k[4],
+                t0 + (8.0 / 9.0) * dt,
+                TimeEvaluationSide::Exact,
+            )?;
             rhs_evals.record();
 
             soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
@@ -3181,7 +3227,13 @@ impl ExchangeLlgProblem {
                 &mut bufs.soa.h_eff,
                 t0 + dt,
             );
-            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[5]);
+            self.llg_rhs_soa_into_at_time(
+                &bufs.soa.m_stage,
+                &bufs.soa.h_eff,
+                &mut bufs.soa.k[5],
+                t0 + dt,
+                TimeEvaluationSide::LeftLimit,
+            )?;
             rhs_evals.record();
 
             soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
@@ -3213,7 +3265,13 @@ impl ExchangeLlgProblem {
                 &mut bufs.soa.h_eff,
                 t0 + dt,
             );
-            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[6]);
+            self.llg_rhs_soa_into_at_time(
+                &bufs.soa.m_stage,
+                &bufs.soa.h_eff,
+                &mut bufs.soa.k[6],
+                t0 + dt,
+                TimeEvaluationSide::LeftLimit,
+            )?;
             rhs_evals.record();
 
             let error = self.max_error_norm_soa_buf(

@@ -1310,7 +1310,7 @@ fn build_reference_problem(plan: &FdmPlanIR) -> Result<ExchangeLlgProblem, RunEr
         });
     }
 
-    let problem = ExchangeLlgProblem::with_terms_and_mask(
+    let mut problem = ExchangeLlgProblem::with_terms_and_mask(
         grid,
         cell_size,
         material,
@@ -1361,6 +1361,13 @@ fn build_reference_problem(plan: &FdmPlanIR) -> Result<ExchangeLlgProblem, RunEr
     .map_err(|e| RunError {
         message: format!("Problem construction: {}", e),
     })?;
+    if let Some(expression) = plan.slonczewski_time_expression.as_ref() {
+        problem
+            .set_slonczewski_time_expression(expression)
+            .map_err(|error| RunError {
+                message: format!("Slonczewski time expression: {error}"),
+            })?;
+    }
     let problem = problem
         .with_static_external_field(plan.static_external_field_xyz.clone())
         .map_err(|e| RunError {
@@ -2052,6 +2059,12 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
             crate::schedules::OUTPUT_TIME_TOLERANCE
         },
     );
+    crate::time_events::extend_absolute_time_expression_events(
+        &mut time_events,
+        plan.slonczewski_time_expression.as_ref(),
+        plan.time_stage.start_time_s,
+        stage_end_time_s,
+    );
     if spin_transport.is_some() {
         let envelopes = plan.spin_transport_plans.iter().filter_map(|resolved| {
             resolved
@@ -2487,7 +2500,11 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                         state.time_seconds,
                         dt.min(remaining),
                         &time_events.times_s,
-                        crate::schedules::OUTPUT_TIME_TOLERANCE,
+                        if plan.slonczewski_time_expression.is_some() {
+                            0.0
+                        } else {
+                            crate::schedules::OUTPUT_TIME_TOLERANCE
+                        },
                     )
                 },
                 |target| target - state.time_seconds,

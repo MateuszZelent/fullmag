@@ -655,7 +655,11 @@ fn append_solved_antenna_drive_events(
 fn cuda_drive_event_schedule(plan: &FdmPlanIR, until_seconds: f64) -> Vec<f64> {
     let stage_start_s = plan.time_stage.start_time_s;
     let stage_end_s = stage_start_s + until_seconds;
-    let tolerance_s = crate::schedules::OUTPUT_TIME_TOLERANCE;
+    let tolerance_s = if plan.slonczewski_time_expression.is_some() {
+        0.0
+    } else {
+        crate::schedules::OUTPUT_TIME_TOLERANCE
+    };
     let mut events = vec![stage_start_s, stage_end_s];
     events.extend(crate::time_events::resolved_stage_drive_discontinuities_with_origin(
         &plan.field_drives,
@@ -680,6 +684,11 @@ fn cuda_drive_event_schedule(plan: &FdmPlanIR, until_seconds: f64) -> Vec<f64> {
             );
         }
     }
+    if let Some(expression) = &plan.slonczewski_time_expression {
+        events.extend(expression.event_times_s.iter().copied().filter(|&time_s| {
+            time_s > stage_start_s + tolerance_s && time_s < stage_end_s - tolerance_s
+        }));
+    }
     events.retain(|time_s| time_s.is_finite());
     events.sort_by(f64::total_cmp);
     events.dedup_by(|right, left| (*right - *left).abs() <= tolerance_s);
@@ -699,8 +708,13 @@ fn cap_cuda_target_to_drive_event(
         .iter()
         .copied()
         .find(|event_s| {
-            *event_s > current_absolute_s + crate::schedules::OUTPUT_TIME_TOLERANCE
-                && *event_s < proposed_absolute_s - crate::schedules::OUTPUT_TIME_TOLERANCE
+            let tolerance_s = if plan.slonczewski_time_expression.is_some() {
+                0.0
+            } else {
+                crate::schedules::OUTPUT_TIME_TOLERANCE
+            };
+            *event_s > current_absolute_s + tolerance_s
+                && *event_s < proposed_absolute_s - tolerance_s
         })
         .map_or(proposed_target_solver_time_s, |event_s| {
             event_s - plan.time_stage.start_time_s
@@ -863,6 +877,9 @@ pub(crate) fn execute_cuda_fdm(
     artifact_writer: Option<ArtifactPipelineSender>,
     mut terminal: Option<crate::constraints::FdmTerminalContext<'_>>,
 ) -> Result<ExecutedRun, RunError> {
+    if plan.slonczewski_time_expression.is_some() && execution_mode != fullmag_ir::ExecutionMode::Extended {
+        return Err(RunError { message: "Slonczewski CUDA time_expression requires extended mode for scalar substep evaluation".into() });
+    }
     let accepted_frozen_state = terminal
         .as_ref()
         .map(|context| {

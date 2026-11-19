@@ -166,6 +166,26 @@ pub(crate) fn build_resolved_stage_event_schedule_with_origin(
     TimeEventSchedule { times_s: times }
 }
 
+pub(crate) fn extend_absolute_time_expression_events(
+    schedule: &mut TimeEventSchedule,
+    expression: Option<&fullmag_ir::TimeExpressionIR>,
+    stage_start_s: f64,
+    stage_end_s: f64,
+) {
+    let Some(expression) = expression else {
+        return;
+    };
+    schedule.times_s.extend(
+        expression
+            .event_times_s
+            .iter()
+            .copied()
+            .filter(|time| time.is_finite() && *time >= stage_start_s && *time <= stage_end_s),
+    );
+    schedule.times_s.sort_by(f64::total_cmp);
+    schedule.times_s.dedup_by(|right, left| *right == *left);
+}
+
 /// Direct energy minimizers advance in accepted minimization steps, not in
 /// physical time. Building sub-picosecond output events across their synthetic
 /// `until_seconds` horizon can therefore allocate an unbounded vector that the
@@ -600,6 +620,33 @@ mod tests {
         assert_eq!(
             resolved_stage_drive_discontinuities_with_origin(&drives, &[], 10.0, 10.0, 13.0, 1e-12,),
             vec![11.0, 12.0]
+        );
+    }
+
+    #[test]
+    fn time_expression_events_remain_absolute_and_are_not_coalesced() {
+        let first = 0.4e-12;
+        let second = first + 5.0e-19;
+        let expression = fullmag_ir::TimeExpressionIR {
+            source: "heaviside(t - first) - heaviside(t - second)".into(),
+            constants: Default::default(),
+            event_times_s: vec![first, second, 2.0e-12],
+        };
+        let mut schedule = TimeEventSchedule {
+            times_s: vec![0.0, 1.0e-12],
+        };
+
+        extend_absolute_time_expression_events(
+            &mut schedule,
+            Some(&expression),
+            0.0,
+            1.0e-12,
+        );
+
+        assert_eq!(schedule.times_s, vec![0.0, first, second, 1.0e-12]);
+        assert_eq!(
+            cap_timestep_to_next_event(0.0, 0.8e-12, &schedule.times_s, 0.0),
+            first
         );
     }
 }
