@@ -425,6 +425,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn body_remesh_rejects_distinct_geometries_before_generating_one_mesh() {
+        let mut problem = ProblemIR::bootstrap_example();
+        assert_eq!(
+            single_body_remesh_geometry(&problem).unwrap().name(),
+            "strip"
+        );
+        let mut second = problem.magnets[0].clone();
+        second.name = "second".into();
+        second.object_id = Some("second".into());
+        second.region = "other".into();
+        problem.magnets.push(second);
+        problem.regions.push(RegionIR {
+            name: "other".into(),
+            geometry: "other-geometry".into(),
+        });
+        problem.geometry.entries.push(GeometryEntryIR::Box {
+            name: "other-geometry".into(),
+            size: [2.0, 1.0, 1.0],
+        });
+        assert!(
+            single_body_remesh_geometry(&problem)
+                .unwrap_err()
+                .to_string()
+                .contains("distinct body meshes")
+        );
+    }
+
+    #[test]
     fn failed_remesh_records_attempt_without_replacing_last_success() {
         let last_success = serde_json::json!({
             "build_id": "mesh:good",
@@ -472,6 +500,37 @@ mod tests {
         );
         assert!(workspace["active_build"].is_null());
     }
+}
+
+fn single_body_remesh_geometry(problem: &ProblemIR) -> Result<&GeometryEntryIR> {
+    let mut geometries = problem.magnets.iter().map(|magnet| {
+        problem
+            .regions
+            .iter()
+            .find(|region| region.name == magnet.region)
+            .map(|region| region.geometry.as_str())
+            .ok_or_else(|| anyhow!("missing geometry binding for magnet '{}'", magnet.name))
+    });
+    let name = geometries
+        .next()
+        .context("no magnetic geometry to remesh")??;
+    let multiple_assets = problem.geometry_assets.as_ref().is_some_and(|assets| {
+        assets.fem_domain_mesh_asset.is_none() && assets.fem_mesh_assets.len() > 1
+    });
+    if multiple_assets {
+        bail!("a single remesh result cannot replace distinct body meshes");
+    }
+    for geometry in geometries {
+        if geometry? != name {
+            bail!("a single remesh result cannot replace distinct body meshes");
+        }
+    }
+    problem
+        .geometry
+        .entries
+        .iter()
+        .find(|entry| entry.name() == name)
+        .ok_or_else(|| anyhow!("missing geometry entry '{name}' for body remesh"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -595,7 +654,6 @@ fn prepare_manual_interactive_remesh(
             fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
         );
         let declared_universe = fem_declared_universe(&remesh_problem_source);
-        let geometry_entry = remesh_problem_source.geometry.entries.first().cloned();
         let hmax = opts
             .get("hmax")
             .and_then(|v| v.as_f64())
@@ -820,9 +878,7 @@ fn prepare_manual_interactive_remesh(
                 remesh_progress_callback,
             )
         } else {
-            let geom = geometry_entry
-                .as_ref()
-                .ok_or_else(|| anyhow!("no geometry entry available"))?;
+            let geom = single_body_remesh_geometry(&remesh_problem_source)?;
             invoke_remesh_full(geom, hmax, plan.fe_order, &opts, remesh_progress_callback)
         };
 

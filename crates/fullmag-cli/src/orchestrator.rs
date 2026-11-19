@@ -3797,7 +3797,60 @@ fn scene_problem_patch_from_mesh_options(
     Ok(Some(patch))
 }
 
+fn rebind_body_mesh_assets(
+    assets: &mut [fullmag_ir::FemMeshAssetIR],
+    previous_magnets: &[MagnetIR],
+    previous_regions: &[RegionIR],
+    patch: &SceneProblemPatch,
+) -> Result<()> {
+    fn geometry_by_owner<'a>(
+        magnets: &'a [MagnetIR],
+        regions: &'a [RegionIR],
+    ) -> std::collections::BTreeMap<&'a str, &'a str> {
+        magnets
+            .iter()
+            .filter_map(|magnet| {
+                let owner = magnet.object_id.as_deref().unwrap_or(&magnet.name);
+                let region = regions.iter().find(|region| region.name == magnet.region)?;
+                Some((owner, region.geometry.as_str()))
+            })
+            .collect()
+    }
+
+    // The materializer names body assets by geometry. The authoring patch can
+    // name the same geometry by the object's immutable ID instead.
+    let previous = geometry_by_owner(previous_magnets, previous_regions);
+    let next = geometry_by_owner(&patch.magnets, &patch.regions);
+    let mut names = std::collections::BTreeMap::new();
+    for (owner, old_geometry) in previous {
+        if let Some(&new_geometry) = next.get(owner) {
+            if names
+                .insert(old_geometry, new_geometry)
+                .is_some_and(|seen| seen != new_geometry)
+            {
+                bail!("body mesh asset '{old_geometry}' has conflicting destination geometries");
+            }
+        }
+    }
+    for asset in assets {
+        if let Some(name) = names.get(asset.geometry_name.as_str()) {
+            asset.geometry_name = (*name).to_owned();
+        }
+    }
+    Ok(())
+}
+
 fn apply_scene_problem_patch(problem: &mut ProblemIR, patch: &SceneProblemPatch) -> Result<()> {
+    if let Some(assets) = &mut problem.geometry_assets {
+        if assets.fem_domain_mesh_asset.is_none() && !assets.fem_mesh_assets.is_empty() {
+            rebind_body_mesh_assets(
+                &mut assets.fem_mesh_assets,
+                &problem.magnets,
+                &problem.regions,
+                patch,
+            )?;
+        }
+    }
     problem.geometry.entries = patch.geometry_entries.clone();
     problem.regions = patch.regions.clone();
     problem.materials = patch.materials.clone();
@@ -21086,6 +21139,59 @@ mod tests {
             dind_field: None,
             dbulk_field: None,
         }
+    }
+
+    #[test]
+    fn scene_patch_rebinds_fem_mesh_assets_by_object_identity() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let region = |name: &str, geometry: &str| RegionIR {
+            name: name.into(),
+            geometry: geometry.into(),
+        };
+        let magnet = |owner: &str, name: &str, region: &str| MagnetIR {
+            object_id: Some(owner.into()),
+            name: name.into(),
+            region: region.into(),
+            material: "Py".into(),
+            initial_magnetization: None,
+            absorbing_boundary: None,
+        };
+        let asset = |geometry: &str, source: &str| fullmag_ir::FemMeshAssetIR {
+            geometry_name: geometry.into(),
+            mesh_source: Some(source.into()),
+            mesh: None,
+        };
+        problem.regions = vec![
+            region("r-left", "left_geom"),
+            region("r-right", "right_geom"),
+        ];
+        problem.magnets = vec![
+            magnet("a", "left", "r-left"),
+            magnet("b", "right", "r-right"),
+        ];
+        problem.geometry_assets = Some(GeometryAssetsIR {
+            fem_mesh_assets: vec![
+                asset("right_geom", "right.mesh"),
+                asset("left_geom", "left.mesh"),
+            ],
+            fdm_grid_assets: vec![],
+            fem_domain_mesh_asset: None,
+        });
+        let patch = SceneProblemPatch {
+            geometry_entries: vec![],
+            materials: problem.materials.clone(),
+            regions: vec![region("b", "b"), region("a", "a")],
+            magnets: vec![magnet("b", "b", "b"), magnet("a", "a", "a")],
+            object_regions: vec![],
+            universe: None,
+            fdm: None,
+            runtime_selection: None,
+        };
+        super::apply_scene_problem_patch(&mut problem, &patch).unwrap();
+        assert_eq!(
+            problem.geometry_assets.unwrap().fem_mesh_assets,
+            vec![asset("b", "right.mesh"), asset("a", "left.mesh")]
+        );
     }
 
     #[test]
