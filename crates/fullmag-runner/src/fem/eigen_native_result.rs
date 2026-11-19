@@ -727,10 +727,10 @@ pub(crate) fn native_poisson_airbox_k0_metrics_from_result_json(
         .ok_or_else(|| RunError {
             message: "native Poisson-airbox modal result JSON is missing demag_kind".to_string(),
         })?;
-    if demag_kind != "periodic_airbox_k0" {
+    if demag_kind != "periodic_airbox_k0" && demag_kind != "open_airbox_k0" {
         return Err(RunError {
             message: format!(
-                "native Poisson-airbox modal result demag_kind must be periodic_airbox_k0, got {demag_kind}"
+                "native Poisson-airbox modal result demag_kind must be periodic_airbox_k0 or open_airbox_k0, got {demag_kind}"
             ),
         });
     }

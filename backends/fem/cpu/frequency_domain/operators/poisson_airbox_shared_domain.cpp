@@ -1823,11 +1823,19 @@ FrequencyDomainStatus validate_modal_shared_domain_payload_contract(
             copy_error(error_message, marker_error.c_str());
             return FrequencyDomainStatus::validation_error;
         }
-        if (payload.mesh->periodic_node_pairs == nullptr ||
-            payload.mesh->periodic_node_pairs_len < 2u ||
-            payload.mesh->periodic_node_pairs_len % 2u != 0u ||
-            payload.mesh->periodic_boundary_pair_markers == nullptr ||
-            payload.mesh->periodic_boundary_pair_markers_len == 0u ||
+        // open_airbox_k0 (note 0830): an isolated airbox mesh with no periodic
+        // metadata and zero pair counts. Its v6 views are identity views, so
+        // only the exterior Robin boundary map is required below.
+        const bool open_airbox_identity =
+            payload.magnetic_pair_count == 0u && payload.airbox_pair_count == 0u &&
+            payload.mesh->periodic_node_pairs_len == 0u &&
+            payload.mesh->periodic_boundary_pair_markers_len == 0u;
+        if ((!open_airbox_identity &&
+             (payload.mesh->periodic_node_pairs == nullptr ||
+              payload.mesh->periodic_node_pairs_len < 2u ||
+              payload.mesh->periodic_node_pairs_len % 2u != 0u ||
+              payload.mesh->periodic_boundary_pair_markers == nullptr ||
+              payload.mesh->periodic_boundary_pair_markers_len == 0u)) ||
             payload.mesh->facet_roles == nullptr || payload.mesh->facet_markers == nullptr ||
             payload.mesh->facet_roles_len != payload.mesh->facet_markers_len) {
             copy_error(error_message,
@@ -1874,9 +1882,12 @@ FrequencyDomainStatus validate_modal_shared_domain_payload_contract(
                 has_open_z_face = true;
             }
         }
-        if (!has_periodic_face || !has_open_z_face) {
+        if ((open_airbox_identity ? has_periodic_face : !has_periodic_face) ||
+            !has_open_z_face) {
             copy_error(error_message,
-                       "shared-domain payload periodic seams or open-z boundary are not mapped");
+                       open_airbox_identity
+                           ? "open_airbox_k0 payload has periodic seams or no exterior Robin boundary"
+                           : "shared-domain payload periodic seams or open-z boundary are not mapped");
             return FrequencyDomainStatus::validation_error;
         }
         MeshSymmetryCertificateV6BindingRequest v6_request{};
@@ -3405,7 +3416,11 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             payload.magnetic_reduced_node == nullptr ||
             payload.scalar_reduced_node_count == 0u ||
             payload.magnetic_reduced_node_count == 0u ||
-            payload.magnetic_pair_count == 0u || payload.airbox_pair_count == 0u ||
+            ((payload.magnetic_pair_count == 0u) != (payload.airbox_pair_count == 0u)) ||
+            (payload.magnetic_pair_count == 0u &&
+             (payload.mesh == nullptr || payload.mesh->periodic_node_pairs_len != 0u ||
+              payload.boundary_kind == nullptr ||
+              std::strcmp(payload.boundary_kind, "robin") != 0)) ||
             payload.boundary_kind == nullptr || payload.boundary_kind[0] == '\0' ||
             payload.equilibrium_digest == nullptr || payload.equilibrium_digest[0] == '\0' ||
             payload.mesh_certificate_digest == nullptr || payload.mesh_certificate_digest[0] == '\0' ||

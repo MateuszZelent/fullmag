@@ -20469,6 +20469,7 @@ mod tests {
             dispersion_validation: None,
             k0_kittel_validation: None,
             solver_policy: None,
+            magnetostatic_bc: Default::default(),
         };
         let backend = BackendPlanIR::FemEigen(target);
         let completion = stage_completion(fullmag_ir::StageStopReason::Torque);

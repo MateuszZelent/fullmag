@@ -1956,6 +1956,13 @@ pub struct FemEigenPlanIR {
     pub k0_kittel_validation: Option<FemEigenK0KittelValidationIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solver_policy: Option<FemEigenSolverPolicyIR>,
+    /// Requested modal magnetostatic boundary. Omitted when `open` so plans
+    /// serialized before `open_airbox_k0` keep their exact bytes.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::MagnetostaticBoundaryConditionIR::is_open"
+    )]
+    pub magnetostatic_bc: crate::MagnetostaticBoundaryConditionIR,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

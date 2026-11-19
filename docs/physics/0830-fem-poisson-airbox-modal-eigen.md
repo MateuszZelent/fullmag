@@ -2404,3 +2404,141 @@ strojenia pod model. Na małym modelu z gęstą dokładną odwrotnością
 | Source ID | Path + symbol | Odpowiedzialność i dowód |
 | --- | --- | --- |
 | source-cpu-schur-krylov-basis | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp + bounded_krylov_dimensions | Reguła `ncv` dla pojedynczego przesunięcia i okien; runtime zmierzony w Docker DEV (headless) |
+
+## Otwarte pudełko powietrza bez periodyczności (`open_airbox_k0`)
+
+Status: rozszerzenie zakresu ścieżki FEM CPU K0 Schur/SLEPc na izolowany
+obiekt magnetyczny w pudełku powietrza z brzegiem Robin na wszystkich
+ścianach zewnętrznych. Źródło i runtime headless w Docker DEV: patrz tabela
+dowodów niżej. Qualification, GPU i run zaakceptowany przez API DEV:
+**NOT VERIFIED**. Równania {eq}`eq-poisson-airbox-strong-form`,
+{eq}`eq-poisson-airbox-weak-form` i {eq}`eq-poisson-airbox-modal-block` nie
+zmieniają się. Zmienia się tylko dziedzina brzegowa: zbiór szwów
+periodycznych jest pusty, a $\Gamma_{\mathrm{open}}=\partial D$.
+
+### Problem fizyczny
+
+Izolowane ciało $\Omega_m$ (np. powłoka zaimportowana z STL, z wnęką
+powietrzną) leży w prostopadłościennym pudełku powietrza
+$\Omega_{\mathrm{air}}$. Pole rozproszone zanika w nieskończoności, więc
+otwarty brzeg obcina się na $\partial D$ warunkiem Robina dla dipolowego
+zaniku potencjału $\delta\phi\propto r^{-2}$:
+
+```{math}
+:label: eq-open-airbox-k0-robin
+\frac{\partial\,\delta\phi}{\partial n}+\beta\,\delta\phi=0
+\quad\text{na }\partial D,
+\qquad
+\beta=\frac{c_\beta}{R_\ast},
+\qquad
+R_\ast=\tfrac12\max_{a\in\{x,y,z\}}\bigl(x_a^{\max}-x_a^{\min}\bigr).
+```
+
+Przy braku osi periodycznych $R_\ast$ jest połową największego wymiaru
+pudełka, a domyślne $c_\beta=2$ odpowiada zanikowi dipolowemu. Blok $P$ jest
+wtedy symetryczny i dodatnio określony (człon Robina usuwa stałe jądro), więc
+nie ma cechowania: `gauge_policy=none`, `gauge_reason=coercive_outer_boundary`
+i brak wiersza $\eta$ w {eq}`eq-poisson-airbox-modal-block`.
+
+### Klasy równoważności węzłów
+
+W trybie periodycznym klasy skalarne i magnetyczne są ilorazem przez pary
+węzłów certyfikowane w `periodic_mesh_certificate.v6`. W trybie otwartym
+zbiór par jest pusty, więc odwzorowanie jest tożsamością:
+
+```{math}
+:label: eq-open-airbox-k0-identity-classes
+\kappa_\phi(i)=i,\quad i=0,\dots,N_D-1,
+\qquad
+\kappa_m(i)=i,\quad i=0,\dots,N_m-1,
+```
+
+gdzie węzły magnetyczne tworzą prefiks numeracji siatki. Certyfikat
+symetrii periodycznej nie istnieje, więc ładunek natywny zamiast niego niesie
+schemat `open_airbox_identity.v1`. Importer natywny sprawdza wtedy: brak par
+periodycznych w siatce, brak ścian `PERIODIC_SEAM`, istnienie ściany
+`EXTERIOR` z markerem $\Gamma_{\mathrm{open}}$, tożsamościowe klasy
+{eq}`eq-open-airbox-k0-identity-classes` i zerowe liczniki par. Każde inne
+odstępstwo kończy się błędem walidacji bez fallbacku.
+
+### Wyrocznia analityczna: kula Kittla
+
+Dla jednorodnie namagnesowanej kuli w polu $H_b$ współczynniki
+odmagnesowania są równe, $N_x=N_y=N_z=\tfrac13$, więc dynamiczny i statyczny
+demag znoszą się w modzie jednorodnym:
+
+```{math}
+:label: eq-open-airbox-k0-sphere-kittel
+f_{\mathrm{sph}}=\frac{\gamma_0H_b}{2\pi}
+=\frac{|\gamma|\,\mu_0H_b}{2\pi}.
+```
+
+Operator bez dynamicznego sprzężenia $\delta\phi$ (statyczny demag w
+$\mathbf H_{\mathrm{eff},0}$) dałby
+$f=\gamma_0(H_b-M_s/3)/(2\pi)$, więc test odróżnia pełne sprzężenie od
+przybliżenia statycznego o $\gamma_0M_s/(6\pi)$. Błąd fasetowania kuli i
+obcięcia Robina maleje z gęstością siatki i rozmiarem pudełka; tolerancja
+testu jest więc względna i jawna w skrypcie, a nie dowodem zbieżności.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $\partial D$ | cały brzeg zewnętrzny pudełka powietrza | $\mathrm{m^2}$ |
+| $n$ | normalna zewnętrzna do $\partial D$ | $1$ |
+| $c_\beta$ | bezwymiarowy współczynnik Robina (`robin_beta_factor`, domyślnie 2) | $1$ |
+| $R_\ast$ | promień odniesienia Robina | $\mathrm{m}$ |
+| $x_a^{\min}$, $x_a^{\max}$ | skrajne współrzędne węzłów siatki wzdłuż osi $a$ | $\mathrm{m}$ |
+| $\kappa_\phi$, $\kappa_m$ | odwzorowania węzłów na klasy skalarne i magnetyczne | $1$ |
+| $N_D$, $N_m$ | liczba węzłów dziedziny i węzłów magnetycznych | $1$ |
+| $N_x$, $N_y$, $N_z$ | współczynniki odmagnesowania | $1$ |
+| $f_{\mathrm{sph}}$ | częstotliwość modu jednorodnego kuli | $\mathrm{Hz}$ |
+| $\gamma$ | współczynnik żyromagnetyczny | $\mathrm{rad\,s^{-1}\,T^{-1}}$ |
+
+### Python API, `ProblemIR` i planowanie
+
+Żądanie jest jawne: `study.stages.add_eigenmodes(..., bc="free",
+magnetostatic_bc="open_airbox_k0", operator="full_2x2",
+damping_policy="ignore", k_vector=(0, 0, 0))` z
+`study.demag(realization="poisson_robin")`, `study.mode("strict")` i
+precyzją `double`. Domyślne `magnetostatic_bc="open"` nie zmienia znaczenia
+ani trasy. Walidacja Pythona i IR odrzuca `open_airbox_k0` z
+`spin_wave_bc` innym niż `free`, z niezerowym `k`, z tłumieniem innym niż
+`ignore` oraz z mieszanką periodycznych par w `bc`.
+
+`MagnetostaticBoundaryConditionIR::OpenAirboxK0` serializuje się jako
+`open_airbox_k0`. Planner przepisuje ten token do
+`FemEigenPlanIR.magnetostatic_bc` (pominięty w serializacji dla `open`, więc
+istniejące plany są bajtowo niezmienione) i rozwiązuje wykonanie przez
+`resolve_k0_periodic_airbox_execution` z powodem wyboru
+`fem_eigen.open_airbox_k0.*`. Jawne `gpu` kończy się błędem planowania
+`fem_eigen.open_airbox_k0_gpu_unavailable` (bez fallbacku), a `auto`
+rozwiązuje się do CPU z widocznym powodem w provenance.
+
+Runner traktuje plan `open_airbox_k0` jak żądanie shared-domain K0
+(`shared_domain_k0_modal_requested`), buduje ładunek z tożsamościowymi
+klasami, zerowymi licznikami par i schematem `open_airbox_identity.v1`, a
+`demag_kind` natywnego problemu i wyniku ma wartość `open_airbox_k0`.
+
+| Solver | Urządzenie | Stan | Uzasadnienie |
+| --- | --- | --- | --- |
+| FEM | CPU | `source_visible`; runtime headless Docker DEV — patrz dowody | Schur/SLEPc z tożsamościowymi klasami i Robinem na całym $\partial D$ |
+| FEM | GPU | nieobsługiwane, błąd planowania bez fallbacku | `gpu_modal_device_krylov` wymaga certyfikatu periodycznego; odroczone |
+| FDM | CPU | nie dotyczy | FDM ma osobnego właściciela demagnetyzacji |
+| FDM | GPU | nie dotyczy | FDM ma osobnego właściciela demagnetyzacji |
+
+### Walidacja i ograniczenia
+
+- Test kuli {eq}`eq-open-airbox-k0-sphere-kittel` w
+  `examples/fem_eigen_k0_open_airbox_sphere.py` (headless CPU).
+- Przypadek buckyballa `examples/buckyball/eigen_k0_open_airbox.py`
+  (relaksacja, potem eigen CPU) jest uruchomieniem użytkowym, nie
+  kwalifikacją: siatka 64 nm jest grubsza niż długość wymiany.
+- Odroczone: lane GPU, uruchomienie przez API DEV (brak workera modalnego
+  w zaakceptowanej ścieżce), zbieżność względem rozmiaru pudełka i
+  $c_\beta$, okna częstotliwości dla wielu modów na dużej siatce.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-open-airbox-k0-ir | crates/fullmag-ir/src/execution.rs + MagnetostaticBoundaryConditionIR | Token `open_airbox_k0` w `ProblemIR` |
+| source-open-airbox-k0-plan | crates/fullmag-plan/src/fem.rs + open_airbox_k0_execution_requested | Rozwiązanie wykonania CPU i błąd GPU bez fallbacku |
+| source-open-airbox-k0-runner | crates/fullmag-runner/src/fem/eigen_policy.rs + shared_domain_k0_modal_requested | Trasa shared-domain K0 dla planu otwartego |
+| source-open-airbox-k0-native | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp + validate_open_airbox_identity_payload | Walidacja tożsamościowych klas i brzegu Robin bez par |

@@ -3208,6 +3208,7 @@ fn modal_v6_multi_part_same_object_registry_is_accepted_and_ordered() {
         modal_shared_domain_equivalence_classes(&topology).expect("maps must build");
     let binding = build_owned_modal_certificate_v6_binding(
         &mesh,
+        false,
         &certificate,
         &parts,
         None,
@@ -3326,6 +3327,7 @@ fn modal_v6_owned_producer_builds_xy_edge_closure_and_keeps_z_open() {
 
     let binding = build_owned_modal_certificate_v6_binding(
         &mesh,
+        false,
         &certificate,
         &modal_v6_xy_mesh_parts(),
         None,
@@ -3373,6 +3375,7 @@ fn modal_v6_owned_binding_fixture() -> OwnedModalCertificateV6Binding {
         modal_shared_domain_equivalence_classes(&topology).expect("maps must build");
     build_owned_modal_certificate_v6_binding(
         &mesh,
+        false,
         &accepted_modal_v6_certificate(&mesh),
         &modal_v6_xy_mesh_parts(),
         None,
@@ -3402,6 +3405,7 @@ fn modal_v6_owned_producer_rejects_missing_axis_and_interleaved_magnetic_nodes()
         .retain(|axis| axis.axis.as_deref() != Some("y"));
     let axis_error = build_owned_modal_certificate_v6_binding(
         &mesh,
+        false,
         &certificate,
         &modal_v6_xy_mesh_parts(),
         None,
@@ -3431,6 +3435,7 @@ fn modal_v6_owned_producer_rejects_missing_axis_and_interleaved_magnetic_nodes()
     }
     let swapped_error = build_owned_modal_certificate_v6_binding(
         &mesh,
+        false,
         &swapped_certificate,
         &modal_v6_xy_mesh_parts(),
         None,
@@ -3454,6 +3459,7 @@ fn modal_v6_owned_producer_rejects_missing_axis_and_interleaved_magnetic_nodes()
     stale_certificate.topology_fingerprint = format!("sha256:{}", "0".repeat(64));
     let stale_error = build_owned_modal_certificate_v6_binding(
         &mesh,
+        false,
         &stale_certificate,
         &modal_v6_xy_mesh_parts(),
         None,
@@ -3477,6 +3483,7 @@ fn modal_v6_owned_producer_rejects_missing_axis_and_interleaved_magnetic_nodes()
     rejected_certificate.certificate_status = "rejected".to_string();
     let rejected_error = build_owned_modal_certificate_v6_binding(
         &mesh,
+        false,
         &rejected_certificate,
         &modal_v6_xy_mesh_parts(),
         None,
@@ -3532,6 +3539,7 @@ fn modal_v6_owned_producer_rejects_all_authoritative_certificate_evidence_mutati
     let assert_rejected = |label: &str, certificate| {
         let error = build_owned_modal_certificate_v6_binding(
             &mesh,
+            false,
             &certificate,
             &modal_v6_xy_mesh_parts(),
             None,
@@ -4102,6 +4110,7 @@ pub(super) fn minimal_native_modal_plan() -> FemEigenPlanIR {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     }
 }
 

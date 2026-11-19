@@ -614,6 +614,15 @@ pub enum MagnetostaticBoundaryConditionIR {
     Open,
     PeriodicAirboxK0,
     FloquetAirbox,
+    /// Isolated body in an airbox with a Robin condition on the whole outer
+    /// boundary and no periodic seams; k=0 modal eigensolve only.
+    OpenAirboxK0,
+}
+
+impl MagnetostaticBoundaryConditionIR {
+    pub fn is_open(&self) -> bool {
+        matches!(self, Self::Open)
+    }
 }
 
 // ── Geometry scale ────────────────────────────────────────────────────────────

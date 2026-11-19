@@ -57,11 +57,16 @@ impl OwnedModalCertificateV6View {
         &self,
     ) -> Result<(Vec<u64>, Vec<OwnedModalCertificateV6ClassDigest>, String), RunError> {
         let node_count = self.region_ids.len();
+        // An identity view (open_airbox_k0) has no periodic boundary nodes and
+        // therefore no generator or closure relations; every class is one node.
+        let identity_view = self.generator_relations.is_empty()
+            && self.closure_relations.is_empty()
+            && self.boundary_axis_masks.iter().all(|mask| *mask == 0);
         if node_count == 0
             || self.boundary_axis_masks.len() != node_count
             || self.region_roles.is_empty()
-            || self.generator_relations.is_empty()
-            || self.closure_relations.is_empty()
+            || (!identity_view
+                && (self.generator_relations.is_empty() || self.closure_relations.is_empty()))
             || !is_sha256_digest(&self.topology_fingerprint)
         {
             return Err(modal_v6_error("owned_view_incomplete"));
@@ -1187,6 +1192,7 @@ pub(super) fn modal_v6_part_identities(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_owned_modal_certificate_v6_binding(
     mesh: &fullmag_ir::MeshIR,
+    allow_open_identity: bool,
     certificate: &fullmag_ir::PeriodicMeshCertificateV6IR,
     mesh_parts: &[fullmag_ir::FemMeshPartIR],
     ms_nodal_field: Option<&[f64]>,
@@ -1201,14 +1207,22 @@ pub(super) fn build_owned_modal_certificate_v6_binding(
     bias_field_sample_index: u64,
     bias_field_a_per_m: &[f64],
 ) -> Result<OwnedModalCertificateV6Binding, RunError> {
-    let authoritative_certificate = mesh
-        .periodic_mesh_certificate_v6_with_material_and_nodal_fields(
+    let authoritative_certificate = if allow_open_identity {
+        mesh.open_mesh_identity_certificate_v6_with_material_and_nodal_fields(
             None,
             None,
             ms_nodal_field,
             a_nodal_field,
         )
-        .map_err(|_| modal_v6_error("authoritative_certificate_rebuild_failed"))?;
+    } else {
+        mesh.periodic_mesh_certificate_v6_with_material_and_nodal_fields(
+            None,
+            None,
+            ms_nodal_field,
+            a_nodal_field,
+        )
+    }
+    .map_err(|_| modal_v6_error("authoritative_certificate_rebuild_failed"))?;
     if certificate.schema_version != "periodic_mesh_certificate.v6"
         || certificate.certificate_status != "accepted"
         || certificate != &authoritative_certificate

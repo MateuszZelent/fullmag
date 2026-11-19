@@ -18,7 +18,7 @@ use super::eigen_equilibrium_contract::{
 use super::eigen_math::vector_norm;
 use super::eigen_policy::{
     k0_kittel_periodic_airbox_validation_requested, native_modal_target_frequency_hz,
-    resolved_demag_realization,
+    open_airbox_k0_modal_requested, resolved_demag_realization,
 };
 use super::eigen_projection::tangent_bases;
 use super::eigen_reduction::validate_shared_domain_tangent_frame_transport;
@@ -317,7 +317,9 @@ pub(super) fn build_shared_domain_linearization_state(
         // recomputation of the same boundary-value problem. For the production
         // shared-domain lane consume the digest-bound native phi0; non-periodic
         // lanes may still compare the reference potential directly.
-        if plan.mesh.periodic_node_pairs.is_empty() {
+        // `open_airbox_k0` also consumes the digest-bound native phi0: the relax
+        // stage may have solved the Robin Poisson problem on another device.
+        if plan.mesh.periodic_node_pairs.is_empty() && !open_airbox_k0_modal_requested(plan) {
             let difference = max_scalar_field_difference(
                 &handoff.certified_fields.phi_a,
                 &recomputed_phi0,
@@ -473,14 +475,7 @@ pub(super) fn build_shared_domain_linearization_state(
         }
     }
 
-    let periodic_certificate = plan
-        .mesh
-        .periodic_mesh_certificate_v6_with_material_and_nodal_fields(
-            None,
-            None,
-            plan.material.ms_field.as_deref(),
-            plan.material.a_field.as_deref(),
-        )
+    let periodic_certificate = modal_mesh_certificate_v6(plan)
         .map_err(|errors| RunError {
             message: format!(
                 "shared-domain modal equilibrium requires periodic_mesh_certificate.v6: {}",
@@ -892,7 +887,15 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
         message: "shared-domain modal production scope requires air_box_config".to_string(),
     })?;
     let pair_stats = periodic_domain_pair_stats(&plan.mesh)?;
-    if pair_stats.magnetic_pair_count == 0 || pair_stats.airbox_pair_count == 0 {
+    let open_airbox = open_airbox_k0_modal_requested(plan);
+    if open_airbox
+        && (pair_stats.magnetic_pair_count != 0 || pair_stats.airbox_pair_count != 0)
+    {
+        return Err(RunError {
+            message: "open_airbox_k0 shared-domain modal scope rejects periodic pairs".to_string(),
+        });
+    }
+    if !open_airbox && (pair_stats.magnetic_pair_count == 0 || pair_stats.airbox_pair_count == 0) {
         return Err(RunError {
             message:
                 "shared-domain modal production scope requires magnetic and airbox periodic pairs"
@@ -918,14 +921,7 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
     };
     let (scalar_classes, scalar_count, magnetic_classes, magnetic_count) =
         modal_shared_domain_equivalence_classes(topology)?;
-    let mesh_certificate = plan
-        .mesh
-        .periodic_mesh_certificate_v6_with_material_and_nodal_fields(
-            None,
-            None,
-            plan.material.ms_field.as_deref(),
-            plan.material.a_field.as_deref(),
-        )
+    let mesh_certificate = modal_mesh_certificate_v6(plan)
         .map_err(|errors| RunError {
             message: format!(
                 "shared-domain modal production requires an accepted periodic_mesh_certificate.v6: {}",
@@ -1110,6 +1106,7 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
     )?;
     let certificate_binding_v6 = build_owned_modal_certificate_v6_binding(
         &plan.mesh,
+        open_airbox_k0_modal_requested(plan),
         &mesh_certificate,
         &plan.mesh_parts,
         plan.material.ms_field.as_deref(),
@@ -1195,20 +1192,35 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
     })
 }
 
+/// Mesh certificate for the shared-domain modal lane: the periodic v6
+/// certificate, or its identity form (no seams) for `open_airbox_k0`.
+fn modal_mesh_certificate_v6(
+    plan: &FemEigenPlanIR,
+) -> Result<fullmag_ir::PeriodicMeshCertificateV6IR, Vec<String>> {
+    if open_airbox_k0_modal_requested(plan) {
+        plan.mesh.open_mesh_identity_certificate_v6_with_material_and_nodal_fields(
+            None,
+            None,
+            plan.material.ms_field.as_deref(),
+            plan.material.a_field.as_deref(),
+        )
+    } else {
+        plan.mesh.periodic_mesh_certificate_v6_with_material_and_nodal_fields(
+            None,
+            None,
+            plan.material.ms_field.as_deref(),
+            plan.material.a_field.as_deref(),
+        )
+    }
+}
+
 fn validate_native_shared_domain_certificate_producer(
     plan: &FemEigenPlanIR,
 ) -> Result<(), RunError> {
     let topology = MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
         message: format!("shared-domain v6 producer topology is invalid: {error}"),
     })?;
-    let certificate = plan
-        .mesh
-        .periodic_mesh_certificate_v6_with_material_and_nodal_fields(
-            None,
-            None,
-            plan.material.ms_field.as_deref(),
-            plan.material.a_field.as_deref(),
-        )
+    let certificate = modal_mesh_certificate_v6(plan)
         .map_err(|errors| RunError {
             message: format!(
                 "shared-domain v6 producer certificate is unavailable: {}",
@@ -1237,6 +1249,7 @@ fn validate_native_shared_domain_certificate_producer(
     let bias_field = plan.external_field.unwrap_or([0.0, 0.0, 0.0]);
     build_owned_modal_certificate_v6_binding(
         &plan.mesh,
+        open_airbox_k0_modal_requested(plan),
         &certificate,
         &plan.mesh_parts,
         plan.material.ms_field.as_deref(),

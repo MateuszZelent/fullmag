@@ -734,7 +734,7 @@ PoissonAirboxSchurMatShellCertificateKey make_certificate_key(
     key.m0_signature = fnv_mix_string(kFnvOffset, "uniform_m0_pa_e3");
     key.h_eff0_signature = hash_csr(problem.A_qq, fnv_mix_string(kFnvOffset, "A_qq"));
     key.static_demag_signature = fnv_mix_string(kFnvOffset, problem.demag_kind);
-    key.boundary_signature = fnv_mix_string(kFnvOffset, "periodic_airbox_k0");
+    key.boundary_signature = fnv_mix_string(kFnvOffset, problem.demag_kind);
     key.k_signature = fnv_mix_string(kFnvOffset, "k=0");
     key.gauge_signature = fnv_mix_string(kFnvOffset, problem.gauge_policy);
     key.operator_signature = hash_csr(problem.A_qphi, fnv_mix_string(kFnvOffset, "A_qphi"));
