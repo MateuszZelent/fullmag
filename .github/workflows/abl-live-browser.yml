@@ -12,6 +12,8 @@ on:
       - "crates/fullmag-api/src/live_authored_damping*"
       - "crates/fullmag-api/src/live_authored_damping/**"
       - "crates/fullmag-cli/src/scratch_runtime.rs"
+      - "crates/fullmag-cli/src/python_bridge.rs"
+      - "crates/fullmag-cli/src/orchestrator/manual_remesh.rs"
       - "crates/fullmag-ir/src/absorbing_boundary.rs"
       - "packages/fullmag-py/src/fullmag/model/*absorbing_boundary*"
       - "examples/fem_spatial_absorbing_layers.py"
@@ -72,6 +74,9 @@ jobs:
           pnpm --dir apps/control-room exec playwright install --with-deps chromium
       - name: Build the API and CLI for the pinned CI checkout
         run: cargo build --locked -p fullmag-api --bin fullmag-api -p fullmag-cli --bin fullmag
+      - name: Verify the single-object remesh response
+        if: matrix.backend == 'fem'
+        run: cargo test --locked -p fullmag-cli --bin fullmag parse_remesh_cli_response_preserves_fresh_object_region_markers
       - name: Compare live alpha to the analytical profile in Chromium
         env:
           ABL_BACKEND: ${{ matrix.backend }}
