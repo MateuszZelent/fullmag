@@ -5,7 +5,7 @@
 //! bounded, so the solver gets back-pressure instead of unbounded RAM growth if
 //! disk I/O falls behind.
 
-#[cfg(any(feature = "cuda", feature = "fem-native"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 use crate::artifacts::field_unit;
 use crate::artifacts::{
     write_field_snapshot_artifact, write_scalar_row, write_scalars_csv_header, FieldArtifactContext,
@@ -27,7 +27,7 @@ use fullmag_engine::{
     MAX_ADAPTIVE_ATTEMPT_RECORDS,
 };
 
-#[cfg(any(feature = "cuda", feature = "fem-native"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -1578,7 +1578,7 @@ impl ArtifactRecorder {
     }
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-native"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeSnapshotScalarType {
     #[allow(dead_code)]
@@ -1586,7 +1586,7 @@ enum NativeSnapshotScalarType {
     F64,
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-native"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 #[derive(Debug, Clone, Copy)]
 struct NativeVectorSnapshotInfo {
     cell_count: usize,
@@ -1622,7 +1622,7 @@ impl From<NativeFemFieldSnapshotInfo> for NativeVectorSnapshotInfo {
     }
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-native"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 struct ZarrFieldSeriesWriter {
     root_dir: PathBuf,
     zarray_path: PathBuf,
@@ -1634,9 +1634,10 @@ struct ZarrFieldSeriesWriter {
     samples_writer: BufWriter<File>,
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-native"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 impl ZarrFieldSeriesWriter {
-    fn open(
+    fn get_or_open<'a>(
+        writers: &'a mut HashMap<String, Self>,
         fields_dir: &Path,
         context: &FieldArtifactContext,
         provenance: &ExecutionProvenance,
@@ -1645,7 +1646,14 @@ impl ZarrFieldSeriesWriter {
         component_order: impl Into<String>,
         location: impl Into<String>,
         scope: impl Into<String>,
-    ) -> Result<Self, String> {
+    ) -> Result<&'a mut Self, String> {
+        use std::collections::hash_map::Entry;
+        // Opening initializes the on-disk index, so it is only safe for a new series.
+        let entry = match writers.entry(observable.to_owned()) {
+            Entry::Occupied(entry) => return Ok(entry.into_mut()),
+            Entry::Vacant(entry) => entry,
+        };
+
         let component_order = component_order.into();
         let location = location.into();
         let scope = scope.into();
@@ -1722,7 +1730,7 @@ impl ZarrFieldSeriesWriter {
             samples_writer,
         };
         writer.write_zarray_metadata()?;
-        Ok(writer)
+        Ok(entry.insert(writer))
     }
 
     fn update_provenance(
@@ -1949,7 +1957,7 @@ impl ZarrFieldSeriesWriter {
     }
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-native"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 fn zarr_dtype(scalar_type: NativeSnapshotScalarType) -> &'static str {
     match scalar_type {
         NativeSnapshotScalarType::F32 => "<f4",
@@ -2016,7 +2024,7 @@ fn writer_loop(
     summary.stage_autosave_completion_target = stage_autosave
         .as_ref()
         .and_then(|runtime| runtime.completion_target.clone());
-    #[cfg(any(feature = "cuda", feature = "fem-native"))]
+    #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
     let mut zarr_writers: HashMap<String, ZarrFieldSeriesWriter> = HashMap::new();
 
     let mut terminal_history: Option<BufWriter<File>> = None;
@@ -2178,7 +2186,7 @@ fn writer_loop(
                         )?;
                     }
                     FieldArtifactStorage::Zarr => {
-                        #[cfg(any(feature = "cuda", feature = "fem-native"))]
+                        #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
                         {
                             let info = NativeVectorSnapshotInfo {
                                 cell_count: snapshot.sample_count(),
@@ -2186,18 +2194,17 @@ fn writer_loop(
                                 scalar_bytes: std::mem::size_of::<f64>(),
                                 scalar_type: NativeSnapshotScalarType::F64,
                             };
-                            let writer = zarr_writers.entry(snapshot.name.clone()).or_insert(
-                                ZarrFieldSeriesWriter::open(
-                                    &fields_dir,
-                                    &field_context,
-                                    &provenance,
-                                    &snapshot.name,
-                                    info,
-                                    snapshot.component_order.clone(),
-                                    snapshot.location.clone(),
-                                    snapshot.scope.clone(),
-                                )?,
-                            );
+                            let writer = ZarrFieldSeriesWriter::get_or_open(
+                                &mut zarr_writers,
+                                &fields_dir,
+                                &field_context,
+                                &provenance,
+                                &snapshot.name,
+                                info,
+                                snapshot.component_order.as_str(),
+                                snapshot.location.as_str(),
+                                snapshot.scope.as_str(),
+                            )?;
                             writer.append_field_snapshot(&snapshot)?;
                             frames_index.record(
                                 &snapshot.name,
@@ -2211,7 +2218,7 @@ fn writer_loop(
                                 None,
                             )?;
                         }
-                        #[cfg(not(any(feature = "cuda", feature = "fem-native")))]
+                        #[cfg(not(any(test, feature = "cuda", feature = "fem-native")))]
                         {
                             return Err(
                                 "Zarr field artifacts require a native CUDA or FEM build"
@@ -2224,7 +2231,7 @@ fn writer_loop(
                     match field_storage {
                         FieldArtifactStorage::Json => runtime.append_field(&snapshot)?,
                         FieldArtifactStorage::Zarr => {
-                            #[cfg(any(feature = "cuda", feature = "fem-native"))]
+                            #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
                             if let Some(writer) = zarr_writers.get(&snapshot.name) {
                                 let values = writer.last_chunk_values_f64()?;
                                 runtime.append_field_values(
@@ -2255,18 +2262,17 @@ fn writer_loop(
                 let info = snapshot.info().map_err(|error| {
                     format!("failed to query CUDA snapshot info: {}", error.message)
                 })?;
-                let writer = zarr_writers.entry(snapshot.name.clone()).or_insert(
-                    ZarrFieldSeriesWriter::open(
-                        &fields_dir,
-                        &field_context,
-                        &provenance,
-                        &snapshot.name,
-                        info.into(),
-                        "xyz",
-                        "sample",
-                        "full",
-                    )?,
-                );
+                let writer = ZarrFieldSeriesWriter::get_or_open(
+                    &mut zarr_writers,
+                    &fields_dir,
+                    &field_context,
+                    &provenance,
+                    &snapshot.name,
+                    info.into(),
+                    "xyz",
+                    "sample",
+                    "full",
+                )?;
                 writer.append_fdm_snapshot(&mut snapshot)?;
                 frames_index.record(
                     &snapshot.name,
@@ -2311,18 +2317,17 @@ fn writer_loop(
                         error.message
                     )
                 })?;
-                let writer = zarr_writers.entry(snapshot.name.clone()).or_insert(
-                    ZarrFieldSeriesWriter::open(
-                        &fields_dir,
-                        &field_context,
-                        &provenance,
-                        &snapshot.name,
-                        info.into(),
-                        "xyz",
-                        "node",
-                        "full",
-                    )?,
-                );
+                let writer = ZarrFieldSeriesWriter::get_or_open(
+                    &mut zarr_writers,
+                    &fields_dir,
+                    &field_context,
+                    &provenance,
+                    &snapshot.name,
+                    info.into(),
+                    "xyz",
+                    "node",
+                    "full",
+                )?;
                 writer.append_fem_snapshot(&mut snapshot)?;
                 frames_index.record(
                     &snapshot.name,
@@ -2373,7 +2378,7 @@ fn writer_loop(
                 let artifact_provenance =
                     crate::artifacts::artifact_provenance_json(&field_context, &provenance);
                 let result = (|| -> Result<(), String> {
-                    #[cfg(any(feature = "cuda", feature = "fem-native"))]
+                    #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
                     for writer in zarr_writers.values() {
                         writer.update_provenance(&field_context, &provenance)?;
                     }
@@ -2406,7 +2411,7 @@ fn writer_loop(
         })?;
     }
 
-    #[cfg(any(feature = "cuda", feature = "fem-native"))]
+    #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
     for (observable, writer) in &mut zarr_writers {
         writer.samples_writer.flush().map_err(|error| {
             format!(
@@ -2416,7 +2421,7 @@ fn writer_loop(
         })?;
     }
 
-    #[cfg(any(feature = "cuda", feature = "fem-native"))]
+    #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
     if let Some(stage_id) = regular_zarr_stage_id.as_ref() {
         summary.regular_zarr_completion_targets = zarr_writers
             .values()
@@ -2427,7 +2432,7 @@ fn writer_loop(
             .collect();
     }
 
-    #[cfg(not(any(feature = "cuda", feature = "fem-native")))]
+    #[cfg(not(any(test, feature = "cuda", feature = "fem-native")))]
     let _ = regular_zarr_stage_id;
 
     frames_index.finish()?;
@@ -3139,6 +3144,93 @@ mod tests {
         fs::remove_dir_all(output_dir).expect("remove transport artifact fixture");
     }
 
+    #[test]
+    fn zarr_field_sample_indexes_survive_interleaved_buffer_flushes() {
+        let output = tempfile::tempdir().expect("temporary run output");
+        let context = FieldArtifactContext {
+            problem_name: "zarr-sample-index".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "grid": [1, 1, 1]}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        // Each index must cross the BufWriter capacity: for shorter runs a final
+        // flush can mask truncation caused by re-opening an active series.
+        const STEPS: u64 = 513;
+        let series = [("m", 1), ("H_eff", 2)];
+        let (tx, rx) = mpsc::channel();
+        for step in 0..STEPS {
+            for (name, stride) in series {
+                if step % stride == 0 {
+                    let snapshot = FieldSnapshot::new(
+                        name,
+                        step,
+                        step as f64,
+                        1.0,
+                        3,
+                        "xyz",
+                        "sample",
+                        "full",
+                        step + 1,
+                        vec![step as f64, 0.0, 0.0],
+                    )
+                    .expect("valid snapshot");
+                    tx.send(ArtifactJob::FieldSnapshot {
+                        snapshot,
+                        provenance: ExecutionProvenance::default(),
+                    })
+                    .expect("queue field snapshot");
+                }
+            }
+        }
+        drop(tx);
+        writer_loop(
+            output.path(),
+            output.path(),
+            context,
+            rx,
+            Arc::default(),
+            Arc::default(),
+            None,
+            FieldArtifactStorage::Zarr,
+            None,
+        )
+        .expect("drain field snapshots");
+
+        for (name, stride) in series {
+            let dir = output.path().join("fields").join(format!("{name}.zarr"));
+            let csv = fs::read_to_string(dir.join("samples.csv")).unwrap();
+            let mut rows = csv.lines();
+            assert_eq!(
+                rows.next(),
+                Some("sample,step,time,solver_dt,chunk_key,dtype,scalar_bytes,cell_count")
+            );
+            let shape: serde_json::Value =
+                serde_json::from_slice(&fs::read(dir.join(".zarray")).unwrap()).unwrap();
+            let count = STEPS.div_ceil(stride);
+            assert_eq!(shape["shape"], serde_json::json!([count, 3, 1]));
+            for sample in 0..count {
+                let step = sample * stride;
+                let chunk = format!("{sample}.0.0");
+                let expected = format!(
+                    "{sample},{step},{:.15e},{:.15e},{chunk},<f8,8,1",
+                    step as f64, 1.0
+                );
+                assert_eq!(
+                    rows.next(),
+                    Some(expected.as_str()),
+                    "{name} sample {sample}"
+                );
+                let bytes = fs::read(dir.join(chunk)).unwrap();
+                assert_eq!(bytes.len(), 24);
+                assert_eq!(&bytes[..8], &(step as f64).to_le_bytes());
+            }
+            assert_eq!(rows.next(), None);
+        }
+    }
+
     #[cfg(feature = "cuda")]
     #[test]
     fn zarr_writer_preserves_regular_transport_snapshot_shape_and_soa_order() {
@@ -3165,7 +3257,9 @@ mod tests {
             scalar_bytes: 8,
             scalar_type: NativeSnapshotScalarType::F64,
         };
-        let mut writer = ZarrFieldSeriesWriter::open(
+        let mut writers = HashMap::new();
+        let writer = ZarrFieldSeriesWriter::get_or_open(
+            &mut writers,
             &fields_dir,
             &context,
             &ExecutionProvenance::default(),
@@ -3209,6 +3303,7 @@ mod tests {
             zattrs["component_order"],
             serde_json::json!(["x", "y", "z"])
         );
+        drop(writers);
         fs::remove_dir_all(fields_dir).expect("remove Zarr fixture");
     }
 
