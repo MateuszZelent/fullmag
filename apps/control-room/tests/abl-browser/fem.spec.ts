@@ -116,6 +116,11 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
   await page.getByRole("tab", { name: "Workspace", exact: true }).click();
   await page.getByTitle("Expand All", { exact: true }).click();
   await page.locator('[data-node-id="model:object:film:visualization"]').click();
+  const shaded = page.getByRole("radio", { name: "Shaded", exact: true });
+  await page.getByRole("radio", { name: "Off", exact: true }).click();
+  await expect(page.getByRole("radio", { name: "Off", exact: true })).toBeChecked();
+  await shaded.click();
+  await expect(shaded).toBeChecked();
   const quantity = page.getByRole("combobox", { name: "Quantity source", exact: true });
   await expect(quantity).toBeEnabled({ timeout: 90_000 });
   await quantity.click();

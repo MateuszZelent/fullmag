@@ -78,12 +78,19 @@ jobs:
           pnpm --dir apps/control-room exec playwright install --with-deps chromium
       - name: Build the API and CLI for the pinned CI checkout
         run: cargo build --locked -p fullmag-api --bin fullmag-api -p fullmag-cli --bin fullmag
-      - name: Verify region-scoped layers in the remesh command
+      - name: Verify prepared FDM material publication
+        if: matrix.backend == 'fdm'
+        run: |
+          cargo test --locked -p fullmag-cli --bin fullmag grid_receipt_publishes_prepared_plan_only_after_a_successful_build
+          cargo test --locked -p fullmag-api --bin fullmag-api desktop_grid_receipt_restores_plan_owned_damping_only_for_the_current_scene
+      - name: Verify FEM mesh ownership and material publication
         if: matrix.backend == 'fem'
-        run: cargo test --locked -p fullmag-api --bin fullmag-api mesh_build_command_preserves_absorbing_layer_and_region_damping
-      - name: Verify the single-object remesh response
-        if: matrix.backend == 'fem'
-        run: cargo test --locked -p fullmag-cli --bin fullmag parse_remesh_cli_response_preserves_fresh_object_region_markers
+        run: |
+          cargo test --locked -p fullmag-api --bin fullmag-api mesh_build_command_preserves_absorbing_layer_and_region_damping
+          cargo test --locked -p fullmag-api --bin fullmag-api desktop_completed_fem_build_and_regional_edits_publish_only_current_nodes
+          cargo test --locked -p fullmag-cli --bin fullmag parse_remesh_cli_response_preserves_fresh_object_region_markers
+          cargo test --locked -p fullmag-cli --bin fullmag scene_patch_rebinds_fem_mesh_assets_by_object_identity
+          cargo test --locked -p fullmag-cli --bin fullmag body_remesh_rejects_distinct_geometries_before_generating_one_mesh
       - name: Compare live alpha to the analytical profile in Chromium
         env:
           ABL_BACKEND: ${{ matrix.backend }}

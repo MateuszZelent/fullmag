@@ -170,12 +170,18 @@ test("ABL editor updates the live FDM damping field and canonical script", async
     await page.getByRole("tab", { name: "Workspace", exact: true }).click();
     await page.getByTitle("Expand All", { exact: true }).click();
     await page.locator(`[data-node-id="model:object:${fixture.object_id}:visualization"]`).click();
+    const shaded = page.getByRole("radio", { name: "Shaded", exact: true });
+    await page.getByRole("radio", { name: "Off", exact: true }).click();
+    await expect(page.getByRole("radio", { name: "Off", exact: true })).toBeChecked();
+    await shaded.click();
+    await expect(shaded).toBeChecked();
     const quantity = page.getByRole("combobox", { name: "Quantity source", exact: true });
     await expect(quantity).toBeEnabled({ timeout });
     await quantity.click();
     await page.getByRole("option", { name: /material alpha|gilbert damping|α/i }).first().click();
     await expect(quantity).toContainText(/alpha|damping|α/i);
   });
+  await page.screenshot({ path: info.outputPath("shaded-material-alpha.png") });
   const parentId = `model:object:${fixture.object_id}:magnetic-parameters`;
   const parent = page.locator(`[data-node-id="${parentId}"]`);
   const child = page.locator(`[data-node-id="${parentId}:absorbing-boundary"]`);
