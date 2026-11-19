@@ -54,6 +54,7 @@ import {
   resolveFdmMultilayerAuthoredAirboxBoundsOverlay,
 } from "../model/viewport3DFdmMultilayerAirboxOverlay";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+import { ComplexGlyphPassLayer } from "./ComplexVectorGlyphLayer";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import {
@@ -527,6 +528,20 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
           )
         ) : null}
         {viewport3DVectorLayersEnabledFromBrowserConfig() &&
+        renderPlan.vectors.visible &&
+        vectorLayerInput.complexGlyphs ? (
+          <ComplexGlyphPassLayer
+            adoptionRegistry={adoptionRegistry}
+            carrierId={part.id}
+            fallbackColor={String(colors.field)}
+            fieldBufferId={requestedFieldBufferId}
+            opacity={renderPlan.vectors.opacity}
+            pass={vectorLayerInput.complexGlyphs}
+            sessionIdentity={sessionIdentity}
+            style={vectorStyleFromSettings(renderSettings, vectorStyle)}
+            tracker={tracker}
+          />
+        ) : viewport3DVectorLayersEnabledFromBrowserConfig() &&
         renderPlan.vectors.visible ? (
           <VectorFieldLayer
             adoptionRegistry={adoptionRegistry}

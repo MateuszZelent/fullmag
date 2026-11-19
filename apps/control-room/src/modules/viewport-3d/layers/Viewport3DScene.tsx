@@ -1,6 +1,8 @@
 "use client";
 
+import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
 import { Viewport3DWireframeGestureContext } from "./Viewport3DInteractionWireframe";
+import { Viewport3DComplexPhaseInvalidator } from "./Viewport3DComplexPhaseInvalidator";
 
 import type { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
@@ -268,7 +270,9 @@ interface Viewport3DSceneProps {
   meshQualityOverlayVisible: boolean;
   modeCompositionFieldLayers: ModeCompositionFieldLayerSnapshotMap;
   modeCompositionId: string | null;
-  modeCompositionPhaseByLayerId: ReadonlyMap<string, number>;
+  modeCompositionPhaseUniformByLayerId: ReadonlyMap<string, LivePhaseUniform>;
+  /** Notifies after every complex display phase change (overlay or mode layers). */
+  subscribeComplexPhaseFrames?: ((listener: () => void) => () => void) | null;
   meshRegionOverlayParts: readonly RegionMeshOverlayOwnerPart[];
   meshRegionOverlays: readonly RegionOverlayInput[];
   periodicOverlayModel: PeriodicOverlayModel | null;
@@ -1242,7 +1246,7 @@ function Viewport3DModelLayerStack({
   meshQualityOverlayVisible,
   modeCompositionFieldLayers,
   modeCompositionId,
-  modeCompositionPhaseByLayerId,
+  modeCompositionPhaseUniformByLayerId,
   meshRegionOverlayParts,
   meshRegionOverlays,
   periodicOverlayModel,
@@ -1307,7 +1311,7 @@ function Viewport3DModelLayerStack({
   | "meshQualityOverlayVisible"
   | "modeCompositionFieldLayers"
   | "modeCompositionId"
-  | "modeCompositionPhaseByLayerId"
+  | "modeCompositionPhaseUniformByLayerId"
   | "meshRegionOverlayParts"
   | "meshRegionOverlays"
   | "periodicOverlayModel"
@@ -1625,7 +1629,7 @@ function Viewport3DModelLayerStack({
             meshQualityOverlayVisible={stagedMeshQualityOverlayVisible}
             modeCompositionFieldLayers={modeCompositionFieldLayers}
             modeCompositionId={modeCompositionId}
-            modeCompositionPhaseByLayerId={modeCompositionPhaseByLayerId}
+            modeCompositionPhaseUniformByLayerId={modeCompositionPhaseUniformByLayerId}
             onSelectPart={onSelectPart}
             onRenderableGeometryChange={onRenderableMeshPartChange}
             renderableGeometryStageVisible={stageVisibility.baseGeometry}
@@ -1922,7 +1926,8 @@ export function Viewport3DScene({
   meshQualityOverlayVisible,
   modeCompositionFieldLayers,
   modeCompositionId,
-  modeCompositionPhaseByLayerId,
+  modeCompositionPhaseUniformByLayerId,
+  subscribeComplexPhaseFrames,
   meshRegionOverlayParts,
   meshRegionOverlays,
   periodicOverlayModel,
@@ -2345,6 +2350,7 @@ export function Viewport3DScene({
       <SavedAntennaSourceLayer model={savedAntennaSourceModel ?? null} colors={colors} tracker={tracker} />
       <Viewport3DBackground colors={colors} mode={appearance.backgroundMode} strength={appearance.backgroundStrength} tracker={tracker} />
       <Viewport3DCaptureSource onFrameReady={onCaptureFrameReady} />
+      <Viewport3DComplexPhaseInvalidator subscribe={subscribeComplexPhaseFrames} />
       <Viewport3DLightingRig profileId={qualityProfileId ?? visualProfileId} appearance={appearance} bounds={bounds} tracker={tracker} />
       {viewport3DCanvasLifecycleProbeEnabledFromBrowserConfig() ? (
         <CanvasLifecycleProbe diagnostics={requestDiagnostics} tracker={tracker} />
@@ -2425,7 +2431,7 @@ export function Viewport3DScene({
         meshQualityOverlayVisible={meshQualityOverlayVisible}
         modeCompositionFieldLayers={modeCompositionFieldLayers}
         modeCompositionId={modeCompositionId}
-        modeCompositionPhaseByLayerId={modeCompositionPhaseByLayerId}
+        modeCompositionPhaseUniformByLayerId={modeCompositionPhaseUniformByLayerId}
         meshRegionOverlayParts={meshRegionOverlayParts}
         meshRegionOverlays={meshRegionOverlays}
         periodicOverlayModel={periodicOverlayModel}

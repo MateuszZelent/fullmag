@@ -5,6 +5,7 @@ import type {
 import { isTensorFrobeniusSurfaceField } from "@/kernel/api/tensorFieldProjection";
 import type { Viewport3DFieldColorBuildTarget } from "./field-colors/viewport3dFieldColorBuildModel";
 import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
+import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
 
 import { buildFdmFieldIndexResolver } from "./model/fdmFieldIndexing";
 import { srgbToLinearChannel } from "./viewport3dColorSpace";
@@ -76,7 +77,14 @@ export interface ScalarColorBuffer {
   colorMode?: string;
   colorPalette?: string;
   complexImagValues?: Float32Array;
+  /** Phase at build time; diagnostics only when `complexPhaseUniform` is set. */
   complexPhaseRad?: number;
+  /**
+   * Shared live phase cell bound as the material's phase uniform. Phase
+   * animation updates it in place, so the buffer, its attributes and the
+   * material stay unchanged between frames.
+   */
+  complexPhaseUniform?: LivePhaseUniform;
   complexRealValues?: Float32Array;
   complexRepresentation?:
     | "phase_rotated_real"
