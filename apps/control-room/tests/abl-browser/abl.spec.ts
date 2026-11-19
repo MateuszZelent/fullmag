@@ -13,6 +13,7 @@ type FieldCase = Layer | Layer[] | null;
 
 test.use({
   browserName: "chromium",
+  screenshot: "only-on-failure",
   viewport: { width: 1440, height: 1000 },
   launchOptions: {
     executablePath: process.env.FULLMAG_QA_CHROMIUM || undefined,
@@ -168,14 +169,15 @@ test("ABL editor updates the live FDM damping field and canonical script", async
     const home = page.locator('.fm-home-overlay[data-state="home-overlay"]');
     if (await home.isVisible()) await page.getByRole("button", { name: "Back to simulation", exact: true }).click();
     await page.locator("#fm-main-content.fm-workspace-body").waitFor();
-    if (!(await viewport.locator('[data-quantity-id="mat_alpha"]').isVisible())) {
-      await page.locator("#fm-ribbon-tab-results").click();
-      await page.locator('[data-ribbon-action-id="res-m"] [data-ribbon-menu-trigger]').click();
-      await page.getByRole("menuitemradio", { name: "α", exact: true }).click();
-    }
+    await page.getByRole("tab", { name: "Workspace", exact: true }).click();
+    await page.getByTitle("Expand All", { exact: true }).click();
+    await page.locator(`[data-node-id="model:object:${fixture.object_id}:visualization"]`).click();
+    const quantity = page.getByRole("combobox", { name: "Quantity source", exact: true });
+    await expect(quantity).toBeEnabled({ timeout });
+    await quantity.click();
+    await page.getByRole("option", { name: /material alpha|gilbert damping|α/i }).first().click();
+    await expect(quantity).toContainText(/alpha|damping|α/i);
   });
-  await page.getByRole("tab", { name: "Workspace", exact: true }).click();
-  await page.getByTitle("Expand All", { exact: true }).click();
   const parentId = `model:object:${fixture.object_id}:magnetic-parameters`;
   const parent = page.locator(`[data-node-id="${parentId}"]`);
   const child = page.locator(`[data-node-id="${parentId}:absorbing-boundary"]`);

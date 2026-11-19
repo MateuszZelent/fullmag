@@ -11,6 +11,7 @@ on:
       - "crates/fullmag-plan/src/spatial_absorber.rs"
       - "crates/fullmag-api/src/live_authored_damping*"
       - "crates/fullmag-api/src/live_authored_damping/**"
+      - "crates/fullmag-cli/src/scratch_runtime.rs"
       - "crates/fullmag-ir/src/absorbing_boundary.rs"
       - "packages/fullmag-py/src/fullmag/model/*absorbing_boundary*"
       - "examples/fem_spatial_absorbing_layers.py"

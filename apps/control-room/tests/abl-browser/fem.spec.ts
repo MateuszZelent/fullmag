@@ -5,6 +5,7 @@ import { decodeFieldVector } from "../../src/kernel/api/codecs/fieldVectorCodec"
 
 test.use({
   browserName: "chromium",
+  screenshot: "only-on-failure",
   viewport: { width: 1600, height: 1060 },
   launchOptions: {
     executablePath: process.env.FULLMAG_QA_CHROMIUM || undefined,

@@ -1109,7 +1109,12 @@ fn pending_compute_command(client: &Client, api_base: &str) -> Option<(String, b
         .and_then(|commands| {
             commands.iter().find_map(|command| {
                 let status = command.get("status").and_then(Value::as_str);
-                let kind = command.get("kind").and_then(Value::as_str);
+                // The v2 journal exposes remesh as mesh_build. Keep the internal
+                // spelling in child custody receipts used by the launcher.
+                let kind = match command.get("kind").and_then(Value::as_str) {
+                    Some("mesh_build") => Some("remesh"),
+                    other => other,
+                };
                 if matches!(
                     status,
                     Some("queued" | "pending" | "accepted" | "dispatched")
