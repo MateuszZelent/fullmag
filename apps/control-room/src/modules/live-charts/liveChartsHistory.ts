@@ -177,8 +177,8 @@ export function archivedScalarWindowToChartTable({
     const descriptor = availableColumns.get(columnId);
     return descriptor ? [{ descriptor, sourceIndex }] : [];
   });
-  if (selected.length < 2 || selected.some(({ descriptor }) =>
-    selected.filter((candidate) => candidate.descriptor.column_id === descriptor.column_id).length > 1)) {
+  const selectedColumnIds = new Set(selected.map(({ descriptor }) => descriptor.column_id));
+  if (selected.length < 2 || selectedColumnIds.size !== selected.length) {
     return null;
   }
   if (window.rows.some((row) => row.length !== window.columns.length ||
