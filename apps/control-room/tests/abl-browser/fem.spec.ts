@@ -1,5 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { expect, test, type Response } from "playwright/test";
+import { expect, test } from "playwright/test";
 import { decodeTopology } from "../../src/kernel/api/codecs/topologyCodec";
 import { decodeFieldVector } from "../../src/kernel/api/codecs/fieldVectorCodec";
 
@@ -55,7 +55,11 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
     for (let i = 0; i < segment.node_count; i++) filmNodes.add(segment.node_start + i);
   }
   expect(filmNodes.size).toBeGreaterThan(0);
-  async function checkMap(amplitude: number, response: Response) {
+  // Verify the nodal field independently of the WebGL vertex attributes.
+  // Chromium may release a response body when a resource hook supersedes a request.
+  async function checkMap(amplitude: number, sampleUrl: string) {
+    expect(sampleUrl.startsWith(prefix)).toBe(true);
+    const response = await get(sampleUrl.slice(prefix.length));
     const field = decodeFieldVector(Uint8Array.from(await response.body()).buffer);
     expect(field.quantityId).toBe("mat_alpha");
     expect(field.nComp).toBe(1);
@@ -132,9 +136,13 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
   const quantity = page.getByRole("combobox", { name: "Quantity source", exact: true });
   await expect(quantity).toBeEnabled({ timeout: 90_000 });
   await quantity.click();
-  const isAlpha = (r: Response) => new URL(r.url()).pathname.endsWith("/data/fields/mat_alpha/samples/vector") && r.status() === 200;
-  const [initialResponse] = await Promise.all([
-    page.waitForResponse(isAlpha),
+  const nextAlphaTransfer = (previousEtag?: string) => page.waitForEvent("requestfinished", async request => {
+    if (new URL(request.url()).pathname !== "/v2/sessions/current/data/fields/mat_alpha/samples/vector") return false;
+    const response = await request.response();
+    return response?.status() === 200 && !!response.headers().etag && response.headers().etag !== previousEtag;
+  });
+  const [initialRequest] = await Promise.all([
+    nextAlphaTransfer(),
     page.getByRole("option", { name: /alpha|α/i }).first().click(),
   ]);
   await expect(quantity).toContainText(/alpha|α/i);
@@ -146,7 +154,8 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
   });
   expect(buffer).toHaveLength(2);
   expect(Math.min(...buffer)).toBeGreaterThan(0);
-  const initial = await checkMap(0.45, initialResponse);
+  const initialEtag = (await initialRequest.response())!.headers().etag;
+  const initial = await checkMap(0.45, initialRequest.url());
   const initialDraw = await verifyDraw(initial, 0);
   await page.screenshot({ path: info.outputPath("material-alpha.png") });
   await page.locator('[data-node-id="model:object:film:magnetic-parameters:absorbing-boundary"]').click();
@@ -158,18 +167,19 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
   await page.screenshot({ path: info.outputPath("semicircle-inspector.png") });
   const before = await page.evaluate(() => window.ablFemProbe.sequence);
   await page.locator("input").and(page.getByLabel("Maximum damping", { exact: true })).fill("0.12");
-  const [, updatedResponse] = await Promise.all([
+  const [, updatedRequest] = await Promise.all([
     page.waitForResponse(r => r.request().method() === "PATCH" && new URL(r.url()).pathname.endsWith("/model/objects/film"))
       .then(async response => {
         if (!response.ok()) throw new Error("FEM layer edit returned " + response.status() + ": " + (await response.text()).slice(0, 2000));
         const saved = await response.json();
         expect(saved.revision).toBeGreaterThan(scene.revision);
       }),
-    page.waitForResponse(isAlpha),
+    nextAlphaTransfer(initialEtag),
     page.getByRole("button", { name: "Apply", exact: true }).click(),
   ]);
-  const updated = await checkMap(0.12, updatedResponse);
+  const updated = await checkMap(0.12, updatedRequest.url());
   const updatedDraw = await verifyDraw(updated, before);
+  await expect(page.locator(".fm-viewport-3d")).not.toContainText("topology stale");
   await page.screenshot({ path: info.outputPath("semicircle-after-edit.png") });
   await writeFile(info.outputPath("nodal-alpha.json"), JSON.stringify({ session, buffer, initial, initialDraw, updated, updatedDraw }, null, 2));
 });
