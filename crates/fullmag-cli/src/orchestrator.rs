@@ -3011,6 +3011,7 @@ fn accepted_relax_handoff_from_completed_stage_with_exact_artifacts(
     accepted_fields: &fullmag_runner::CertifiedFemEquilibriumFields,
     certified_fields: &fullmag_runner::CertifiedFemEquilibriumFields,
     recomputed_certificate: &fullmag_runner::RecomputedFemLinearizationCertificateV1,
+    forced_acceptance: bool,
 ) -> Result<Option<fullmag_runner::AcceptedFemRelaxStageHandoff>> {
     let BackendPlanIR::Fem(source_plan) = backend_plan else {
         return Ok(None);
@@ -3049,7 +3050,17 @@ fn accepted_relax_handoff_from_completed_stage_with_exact_artifacts(
                 producer_provenance_path.display()
             )
         })?;
-    fullmag_runner::AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts_and_provenance(
+    let exact_artifacts = fullmag_runner::AcceptedFemRelaxExactArtifacts {
+        accepted_fields_json: read_exact(&accepted_path, "accepted fields")?,
+        certified_fields_json: read_exact(&certified_path, "certified fields")?,
+        recomputed_certificate_json: read_exact(&recomputed_path, "recomputed certificate")?,
+    };
+    let constructor = if forced_acceptance {
+        fullmag_runner::AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts_and_provenance_forced
+    } else {
+        fullmag_runner::AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts_and_provenance
+    };
+    constructor(
         &source_stage.run_id,
         &source_stage.stage_id,
         &source_stage.stage_kind,
@@ -3061,16 +3072,36 @@ fn accepted_relax_handoff_from_completed_stage_with_exact_artifacts(
         accepted_fields.clone(),
         certified_fields.clone(),
         recomputed_certificate.clone(),
-        fullmag_runner::AcceptedFemRelaxExactArtifacts {
-            accepted_fields_json: read_exact(&accepted_path, "accepted fields")?,
-            certified_fields_json: read_exact(&certified_path, "certified fields")?,
-            recomputed_certificate_json: read_exact(&recomputed_path, "recomputed certificate")?,
-        },
+        exact_artifacts,
         producer_provenance,
         producer_provenance_json,
     )
     .map(Some)
     .map_err(|error| anyhow!(error.to_string()))
+}
+
+/// Note 0830, eq-k0-forced-residual-torque: entry `i` is true when the next
+/// physical stage after `i` (synthetic action stages such as change_device are
+/// skipped) is an eigenmodes stage that explicitly requested
+/// `equilibrium_acceptance="force"`, so a non-converged relax stage `i` may
+/// still hand its state over.
+fn forced_relax_acceptance_requests(stages: &[(&fullmag_ir::ProblemIR, bool)]) -> Vec<bool> {
+    (0..stages.len())
+        .map(|index| {
+            stages[index + 1..]
+                .iter()
+                .find(|(_, is_action)| !*is_action)
+                .is_some_and(|(next, _)| {
+                    matches!(next.study, fullmag_ir::StudyIR::Eigenmodes { .. })
+                        && next
+                            .problem_meta
+                            .runtime_metadata
+                            .get("modal_equilibrium_acceptance")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("force")
+                })
+        })
+        .collect()
 }
 
 // This value follows the physical continuation, independently of preview state.
@@ -11335,6 +11366,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     }
 
     crate::script_launch::note_stage(crate::script_launch::Stage::Running);
+    let forced_relax_acceptance = forced_relax_acceptance_requests(
+        &stages
+            .iter()
+            .map(|stage| (&stage.ir, stage.action.is_some()))
+            .collect::<Vec<_>>(),
+    );
     for (stage_index, (mut stage, materialized_execution_plan)) in stages
         .into_iter()
         .zip(stage_execution_plans.into_iter())
@@ -12504,11 +12541,29 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             ),
             _ => None,
         };
+        // Note 0830, eq-k0-forced-residual-torque: a relax state that stopped
+        // without converging is handed over only to an immediately following
+        // eigen stage that requested equilibrium_acceptance="force".
+        let forced_relax_handoff = forced_relax_acceptance
+            .get(stage_index)
+            .copied()
+            .unwrap_or(false)
+            && stage_result
+                .completion
+                .as_ref()
+                .is_some_and(|completion| completion.status == "completed" && !completion.converged);
+        if forced_relax_handoff {
+            live_workspace.push_log(
+                "warn",
+                "Relaxation did not converge; the next eigen stage requested equilibrium_acceptance=\"force\" and will linearize around the non-equilibrium state (note 0830)".to_string(),
+            );
+        }
         let next_continuation_accepted_fields =
             if matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. })
                 && matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(_))
                 && stage_result.completion.as_ref().is_some_and(|completion| {
-                    completion.status == "completed" && completion.converged
+                    completion.status == "completed"
+                        && (completion.converged || forced_relax_handoff)
                 })
             {
                 let path = current_stage_artifact_dir.join(
@@ -12532,7 +12587,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             if matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. })
                 && matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(_))
                 && stage_result.completion.as_ref().is_some_and(|completion| {
-                    completion.status == "completed" && completion.converged
+                    completion.status == "completed"
+                        && (completion.converged || forced_relax_handoff)
                 })
             {
                 let path = current_stage_artifact_dir.join(
@@ -12555,7 +12611,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             if matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. })
                 && matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(_))
                 && stage_result.completion.as_ref().is_some_and(|completion| {
-                    completion.status == "completed" && completion.converged
+                    completion.status == "completed"
+                        && (completion.converged || forced_relax_handoff)
                 })
             {
                 let path = current_stage_artifact_dir.join(
@@ -12605,6 +12662,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 accepted_fields,
                 certified_fields,
                 recomputed_certificate,
+                forced_relax_handoff,
             )?,
             _ => None,
         };
@@ -12614,6 +12672,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             let engine = fullmag_runner::resolve_planned_runtime_engine(&stage.ir, &execution_plan)
                 .map_err(|error| anyhow!("accepted equilibrium execution owner: {}", error.message))?;
             if stage_result.status == fullmag_runner::RunStatus::Completed && !stage_failed
+                && !forced_relax_handoff
                 && engine.engine_id == "fem_cpu_native" && plan.precision == fullmag_ir::ExecutionPrecision::Double && plan.fe_order == 1 {
                 let authored_stage_id = stage.ir.problem_meta.runtime_metadata.get("active_stage_id")
                     .and_then(serde_json::Value::as_str).filter(|id| !id.trim().is_empty()).unwrap_or(&current_stage_id);
@@ -20522,6 +20581,7 @@ mod tests {
             dispersion_validation: None,
             k0_kittel_validation: None,
             solver_policy: None,
+            magnetostatic_bc: Default::default(),
         };
         let backend = BackendPlanIR::FemEigen(target);
         let completion = stage_completion(fullmag_ir::StageStopReason::Torque);

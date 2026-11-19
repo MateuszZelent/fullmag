@@ -2652,6 +2652,13 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         problem.gauge_policy = request.poisson_airbox_gauge_policy;
         problem.gauge_reason = request.poisson_airbox_gauge_reason;
         problem.assembly_kind = request.poisson_airbox_assembly_kind;
+        // A shared-domain payload with zero periodic pairs is the isolated
+        // open-airbox K0 lane (note 0830): the importer already proved the
+        // identity certificate and the Robin outer boundary.
+        if (std::strcmp(problem.assembly_kind, "mfem_weak_form_shared_domain") == 0 &&
+            problem.magnetic_pair_count == 0u && problem.airbox_pair_count == 0u) {
+            problem.demag_kind = "open_airbox_k0";
+        }
         problem.solver_adapter =
             request.execution_target == ModalExecutionTarget::production_gpu ?
                 "k0_poisson_airbox_gpu_petsc_slepc" :
@@ -3142,7 +3149,9 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                             "production_gpu" :
                             "production_cpu") +
             "\","
-            "\"demag_kind\":\"periodic_airbox_k0\","
+            "\"demag_kind\":\"" +
+            std::string(problem.demag_kind) +
+            "\","
             "\"accepted_mode_count\":" +
             std::to_string(poisson_result.accepted_mode_count) +
             ",\"q_dof_count\":" +
