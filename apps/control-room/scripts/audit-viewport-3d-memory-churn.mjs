@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { checkFooterReadability } from "./lib/viewport-layout-browser-qa.mjs";
@@ -490,6 +490,7 @@ try {
       `Live WebGL buffers did not return to a post-warmup plateau: baseline=${baselineLiveBuffers}, after=${stressLiveBuffers}.`,
     );
   }
+  await assertModelExportDownloads(page, viewport, canvas);
   await openFieldMapViewport(page);
   await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
   final2DLayout = await waitForComparable2DViewport(
@@ -620,6 +621,47 @@ try {
   auditActive = false;
   await browser.close();
   await managedRuntime?.stop();
+}
+
+async function assertModelExportDownloads(page, viewport, canvas) {
+  const dialog = page.getByRole("dialog", { name: "Export 3D model" });
+  const download = async (extension) => {
+    const [file] = await Promise.all([
+      page.waitForEvent("download", { timeout: 15_000 }),
+      dialog.getByRole("button", { name: "Download", exact: true }).click(),
+    ]);
+    if (!file.suggestedFilename().endsWith(extension)) {
+      throw new Error(`Unexpected model export file: ${file.suggestedFilename()}`);
+    }
+    const data = await readFile(await file.path());
+    await file.delete();
+    await dialog.waitFor({ state: "hidden" });
+    return data;
+  };
+
+  await viewport.getByRole("button", { name: "Export 3D model", exact: true }).click();
+  await dialog.getByRole("checkbox", { name: "Include vector arrows" }).uncheck();
+  const glb = await download(".glb");
+  if (glb.length < 20 || glb.readUInt32LE(0) !== 0x46546c67 || glb.readUInt32LE(4) !== 2) {
+    throw new Error("The toolbar did not download a valid GLB 2 model.");
+  }
+
+  await canvas.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Export 3D model…" }).click();
+  await dialog.getByLabel("Format").selectOption("vtu");
+  await dialog.getByRole("checkbox", { name: "Include vector field data" }).check();
+  await dialog.getByRole("checkbox", { name: "Include Airbox" }).check();
+  const vtu = (await download(".vtu")).toString("utf8");
+  if (!vtu.includes('type="UnstructuredGrid"') || !vtu.includes('Name="m"')) {
+    throw new Error("The canvas menu did not download VTK geometry with the current field.");
+  }
+
+  await page.getByRole("button", { name: "File", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Export", exact: true }).hover();
+  await page.getByRole("menuitem", { name: "3D model…", exact: true }).click();
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await waitForCanvasReady(canvas);
+  auditLog("verified GLB and VTU downloads and the File export entry");
 }
 
 async function assertCanvasHasFidelity(page) {

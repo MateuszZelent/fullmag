@@ -6,6 +6,7 @@ import {
   Command,
   Cpu,
   Database,
+  Download,
   FileCode2,
   FilePlus2,
   Gauge,
@@ -85,6 +86,13 @@ const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
       { id: "workspace.save-project", label: "Save Project", icon: <Save size={14} />, shortcut: "Ctrl+S" },
       { id: "workspace.close-project", label: "Close Project", icon: <X size={14} />, shortcut: "Ctrl+W" },
       { id: "workspace.export-python", label: "Save canonical copy as…", icon: <FileCode2 size={14} /> },
+      {
+        id: "file.export",
+        label: "Export",
+        children: [
+          { id: "viewport-3d.export-model", label: "3D model…", icon: <Download size={14} /> },
+        ],
+      },
     ],
   },
   {

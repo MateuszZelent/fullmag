@@ -2030,25 +2030,14 @@ describe("Viewport3DModule scene wiring", () => {
       "const canvasGlOptions = resolveStableViewport3DCanvasGlOptions(\n    getViewport3DVisualProfile(canvasContextProfileId),\n    effectAntialias,\n  );",
     );
     expect(source).toContain("const handleCanvasCreated = useCallback");
-    expect(source).toContain("const handleCanvasContextMenu = useCallback");
     expect(source).toContain("const handleCanvasPointerMissed = useCallback");
     expect(canvasBlock).toContain("camera={canvasCamera}");
     expect(canvasBlock).toContain("gl={canvasGlOptions}");
     expect(canvasBlock).toContain("onCreated={handleCanvasCreated}");
-    expect(canvasBlock).toContain("onContextMenu={handleCanvasContextMenu}");
+    expect(source).toContain("<Viewport3DExportMenu onCommand={onViewCommand}>");
     expect(canvasBlock).toContain("onPointerMissed={handleCanvasPointerMissed}");
     expect(canvasBlock).not.toContain("camera={{");
     expect(canvasBlock).not.toContain("onCreated={({ gl }) =>");
-  });
-
-  it("suppresses the native context menu because right button pans the camera", () => {
-    const source = readFileSync(
-      new URL("./Viewport3DModule.tsx", import.meta.url),
-      "utf8",
-    );
-
-    expect(source).toContain("const handleCanvasContextMenu = useCallback");
-    expect(source).toContain("event.preventDefault();");
   });
 
   it("holds transport only for a real camera interaction", () => {

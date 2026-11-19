@@ -8,12 +8,32 @@ import {
   summarizeExport3DCapabilities,
 } from "@/shared/export-3d";
 
-import { extractViewport3DExportSource } from "./extractViewport3DExportSource";
+import { convertRealFieldToExportInput, extractViewport3DExportSource } from "./extractViewport3DExportSource";
 
 describe("extractViewport3DExportSource", () => {
   useNodeBlobFileReader();
 
-  it("extracts single-grid FDM with inactive regionIds and optional visible airbox", () => {
+  it("writes the accepted Frobenius tensor view as a scalar field", () => {
+    const tensor = {
+      dtype: "float64",
+      quantityId: "spin-current",
+      nComp: 9,
+      pointCount: 1,
+      valueCount: 9,
+      values: new Float64Array([3, 0, 0, 0, 4, 0, 0, 0, 0]),
+    };
+    expect(convertRealFieldToExportInput(tensor as never)).toBeNull();
+    expect(convertRealFieldToExportInput({
+      ...tensor,
+      projectionToken: "frobenius",
+      tensorSurfaceDescriptor: {
+        rank: 2, shape: [3, 3], layout: "flow_major", axes: ["flow", "spin"],
+        component_labels: Array.from({ length: 9 }, (_, index) => `c${index}`),
+      },
+    } as never)).toMatchObject({ componentCount: 1, values: new Float64Array([5]) });
+  });
+
+  it("extracts single-grid FDM with an independently exportable hidden Airbox", () => {
     const regionIds = new Uint32Array([
       1,
       FMRM_INACTIVE_REGION_ID,
@@ -122,12 +142,49 @@ describe("extractViewport3DExportSource", () => {
         quantityId: "B_demag",
         values,
       },
-      airboxSettings: { visible: true, surfaceOpacityPercent: 20 },
+      fdmSettings: { surfaceColorSource: "component_y", vectorColorMode: "orientation" },
+      airboxSettings: { visible: false, surfaceOpacityPercent: 20 },
+      includeHiddenAirbox: true,
     });
 
     expect(sourceWithAirbox.targets).toHaveLength(2);
-    expect(sourceWithAirbox.targets[1]?.id).toBe("fdm-airbox");
+    expect(sourceWithAirbox.targets[0]?.appearance).toMatchObject({
+      colorMode: "y",
+      vectorColorMode: "orientation",
+    });
+    expect(sourceWithAirbox.targets[1]).toMatchObject({ id: "fdm-airbox", role: "airbox" });
     expect(sourceWithAirbox.targets[1]?.appearance?.opacity).toBeCloseTo(0.2);
+  });
+
+  it("keeps visible single-grid objects and regional overrides on their own exact cells", () => {
+    const a = { id: "object:a", kind: "object" } as const;
+    const b = { id: "object:b", kind: "object" } as const;
+    const region = { id: "region:a:detail", kind: "region" } as const;
+    const source = extractViewport3DExportSource({
+      fdmDomain: { kind: "fdm-grid", origin: [0, 0, 0], shape: [4, 1, 1], spacing: [1, 1, 1] } as never,
+      fdmExportMembership: {
+        regionIds: new Uint32Array([1, 2, 3, 1]),
+        definitions: [
+          { target: a, ownerTarget: a, numericRegionId: null },
+          { target: b, ownerTarget: b, numericRegionId: null },
+          { target: { id: "region:a:base", kind: "region" }, ownerTarget: a, numericRegionId: 1 },
+          { target: region, ownerTarget: a, numericRegionId: 2 },
+          { target: { id: "region:b:base", kind: "region" }, ownerTarget: b, numericRegionId: 3 },
+        ],
+      },
+      fdmTargetViews: [
+        { target: a, cellIndices: new Uint32Array([0]), settings: { visible: true }, fieldVector: null },
+        { target: b, cellIndices: new Uint32Array([2]), settings: { visible: false }, fieldVector: null },
+        {
+          target: region, cellIndices: new Uint32Array([1]), settings: { visible: true },
+          fieldVector: { quantityId: "B_demag", nComp: 3, pointCount: 4, values: new Float32Array(12) },
+        },
+      ] as never,
+    });
+    expect(source.targets).toMatchObject([
+      { id: "object:a", activeMask: new Uint8Array([1, 0, 0, 1]) },
+      { id: "region:a:detail", activeMask: new Uint8Array([0, 1, 0, 0]), field: { quantityId: "B_demag" } },
+    ]);
   });
 
   it("extracts multilayer FDM native layer views and multilayer airbox", () => {
@@ -147,6 +204,7 @@ describe("extractViewport3DExportSource", () => {
             shape: [2, 2, 1],
             spacing: [2e-9, 2e-9, 2e-9],
             activeCellCount: 2,
+            totalCells: 4,
             layerId: "layer-1",
             magnetName: "Bottom CoFeB",
             objectId: "obj-bottom",
@@ -155,21 +213,21 @@ describe("extractViewport3DExportSource", () => {
             activeMaskPresent: true,
             inactiveCellCount: 2,
           },
+          activeMask: new Uint8Array([1, 0, 0, 1]),
           fieldVector: {
             dtype: "float64",
             formatVersion: 3,
             grid: [2, 2, 1],
             nComp: 3,
-            pointCount: 2,
-            nodeIndices: [0, 3],
+            pointCount: 4,
             quantityId: "m",
-            values: new Float64Array([1, 0, 0, 0, 1, 0]),
+            values: new Float64Array([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]),
           },
           model: {
             cellSize: [2e-9, 2e-9, 2e-9],
-            cellIndices: new Uint32Array([0, 3]),
-            centers: new Float32Array(6),
-            count: 2,
+            cellIndices: new Uint32Array([0]),
+            centers: new Float32Array(3),
+            count: 1,
             gridShape: [2, 2, 1],
             matrices: new Float32Array(32),
             matrixContentRevision: "m1",
@@ -199,6 +257,7 @@ describe("extractViewport3DExportSource", () => {
             shape: [2, 2, 1],
             spacing: [2e-9, 2e-9, 2e-9],
             activeCellCount: 4,
+            totalCells: 4,
             layerId: "layer-2",
             magnetName: "Top Py",
             objectId: "obj-top",
@@ -237,6 +296,7 @@ describe("extractViewport3DExportSource", () => {
           bounds: null,
           displayCellBudget: 1000,
           displayCellCount: 8,
+          totalCells: 8,
           origin: [0, 0, 0],
           shape: [2, 2, 2],
           spacing: [2e-9, 2e-9, 2e-9],
@@ -266,7 +326,7 @@ describe("extractViewport3DExportSource", () => {
       expect(Array.from(source.targets[0].activeMask ?? [])).toEqual([1, 0, 0, 1]);
     }
     expect(source.targets[1]?.id).toBe("layer-2");
-    expect(source.targets[2]?.id).toBe("airbox");
+    expect(source.targets[2]).toMatchObject({ id: "airbox", activeMask: new Uint8Array([0, 1, 1, 0, 1, 1, 1, 1]) });
     expect(source.targets[2]?.appearance?.opacity).toBeCloseTo(0.15);
   });
 
@@ -306,13 +366,12 @@ describe("extractViewport3DExportSource", () => {
         floquetSpatialConvention: "exp_plus_i_k_dot_r",
         wavevectorKf: [1e7, 0, 0],
         cellOrigin: [1e-9, 0, 0],
-        visualizationPhaseRad: Math.PI / 4,
         appearance: {
           displayGain: 2.5,
           scalarColorPalette: "twilight",
           surfaceColorSource: "scalar",
         },
-        query: { component: "full" },
+        query: { component: "full", phase_rad: Math.PI / 4 },
       } as never,
     });
 
@@ -340,6 +399,11 @@ describe("extractViewport3DExportSource", () => {
     const modeCompSource = extractViewport3DExportSource({
       fdmLaneActive: true,
       modeCompositionId: "comp-1",
+      analysisOverlay: {
+        visualizationPhaseRad: 0.5,
+        phasorConvention: "exp_minus_i_omega_t",
+        appearance: { displayGain: 7 },
+      } as never,
       modeCompositionPhaseByLayerId: new Map([["mc-l1", 1.25]]),
       modeCompositionFieldLayers: new Map([
         [
@@ -355,7 +419,9 @@ describe("extractViewport3DExportSource", () => {
               object_id: "obj-1",
               amplitude_scale: 1.75,
               phase_rad: 0.2,
+              component: "x",
               representation: "abs",
+              appearance: { auto_range: false, colormap: "coolwarm", range_min: 0, range_max: 2 },
             } as never,
             field: {
               componentCount: 3,
@@ -399,12 +465,16 @@ describe("extractViewport3DExportSource", () => {
       ],
     });
     expect(modeCompSource.defaultAnimationMode).toBe("phase_cycle");
+    expect(modeCompSource.targets[0]?.appearance).toMatchObject({
+      colorMode: "x", colorPalette: "coolwarm", colorRange: { min: 0, max: 2 },
+    });
     const compField = modeCompSource.targets[0]?.field;
     expect(compField?.kind).toBe("complex");
     if (compField?.kind === "complex") {
       expect(compField.amplitudeScale).toBe(1.75);
       expect(compField.complexPhaseRad).toBe(1.25);
       expect(compField.complexRepresentation).toBe("abs");
+      expect(compField.phasorConvention).toBe("exp_i_omega_t");
     }
   });
 
@@ -457,7 +527,7 @@ describe("extractViewport3DExportSource", () => {
           {
             part: {
               id: "part-magnet",
-              label: "Cobalt Disk",
+              label: "Cobalt Disk near airbox",
               role: "magnetic",
               boundary_face_start: 0,
               boundary_face_count: 4,
@@ -604,9 +674,9 @@ describe("extractViewport3DExportSource", () => {
           },
         ],
       },
-      getObjectSettings: (id) =>
+      getObjectSettings: ({ objectId }) =>
         ({
-          visible: id !== "obj-hidden",
+          visible: objectId !== "obj-hidden",
           shaderVisible: true,
           wireframeVisible: false,
           surfaceOpacityPercent: 100,

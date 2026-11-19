@@ -5,6 +5,7 @@ import {
   Box,
   Camera,
   Compass,
+  Download,
   Eye,
   Gauge,
   Layers,
@@ -250,6 +251,20 @@ export function Viewport3DToolbar({
             >
               <Camera aria-hidden="true" size={ICON_SIZE} />
               <span className="fm-viewport-3d-toolbar__label">PNG</span>
+            </Button>
+          </ToolbarTooltip>
+          <ToolbarTooltip content="Export the current view as a 3D model">
+            <Button
+              aria-label="Export 3D model"
+              className="fm-viewport-3d-toolbar__button"
+              data-command-id="viewport-3d.export-model"
+              onClick={() => onCommand("viewport-3d.export-model")}
+              size="icon"
+              type="button"
+              variant="ghost"
+            >
+              <Download aria-hidden="true" size={ICON_SIZE} />
+              <span className="fm-viewport-3d-toolbar__label">3D model</span>
             </Button>
           </ToolbarTooltip>
         </div>
