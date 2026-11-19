@@ -13,7 +13,9 @@ spectrum is a preliminary run, not a converged FMR result.
 Usage (headless, inside the backend):
     fullmag examples/buckyball/eigen_k0_open_airbox.py --headless
 Environment overrides: FULLMAG_BUCKY_MAG_HMAX_NM, FULLMAG_BUCKY_MODES,
-FULLMAG_BUCKY_TARGET_GHZ, FULLMAG_BUCKY_BIAS_T, FULLMAG_BUCKY_RELAX_DEVICE.
+FULLMAG_BUCKY_TARGET_GHZ, FULLMAG_BUCKY_BIAS_T, FULLMAG_BUCKY_RELAX_DEVICE,
+FULLMAG_BUCKY_RELAX_MAX_STEPS (default 1000), FULLMAG_BUCKY_EQUILIBRIUM_ACCEPTANCE
+(default "force": modes of the non-converged state, diagnostic only).
 """
 
 # %% Parameters (SI)
@@ -36,6 +38,10 @@ MODE_COUNT = int(os.environ.get("FULLMAG_BUCKY_MODES", "10"))
 TARGET_HZ = float(os.environ.get("FULLMAG_BUCKY_TARGET_GHZ", "3.0")) * 1e9
 BIAS_T = float(os.environ.get("FULLMAG_BUCKY_BIAS_T", "0.0"))
 RELAX_DEVICE = os.environ.get("FULLMAG_BUCKY_RELAX_DEVICE", "gpu")
+RELAX_MAX_STEPS = int(os.environ.get("FULLMAG_BUCKY_RELAX_MAX_STEPS", "1000"))
+# Zero field relaxes slowly; "force" linearizes the state reached after
+# RELAX_MAX_STEPS even without torque convergence (note 0830, diagnostic only).
+EQUILIBRIUM_ACCEPTANCE = os.environ.get("FULLMAG_BUCKY_EQUILIBRIUM_ACCEPTANCE", "force")
 
 if not STL_PATH.is_file():
     raise FileNotFoundError(f"Missing buckyball geometry: {STL_PATH}")
@@ -78,7 +84,7 @@ study.save("mode", indices=tuple(range(MODE_COUNT)))
 study.stages.add_relax(
     stage_id="relax",
     algorithm="projected_gradient_bb",
-    max_steps=100_000,
+    max_steps=RELAX_MAX_STEPS,
     tolT=1e-6,
 )
 
@@ -96,4 +102,5 @@ study.stages.add_eigenmodes(
     k_vector=(0.0, 0.0, 0.0),
     bc="free",
     magnetostatic_bc="open_airbox_k0",
+    equilibrium_acceptance=EQUILIBRIUM_ACCEPTANCE,
 )

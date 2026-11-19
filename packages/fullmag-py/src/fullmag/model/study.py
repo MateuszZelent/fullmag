@@ -1175,6 +1175,9 @@ class Eigenmodes:
     spin_wave_bc: SpinWaveBoundarySpec = "free"
     magnetostatic_bc: str = "open"
     solver_policy: FemEigenSolverPolicy | None = None
+    # Note 0830, eq-k0-forced-residual-torque: "force" linearizes around a relax
+    # state that stopped without converging. Diagnostic only; never the default.
+    equilibrium_acceptance: str = "certified"
     dynamics: LLG = field(default_factory=LLG)
 
     def __post_init__(self) -> None:
@@ -1232,6 +1235,12 @@ class Eigenmodes:
             FemEigenSolverPolicy,
         ):
             raise TypeError("solver_policy must be FemEigenSolverPolicy")
+        if self.equilibrium_acceptance not in {"certified", "force"}:
+            raise ValueError("equilibrium_acceptance must be 'certified' or 'force'")
+        if self.equilibrium_acceptance == "force" and self.equilibrium_source != "relax":
+            raise ValueError(
+                "equilibrium_acceptance='force' requires equilibrium_source='relax'"
+            )
         if magnetostatic_bc == "periodic_airbox_k0":
             if not self.include_demag:
                 raise ValueError("periodic_airbox_k0 requires include_demag=True")

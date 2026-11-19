@@ -2676,3 +2676,50 @@ przybliżenie pierwszego rzędu w różnicy dyskretyzacji.
 | --- | --- | --- |
 | source-k0-film-neumann-runner | crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs + shared_domain_modal_outer_boundary | Wybór Neumanna dla filmu periodycznego w dwóch osiach |
 | source-k0-consistent-static-demag | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp + recompute_shared_domain_static_demag_p1 | Statyczne pole P1 i podmiana $h_\parallel$ przed złożeniem $A_{qq}$ |
+
+## Wymuszona akceptacja niezrelaksowanego stanu (`equilibrium_acceptance="force"`)
+
+Status: źródło; runtime **NOT VERIFIED**. Opcja diagnostyczna, wyłączona
+domyślnie. Wynik nie jest certyfikowanym spektrum równowagi.
+
+Linearyzacja {eq}`eq-poisson-airbox-modal-block` zakłada równowagę
+$\mathbf m_0\times\mathbf H_{\mathrm{eff},0}=0$. Gdy relaksacja kończy się
+limitem kroków, w węzłach zostaje moment resztkowy
+
+```{math}
+:label: eq-k0-forced-residual-torque
+\tau_{\max}=\max_{i\in\Omega_m}
+\bigl|\mathbf m_{0,i}\times\mathbf H_{\mathrm{eff},0,i}\bigr| .
+```
+
+Operator K0 bierze z $\mathbf H_{\mathrm{eff},0}$ tylko skalar
+$h_\parallel=\mathbf m_0\cdot\mathbf H_{\mathrm{eff},0}$
+({eq}`eq-k0-consistent-h-parallel`). Składowa poprzeczna, czyli człon
+napędzający dryf stanu, zostaje pominięta. Mody są wtedy drganiami wokół
+chwilowego $\mathbf m_0$ w polu $h_\parallel$. Błąd częstotliwości jest
+rzędu $\gamma_0\tau_{\max}/2\pi$ w obszarach z dużym momentem. Mogą też
+pojawić się mody o ujemnej lub zespolonej częstotliwości, gdy stan jest
+bliski punktu siodłowego.
+
+Kontrakt: `study.stages.add_eigenmodes(..., equilibrium_source="relax",
+equilibrium_acceptance="force")`. Orkiestrator buduje handoff z niezbieżnej
+relaksacji tylko wtedy, gdy bezpośrednio następny etap eigen o to prosi.
+Certyfikat akceptacji ma `criterion="torque"`, `metric_value`$=\tau_{\max}$
+z {eq}`eq-k0-forced-residual-torque`, `threshold`$=\tau_{\max}(1+10^{-6})$,
+prawdziwe `converged=false` i `stop_reason` relaksacji oraz `forced=true`.
+Flaga `forced` jest serializowana tylko gdy prawdziwa, więc certyfikaty
+zbieżnych relaksacji i ich digesty są bajtowo niezmienione. Walidacja
+wiązania handoffu przelicza $\tau_{\max}$ z certyfikowanych pól i porównuje
+cały certyfikat. Wymuszony stan nie publikuje „accepted equilibrium” dla
+anten. Ścieżka `equilibrium_source="artifact"` nadal przyjmuje tylko
+certyfikaty zbieżne.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $\tau_{\max}$ | maksymalny moment resztkowy w węzłach magnetycznych | $\mathrm{A\,m^{-1}}$ |
+| $\Omega_m$ | węzły magnetyczne | $1$ |
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-k0-forced-acceptance | crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs + forced_equilibrium_criterion | Wymuszony certyfikat momentu z prawdziwym stanem zbieżności |
+| source-k0-forced-acceptance-cli | crates/fullmag-cli/src/orchestrator.rs + forced_relax_acceptance_requests | Handoff niezbieżnej relaksacji tylko dla żądającego etapu eigen |

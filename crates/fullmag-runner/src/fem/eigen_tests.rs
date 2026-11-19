@@ -79,6 +79,7 @@ fn frozen_v2_record_fixture() -> AcceptedFemRelaxStageHandoffV2Record {
             status: "completed".to_string(),
             converged: true,
             stop_reason: fullmag_ir::StageStopReason::Torque,
+            forced: false,
         },
         equilibrium_content_sha256: format!("sha256:{}", "6".repeat(64)),
         content_sha256: String::new(),

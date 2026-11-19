@@ -3209,6 +3209,8 @@ class Problem:
             runtime_metadata.pop("execution_layers", None)
         if isinstance(self.study, Eigenmodes) and self.study.solver_policy is not None:
             runtime_metadata["modal_solver_policy"] = self.study.solver_policy.to_ir()
+        if isinstance(self.study, Eigenmodes) and self.study.equilibrium_acceptance == "force":
+            runtime_metadata["modal_equilibrium_acceptance"] = "force"
         effective_study_pipeline = _normalize_study_pipeline_value(study_pipeline)
         if effective_study_pipeline is None:
             effective_study_pipeline = _normalize_study_pipeline_value(
