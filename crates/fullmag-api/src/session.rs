@@ -1791,6 +1791,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         field_quantity_revisions: BTreeMap::new(),
         accepted_terminal_field_generation: None,
         terminal_field_generations: BTreeMap::new(),
+        accepted_mesh_reinitializations: Default::default(),
         stage_execution_revision: 0,
         simulation_preparation_revision,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
@@ -2508,18 +2509,35 @@ pub(crate) fn apply_current_live_snapshot(
     current: &mut SessionStateResponse,
     req: CurrentLiveSnapshotRequest,
 ) -> Result<(), ApiError> {
-    apply_current_live_snapshot_with_options(current, req, false)
+    apply_current_live_snapshot_with_options(current, req, false).map(|_| ())
 }
 
 pub(crate) fn apply_current_live_snapshot_with_options(
     current: &mut SessionStateResponse,
-    req: CurrentLiveSnapshotRequest,
+    mut req: CurrentLiveSnapshotRequest,
     drop_live_magnetization: bool,
-) -> Result<(), ApiError> {
+) -> Result<bool, ApiError> {
+    let mut reinitialization = None;
+    if let Some(workspace) = req.mesh_workspace.as_mut() {
+        let event_key = fullmag_session::mesh_operation::MESH_REINITIALIZATION_EVENT;
+        if workspace.get(event_key).is_some() {
+            let event = fullmag_session::mesh_operation::completed_mesh_reinitialization(workspace)
+                .filter(|_| req.clear_preview_cache && !req.replace_latest_fields)
+                .ok_or_else(|| ApiError::bad_request("invalid_mesh_reinitialization_receipt"))?;
+            if current.accepted_mesh_reinitializations.contains(&event.command_id) {
+                return Ok(false);
+            }
+            workspace.as_object_mut().unwrap().remove(event_key);
+            reinitialization = Some(event);
+        }
+    }
     let mut candidate = current.clone();
-    apply_current_live_snapshot_in_place(&mut candidate, req, drop_live_magnetization)?;
+    apply_current_live_snapshot_in_place(&mut candidate, req, drop_live_magnetization, reinitialization.as_ref())?;
+    if let Some(event) = reinitialization {
+        candidate.accepted_mesh_reinitializations.insert(event.command_id);
+    }
     *current = candidate;
-    Ok(())
+    Ok(true)
 }
 
 /// The current spatial sources own the previously published domain. A mesh
@@ -2543,6 +2561,11 @@ impl LiveDomainPublicationFence {
             return false;
         }
 
+        self.retire_previous_fields(current);
+        true
+    }
+
+    fn retire_previous_fields(self, current: &mut SessionStateResponse) {
         for (quantity, previous) in self.latest_fields.entries() {
             if previous.get("artifact_field_locator").is_none()
                 && current.latest_fields.get(quantity).is_some_and(|field| std::ptr::eq(previous, field))
@@ -2561,7 +2584,6 @@ impl LiveDomainPublicationFence {
             current.latest_scalar_source = None;
             current.scalar_revision = next_revision(current.scalar_revision);
         }
-        true
     }
 }
 
@@ -2613,6 +2635,7 @@ fn apply_current_live_snapshot_in_place(
     current: &mut SessionStateResponse,
     mut req: CurrentLiveSnapshotRequest,
     drop_live_magnetization: bool,
+    reinitialization: Option<&fullmag_session::mesh_operation::MeshCommandOutcome>,
 ) -> Result<(), ApiError> {
     let apply_start = std::time::Instant::now();
     if crate::live_authored_damping::publication_revision(current).is_some() {
@@ -2643,7 +2666,7 @@ fn apply_current_live_snapshot_in_place(
     ) {
         return Ok(());
     }
-    let publishes_domain = req.metadata.is_some()
+    let publishes_domain = reinitialization.is_some() || req.metadata.is_some()
         || req.fem_mesh.is_some()
         || req.live_state.as_ref().is_some_and(|live| live.latest_step.fem_mesh.is_some());
     let domain_fence = publishes_domain.then(|| LiveDomainPublicationFence::capture(current));
@@ -2719,6 +2742,7 @@ fn apply_current_live_snapshot_in_place(
     if let Some(fem_mesh) = req.fem_mesh {
         apply_fem_mesh_update(current, fem_mesh);
     }
+    let mut validated_grid_generation = None;
     if let Some(mut metadata) = req.metadata {
         if let Some(revision) = metadata.as_object_mut()
             .and_then(|object| object.remove("prepared_grid_scene_revision"))
@@ -2745,6 +2769,9 @@ fn apply_current_live_snapshot_in_place(
                     "prepared grid no longer matches the current scene and build receipt",
                 ));
             }
+            validated_grid_generation = receipt.and_then(|summary| {
+                summary["mesh_summary"]["generation_id"].as_str().map(str::to_owned)
+            });
             crate::live_authored_damping::retire_for_prepared_domain(current);
             // A grid-only receipt updates the prepared domain. Keep the session and
             // run metadata owned by the API, as for canonical scene preparation.
@@ -2761,7 +2788,19 @@ fn apply_current_live_snapshot_in_place(
         }
         apply_current_live_metadata(current, metadata);
     }
-    flags.clear_preview_cache |= domain_fence.is_some_and(|fence| fence.retire_if_replaced(current));
+    flags.clear_preview_cache |= domain_fence.is_some_and(|fence| {
+        if reinitialization.is_some_and(|reset| {
+            let generation = validated_grid_generation.as_ref().or_else(|| {
+                current.fem_mesh.as_ref().and_then(|mesh| mesh.generation_id.as_ref())
+            });
+            generation == reset.mesh_generation_id.as_ref()
+        }) {
+            fence.retire_previous_fields(current);
+            true
+        } else {
+            fence.retire_if_replaced(current)
+        }
+    });
     if drop_live_magnetization {
         drop_large_current_field_carriers(current);
     }
@@ -7799,6 +7838,51 @@ mod tests {
             resolved_current_field_source(&current, "m", 3),
             Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. })
         ));
+    }
+
+    #[test]
+    fn completed_remesh_reinitializes_same_topology_fields_only_once() {
+        let mesh = domain_fem_mesh("same-mesh");
+        let mut current = test_current_snapshot();
+        current.fem_mesh = Some(mesh.clone().into());
+        current.latest_fields.insert("H_demag".into(), json!({"values": [99.0]}));
+        let workspace = json!({
+            "mesh_reinitialization_command_id": "build-1",
+            "last_build_summary": {"status": "completed", "command_id": "build-1",
+                "state_policy": "reinitialize_from_model", "mesh_generation_id": "same-mesh"},
+            "command_outcomes": [{"status": "completed", "command_id": "build-1", "build_id":"mesh:build-1",
+                "state_policy":"reinitialize_from_model", "mesh_generation_id":"same-mesh",
+                "completed_at_unix_ms": 1}]
+        });
+        let snapshot = json!({"session_id": "test-session", "clear_preview_cache": true,
+            "fem_mesh": mesh, "mesh_workspace": workspace});
+        let apply = |current: &mut SessionStateResponse, frame: &Value| {
+            let request = serde_json::from_value(frame.clone()).unwrap();
+            apply_current_live_snapshot_with_options(current, request, false).unwrap()
+        };
+        assert!(apply(&mut current, &snapshot));
+        assert!(current.latest_fields.get("H_demag").is_none());
+
+        let mut second = snapshot.clone();
+        second["fem_mesh"] = json!(domain_fem_mesh("next-mesh"));
+        let workspace = &mut second["mesh_workspace"];
+        workspace["mesh_reinitialization_command_id"] = json!("build-2");
+        workspace["last_build_summary"]["command_id"] = json!("build-2");
+        workspace["last_build_summary"]["mesh_generation_id"] = json!("next-mesh");
+        workspace["command_outcomes"][0]["command_id"] = json!("build-2");
+        workspace["command_outcomes"][0]["build_id"] = json!("mesh:build-2");
+        workspace["command_outcomes"][0]["mesh_generation_id"] = json!("next-mesh");
+        assert!(apply(&mut current, &second));
+
+        let mut ordinary = second.clone();
+        ordinary["mesh_workspace"].as_object_mut().unwrap().remove("mesh_reinitialization_command_id");
+        ordinary["latest_fields"] = json!({"H_demag": {"values": [0.25]}});
+        assert!(apply(&mut current, &ordinary));
+        assert!(!apply(&mut current, &snapshot));
+        assert_eq!(current.fem_mesh.as_ref().unwrap().generation_id.as_deref(), Some("next-mesh"));
+        assert_eq!(current.latest_fields.get("H_demag").unwrap()["values"], json!([0.25]));
+        assert_eq!(current.mesh_workspace.as_ref().unwrap()["last_build_summary"]["command_id"], "build-2");
+        assert!(current.accepted_terminal_field_generation.is_none());
     }
 
     #[test]

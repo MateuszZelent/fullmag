@@ -152,11 +152,7 @@ fn prepare_fdm_grid_refresh(
     candidate_state.live_state = live_state;
     candidate_state.metadata = Some(metadata.clone());
     candidate_state.fem_mesh = None;
-    clear_cached_preview_fields(&mut candidate_state);
-    candidate_state.latest_scalar_row = None;
-    candidate_state.latest_fields = CurrentLiveLatestFields::default();
-    candidate_state.replace_latest_fields = true;
-    candidate_state.field_generation = None;
+    candidate_state.clear_fields_for_remesh();
     candidate_state.mesh_workspace = current_mesh_workspace(
         &candidate_stages[0].ir,
         &first_plan,
@@ -203,6 +199,8 @@ fn prepare_fdm_grid_refresh(
             "command_id": command.command_id,
             "build_id": format!("mesh:{}", command.command_id),
             "status": "completed",
+            "state_policy": MESH_STATE_POLICY,
+            "mesh_generation_id": mesh_summary.get("generation_id"),
             "mesh_target": "study_domain",
             "mesh_reason": command.reason.as_deref().unwrap_or("fdm_grid_refresh"),
             "source_scene_revision": opts.get("source_scene_revision"),
@@ -376,16 +374,15 @@ pub(super) fn execute_manual_interactive_remesh(
                     workspace["command_outcomes"] = receipts.clone();
                 }
                 record_mesh_command_outcome(workspace, &outcome);
-                clear_cached_preview_fields(state);
-                state.field_generation = None;
-                state.latest_fields = CurrentLiveLatestFields::default();
-                state.replace_latest_fields = true;
-                state.latest_scalar_row = None;
+                state.clear_fields_for_remesh();
                 state.live_state.latest_step = candidate.state.live_state.latest_step;
                 state.live_state.coupled_checkpoint = None;
                 state.metadata = candidate.state.metadata;
                 state.fem_mesh = candidate.state.fem_mesh;
-                state.mesh_workspace = Some(workspace.clone());
+                let mut publication = workspace.clone();
+                publication[fullmag_session::mesh_operation::MESH_REINITIALIZATION_EVENT] =
+                    serde_json::json!(outcome.command_id);
+                state.mesh_workspace = Some(publication);
             });
             live_workspace.push_log("success", format!("Remesh complete — command {} committed; magnetization reinitialized from the authored model", command.command_id));
             Some(candidate.plan_summary)
@@ -896,7 +893,7 @@ fn prepare_manual_interactive_remesh(
                 } else {
                     plan.mesh_source.clone()
                 };
-                let (live_mesh_payload, remeshed_magnetization, remeshed_plan) = {
+                let (live_mesh_payload, remeshed_plan) = {
                     let mut remeshed_problem = remesh_problem_source.clone();
                     apply_current_fem_overrides(
                         &mut remeshed_problem,
@@ -928,14 +925,12 @@ fn prepare_manual_interactive_remesh(
                     }
                     let remeshed_plan = fullmag_plan::plan(&remeshed_problem)
                         .map_err(|error| anyhow!(error.to_string()))?;
-                    let magnetization =
-                        current_stage_magnetization_vectors(None, &remeshed_plan.backend_plan);
                     let mesh_payload =
                         fem_mesh_payload_from_backend_plan(&remeshed_plan.backend_plan)
                             .ok_or_else(|| {
                                 anyhow!("updated backend plan did not produce a FEM mesh payload")
                             })?;
-                    (mesh_payload, magnetization, remeshed_plan)
+                    (mesh_payload, remeshed_plan)
                 };
                 let prepared_remesh = prepare_remesh_stage_transaction(
                     stages,
@@ -1001,11 +996,11 @@ fn prepare_manual_interactive_remesh(
                 ));
                 {
                     let state = &mut candidate_state;
-                    state.live_state.latest_step.fem_mesh_generation_id =
-                        live_mesh_payload.generation_id.clone();
+                    state.live_state.latest_step = live_state_manifest_from_update(initial_step_update(
+                        &remeshed_plan.backend_plan,
+                        live_mesh_payload.generation_id.clone(),
+                    )).latest_step;
                     state.fem_mesh = Some(live_mesh_payload);
-                    state.live_state.latest_step.magnetization =
-                        Some(flatten_magnetization(&remeshed_magnetization));
                     let mut workspace = current_fem_mesh_workspace(
                         &remesh_problem_source,
                         &new_mesh,

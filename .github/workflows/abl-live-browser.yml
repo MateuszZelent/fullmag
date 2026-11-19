@@ -92,6 +92,8 @@ jobs:
           cargo test --locked -p fullmag-api --bin fullmag-api mesh_build_command_preserves_absorbing_layer_and_region_damping
           cargo test --locked -p fullmag-api --bin fullmag-api desktop_completed_fem_build_and_regional_edits_publish_only_current_nodes
           cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_build_mesh_and_patch_publish_fem_nodes_without_solve
+          cargo test --locked -p fullmag-api --bin fullmag-api completed_remesh_reinitializes_same_topology_fields_only_once
+          cargo test --locked -p fullmag-cli --bin fullmag completed_remesh_supersedes_pending_terminal_fields
           cargo test --locked -p fullmag-cli --bin fullmag parse_remesh_cli_response_preserves_fresh_object_region_markers
           cargo test --locked -p fullmag-cli --bin fullmag scene_patch_rebinds_fem_mesh_assets_by_object_identity
           cargo test --locked -p fullmag-cli --bin fullmag body_remesh_rejects_distinct_geometries_before_generating_one_mesh

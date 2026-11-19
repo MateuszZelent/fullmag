@@ -88,6 +88,16 @@ fn fem_mesh_payload_clone_count() -> u64 {
 }
 
 impl LocalLiveWorkspaceState {
+    pub(crate) fn clear_fields_for_remesh(&mut self) {
+        clear_cached_preview_fields(self);
+        self.clear_preview_cache = true;
+        self.latest_scalar_row = None;
+        self.latest_fields = Default::default();
+        // Only solver termination has an authoritative terminal field generation.
+        self.replace_latest_fields = false;
+        self.field_generation = None;
+    }
+
     pub fn build_publish_payload(
         &self,
         include_mesh: bool,
@@ -165,6 +175,9 @@ impl LocalLiveWorkspaceState {
         let include_mesh = next_mesh_generation_id.is_some()
             && next_mesh_generation_id != self.published_fem_mesh_generation_id;
         let mut payload = self.build_publish_payload(include_mesh, None, clear_preview_cache);
+        if let Some(workspace) = self.mesh_workspace.as_mut().and_then(|value| value.as_object_mut()) {
+            workspace.remove(fullmag_session::mesh_operation::MESH_REINITIALIZATION_EVENT);
+        }
         payload.replace_latest_fields = std::mem::take(&mut self.replace_latest_fields);
         payload.field_generation = std::mem::take(&mut self.field_generation);
         if let Some(generation_id) = next_mesh_generation_id.filter(|_| include_mesh) {
@@ -416,6 +429,7 @@ impl LocalLiveWorkspace {
         Ok(CurrentLiveSnapshotPayload {
             metadata,
             mesh_workspace: state.mesh_workspace.clone(),
+            clear_preview_cache: completed,
             engine_log: Some(state.engine_log.clone()),
             ..Default::default()
         })
@@ -566,6 +580,9 @@ impl LocalLiveWorkspace {
         // Replaying its generation can make the API skip terminal metadata.
         snapshot.replace_latest_fields = false;
         snapshot.field_generation = None;
+        if let Some(workspace) = snapshot.mesh_workspace.as_mut().and_then(|value| value.as_object_mut()) {
+            workspace.remove(fullmag_session::mesh_operation::MESH_REINITIALIZATION_EVENT);
+        }
         snapshot.latest_fields = Some(state.latest_fields.clone());
         drop(state);
         self.publisher.terminal.publish_and_wait(snapshot, timeout, &self.publisher.wake_tx)
@@ -1304,6 +1321,12 @@ fn merge_pending_publish_payload(
     mut incoming: CurrentLiveSnapshotPayload,
     should_merge_pending: bool,
 ) {
+    let supersedes_pending = incoming.mesh_reinitialization().is_some_and(|reset| {
+        slot.mesh_workspace.as_ref().and_then(|w| {
+            fullmag_session::mesh_operation::mesh_command_outcome(w, &reset.command_id)
+        }).is_none()
+    });
+    let should_merge_pending = should_merge_pending && !supersedes_pending;
     let incoming_preview_fields = incoming.preview_fields.clone();
     let allow_previous_preview = should_merge_pending && !incoming.clear_preview_cache;
     let merged_preview_fields = if incoming.clear_preview_cache {
@@ -1380,6 +1403,14 @@ fn acknowledge_terminal_field_publish(
     slot: &mut CurrentLiveSnapshotPayload,
     published: &CurrentLiveSnapshotPayload,
 ) {
+    if let Some(event) = published.mesh_reinitialization() {
+        if slot.mesh_reinitialization().is_some_and(|pending| pending.command_id == event.command_id) {
+            if let Some(workspace) = slot.mesh_workspace.as_mut().and_then(|value| value.as_object_mut()) {
+                workspace.remove(fullmag_session::mesh_operation::MESH_REINITIALIZATION_EVENT);
+            }
+            slot.clear_preview_cache = false;
+        }
+    }
     if published.replace_latest_fields
         && published.field_generation.is_some()
         && slot.replace_latest_fields
@@ -3967,6 +3998,34 @@ mod tests {
     }
 
     #[test]
+    fn completed_remesh_supersedes_pending_terminal_fields() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+        state.latest_fields.insert("H_demag".into(), serde_json::json!({"values": [99.0]}));
+        state.replace_latest_fields = true;
+        state.field_generation = Some(crate::types::CurrentLiveFieldGeneration {
+            run_id: "previous-run".into(),
+            sequence: 7,
+        });
+        let mut pending = state.build_publish_payload(false, None, true);
+        state.clear_fields_for_remesh();
+        state.mesh_workspace = Some(serde_json::json!({
+            "mesh_reinitialization_command_id": "build-1",
+            "last_build_summary": {"status": "completed", "command_id": "build-1",
+                "state_policy": "reinitialize_from_model", "mesh_generation_id": "mesh-gen-1"},
+            "command_outcomes": [{"status": "completed", "command_id": "build-1",
+                "build_id": "mesh:build-1", "state_policy": "reinitialize_from_model",
+                "mesh_generation_id": "mesh-gen-1", "completed_at_unix_ms": 1}]
+        }));
+        let (remesh, ..) = state.take_publish_delta_parts();
+        assert!(state.build_publish_payload(false, None, true).mesh_reinitialization().is_none());
+        merge_pending_publish_payload(&mut pending, remesh, true);
+        assert!(pending.mesh_reinitialization().is_some());
+        assert!(!pending.replace_latest_fields);
+        assert!(pending.field_generation.is_none());
+        assert!(pending.latest_fields.is_none());
+    }
+
+    #[test]
     fn failed_terminal_publish_retains_generation_for_retry() {
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let retry_generation = std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -5646,6 +5705,9 @@ fn current_live_publisher_loop(
                 has_published = true;
                 if let Ok(mut slot) = payload.lock() {
                     acknowledge_terminal_field_publish(&mut slot, &snapshot);
+                    if snapshot.mesh_reinitialization().is_some() {
+                        pending.store(true, Ordering::Release);
+                    }
                 }
             }
             if let Some(error) = scalar_publish_error.as_ref() {
@@ -5963,6 +6025,10 @@ fn build_pending_payload_from_workspace(
     scalar_gate: &Arc<Mutex<LiveTelemetryPublishGate>>,
     diagnostics: &Arc<Mutex<fullmag_runner::LivePublisherDiagnostics>>,
 ) {
+    // Retry the original mesh event intact. Later workspace changes are read after its acknowledgement.
+    if payload.lock().is_ok_and(|slot| slot.mesh_reinitialization().is_some()) {
+        return;
+    }
     let source = state_source.lock().ok().and_then(|source| source.clone());
     let Some(source) = source else {
         return;
