@@ -341,7 +341,7 @@ pub(crate) fn plan_on_published_domain(
         problem.geometry_assets = problem.geometry_assets.or(config.shared_geometry_assets);
         problem
     } else {
-        crate::script::scene_document_to_authored_problem_ir_with_asset_root(
+        crate::script::scene_document_to_preparation_problem_ir_with_asset_root(
             repo, workspace, asset_root, scene, &execution,
         )?
     };

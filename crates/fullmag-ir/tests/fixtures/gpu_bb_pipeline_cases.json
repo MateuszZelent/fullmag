@@ -1,0 +1,500 @@
+[
+  {
+    "name": "bb",
+    "valid": true,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "group_v2",
+    "valid": true,
+    "pipeline": {
+      "version": "study_pipeline.v2",
+      "nodes": [
+        {
+          "node_kind": "group",
+          "id": "g",
+          "label": "G",
+          "children": [
+            {
+              "node_kind": "primitive",
+              "id": "bb",
+              "label": "BB",
+              "stage_kind": "relax",
+              "payload": {
+                "relax_algorithm": "projected_gradient_bb"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "llg",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "llg_overdamped"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "mixed_run",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb"
+          }
+        },
+        {
+          "node_kind": "primitive",
+          "id": "run",
+          "label": "Run",
+          "stage_kind": "run",
+          "payload": {}
+        }
+      ]
+    }
+  },
+  {
+    "name": "unknown_kind",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "unknown",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "macro",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "macro",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "duplicate",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb"
+          }
+        },
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "disabled_only",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb"
+          },
+          "enabled": false
+        }
+      ]
+    }
+  },
+  {
+    "name": "string_enabled",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb"
+          },
+          "enabled": "true"
+        }
+      ]
+    }
+  },
+  {
+    "name": "conflicting_alias",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb",
+            "algorithm": "llg_overdamped"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "missing_algorithm",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {}
+        }
+      ]
+    }
+  },
+  {
+    "name": "null_algorithm",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb",
+            "algorithm": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "bad_payload",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "bad_nodes",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": {}
+    }
+  },
+  {
+    "name": "unknown_version",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v99",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "metadata_flag",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb"
+          }
+        }
+      ],
+      "bb_only": true
+    }
+  },
+  {
+    "name": "version_array",
+    "valid": false,
+    "pipeline": {
+      "version": [],
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "node_kind_array",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": [],
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "contradictory_kind",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb",
+            "kind": "run"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "contradictory_entrypoint",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb",
+            "entrypoint_kind": "flat_run"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "contradictory_payload_enabled",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb",
+            "enabled": false
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "nonboolean_payload_enabled",
+    "valid": false,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb",
+            "enabled": "true"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "consistent_flat_relax",
+    "valid": true,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb",
+            "kind": "relax",
+            "entrypoint_kind": "flat_relax",
+            "enabled": true
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "consistent_study_pipeline_relax",
+    "valid": true,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb",
+            "kind": "relax",
+            "entrypoint_kind": "study_pipeline_relax",
+            "enabled": true
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "consistent_build",
+    "valid": true,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb",
+            "kind": "relax",
+            "entrypoint_kind": "build",
+            "enabled": true
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "consistent_constructor_problem",
+    "valid": true,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb",
+            "kind": "relax",
+            "entrypoint_kind": "problem",
+            "enabled": true
+          }
+        }
+      ]
+    }
+  }
+]

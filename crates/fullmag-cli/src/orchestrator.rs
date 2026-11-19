@@ -6611,6 +6611,7 @@ fn apply_current_fem_overrides(
             Some(fem) => fem.hmax = hmax,
             None => {
                 hints.fem = Some(FemHintsIR {
+                    gpu_bb_preconditioner: None,
                     order: 1,
                     hmax,
                     mesh: None,
@@ -19118,6 +19119,7 @@ mod tests {
 
     fn tiny_fem_plan() -> BackendPlanIR {
         BackendPlanIR::Fem(FemPlanIR {
+            gpu_bb_preconditioner: None,
             mesh_name: "tiny".to_string(),
             mesh_source: None,
             mesh: MeshIR {
@@ -19238,6 +19240,7 @@ mod tests {
 
     fn tiny_shared_domain_fem_plan() -> BackendPlanIR {
         BackendPlanIR::Fem(FemPlanIR {
+            gpu_bb_preconditioner: None,
             mesh_name: "shared".to_string(),
             mesh_source: None,
             mesh: MeshIR {

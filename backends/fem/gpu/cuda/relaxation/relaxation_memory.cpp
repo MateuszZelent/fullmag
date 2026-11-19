@@ -50,6 +50,7 @@ bool gpu_relaxation_state_allocate(
 
 void gpu_relaxation_state_free(FemGpuRelaxationDeviceState &relaxation)
 {
+    relaxation.bb_exchange_mass.reset();
     gpu_device_free_component(relaxation.projected_gradient_accepted_h_eff);
     gpu_device_free_component(relaxation.nonlinear_cg_direction);
     gpu_device_free_component(relaxation.nonlinear_cg_direction_backup);

@@ -23,6 +23,7 @@ CONTRACT_REVISION = 1
 FEM_DEMAG_POISSON = "fem-demag-poisson"
 FEM_CUDA_ACTIVITY_TRACE = "fem-cuda-activity-trace"
 CONTRACT_TARGETS = {
+    "fem-cuda-bb-exchange-mass": "fem_cuda_bb_exchange_mass_contract",
     FEM_DEMAG_POISSON: "fem_demag_poisson_contract",
     FEM_CUDA_ACTIVITY_TRACE: "fem_cuda_activity_trace_contract",
     "fem-cuda-pgbb-reuse": "fem_cuda_pgbb_reuse_contract",

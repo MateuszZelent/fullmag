@@ -4474,6 +4474,7 @@ fn fem_shared_domain_ir_for_magnetoelastic() -> ProblemIR {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -4736,6 +4737,7 @@ fn fem_backend_with_mesh_asset_plans_successfully() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -4826,6 +4828,7 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -5206,6 +5209,7 @@ fn fem_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mode() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -5280,6 +5284,7 @@ fn fem_plan_serializes_mesh_parts() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -5452,6 +5457,7 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -5566,6 +5572,7 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -5676,6 +5683,7 @@ fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode(
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -5737,6 +5745,7 @@ fn fem_backend_without_air_elements_rejects_missing_shared_airbox_mesh() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -5808,6 +5817,7 @@ fn fem_backend_fredkin_koehler_demag_plans_on_body_only_mesh_without_airbox() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -5901,6 +5911,7 @@ fn fem_backend_rejects_requested_shared_domain_without_air_elements() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -5976,6 +5987,7 @@ fn fem_backend_populates_domain_frame_and_domain_mesh_mode() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -6073,6 +6085,7 @@ fn fem_backend_prefers_domain_frame_declared_universe_over_legacy_study_universe
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -6158,6 +6171,7 @@ fn fem_backend_with_mesh_source_json_plans_successfully() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: Some(mesh_path.display().to_string()),
@@ -6204,6 +6218,7 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -8609,6 +8624,7 @@ fn single_precision_is_rejected_for_phase_one_cpu_execution() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -8681,6 +8697,7 @@ fn single_precision_is_rejected_with_gpu_specific_reason_when_cuda_device_reques
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -11150,6 +11167,7 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
@@ -12826,6 +12844,7 @@ fn fem_eigen_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mo
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
@@ -12919,6 +12938,7 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
@@ -13041,6 +13061,7 @@ fn fem_eigen_periodic_bc_requires_periodic_node_pairs() {
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
         fdm: None,
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
@@ -13117,6 +13138,7 @@ fn fem_eigen_periodic_bc_with_pairs_plans_successfully() {
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
         fdm: None,
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
@@ -13212,6 +13234,7 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
         fdm: None,
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
@@ -13308,6 +13331,7 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
         fdm: None,
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
@@ -13749,6 +13773,7 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
         fdm: None,
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
@@ -14641,6 +14666,7 @@ fn fem_frequency_response_mesh_asset_problem() -> ProblemIR {
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
         fdm: None,
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
@@ -15000,6 +15026,7 @@ fn fem_plan_fails_when_shared_domain_requested_but_no_domain_mesh_asset() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -15087,6 +15114,7 @@ fn fem_plan_succeeds_when_shared_domain_has_domain_mesh_asset() {
             projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -16652,6 +16680,7 @@ fn fem_minimal_test_ir() -> ProblemIR {
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
         fdm: None,
         fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
             order: 1,
             hmax: 2e-9,
             mesh: None,
@@ -20229,3 +20258,84 @@ fn cuda_centered_embedding_restricts_execution_without_changing_identity_support
 mod material_audit_fdm;
 mod material_audit_fem;
 mod material_boundary_stt;
+
+fn fem_gpu_bb_policy_test_problem(policy: fullmag_ir::FemGpuBbPreconditionerIR) -> ProblemIR {
+    let mut ir = fem_minimal_test_ir();
+    ir.backend_policy
+        .discretization_hints
+        .as_mut()
+        .unwrap()
+        .fem
+        .as_mut()
+        .unwrap()
+        .gpu_bb_preconditioner = Some(policy);
+    ir.problem_meta
+        .runtime_metadata
+        .insert("runtime_selection".into(), serde_json::json!({"device": "gpu"}));
+    ir.study = fullmag_ir::StudyIR::Relaxation {
+        algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1e-6),
+            energy_tolerance_j: None,
+            max_steps: Some(10),
+            max_relaxation_time_s: None,
+        },
+        sampling: ir.study.sampling().clone(),
+    };
+    ir
+}
+
+#[test]
+fn gpu_bb_policy_is_typed_and_preserved_in_fem_plan() {
+    use fullmag_ir::FemGpuBbPreconditionerIR as Policy;
+    for policy in [Policy::Auto, Policy::None, Policy::ExchangeMass] {
+        let ir = fem_gpu_bb_policy_test_problem(policy);
+        let planned = plan(&ir).expect("explicit GPU BB policy should plan");
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("expected FEM");
+        };
+        assert_eq!(fem.gpu_bb_preconditioner, Some(policy));
+    }
+}
+
+#[test]
+fn gpu_bb_policy_rejects_cpu_other_algorithm_and_fdm() {
+    let base = fem_gpu_bb_policy_test_problem(fullmag_ir::FemGpuBbPreconditionerIR::None);
+    let mut cpu = base.clone();
+    cpu.problem_meta
+        .runtime_metadata
+        .insert("runtime_selection".into(), serde_json::json!({"device": "cpu"}));
+    assert!(plan(&cpu)
+        .unwrap_err()
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("gpu_bb_preconditioner")));
+    let mut ncg = base.clone();
+    if let fullmag_ir::StudyIR::Relaxation { algorithm, .. } = &mut ncg.study {
+        *algorithm = fullmag_ir::RelaxationAlgorithmIR::NonlinearCg;
+    }
+    assert!(plan(&ncg)
+        .unwrap_err()
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("gpu_bb_preconditioner")));
+    let mut fdm = base;
+    fdm.backend_policy.requested_backend = BackendTarget::Fdm;
+    assert!(plan(&fdm)
+        .unwrap_err()
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("gpu_bb_preconditioner")));
+}
+
+#[test]
+fn gpu_bb_policy_nonexecuted_pipeline_carrier_cannot_be_planned_as_llg() {
+    let mut ir = fem_gpu_bb_policy_test_problem(fullmag_ir::FemGpuBbPreconditionerIR::ExchangeMass);
+    ir.study = ProblemIR::bootstrap_example().study;
+    ir.problem_meta.entrypoint_kind = "flat_workspace".into();
+    let cases: serde_json::Value = serde_json::from_str(include_str!("../../fullmag-ir/tests/fixtures/gpu_bb_pipeline_cases.json")).unwrap();
+    ir.problem_meta.runtime_metadata.insert("study_pipeline".into(), cases[0]["pipeline"].clone());
+    ir.validate().expect("nonexecuted carrier preserves intent");
+    assert!(plan(&ir).unwrap_err().reasons.iter().any(|reason| reason.contains("gpu_bb_preconditioner")));
+}

@@ -340,6 +340,7 @@ fn fem_plan(n: u32) -> Result<FemPlanIR, Box<dyn Error>> {
         per_domain_quality: HashMap::new(),
     };
     Ok(FemPlanIR {
+        gpu_bb_preconditioner: None,
         mesh_name: mesh.mesh_name.clone(),
         mesh_source: None,
         mesh,

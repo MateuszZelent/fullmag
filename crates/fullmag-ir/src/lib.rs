@@ -11,6 +11,7 @@ mod time_expression;
 pub use time_expression::TimeExpressionIR;
 
 pub mod antenna;
+pub mod bb_pipeline;
 pub mod antenna_current_source;
 pub mod constraint;
 pub mod compute_resources;
@@ -805,6 +806,7 @@ impl ProblemIR {
                         projection_policy: None,
                     }),
                     fem: Some(FemHintsIR {
+                        gpu_bb_preconditioner: None,
                         order: 1,
                         hmax: 2e-9,
                         mesh: None,
@@ -1464,6 +1466,25 @@ impl ProblemIR {
                 }
             }
             if let Some(fem) = &hints.fem {
+                if fem.gpu_bb_preconditioner.is_some() {
+                    if self.backend_policy.requested_backend != BackendTarget::Fem {
+                        errors.push(
+                            "fem.gpu_bb_preconditioner requires explicit FEM backend".to_string(),
+                        );
+                    }
+                    if !matches!(
+                        &self.study,
+                        StudyIR::Relaxation {
+                            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+                            ..
+                        }
+                    ) && !bb_pipeline::is_gpu_bb_pipeline_carrier(self) {
+                        errors.push(
+                            "fem.gpu_bb_preconditioner requires projected_gradient_bb relaxation"
+                                .to_string(),
+                        );
+                    }
+                }
                 if fem.order == 0 {
                     errors.push("fem.order must be >= 1".to_string());
                 }
