@@ -1,4 +1,4 @@
-"""Run bounded native modal and algebraic energy contracts on GitHub Actions only."""
+"""Run bounded native modal, material and energy contracts on GitHub Actions only."""
 from __future__ import annotations
 
 import hashlib
@@ -27,12 +27,14 @@ def main() -> int:
         "fem_floquet_modal_solver_contract",
         "fem_modal_eigen_nodal_energy_hessian_contract",
         "fem_state_io_contract",
+        "fem_element_quadrature_material_contract",
+        "fem_element_dg0_workflow_contract",
     ]
     receipt = {
         "schema": "fullmag.ci.native_contract.v1", "source_sha": None, "requested_sha": os.environ.get("GITHUB_SHA"),
         "target": target, "targets": targets, "cmake_flags": flags,
         "scope": (
-            "dependency-free ABI, algebraic nodal-energy and torque observable contracts; "
+            "dependency-free ABI, DG0 material averages, algebraic nodal-energy and torque observable contracts; "
             "no production FEM or scientific qualification"
         ),
         "started_at": time.time(), "steps": [], "status": "failed",
@@ -50,7 +52,8 @@ def main() -> int:
              "-R",
              "^(fem_modal_eigen_contract|fem_modal_eigen_poisson_iteration_policy_contract|"
              "fem_mode_kinematics_contract|fem_floquet_modal_solver_contract|"
-             "fem_modal_eigen_nodal_energy_hessian_contract|fem_torque_observable_contract)$",
+             "fem_modal_eigen_nodal_energy_hessian_contract|fem_torque_observable_contract|"
+             "fem_element_quadrature_material_contract|fem_element_dg0_average_contract)$",
              "--output-on-failure", "--no-tests=error"],
         ]
         for index, command in enumerate(commands):

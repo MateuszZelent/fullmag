@@ -28,9 +28,11 @@ import {
   DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELDS_PATH,
+  DATA_FIELD_META_PATH,
   DATA_QUANTITIES_PATH,
   DATA_PLANAR_FIELD_META_PATH,
   DATA_SCALARS_PATH,
+  DATA_TABLE_ROWS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_SEMANTICS_PATH,
@@ -65,6 +67,7 @@ import {
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_PREPARATION_PATH,
+  SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
@@ -542,14 +545,24 @@ export class RealtimeInvalidationBridge {
         const planarFieldChange = change.resource === "planar_fields";
         const scalarChange = change.resource === "scalars";
 
-        if (scalarChange) {
-          this.queuePrefixInvalidation(DATA_SCALARS_PATH, change.revision);
-          // Energy history keys carry a `?limit=` window; the batch names only
-          // `energies/current`, so the history must follow every scalar row.
+        if (
+          recommendedFetch === SIMULATION_SOLVER_ENERGIES_CURRENT_PATH &&
+          change.resource === "simulation"
+        ) {
           this.queuePrefixInvalidation(
             SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
             change.revision,
           );
+        }
+
+        if (scalarChange) {
+          this.queuePrefixInvalidation(DATA_SCALARS_PATH, change.revision);
+          if (
+            recommendedFetch &&
+            stageScopedRegex(DATA_TABLE_ROWS_PATH).test(recommendedFetch)
+          ) {
+            this.queueResourceInvalidation(recommendedFetch, change.revision);
+          }
           this.queuePrefixInvalidation(
             resourceFamilyPrefix(SIMULATION_OBJECT_METRICS_PATH),
             dependentResourceRevision(
@@ -596,6 +609,12 @@ export class RealtimeInvalidationBridge {
             );
             if (exactFieldResource.quantityId === "m") {
               this.queueMagnetizationFieldDependents(fieldSampleRevision);
+              if (!exactFieldResource.snapshotId && !exactFieldResource.carrierId && !exactFieldResource.view) {
+                this.queueExactResourceInvalidation(
+                  DATA_FIELD_META_PATH.replace("{quantity_id}", "m"),
+                  fieldSampleRevision,
+                );
+              }
             }
           } else if (change.broad || !change.quantity_ids?.length) {
             this.recordFieldInvalidation("broad");
@@ -1013,6 +1032,7 @@ export class RealtimeInvalidationBridge {
     this.resources.invalidate(MODEL_REGION_DIAGNOSTICS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_MATERIAL_FIELDS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_READINESS_PATH, dependentRevision);
+    this.resources.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, dependentRevision);
     // Mesh policies are projections of the scene document; their revision is
     // the mesh revision that the policy PUT routes check as expected_revision.
     this.resources.invalidate(MESHING_SEMANTICS_PATH, dependentRevision);

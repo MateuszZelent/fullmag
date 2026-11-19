@@ -1,5 +1,5 @@
 use crate::{
-    AbsorbingBoundaryLayerIR, AirBoxPolicyIR, AntennaFieldSolveStageIR, AntennaPortModeIR,
+    AbsorbingBoundaryIR, AirBoxPolicyIR, AntennaFieldSolveStageIR, AntennaPortModeIR,
     AntennaSpectrumRequestIR, AntennaTargetProjectionRefIR, BackendPolicyIR, CouplingIR,
     CurrentModuleIR, ElasticBodyIR, ElasticMaterialIR, EnergyTermIR, ExcitationAnalysisIR,
     FdmPeriodicityIR, GeometryAssetsIR, GeometryIR, InitialMagnetizationIR,
@@ -165,7 +165,7 @@ pub struct MagnetizationModuleIR {
     pub material_id: String,
     pub initial_magnetization: InitialMagnetizationIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub absorbing_boundary: Option<AbsorbingBoundaryLayerIR>,
+    pub absorbing_boundary: Option<AbsorbingBoundaryIR>,
 }
 
 impl MagnetizationModuleIR {

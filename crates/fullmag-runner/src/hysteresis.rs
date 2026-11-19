@@ -461,6 +461,8 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
     stage_id: Option<&str>,
     on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send),
 ) -> Result<RunResult, RunError> {
+        let mut performance = crate::run_performance_integration::start(problem, plan, output_dir, "hysteresis_numeric_callbacks");
+        let result = (|| {
     let (
         field_min_mT,
         field_max_mT,
@@ -610,6 +612,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             interrupt_requested,
             initial_snapshot,
             on_step,
+            &mut performance,
         )?;
         current_m = probe_run.final_magnetization;
         final_status = probe_run.status;
@@ -650,6 +653,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             interrupt_requested,
             initial_snapshot,
             on_step,
+            &mut performance,
         )?;
         final_status = solve_res.executed_run.result.status;
         merge_hysteresis_execution_provenance(
@@ -692,6 +696,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                 interrupt_requested,
                 initial_snapshot,
                 on_step,
+                &mut performance,
             )?;
 
             current_m = point_run.executed_run.result.final_magnetization.clone();
@@ -921,6 +926,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                     interrupt_requested,
                     stage_id,
                     on_step,
+                    &mut performance,
                 )?;
                 final_status = combine_run_status(final_status, variant_run.status);
                 merge_hysteresis_execution_provenance(
@@ -959,6 +965,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                 interrupt_requested,
                 stage_id,
                 on_step,
+                &mut performance,
             )?;
             final_status = combine_run_status(final_status, adaptive_run.status);
             merge_hysteresis_execution_provenance(
@@ -1013,6 +1020,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                     interrupt_requested,
                     stage_id,
                     on_step,
+                    &mut performance,
                 )?;
                 final_status = combine_run_status(final_status, minor_run.status);
                 merge_hysteresis_execution_provenance(
@@ -1059,6 +1067,9 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         final_magnetization: current_m,
         completion: None,
     })
+        })();
+        crate::run_performance_integration::finish(&mut performance, &result);
+        result
 }
 
 fn build_hysteresis_angular_family_artifact(
@@ -1279,6 +1290,7 @@ fn run_hysteresis_saturation_probe(
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
     on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send),
+    performance: &mut crate::run_performance_integration::PerformanceSession,
 ) -> Result<HysteresisSaturationProbeRun, RunError> {
     let mut current_m = initial_m.to_vec();
     let mut all_steps = Vec::new();
@@ -1311,6 +1323,7 @@ fn run_hysteresis_saturation_probe(
             interrupt_requested,
             initial_snapshot,
             on_step,
+            performance,
         )?;
         status = solve_res.executed_run.result.status;
         merge_hysteresis_execution_provenance(
@@ -2212,6 +2225,7 @@ fn run_settle_at_field(
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
     on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send),
+    performance: &mut crate::run_performance_integration::PerformanceSession,
 ) -> Result<SettledFieldRun, RunError> {
     let steps = materialize_settle_steps(pipeline);
 
@@ -2337,6 +2351,7 @@ fn run_settle_at_field(
                     .as_ref()
                     .map(|progress| (progress.point_idx, progress.field_m_t, settle_idx, &step)),
                 on_step,
+                performance,
             )?;
             if executed_run
                 .result
@@ -2497,7 +2512,7 @@ fn settle_step_relaxation_control(step: &SettleStepIR) -> Result<RelaxationContr
                 algorithm,
                 stop: RelaxStopIR {
                     torque_tolerance_apm: Some(*torque_tolerance),
-                    energy_tolerance_j: *energy_tolerance,
+                    energy_tolerance_j: Some(*energy_tolerance),
                     max_steps: Some(*max_steps as u64),
                     max_relaxation_time_s: resolve_settle_relaxation_time(
                         algorithm,
@@ -2633,7 +2648,9 @@ fn execute_settle_step_at_field(
     initial_snapshot: bool,
     hysteresis_progress: Option<(Option<usize>, f64, usize, &SettleStepIR)>,
     on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send),
+    performance: &mut crate::run_performance_integration::PerformanceSession,
 ) -> Result<ExecutedRun, RunError> {
+    performance.begin_hysteresis_segment();
     let live_display_selection = (field_every_n != u64::MAX).then_some(display_selection);
     match backend_plan {
         BackendPlanIR::Fdm(fdm) => {
@@ -2650,13 +2667,14 @@ fn execute_settle_step_at_field(
             let resolution =
                 dispatch::resolve_fdm_engine_for_plan_with_trail(problem, &mutated_fdm)?;
             let mut live_on_step = |update: StepUpdate| {
+                performance.observe_hysteresis_numeric(&update);
                 let update = annotate_hysteresis_live_update(update, hysteresis_progress);
                 (*on_step)(update)
             };
             let grid = [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]];
             let live = LiveStepConsumer {
                 grid,
-                field_every_n,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(field_every_n),
                 initial_snapshot,
                 display_selection: live_display_selection,
                 interrupt_requested,
@@ -2705,13 +2723,14 @@ fn execute_settle_step_at_field(
                     backend_plan,
                 )?;
             let mut live_on_step = |update: StepUpdate| {
+                performance.observe_hysteresis_numeric(&update);
                 let update = annotate_hysteresis_live_update(update, hysteresis_progress);
                 (*on_step)(update)
             };
             let grid = [mutated_fem.initial_magnetization.len() as u32, 1, 1];
             let live = LiveStepConsumer {
                 grid,
-                field_every_n,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(field_every_n),
                 initial_snapshot,
                 display_selection: live_display_selection,
                 interrupt_requested,
@@ -4345,6 +4364,7 @@ fn run_hysteresis_angular_family_variant(
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     stage_id: Option<&str>,
     on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send),
+    performance: &mut crate::run_performance_integration::PerformanceSession,
 ) -> Result<HysteresisAngularFamilyVariantRun, RunError> {
     let variant_dir = output_dir
         .join("hysteresis_angular_family")
@@ -4396,6 +4416,7 @@ fn run_hysteresis_angular_family_variant(
             interrupt_requested,
             false,
             on_step,
+            performance,
         )?;
         current_m = point_run.executed_run.result.final_magnetization.clone();
         status = combine_run_status(status, point_run.executed_run.result.status);
@@ -4600,6 +4621,7 @@ fn run_hysteresis_adaptive_refinement(
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     stage_id: Option<&str>,
     on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send),
+    performance: &mut crate::run_performance_integration::PerformanceSession,
 ) -> Result<HysteresisAdaptiveRefinementRun, RunError> {
     let backend_plan = &plan.backend_plan;
     let source_points: Vec<HysteresisPoint> = major_states
@@ -4676,6 +4698,7 @@ fn run_hysteresis_adaptive_refinement(
                 interrupt_requested,
                 false,
                 on_step,
+                performance,
             )?;
             status = combine_run_status(status, solve_res.executed_run.result.status);
             merge_hysteresis_execution_provenance(
@@ -4820,6 +4843,7 @@ fn run_hysteresis_minor_loops(
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     stage_id: Option<&str>,
     on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send),
+    performance: &mut crate::run_performance_integration::PerformanceSession,
 ) -> Result<HysteresisMinorLoopRun, RunError> {
     let mut loops = Vec::new();
     let mut all_steps = Vec::new();
@@ -4869,6 +4893,7 @@ fn run_hysteresis_minor_loops(
                     interrupt_requested,
                     false,
                     on_step,
+                    performance,
                 )?;
                 status = combine_run_status(status, reversal_res.executed_run.result.status);
                 merge_hysteresis_execution_provenance(
@@ -4999,6 +5024,7 @@ fn run_hysteresis_minor_loops(
                 interrupt_requested,
                 false,
                 on_step,
+                performance,
             )?;
             status = combine_run_status(status, solve_res.executed_run.result.status);
             merge_hysteresis_execution_provenance(
@@ -5776,6 +5802,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn performance_observes_each_numerical_settle_but_not_hysteresis_progress() {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        let step = SettleStepIR::DynamicsSettle {
+            method: "heun_dynamics_settle".into(), damping: 1.0, max_steps: 2,
+            applies_to: None, stop_criteria: None, timestep_s: None,
+            max_pseudotime_s: None, max_physical_time_s: None,
+            on_non_convergence: "continue_with_warning".into(),
+            retry_timestep_scale: None, retry_max_attempts: None,
+        };
+        if let StudyIR::Hysteresis { field_values_mT, settle_pipeline, .. } = &mut problem.study {
+            *field_values_mT = Some(vec![100.0, 90.0]);
+            *settle_pipeline = Some(SettlePipelineIR::Sequence { steps: vec![step.clone(), step] });
+        }
+        let plan = fullmag_plan::plan(&problem).unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let display = || crate::interactive::DisplaySelectionState::default();
+        // Simulate a public callback adapter acquiring first. It must defer
+        // ownership; its progress/summary observations must remain inert.
+        let mut outer = crate::run_performance_integration::start(
+            &problem, &plan, output.path(), "live_callback");
+        let mut public_callbacks = 0;
+        let mut summaries = 0;
+        let mut on_step = |update: StepUpdate| {
+            public_callbacks += 1;
+            if update.hysteresis_settle_step_index.is_none() { summaries += 1; }
+            outer.observe(&update.stats);
+            StepAction::Continue
+        };
+        run_planned_hysteresis_with_live_preview(
+            &problem, &plan, None, 0.0, output.path(), u64::MAX,
+            &display, None, false, None, &mut on_step,
+        ).unwrap();
+        assert_eq!(summaries, 2, "public point summaries remain unchanged");
+        assert!(public_callbacks > 8, "UI progress still reaches the consumer");
+        let summary: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(output.path().join("performance/summary.json")).unwrap()).unwrap();
+        assert_eq!(summary["coverage"]["unique_step_callback_records"], 8);
+        assert_eq!(summary["coverage"]["last_step_index"], 8);
+        assert_eq!(summary["coverage"]["out_of_order_step_callbacks_skipped"], 0);
+        let csv = std::fs::read_to_string(output.path().join("performance/steps.csv")).unwrap();
+        let steps = csv.lines().skip(1).map(|row|
+            row.split(',').nth(1).unwrap().parse::<u64>().unwrap()).collect::<Vec<_>>();
+        assert_eq!(steps, (1..=8).collect::<Vec<_>>());
+    }
+
+    #[test]
     fn hysteresis_settle_step_method_selects_runtime_algorithm() {
         let relax_ncg = SettleStepIR::Relax {
             method: "nonlinear_cg".to_string(),
@@ -5801,7 +5873,7 @@ mod tests {
         let minimize_tpi = SettleStepIR::Minimize {
             method: "tangent_plane_implicit".to_string(),
             torque_tolerance: 1e-5,
-            energy_tolerance: Some(1e-20),
+            energy_tolerance: 1e-20,
             max_steps: 100,
             applies_to: None,
             stop_criteria: None,
@@ -5845,7 +5917,7 @@ mod tests {
         let step = SettleStepIR::Minimize {
             method: "unknown_method".to_string(),
             torque_tolerance: 1e-5,
-            energy_tolerance: Some(1e-20),
+            energy_tolerance: 1e-20,
             max_steps: 100,
             applies_to: None,
             stop_criteria: None,
@@ -6390,7 +6462,7 @@ mod tests {
         let step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: Some(1e-20),
+            energy_tolerance: 1e-20,
             max_steps: 2000,
             applies_to: Some(serde_json::json!(["key_events", "minor"])),
             stop_criteria: Some(serde_json::json!({
@@ -6553,6 +6625,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
             charge_transport_plans: Vec::new(),
@@ -6612,7 +6685,7 @@ mod tests {
         let step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: Some(1e-20),
+            energy_tolerance: 1e-20,
             max_steps: 2,
             applies_to: None,
             stop_criteria: None,
@@ -7614,7 +7687,7 @@ mod tests {
                 steps: vec![SettleStepIR::Minimize {
                     method: "projected_gradient_bb".to_string(),
                     torque_tolerance: 5e-5,
-                    energy_tolerance: Some(1e-20),
+                    energy_tolerance: 1e-20,
                     max_steps: 200,
                     applies_to: None,
                     stop_criteria: None,
@@ -8208,7 +8281,7 @@ mod tests {
                     run: SettleStepIR::Minimize {
                         method: "projected_gradient_bb".to_string(),
                         torque_tolerance: 5e-6,
-                        energy_tolerance: Some(1e-20),
+                        energy_tolerance: 1e-20,
                         max_steps: 2000,
                         applies_to: None,
                         stop_criteria: None,
@@ -8263,7 +8336,7 @@ mod tests {
         let key_event_step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: Some(1e-20),
+            energy_tolerance: 1e-20,
             max_steps: 25,
             applies_to: Some(serde_json::json!(["key_events", "minor"])),
             stop_criteria: None,
@@ -8406,7 +8479,7 @@ mod tests {
                 SettleStepIR::Minimize {
                     method: "projected_gradient_bb".to_string(),
                     torque_tolerance: 5e-5,
-                    energy_tolerance: Some(1e-20),
+                    energy_tolerance: 1e-20,
                     max_steps: 2000,
                     applies_to: None,
                     stop_criteria: None,
@@ -8492,7 +8565,7 @@ mod tests {
                 &SettleStepIR::Minimize {
                     method: "projected_gradient_bb".to_string(),
                     torque_tolerance: 5e-5,
-                    energy_tolerance: Some(1e-20),
+                    energy_tolerance: 1e-20,
                     max_steps: 2000,
                     applies_to: None,
                     stop_criteria: None,
@@ -8552,7 +8625,7 @@ mod tests {
         let step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: Some(1e-20),
+            energy_tolerance: 1e-20,
             max_steps: 2000,
             applies_to: Some(serde_json::json!(["key_events", "minor"])),
             stop_criteria: Some(serde_json::json!({
@@ -8752,7 +8825,7 @@ mod tests {
         let step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: Some(1e-20),
+            energy_tolerance: 1e-20,
             max_steps: 2000,
             applies_to: None,
             stop_criteria: None,
@@ -8771,37 +8844,11 @@ mod tests {
     }
 
     #[test]
-    fn minimize_settle_preserves_optional_energy_tolerance_in_control_and_trace() {
-        for energy_tolerance in [None, Some(1e-20)] {
-            let step = SettleStepIR::Minimize {
-                method: "projected_gradient_bb".to_string(),
-                torque_tolerance: 1.0,
-                energy_tolerance,
-                max_steps: 500,
-                applies_to: None,
-                stop_criteria: None,
-                timestep_s: None,
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
-                on_non_convergence: "continue_with_warning".to_string(),
-                retry_timestep_scale: None,
-                retry_max_attempts: None,
-            };
-            let control = settle_step_relaxation_control(&step).unwrap();
-            assert_eq!(control.stop.energy_tolerance_j, energy_tolerance);
-            assert_eq!(control.stop.torque_tolerance_apm, Some(1.0));
-            assert_eq!(control.stop.max_steps, Some(500));
-            let trace = settle_trace_resolved_parameters(&step, None);
-            assert_eq!(trace.get("energy_tolerance"), Some(&serde_json::json!(energy_tolerance)));
-        }
-    }
-
-    #[test]
     fn direct_minimizer_settle_step_rejects_physical_time_budget() {
         let step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: Some(1e-20),
+            energy_tolerance: 1e-20,
             max_steps: 2000,
             applies_to: None,
             stop_criteria: None,
@@ -8857,7 +8904,7 @@ mod tests {
         let tpi_step = SettleStepIR::Minimize {
             method: "tangent_plane_implicit".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: Some(1e-20),
+            energy_tolerance: 1e-20,
             max_steps: 2000,
             applies_to: None,
             stop_criteria: None,
@@ -8917,6 +8964,7 @@ mod tests {
             None,
             false,
             &mut on_step,
+            &mut crate::run_performance_integration::PerformanceSession::disabled(),
         )
         .expect("settle run should complete");
 
@@ -8972,6 +9020,7 @@ mod tests {
             None,
             false,
             &mut on_step,
+            &mut crate::run_performance_integration::PerformanceSession::disabled(),
         )
         .expect("duration settle run should complete");
 
@@ -9057,7 +9106,7 @@ mod tests {
         let step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: Some(1e-20),
+            energy_tolerance: 1e-20,
             max_steps: 2000,
             applies_to: None,
             stop_criteria: None,

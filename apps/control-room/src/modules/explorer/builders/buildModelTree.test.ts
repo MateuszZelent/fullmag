@@ -963,6 +963,22 @@ describe("buildModelTree", () => {
     });
   });
 
+  it("shows a retained FEM mesh as ready when the server validates the edited scene", () => {
+    const nodes = flattenExplorerNodes(buildModelTree({
+      domainDiscretization: "fem",
+      mesh: {
+        meshName: "shared-domain",
+        meshRevision: 12,
+        sourceSceneRevision: 5,
+        manifestSourceSceneRevision: 4,
+        manifestValidatedSceneRevision: 5,
+      },
+    }));
+
+    expect(nodes.find((node) => node.id === "model:mesh:shared-domain"))
+      .toMatchObject({ badge: "current", status: "mesh-ready" });
+  });
+
   it("keeps the published mesh identity visible after a failed candidate", () => {
     const flattened = flattenExplorerNodes(
       buildModelTree({

@@ -4,10 +4,20 @@ import { cn } from "@/shared/utils/className";
 
 export function Table({
   className,
+  scrollRegionLabel,
   ...props
-}: ComponentPropsWithRef<"table">) {
+}: ComponentPropsWithRef<"table"> & {
+  /** Names the scroll wrapper so keyboard users can focus and scroll a wide table. */
+  scrollRegionLabel?: string;
+}) {
   return (
-    <div className="fm-table__wrapper" data-slot="table-wrapper">
+    <div
+      aria-label={scrollRegionLabel}
+      className="fm-table__wrapper"
+      data-slot="table-wrapper"
+      role={scrollRegionLabel ? "region" : undefined}
+      tabIndex={scrollRegionLabel ? 0 : undefined}
+    >
       <table className={cn("fm-table", className)} data-slot="table" {...props} />
     </div>
   );

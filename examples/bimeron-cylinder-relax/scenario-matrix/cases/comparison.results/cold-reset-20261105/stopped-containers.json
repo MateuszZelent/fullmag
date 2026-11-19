@@ -1,0 +1,1257 @@
+[
+  {
+    "AppArmorProfile": "",
+    "Args": [
+      "/opt/fullmag/backend_dev.py",
+      "start",
+      "--source-root",
+      "/opt/fullmag/source",
+      "--git-common-root",
+      "/opt/fullmag/source-git",
+      "--output",
+      "/opt/fullmag/package",
+      "--build-root",
+      "/build"
+    ],
+    "Config": {
+      "AttachStderr": true,
+      "AttachStdin": false,
+      "AttachStdout": true,
+      "Cmd": [
+        "start",
+        "--source-root",
+        "/opt/fullmag/source",
+        "--git-common-root",
+        "/opt/fullmag/source-git",
+        "--output",
+        "/opt/fullmag/package",
+        "--build-root",
+        "/build"
+      ],
+      "Domainname": "",
+      "Entrypoint": [
+        "/usr/local/bin/python3",
+        "/opt/fullmag/backend_dev.py"
+      ],
+      "Env": [
+        "FULLMAG_SCRIPT_OUTPUT_ROOT=/opt/fullmag/script-output",
+        "FULLMAG_BACKEND_CACHE_PROJECT_ID=b29b72e8e8a9dfe0",
+        "FULLMAG_PACKAGE_PROVENANCE=/opt/fullmag/control/backend/runtime-provenance.json",
+        "FULLMAG_SESSION_STORAGE_PROFILE=linux-native-v1",
+        "FULLMAG_RUNTIME_CONTROL_ROOT=/opt/fullmag/runtime-control",
+        "FULLMAG_DOCKER_HOST_EXECUTION=1",
+        "FULLMAG_AUTO_CACHE_MAINTENANCE=1",
+        "FULLMAG_BACKEND_CARGO_PROFILE=backend-dev",
+        "FULLMAG_RUNTIME_IMAGE_ID=sha256:c8b03789c307db4b69e12ca32266df40998ce8f2da917489d3b1cb70408e7d0a",
+        "FULLMAG_BACKEND_CACHE_PROFILE=backend-build-cache-v2",
+        "FULLMAG_BACKEND_CACHE_RECEIPT=/opt/fullmag/control/backend/backend-volume-cache-receipt.json",
+        "FULLMAG_FEM_MESH_CACHE_DIR=/build/cache/fem-mesh",
+        "FULLMAG_HOST_LEDGER_PROFILE=group-ledger-v1",
+        "PYTHONPATH=/build/workspace/packages/fullmag-py/src:/opt/fullmag/package",
+        "FULLMAG_DOCKER_DEVICE_ACCESS=gpu",
+        "FULLMAG_BACKEND_CACHE_OWNER_ID=db219c5ec640bee3e6138c49f72630ea25c6f2f9a14f761b95fc0e9684a1aa61",
+        "FULLMAG_BACKEND_CACHE_CONTROL_NAMESPACE=/opt/fullmag/control/backend",
+        "FULLMAG_SOURCE_HOST_ROOT=/home/kkingstoun/git/fullmag/fullmag",
+        "FULLMAG_BACKEND_CACHE_CONTROL_VOLUME=fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+        "FULLMAG_BACKEND_RUNTIME_IMAGE_ID=sha256:c8b03789c307db4b69e12ca32266df40998ce8f2da917489d3b1cb70408e7d0a",
+        "FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256=3e6a3803616484cc0f2931c9ea452cb3b44463ee7c34eee9a81a709be4637e8e",
+        "FULLMAG_WORKSPACE_STATE_DIR=/user-data",
+        "FULLMAG_DOCKER_ROLE=backend",
+        "FULLMAG_RUNTIME_PROCESS_RECEIPT=/opt/fullmag/runtime-control/runtime-service/process-tree.json",
+        "FULLMAG_DOCKER_PREVIOUS_CONFIG_SHA256=1e31a2a3e20e53994466d9a6902818d1fb9c8b4758389cf916849c936001a272",
+        "FULLMAG_BACKEND_CACHE_UNIT_KEY=db219c5ec640bee3e6138c49f72630ea25c6f2f9a14f761b95fc0e9684a1aa61",
+        "FULLMAG_WORKER_CGROUP_ROOT=/opt/fullmag/worker-cgroup",
+        "FULLMAG_BACKEND_PACKAGE=/opt/fullmag/package",
+        "FULLMAG_BACKEND_CACHE_TOOLCHAIN_IMAGE_ID=sha256:efe1c5b5ef051387c4e6b32f960effd382a6e3cbc7de1627c15508be0ac96ebf",
+        "FULLMAG_GROUP_LEDGER_HOST_ID=f53bad7b6f915f4d5ec9a05dde4a6ae5475a5fb28fe35a9d749b88723b477c6b",
+        "FULLMAG_RUNTIME_PACKAGE_ROOT=/opt/fullmag/package",
+        "FULLMAG_DOCKER_MEMORY_BYTES=68719476736",
+        "FULLMAG_COMPOSE_PROJECT=fullmag-master",
+        "FULLMAG_BACKEND_CACHE_CONTROL_ROOT=/opt/fullmag/control",
+        "FULLMAG_PRIVATE_GROUP_STORAGE=group-volume-v1",
+        "FULLMAG_HOST_LEDGER_ROOT=/host-ledger/ledger",
+        "CARGO_BUILD_JOBS=8",
+        "FULLMAG_RUNTIME_PROVENANCE=/opt/fullmag/control/backend/runtime-provenance.json",
+        "FULLMAG_STATE_ROOT=/opt/fullmag/runtime-control",
+        "FULLMAG_CONTROL_NAMESPACE=namespaces/d5caee179fce44569fa9eabc16bc7101",
+        "CUDA_CACHE_PATH=/build/cuda-cache",
+        "FULLMAG_TOOLCHAIN_IMAGE_ID=sha256:efe1c5b5ef051387c4e6b32f960effd382a6e3cbc7de1627c15508be0ac96ebf",
+        "FULLMAG_SHARED_BACKEND_STORE=/opt/fullmag/shared-backend",
+        "FULLMAG_RUNTIME_SERVICE_CONFIG=/opt/fullmag/runtime-control/runtime-service/docker-all.json",
+        "FULLMAG_BACKEND_CACHE_BUILD_VOLUME=fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+        "FULLMAG_SHARED_BACKEND_UNIT_KEY=db219c5ec640bee3e6138c49f72630ea25c6f2f9a14f761b95fc0e9684a1aa61",
+        "FULLMAG_MIXED_P1_DEVICE=gpu",
+        "FULLMAG_BACKEND_CACHE_WORKTREE_ID=fullmag-902a54b7b1f633a7",
+        "FULLMAG_BACKEND_CACHE_PACKAGE_VOLUME=fullmag-shared-packages-v1-4881c0403b693b235f4eadec",
+        "FULLMAG_ARTIFACT_FIELD_STORAGE=json",
+        "FULLMAG_SHARED_BACKEND_VOLUME=fullmag-shared-packages-v1-4881c0403b693b235f4eadec",
+        "FULLMAG_BUILD_CONTROL_VOLUME=fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+        "FULLMAG_DEV_INCLUDE_UNTRACKED=[]",
+        "FULLMAG_REPO_ROOT=/opt/fullmag/source",
+        "FULLMAG_SCRIPT_OUTPUT_SOURCE_DIR=/opt/fullmag/source/examples",
+        "FULLMAG_BACKEND_CACHE_SCHEMA=fullmag.backend-build-cache.v2",
+        "FULLMAG_STATE_DIR=/opt/fullmag/runtime-control",
+        "FULLMAG_SHARED_BACKEND_GROUP=groups/db219c5ec640bee3e6138c49f72630ea25c6f2f9a14f761b95fc0e9684a1aa61",
+        "FULLMAG_DOCKER_HOST_ID=dbd4fbf4e5e5848a4d1f2bf0ba98f19aae868305cc9fec3343905498db1bab4b",
+        "FULLMAG_SHARED_CARGO_HOME=/opt/fullmag/shared-cargo",
+        "FULLMAG_RUNTIME_SERVICES_ROOT=/opt/fullmag/runtime-control/runtime-services",
+        "FULLMAG_WORKER_CGROUP_PROFILE=docker-backend-v1",
+        "FULLMAG_BACKEND_CACHE_BUILD_ROOT=/build",
+        "FULLMAG_BACKEND_CACHE_PACKAGE_ROOT=/opt/fullmag/package",
+        "FULLMAG_DOCKER_CPU_MILLIS=8000",
+        "FULLMAG_BACKEND_CACHE_KEY=0953765bf46b015644049b5f627c49e6a1753253f719b14250e182a207bb43f8",
+        "FULLMAG_DEVELOPMENT_INPUTS_PATH=/opt/fullmag/control/frontend/development-inputs.json",
+        "PATH=/root/.cargo/bin:/opt/fullmag/package/bin:/opt/fullmag-deps/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "NVARCH=x86_64",
+        "NVIDIA_REQUIRE_CUDA=cuda>=12.6 brand=unknown,driver>=470,driver<471 brand=grid,driver>=470,driver<471 brand=tesla,driver>=470,driver<471 brand=nvidia,driver>=470,driver<471 brand=quadro,driver>=470,driver<471 brand=quadrortx,driver>=470,driver<471 brand=nvidiartx,driver>=470,driver<471 brand=vapps,driver>=470,driver<471 brand=vpc,driver>=470,driver<471 brand=vcs,driver>=470,driver<471 brand=vws,driver>=470,driver<471 brand=cloudgaming,driver>=470,driver<471 brand=unknown,driver>=535,driver<536 brand=grid,driver>=535,driver<536 brand=tesla,driver>=535,driver<536 brand=nvidia,driver>=535,driver<536 brand=quadro,driver>=535,driver<536 brand=quadrortx,driver>=535,driver<536 brand=nvidiartx,driver>=535,driver<536 brand=vapps,driver>=535,driver<536 brand=vpc,driver>=535,driver<536 brand=vcs,driver>=535,driver<536 brand=vws,driver>=535,driver<536 brand=cloudgaming,driver>=535,driver<536 brand=unknown,driver>=550,driver<551 brand=grid,driver>=550,driver<551 brand=tesla,driver>=550,driver<551 brand=nvidia,driver>=550,driver<551 brand=quadro,driver>=550,driver<551 brand=quadrortx,driver>=550,driver<551 brand=nvidiartx,driver>=550,driver<551 brand=vapps,driver>=550,driver<551 brand=vpc,driver>=550,driver<551 brand=vcs,driver>=550,driver<551 brand=vws,driver>=550,driver<551 brand=cloudgaming,driver>=550,driver<551",
+        "NV_CUDA_CUDART_VERSION=12.6.77-1",
+        "CUDA_VERSION=12.6.3",
+        "LD_LIBRARY_PATH=/opt/fullmag/package/lib:/opt/fullmag-deps/lib:/usr/local/cuda/lib64:/usr/local/cuda/lib64:/opt/fullmag-deps/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64",
+        "NVIDIA_VISIBLE_DEVICES=all",
+        "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+        "NV_CUDA_LIB_VERSION=12.6.3-1",
+        "NV_NVTX_VERSION=12.6.77-1",
+        "NV_LIBNPP_VERSION=12.3.1.54-1",
+        "NV_LIBNPP_PACKAGE=libnpp-12-6=12.3.1.54-1",
+        "NV_LIBCUSPARSE_VERSION=12.5.4.2-1",
+        "NV_LIBCUBLAS_PACKAGE_NAME=libcublas-12-6",
+        "NV_LIBCUBLAS_VERSION=12.6.4.1-1",
+        "NV_LIBCUBLAS_PACKAGE=libcublas-12-6=12.6.4.1-1",
+        "NV_LIBNCCL_PACKAGE_NAME=libnccl2",
+        "NV_LIBNCCL_PACKAGE_VERSION=2.23.4-1",
+        "NCCL_VERSION=2.23.4-1",
+        "NV_LIBNCCL_PACKAGE=libnccl2=2.23.4-1+cuda12.6",
+        "NVIDIA_PRODUCT_NAME=CUDA",
+        "NV_CUDA_CUDART_DEV_VERSION=12.6.77-1",
+        "NV_NVML_DEV_VERSION=12.6.77-1",
+        "NV_LIBCUSPARSE_DEV_VERSION=12.5.4.2-1",
+        "NV_LIBNPP_DEV_VERSION=12.3.1.54-1",
+        "NV_LIBNPP_DEV_PACKAGE=libnpp-dev-12-6=12.3.1.54-1",
+        "NV_LIBCUBLAS_DEV_VERSION=12.6.4.1-1",
+        "NV_LIBCUBLAS_DEV_PACKAGE_NAME=libcublas-dev-12-6",
+        "NV_LIBCUBLAS_DEV_PACKAGE=libcublas-dev-12-6=12.6.4.1-1",
+        "NV_CUDA_NSIGHT_COMPUTE_VERSION=12.6.3-1",
+        "NV_CUDA_NSIGHT_COMPUTE_DEV_PACKAGE=cuda-nsight-compute-12-6=12.6.3-1",
+        "NV_NVPROF_VERSION=12.6.80-1",
+        "NV_NVPROF_DEV_PACKAGE=cuda-nvprof-12-6=12.6.80-1",
+        "NV_LIBNCCL_DEV_PACKAGE_NAME=libnccl-dev",
+        "NV_LIBNCCL_DEV_PACKAGE_VERSION=2.23.4-1",
+        "NV_LIBNCCL_DEV_PACKAGE=libnccl-dev=2.23.4-1+cuda12.6",
+        "LIBRARY_PATH=/usr/local/cuda/lib64/stubs",
+        "FULLMAG_CUDA_BASE_IMAGE=nvidia/cuda:12.6.3-devel-ubuntu22.04@sha256:d49bb8a4ff97fb5fe477947a3f02aa8c0a53eae77e11f00ec28618a0bcaa2ad1",
+        "FULLMAG_CUDA_BASE_IMAGE_DIGEST=d49bb8a4ff97fb5fe477947a3f02aa8c0a53eae77e11f00ec28618a0bcaa2ad1",
+        "CMAKE_VERSION=3.30.5",
+        "NODE_VERSION=24.18.0",
+        "PYTHON_VERSION=3.10.21",
+        "PNPM_VERSION=10.8.1",
+        "RUST_TOOLCHAIN=nightly",
+        "DEBIAN_FRONTEND=noninteractive",
+        "PNPM_HOME=/pnpm",
+        "INSTALL_PREFIX=/opt/fullmag-deps",
+        "CUDA_HOME=/usr/local/cuda",
+        "CUDA_PATH=/usr/local/cuda",
+        "CMAKE_PREFIX_PATH=/opt/fullmag-deps:",
+        "PKG_CONFIG_PATH=/opt/fullmag-deps/lib/pkgconfig:/opt/fullmag-deps/lib64/pkgconfig:",
+        "PETSC_DIR=/opt/fullmag-deps",
+        "SLEPC_DIR=/opt/fullmag-deps",
+        "FULLMAG_FEM_MFEM_DEVICE=",
+        "FULLMAG_CUDA_ARCHITECTURES=80-real;89-real;90-real;90-virtual",
+        "FULLMAG_USE_MFEM_STACK=ON",
+        "FULLMAG_FEM_REQUIRE_GPU=0",
+        "FULLMAG_FEM_REQUIRE_CEED=1",
+        "FULLMAG_HYPRE_MEMORY_VARIANT=baseline",
+        "HOME=/opt/fullmag/runtime-control",
+        "FULLMAG_PROJECT_STORAGE_ROOT=/state",
+        "FULLMAG_RUNS_ROOT=/state/runs/docker-all",
+        "FULLMAG_WORKTREE_ID=docker-all",
+        "FULLMAG_RUNTIME_ROOT=/opt/fullmag/package",
+        "FULLMAG_WEB_STATIC_DIR=/opt/fullmag/package/web",
+        "FULLMAG_API_PORT=8081",
+        "FULLMAG_PYTHON=/usr/local/bin/python3",
+        "PYTHONDONTWRITEBYTECODE=1",
+        "FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME=1",
+        "FULLMAG_FORCE_LOCAL_FEM_GPU=0",
+        "OMP_NUM_THREADS=4",
+        "FULLMAG_CPU_THREADS=4",
+        "FULLMAG_FORCE_LOCAL_FEM_CPU=0",
+        "FULLMAG_FEM_ALL_IN_GPU=0",
+        "FULLMAG_WINDOWS_CONTAINER_MANAGED=1",
+        "FULLMAG_CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/direct",
+        "CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/direct",
+        "FULLMAG_CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets",
+        "CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets",
+        "CARGO_HOME=/build/cargo",
+        "RUSTUP_HOME=/root/.rustup",
+        "RUSTUP_TOOLCHAIN=nightly",
+        "RUSTUP_AUTO_INSTALL=0"
+      ],
+      "ExposedPorts": {
+        "8080/tcp": {},
+        "8081/tcp": {}
+      },
+      "Healthcheck": {
+        "Interval": 5000000000,
+        "Retries": 6,
+        "StartPeriod": 14400000000000,
+        "Test": [
+          "CMD",
+          "/usr/local/bin/python3",
+          "/opt/fullmag/healthcheck.py"
+        ],
+        "Timeout": 10000000000
+      },
+      "Hostname": "fullmag-direct-backend-92eed314bb99",
+      "Image": "sha256:c8b03789c307db4b69e12ca32266df40998ce8f2da917489d3b1cb70408e7d0a",
+      "Labels": {
+        "com.docker.compose.config-hash": "6f2a087bf13085b80f4b412d105062edfd0775f705ad3e1a43ec563e696a38a4",
+        "com.docker.compose.container-number": "1",
+        "com.docker.compose.depends_on": "",
+        "com.docker.compose.image": "sha256:c8b03789c307db4b69e12ca32266df40998ce8f2da917489d3b1cb70408e7d0a",
+        "com.docker.compose.oneoff": "False",
+        "com.docker.compose.project": "fullmag-master",
+        "com.docker.compose.project.config_files": "-",
+        "com.docker.compose.project.working_dir": "/home/kkingstoun/git/fullmag/fullmag",
+        "com.docker.compose.service": "backend",
+        "com.docker.compose.version": "5.6.1",
+        "com.fullmag.backend-cache.cargo-profile": "backend-dev",
+        "com.fullmag.backend-cache.key": "0953765bf46b015644049b5f627c49e6a1753253f719b14250e182a207bb43f8",
+        "com.fullmag.backend-cache.owner-id": "db219c5ec640bee3e6138c49f72630ea25c6f2f9a14f761b95fc0e9684a1aa61",
+        "com.fullmag.backend-cache.profile": "backend-build-cache-v2",
+        "com.fullmag.backend-cache.project-id": "b29b72e8e8a9dfe0",
+        "com.fullmag.backend-cache.schema": "fullmag.backend-build-cache.v2",
+        "com.fullmag.backend-cache.toolchain-image-id": "sha256:efe1c5b5ef051387c4e6b32f960effd382a6e3cbc7de1627c15508be0ac96ebf",
+        "com.fullmag.backend-cache.unit-key": "db219c5ec640bee3e6138c49f72630ea25c6f2f9a14f761b95fc0e9684a1aa61",
+        "com.fullmag.backend-cache.worktree-id": "fullmag-902a54b7b1f633a7",
+        "desktop.docker.io/wsl-distro": "Ubuntu2",
+        "maintainer": "NVIDIA CORPORATION <cudatools@nvidia.com>",
+        "org.fullmag.build.input-digest": "a0d253acb195646a694b744403a1c6facc60d10b1048980930d13058d6592867",
+        "org.fullmag.compose.project": "fullmag-master",
+        "org.fullmag.development": "source-bind-v1",
+        "org.fullmag.direct-development.backend-context-sha256": "",
+        "org.fullmag.direct-development.base-context-sha256": "",
+        "org.fullmag.direct-development.context-schema": "",
+        "org.fullmag.direct-development.context-sha256": "",
+        "org.fullmag.direct-development.receipt-schema": "",
+        "org.fullmag.direct-development.runtime-context-sha256": "",
+        "org.fullmag.runtime": "docker-all-gpu-v1",
+        "org.fullmag.source.checkout-kind": "main-checkout",
+        "org.fullmag.source.project-id": "fullmag-902a54b7b1f633a7",
+        "org.fullmag.source.worktree-id": "fullmag-902a54b7b1f633a7",
+        "org.fullmag.toolchain.dependencies": "/opt/fullmag-deps/share/fullmag/dependency-versions.json",
+        "org.fullmag.toolchain.image-id": "sha256:efe1c5b5ef051387c4e6b32f960effd382a6e3cbc7de1627c15508be0ac96ebf",
+        "org.opencontainers.image.ref.name": "ubuntu",
+        "org.opencontainers.image.version": "22.04"
+      },
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "StopTimeout": 60,
+      "Tty": false,
+      "User": "65532:65532",
+      "Volumes": null,
+      "WorkingDir": "/build"
+    },
+    "Created": "2026-11-05T07:05:48.378413237Z",
+    "Driver": "overlay2",
+    "ExecIDs": null,
+    "GraphDriver": {
+      "Data": {
+        "ID": "bf04e8150e763e39160290b363c56828dab7784b7bedf39eaa8c33f655f8d392",
+        "LowerDir": "/var/lib/docker/overlay2/e459b636e581dc13e7556704621a36d4d180eb99881f4bb7e9d44df58b3aa095-init/diff:/var/lib/docker/overlay2/716v54jbf2xeri1jzgg6vgy78/diff:/var/lib/docker/overlay2/k1360ecwzywlbyifsfj1xbbw9/diff:/var/lib/docker/overlay2/7wxgzynmgd942k7zxbgisv8rn/diff:/var/lib/docker/overlay2/uhcs1mest6i0re2xti447miuu/diff:/var/lib/docker/overlay2/v14790mvrkc5dwqf7voq492wj/diff:/var/lib/docker/overlay2/2lvrk8o8mkv0q2wzou77it8gp/diff:/var/lib/docker/overlay2/ik5xlia1rzjqztcxgbdd672vl/diff:/var/lib/docker/overlay2/1geh7mgyqlrs5f7t4ua58yu73/diff:/var/lib/docker/overlay2/h9qar01cmly28xwcgk18uo7za/diff:/var/lib/docker/overlay2/nuzs026vnfhrslku0l9z8ltf9/diff:/var/lib/docker/overlay2/urlymq1hkvitwj32dywac0k8w/diff:/var/lib/docker/overlay2/ng421duqnsx9161j2i7i2yqqt/diff:/var/lib/docker/overlay2/jg1n84ymic722oyor2574y0x5/diff:/var/lib/docker/overlay2/s2vzskxtr3nd5lmrv8377ddkm/diff:/var/lib/docker/overlay2/u4fs16jburi57jw4e6de6r8h4/diff:/var/lib/docker/overlay2/achkm6mr00pbwhsv1niwx7w53/diff:/var/lib/docker/overlay2/mimv4rs2ogtbrbnx71awyircq/diff:/var/lib/docker/overlay2/mikh4th7smsuv2rzjur93hoes/diff:/var/lib/docker/overlay2/pewsqgd4hiv6kzopea9mlrdi7/diff:/var/lib/docker/overlay2/k3p7ecrufvihq97iyn0ryx9rs/diff:/var/lib/docker/overlay2/96pcn09qpurv8k7z49lh5z1pw/diff:/var/lib/docker/overlay2/rahczi3k12188ankabnout56v/diff:/var/lib/docker/overlay2/xzp7nwmopanm7rzl9jt4yy8l0/diff:/var/lib/docker/overlay2/eswftbb5g19b0y6r5curegud3/diff:/var/lib/docker/overlay2/kmsjo66f3s2t9yn2x53xx2bxd/diff:/var/lib/docker/overlay2/2gd1ia7zokij5tpzt1n43qyz3/diff:/var/lib/docker/overlay2/b5q5nq9pjhxscjtoemcjq3pxo/diff:/var/lib/docker/overlay2/6q3lqjtrwntj6m3u7ifojfrin/diff:/var/lib/docker/overlay2/ektyl3od9nh6iozimeocgm0iw/diff:/var/lib/docker/overlay2/i50avoc40ahifnvchvi2wfeqf/diff:/var/lib/docker/overlay2/i4y8at8w2b9ooqkajqesspmtr/diff:/var/lib/docker/overlay2/eegf69a489su8vlpokfpl945b/diff:/var/lib/docker/overlay2/9t1c5l5z3otnlvepopcbsed08/diff:/var/lib/docker/overlay2/l8mdjvfqosirz75bncz8lb12j/diff:/var/lib/docker/overlay2/3vt1f91q4e476ual2pi352r5a/diff:/var/lib/docker/overlay2/x8hgukmnfj9snjesxny5vp9hm/diff:/var/lib/docker/overlay2/vuo7ejrjrlg45wir0i97alrj8/diff:/var/lib/docker/overlay2/dwlb0e1a0n82t8feb6sgrljwc/diff:/var/lib/docker/overlay2/nh2gobyk84ba8th1g4ljf3xrk/diff:/var/lib/docker/overlay2/yf8bv7oec8tfkr71vfc8eimg9/diff:/var/lib/docker/overlay2/6jnkqsglz93ptojxo88apiewt/diff:/var/lib/docker/overlay2/p9i15bo7vv88iio3u307lwzss/diff:/var/lib/docker/overlay2/n6pmh51nsppxnjdfjex42irht/diff:/var/lib/docker/overlay2/ywslye8e6obltlthsx08wnhw5/diff:/var/lib/docker/overlay2/q95zkevbxm8ypdcht36kvme0i/diff:/var/lib/docker/overlay2/zid79bj99t2uktzjvm0n3xfyt/diff:/var/lib/docker/overlay2/ocpuab6awdfho6269d0oxfhhs/diff:/var/lib/docker/overlay2/bzqhmt3sw3v2xak27u26gv5bh/diff:/var/lib/docker/overlay2/jb94v6tzapo796tg3wvr1tydq/diff:/var/lib/docker/overlay2/rthe82rq5fsvu7lzem64yd5l7/diff:/var/lib/docker/overlay2/ab81l9suozxgxqj5cixpz6c75/diff:/var/lib/docker/overlay2/w02eherm2o7u74b29ls4psl6e/diff:/var/lib/docker/overlay2/4c753cf5eb6a4151251ad9089b85f28c51e37ed0d6ee33483ac2db22dcdd1fe4/diff:/var/lib/docker/overlay2/0a7da449910aa0ca156dd9b5cf97261d2b36ea2a4ba15f18e959ebdac980fd81/diff:/var/lib/docker/overlay2/66d263ba9d6638dacd08cdad3a7c902fab7511f42faf6030839df08d0300b9b5/diff:/var/lib/docker/overlay2/076511b487f870857b5151b31982b97a945bc0897518e2cc4ce1812411e093ba/diff:/var/lib/docker/overlay2/34bfea7d9ceea51289a7316d88a453ab20e839e1a0ca36e58d3843001c4e6688/diff:/var/lib/docker/overlay2/ddb2ab177c42ba98d8e8616b4305fa7919be9e03870d8aedf37cdb28c5598d9e/diff:/var/lib/docker/overlay2/bdc1c8a7e8ab9d59fb7128a743c76dd2579a2e8f10c5a848716e8adaed05b275/diff:/var/lib/docker/overlay2/cf88a3fc82c1e67528d1f19fef153843490a8b0761692069e97ea1395fc2c44b/diff:/var/lib/docker/overlay2/27533bdc0a596b43035fad7ae1137716b2cf58b934f20f3823bf11372ada34dd/diff:/var/lib/docker/overlay2/98280925ac85ba34de78778b54d426416b545e9f829fe480bf128a51cb7f46c1/diff:/var/lib/docker/overlay2/12b08a845ce13ffeba310db825e7cc7daef0931164a0fae4605a7bb51952128a/diff",
+        "MergedDir": "/var/lib/docker/overlay2/e459b636e581dc13e7556704621a36d4d180eb99881f4bb7e9d44df58b3aa095/merged",
+        "UpperDir": "/var/lib/docker/overlay2/e459b636e581dc13e7556704621a36d4d180eb99881f4bb7e9d44df58b3aa095/diff",
+        "WorkDir": "/var/lib/docker/overlay2/e459b636e581dc13e7556704621a36d4d180eb99881f4bb7e9d44df58b3aa095/work"
+      },
+      "Name": "overlay2"
+    },
+    "HostConfig": {
+      "AutoRemove": false,
+      "Binds": null,
+      "BlkioDeviceReadBps": null,
+      "BlkioDeviceReadIOps": null,
+      "BlkioDeviceWriteBps": null,
+      "BlkioDeviceWriteIOps": null,
+      "BlkioWeight": 0,
+      "BlkioWeightDevice": null,
+      "CapAdd": null,
+      "CapDrop": [
+        "ALL"
+      ],
+      "Cgroup": "",
+      "CgroupParent": "",
+      "CgroupnsMode": "private",
+      "ConsoleSize": [
+        0,
+        0
+      ],
+      "ContainerIDFile": "",
+      "CpuCount": 0,
+      "CpuPercent": 0,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "CpuRealtimePeriod": 0,
+      "CpuRealtimeRuntime": 0,
+      "CpuShares": 0,
+      "CpusetCpus": "",
+      "CpusetMems": "",
+      "DeviceCgroupRules": null,
+      "DeviceRequests": [
+        {
+          "Capabilities": [
+            [
+              "gpu"
+            ]
+          ],
+          "Count": -1,
+          "DeviceIDs": null,
+          "Driver": "",
+          "Options": null
+        }
+      ],
+      "Devices": null,
+      "Dns": null,
+      "DnsOptions": null,
+      "DnsSearch": null,
+      "ExtraHosts": [],
+      "GroupAdd": [
+        "1000"
+      ],
+      "IOMaximumBandwidth": 0,
+      "IOMaximumIOps": 0,
+      "Init": true,
+      "IpcMode": "private",
+      "Isolation": "",
+      "Links": null,
+      "LogConfig": {
+        "Config": {
+          "max-file": "3",
+          "max-size": "10m"
+        },
+        "Type": "local"
+      },
+      "MaskedPaths": [
+        "/proc/acpi",
+        "/proc/asound",
+        "/proc/interrupts",
+        "/proc/kcore",
+        "/proc/keys",
+        "/proc/latency_stats",
+        "/proc/sched_debug",
+        "/proc/scsi",
+        "/proc/timer_list",
+        "/proc/timer_stats",
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware"
+      ],
+      "Memory": 68719476736,
+      "MemoryReservation": 0,
+      "MemorySwap": 137438953472,
+      "MemorySwappiness": null,
+      "Mounts": [
+        {
+          "Source": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+          "Target": "/opt/fullmag/control",
+          "Type": "volume",
+          "VolumeOptions": {
+            "NoCopy": true,
+            "Subpath": "namespaces/d5caee179fce44569fa9eabc16bc7101"
+          }
+        },
+        {
+          "BindOptions": {},
+          "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/9daa3805618dd4ad85c384b74e65fa60849a39bde8485b4d724226aea5523509",
+          "Target": "/opt/fullmag/script-output",
+          "Type": "bind"
+        },
+        {
+          "BindOptions": {},
+          "ReadOnly": true,
+          "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/902a54b7b1f633a711db875c7c4f0df3be26032e7c473d7383e7e83fd376ff10",
+          "Target": "/opt/fullmag/source",
+          "Type": "bind"
+        },
+        {
+          "BindOptions": {},
+          "ReadOnly": true,
+          "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/213ec4dc683bb2db829f4c579c387e3b9ae11d90c7aab819fc744fd66577f9db",
+          "Target": "/opt/fullmag/source-git",
+          "Type": "bind"
+        },
+        {
+          "Source": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+          "Target": "/opt/fullmag/runtime-control",
+          "Type": "volume",
+          "VolumeOptions": {
+            "NoCopy": true,
+            "Subpath": "namespaces/d5caee179fce44569fa9eabc16bc7101/runtime-control"
+          }
+        },
+        {
+          "Source": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+          "Target": "/state/runs/docker-all/session-store/runtime-services",
+          "Type": "volume",
+          "VolumeOptions": {
+            "NoCopy": true,
+            "Subpath": "namespaces/d5caee179fce44569fa9eabc16bc7101/runtime-control/runtime-services"
+          }
+        },
+        {
+          "BindOptions": {},
+          "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/77b3c18b8b80fdd8a049bb79a0c37300c307546c78752bbb5c6e92eef2913a8a",
+          "Target": "/user-data",
+          "Type": "bind"
+        },
+        {
+          "Source": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+          "Target": "/host-ledger",
+          "Type": "volume",
+          "VolumeOptions": {
+            "NoCopy": true,
+            "Subpath": "namespaces/d5caee179fce44569fa9eabc16bc7101/private/ledger"
+          }
+        },
+        {
+          "Source": "fullmag-shared-cargo-v1-4881c0403b693b235f4eadec",
+          "Target": "/opt/fullmag/shared-cargo",
+          "Type": "volume",
+          "VolumeOptions": {
+            "NoCopy": true,
+            "Subpath": "home"
+          }
+        },
+        {
+          "BindOptions": {},
+          "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/4d4dab3b1a989baa996eec78308df31233cf304d8e37698ee362f84bede3cf09",
+          "Target": "/state",
+          "Type": "bind"
+        },
+        {
+          "BindOptions": {},
+          "ReadOnly": true,
+          "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/89dbc5eeda13749292d26f14f1c58cd7a3f9af2a822e8c7227d6aed5f5112f02",
+          "Target": "/run/fullmag/linux-native-host.json",
+          "Type": "bind"
+        },
+        {
+          "Source": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+          "Target": "/build",
+          "Type": "volume",
+          "VolumeOptions": {
+            "NoCopy": true,
+            "Subpath": "namespaces/d5caee179fce44569fa9eabc16bc7101/private/backend"
+          }
+        },
+        {
+          "Source": "fullmag-shared-packages-v1-4881c0403b693b235f4eadec",
+          "Target": "/opt/fullmag/package",
+          "Type": "volume",
+          "VolumeOptions": {
+            "NoCopy": true,
+            "Subpath": "groups/db219c5ec640bee3e6138c49f72630ea25c6f2f9a14f761b95fc0e9684a1aa61"
+          }
+        },
+        {
+          "Source": "fullmag-shared-packages-v1-4881c0403b693b235f4eadec",
+          "Target": "/opt/fullmag/shared-backend",
+          "Type": "volume",
+          "VolumeOptions": {
+            "NoCopy": true
+          }
+        }
+      ],
+      "NanoCpus": 8000000000,
+      "NetworkMode": "fullmag-master_fullmag",
+      "OomKillDisable": null,
+      "OomScoreAdj": 0,
+      "PidMode": "",
+      "PidsLimit": 512,
+      "PortBindings": {},
+      "Privileged": false,
+      "PublishAllPorts": false,
+      "ReadonlyPaths": [
+        "/proc/bus",
+        "/proc/fs",
+        "/proc/irq",
+        "/proc/sys",
+        "/proc/sysrq-trigger"
+      ],
+      "ReadonlyRootfs": true,
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "no"
+      },
+      "Runtime": "runc",
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "ShmSize": 67108864,
+      "Tmpfs": {
+        "/tmp": "rw,nosuid,nodev,size=512m"
+      },
+      "UTSMode": "",
+      "Ulimits": null,
+      "UsernsMode": "",
+      "VolumeDriver": "",
+      "VolumesFrom": null
+    },
+    "HostnamePath": "/var/lib/docker/containers/bf04e8150e763e39160290b363c56828dab7784b7bedf39eaa8c33f655f8d392/hostname",
+    "HostsPath": "/var/lib/docker/containers/bf04e8150e763e39160290b363c56828dab7784b7bedf39eaa8c33f655f8d392/hosts",
+    "Id": "bf04e8150e763e39160290b363c56828dab7784b7bedf39eaa8c33f655f8d392",
+    "Image": "sha256:c8b03789c307db4b69e12ca32266df40998ce8f2da917489d3b1cb70408e7d0a",
+    "LogPath": "",
+    "MountLabel": "",
+    "Mounts": [
+      {
+        "Destination": "/build",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+        "Propagation": "",
+        "RW": true,
+        "Source": "/var/lib/docker/volumes/fullmag-build-control-fullmag-master-a7f7e9b9a4026499/_data",
+        "Type": "volume"
+      },
+      {
+        "Destination": "/host-ledger",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+        "Propagation": "",
+        "RW": true,
+        "Source": "/var/lib/docker/volumes/fullmag-build-control-fullmag-master-a7f7e9b9a4026499/_data",
+        "Type": "volume"
+      },
+      {
+        "Destination": "/state",
+        "Mode": "",
+        "Propagation": "rprivate",
+        "RW": true,
+        "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/4d4dab3b1a989baa996eec78308df31233cf304d8e37698ee362f84bede3cf09",
+        "Type": "bind"
+      },
+      {
+        "Destination": "/user-data",
+        "Mode": "",
+        "Propagation": "rprivate",
+        "RW": true,
+        "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/77b3c18b8b80fdd8a049bb79a0c37300c307546c78752bbb5c6e92eef2913a8a",
+        "Type": "bind"
+      },
+      {
+        "Destination": "/opt/fullmag/control",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+        "Propagation": "",
+        "RW": true,
+        "Source": "/var/lib/docker/volumes/fullmag-build-control-fullmag-master-a7f7e9b9a4026499/_data",
+        "Type": "volume"
+      },
+      {
+        "Destination": "/opt/fullmag/package",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "fullmag-shared-packages-v1-4881c0403b693b235f4eadec",
+        "Propagation": "",
+        "RW": true,
+        "Source": "/var/lib/docker/volumes/fullmag-shared-packages-v1-4881c0403b693b235f4eadec/_data",
+        "Type": "volume"
+      },
+      {
+        "Destination": "/opt/fullmag/runtime-control",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+        "Propagation": "",
+        "RW": true,
+        "Source": "/var/lib/docker/volumes/fullmag-build-control-fullmag-master-a7f7e9b9a4026499/_data",
+        "Type": "volume"
+      },
+      {
+        "Destination": "/opt/fullmag/script-output",
+        "Mode": "",
+        "Propagation": "rprivate",
+        "RW": true,
+        "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/9daa3805618dd4ad85c384b74e65fa60849a39bde8485b4d724226aea5523509",
+        "Type": "bind"
+      },
+      {
+        "Destination": "/opt/fullmag/shared-backend",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "fullmag-shared-packages-v1-4881c0403b693b235f4eadec",
+        "Propagation": "",
+        "RW": true,
+        "Source": "/var/lib/docker/volumes/fullmag-shared-packages-v1-4881c0403b693b235f4eadec/_data",
+        "Type": "volume"
+      },
+      {
+        "Destination": "/opt/fullmag/shared-cargo",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "fullmag-shared-cargo-v1-4881c0403b693b235f4eadec",
+        "Propagation": "",
+        "RW": true,
+        "Source": "/var/lib/docker/volumes/fullmag-shared-cargo-v1-4881c0403b693b235f4eadec/_data",
+        "Type": "volume"
+      },
+      {
+        "Destination": "/opt/fullmag/source",
+        "Mode": "",
+        "Propagation": "rprivate",
+        "RW": false,
+        "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/902a54b7b1f633a711db875c7c4f0df3be26032e7c473d7383e7e83fd376ff10",
+        "Type": "bind"
+      },
+      {
+        "Destination": "/opt/fullmag/source-git",
+        "Mode": "",
+        "Propagation": "rprivate",
+        "RW": false,
+        "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/213ec4dc683bb2db829f4c579c387e3b9ae11d90c7aab819fc744fd66577f9db",
+        "Type": "bind"
+      },
+      {
+        "Destination": "/run/fullmag/linux-native-host.json",
+        "Mode": "",
+        "Propagation": "rprivate",
+        "RW": false,
+        "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/89dbc5eeda13749292d26f14f1c58cd7a3f9af2a822e8c7227d6aed5f5112f02",
+        "Type": "bind"
+      },
+      {
+        "Destination": "/state/runs/docker-all/session-store/runtime-services",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+        "Propagation": "",
+        "RW": true,
+        "Source": "/var/lib/docker/volumes/fullmag-build-control-fullmag-master-a7f7e9b9a4026499/_data",
+        "Type": "volume"
+      }
+    ],
+    "Name": "/fullmag-master-backend-1",
+    "NetworkSettings": {
+      "Networks": {
+        "fullmag-master_fullmag": {
+          "Aliases": [
+            "fullmag-master-backend-1",
+            "backend"
+          ],
+          "DNSNames": [
+            "fullmag-master-backend-1",
+            "backend",
+            "bf04e8150e76",
+            "fullmag-direct-backend-92eed314bb99"
+          ],
+          "DriverOpts": null,
+          "EndpointID": "",
+          "Gateway": "",
+          "GlobalIPv6Address": "",
+          "GlobalIPv6PrefixLen": 0,
+          "GwPriority": 0,
+          "IPAMConfig": null,
+          "IPAddress": "",
+          "IPPrefixLen": 0,
+          "IPv6Gateway": "",
+          "Links": null,
+          "MacAddress": "",
+          "NetworkID": "9d7f07ae1a189fbef568371aeed21bf853909f9b9cf05d596abfe4509cb55420"
+        }
+      },
+      "Ports": {},
+      "SandboxID": "",
+      "SandboxKey": ""
+    },
+    "Path": "/usr/local/bin/python3",
+    "Platform": "linux",
+    "ProcessLabel": "",
+    "ResolvConfPath": "/var/lib/docker/containers/bf04e8150e763e39160290b363c56828dab7784b7bedf39eaa8c33f655f8d392/resolv.conf",
+    "RestartCount": 0,
+    "State": {
+      "Dead": false,
+      "Error": "",
+      "ExitCode": 1,
+      "FinishedAt": "2026-11-05T14:58:10.508861866Z",
+      "Health": {
+        "FailingStreak": 3593,
+        "Log": [
+          {
+            "End": "2026-11-05T14:57:42.499781514Z",
+            "ExitCode": 1,
+            "Output": "Traceback (most recent call last):\n  File \"/opt/fullmag/healthcheck.py\", line 251, in <module>\n    _run()\n  File \"/opt/fullmag/healthcheck.py\", line 245, in _run\n    _check_backend_readiness()\n  File \"/opt/fullmag/healthcheck.py\", line 227, in _check_backend_readiness\n    raise RuntimeError(\"backend supervisor has not confirmed startup readiness\")\nRuntimeError: backend supervisor has not confirmed startup readiness\n",
+            "Start": "2026-11-05T14:57:42.38777228Z"
+          },
+          {
+            "End": "2026-11-05T14:57:47.631130382Z",
+            "ExitCode": 1,
+            "Output": "Traceback (most recent call last):\n  File \"/opt/fullmag/healthcheck.py\", line 251, in <module>\n    _run()\n  File \"/opt/fullmag/healthcheck.py\", line 245, in _run\n    _check_backend_readiness()\n  File \"/opt/fullmag/healthcheck.py\", line 227, in _check_backend_readiness\n    raise RuntimeError(\"backend supervisor has not confirmed startup readiness\")\nRuntimeError: backend supervisor has not confirmed startup readiness\n",
+            "Start": "2026-11-05T14:57:47.500708275Z"
+          },
+          {
+            "End": "2026-11-05T14:57:52.763527677Z",
+            "ExitCode": 1,
+            "Output": "Traceback (most recent call last):\n  File \"/opt/fullmag/healthcheck.py\", line 251, in <module>\n    _run()\n  File \"/opt/fullmag/healthcheck.py\", line 245, in _run\n    _check_backend_readiness()\n  File \"/opt/fullmag/healthcheck.py\", line 227, in _check_backend_readiness\n    raise RuntimeError(\"backend supervisor has not confirmed startup readiness\")\nRuntimeError: backend supervisor has not confirmed startup readiness\n",
+            "Start": "2026-11-05T14:57:52.632223284Z"
+          },
+          {
+            "End": "2026-11-05T14:58:00.64735329Z",
+            "ExitCode": 1,
+            "Output": "Traceback (most recent call last):\n  File \"/opt/fullmag/healthcheck.py\", line 251, in <module>\n    _run()\n  File \"/opt/fullmag/healthcheck.py\", line 245, in _run\n    _check_backend_readiness()\n  File \"/opt/fullmag/healthcheck.py\", line 227, in _check_backend_readiness\n    raise RuntimeError(\"backend supervisor has not confirmed startup readiness\")\nRuntimeError: backend supervisor has not confirmed startup readiness\n",
+            "Start": "2026-11-05T14:58:00.492723288Z"
+          },
+          {
+            "End": "2026-11-05T14:58:05.797762417Z",
+            "ExitCode": 1,
+            "Output": "Traceback (most recent call last):\n  File \"/opt/fullmag/healthcheck.py\", line 251, in <module>\n    _run()\n  File \"/opt/fullmag/healthcheck.py\", line 245, in _run\n    _check_backend_readiness()\n  File \"/opt/fullmag/healthcheck.py\", line 227, in _check_backend_readiness\n    raise RuntimeError(\"backend supervisor has not confirmed startup readiness\")\nRuntimeError: backend supervisor has not confirmed startup readiness\n",
+            "Start": "2026-11-05T14:58:05.648776226Z"
+          }
+        ],
+        "Status": "unhealthy"
+      },
+      "OOMKilled": false,
+      "Paused": false,
+      "Pid": 0,
+      "Restarting": false,
+      "Running": false,
+      "StartedAt": "2026-11-05T07:05:49.926584394Z",
+      "Status": "exited"
+    }
+  },
+  {
+    "AppArmorProfile": "",
+    "Args": [
+      "/opt/fullmag/entrypoint.py"
+    ],
+    "Config": {
+      "AttachStderr": true,
+      "AttachStdin": false,
+      "AttachStdout": true,
+      "Cmd": null,
+      "Domainname": "",
+      "Entrypoint": [
+        "/usr/local/bin/python3",
+        "/opt/fullmag/entrypoint.py"
+      ],
+      "Env": [
+        "FULLMAG_SHARED_PNPM_STORE=/opt/fullmag/shared-pnpm",
+        "FULLMAG_SOURCE_WORKTREE_ID=fullmag-902a54b7b1f633a7",
+        "FULLMAG_DEVELOPMENT_INPUTS_PATH=/opt/fullmag/control/development-inputs.json",
+        "HOME=/state/development",
+        "FULLMAG_SOURCE_ROOT=/home/kkingstoun/git/fullmag/fullmag",
+        "NVIDIA_VISIBLE_DEVICES=void",
+        "FULLMAG_API_PROXY_TARGET=http://backend:8081",
+        "FULLMAG_FRONTEND_HOST_PORT=3342",
+        "FULLMAG_FRONTEND_SOURCE_CONTAINER_ROOT=/opt/fullmag/source",
+        "FULLMAG_WATCHPACK_POLLING_MS=5000",
+        "FULLMAG_PRIVATE_GROUP_STORAGE=group-volume-v1",
+        "NODE_OPTIONS=--max-old-space-size=6144",
+        "FULLMAG_DOCKER_ROLE=frontend",
+        "FULLMAG_DOCKER_FRONTEND=dev",
+        "FULLMAG_SOURCE_COMMIT=e8e92c82c49d919300c6cf2153e73ce18f1e452b",
+        "PATH=/root/.cargo/bin:/opt/fullmag/package/bin:/opt/fullmag-deps/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "NVARCH=x86_64",
+        "NVIDIA_REQUIRE_CUDA=cuda>=12.6 brand=unknown,driver>=470,driver<471 brand=grid,driver>=470,driver<471 brand=tesla,driver>=470,driver<471 brand=nvidia,driver>=470,driver<471 brand=quadro,driver>=470,driver<471 brand=quadrortx,driver>=470,driver<471 brand=nvidiartx,driver>=470,driver<471 brand=vapps,driver>=470,driver<471 brand=vpc,driver>=470,driver<471 brand=vcs,driver>=470,driver<471 brand=vws,driver>=470,driver<471 brand=cloudgaming,driver>=470,driver<471 brand=unknown,driver>=535,driver<536 brand=grid,driver>=535,driver<536 brand=tesla,driver>=535,driver<536 brand=nvidia,driver>=535,driver<536 brand=quadro,driver>=535,driver<536 brand=quadrortx,driver>=535,driver<536 brand=nvidiartx,driver>=535,driver<536 brand=vapps,driver>=535,driver<536 brand=vpc,driver>=535,driver<536 brand=vcs,driver>=535,driver<536 brand=vws,driver>=535,driver<536 brand=cloudgaming,driver>=535,driver<536 brand=unknown,driver>=550,driver<551 brand=grid,driver>=550,driver<551 brand=tesla,driver>=550,driver<551 brand=nvidia,driver>=550,driver<551 brand=quadro,driver>=550,driver<551 brand=quadrortx,driver>=550,driver<551 brand=nvidiartx,driver>=550,driver<551 brand=vapps,driver>=550,driver<551 brand=vpc,driver>=550,driver<551 brand=vcs,driver>=550,driver<551 brand=vws,driver>=550,driver<551 brand=cloudgaming,driver>=550,driver<551",
+        "NV_CUDA_CUDART_VERSION=12.6.77-1",
+        "CUDA_VERSION=12.6.3",
+        "LD_LIBRARY_PATH=/opt/fullmag/package/lib:/opt/fullmag-deps/lib:/usr/local/cuda/lib64:/usr/local/cuda/lib64:/opt/fullmag-deps/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64",
+        "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+        "NV_CUDA_LIB_VERSION=12.6.3-1",
+        "NV_NVTX_VERSION=12.6.77-1",
+        "NV_LIBNPP_VERSION=12.3.1.54-1",
+        "NV_LIBNPP_PACKAGE=libnpp-12-6=12.3.1.54-1",
+        "NV_LIBCUSPARSE_VERSION=12.5.4.2-1",
+        "NV_LIBCUBLAS_PACKAGE_NAME=libcublas-12-6",
+        "NV_LIBCUBLAS_VERSION=12.6.4.1-1",
+        "NV_LIBCUBLAS_PACKAGE=libcublas-12-6=12.6.4.1-1",
+        "NV_LIBNCCL_PACKAGE_NAME=libnccl2",
+        "NV_LIBNCCL_PACKAGE_VERSION=2.23.4-1",
+        "NCCL_VERSION=2.23.4-1",
+        "NV_LIBNCCL_PACKAGE=libnccl2=2.23.4-1+cuda12.6",
+        "NVIDIA_PRODUCT_NAME=CUDA",
+        "NV_CUDA_CUDART_DEV_VERSION=12.6.77-1",
+        "NV_NVML_DEV_VERSION=12.6.77-1",
+        "NV_LIBCUSPARSE_DEV_VERSION=12.5.4.2-1",
+        "NV_LIBNPP_DEV_VERSION=12.3.1.54-1",
+        "NV_LIBNPP_DEV_PACKAGE=libnpp-dev-12-6=12.3.1.54-1",
+        "NV_LIBCUBLAS_DEV_VERSION=12.6.4.1-1",
+        "NV_LIBCUBLAS_DEV_PACKAGE_NAME=libcublas-dev-12-6",
+        "NV_LIBCUBLAS_DEV_PACKAGE=libcublas-dev-12-6=12.6.4.1-1",
+        "NV_CUDA_NSIGHT_COMPUTE_VERSION=12.6.3-1",
+        "NV_CUDA_NSIGHT_COMPUTE_DEV_PACKAGE=cuda-nsight-compute-12-6=12.6.3-1",
+        "NV_NVPROF_VERSION=12.6.80-1",
+        "NV_NVPROF_DEV_PACKAGE=cuda-nvprof-12-6=12.6.80-1",
+        "NV_LIBNCCL_DEV_PACKAGE_NAME=libnccl-dev",
+        "NV_LIBNCCL_DEV_PACKAGE_VERSION=2.23.4-1",
+        "NV_LIBNCCL_DEV_PACKAGE=libnccl-dev=2.23.4-1+cuda12.6",
+        "LIBRARY_PATH=/usr/local/cuda/lib64/stubs",
+        "FULLMAG_CUDA_BASE_IMAGE=nvidia/cuda:12.6.3-devel-ubuntu22.04@sha256:d49bb8a4ff97fb5fe477947a3f02aa8c0a53eae77e11f00ec28618a0bcaa2ad1",
+        "FULLMAG_CUDA_BASE_IMAGE_DIGEST=d49bb8a4ff97fb5fe477947a3f02aa8c0a53eae77e11f00ec28618a0bcaa2ad1",
+        "CMAKE_VERSION=3.30.5",
+        "NODE_VERSION=24.18.0",
+        "PYTHON_VERSION=3.10.21",
+        "PNPM_VERSION=10.8.1",
+        "RUST_TOOLCHAIN=nightly",
+        "DEBIAN_FRONTEND=noninteractive",
+        "PNPM_HOME=/pnpm",
+        "INSTALL_PREFIX=/opt/fullmag-deps",
+        "CUDA_HOME=/usr/local/cuda",
+        "CUDA_PATH=/usr/local/cuda",
+        "CMAKE_PREFIX_PATH=/opt/fullmag-deps:",
+        "PKG_CONFIG_PATH=/opt/fullmag-deps/lib/pkgconfig:/opt/fullmag-deps/lib64/pkgconfig:",
+        "PETSC_DIR=/opt/fullmag-deps",
+        "SLEPC_DIR=/opt/fullmag-deps",
+        "FULLMAG_FEM_MFEM_DEVICE=",
+        "FULLMAG_CUDA_ARCHITECTURES=80-real;89-real;90-real;90-virtual",
+        "FULLMAG_USE_MFEM_STACK=ON",
+        "FULLMAG_FEM_REQUIRE_GPU=0",
+        "FULLMAG_FEM_REQUIRE_CEED=1",
+        "FULLMAG_HYPRE_MEMORY_VARIANT=baseline",
+        "FULLMAG_TOOLCHAIN_IMAGE_ID=sha256:efe1c5b5ef051387c4e6b32f960effd382a6e3cbc7de1627c15508be0ac96ebf",
+        "FULLMAG_REPO_ROOT=/opt/fullmag/source",
+        "FULLMAG_RUNTIME_CONTROL_ROOT=/opt/fullmag/runtime-control",
+        "FULLMAG_RUNTIME_SERVICES_ROOT=/opt/fullmag/runtime-control/runtime-services",
+        "FULLMAG_STATE_ROOT=/opt/fullmag/runtime-control",
+        "FULLMAG_STATE_DIR=/opt/fullmag/runtime-control",
+        "FULLMAG_PROJECT_STORAGE_ROOT=/state",
+        "FULLMAG_RUNS_ROOT=/state/runs/docker-all",
+        "FULLMAG_WORKTREE_ID=docker-all",
+        "FULLMAG_RUNTIME_SERVICE_CONFIG=/opt/fullmag/runtime-control/runtime-service/docker-all.json",
+        "FULLMAG_RUNTIME_ROOT=/opt/fullmag/package",
+        "FULLMAG_WEB_STATIC_DIR=/opt/fullmag/package/web",
+        "FULLMAG_API_PORT=8081",
+        "FULLMAG_PYTHON=/usr/local/bin/python3",
+        "PYTHONPATH=/build/workspace/packages/fullmag-py/src:/opt/fullmag/package",
+        "PYTHONDONTWRITEBYTECODE=1",
+        "FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME=1",
+        "FULLMAG_FORCE_LOCAL_FEM_GPU=0",
+        "FULLMAG_FEM_MESH_CACHE_DIR=/build/cache/fem-mesh",
+        "CUDA_CACHE_PATH=/build/cache/cuda-compute",
+        "OMP_NUM_THREADS=4",
+        "FULLMAG_CPU_THREADS=4",
+        "FULLMAG_RUNTIME_PACKAGE_ROOT=/opt/fullmag/package",
+        "FULLMAG_PACKAGE_PROVENANCE=/opt/fullmag/provenance.json",
+        "FULLMAG_FORCE_LOCAL_FEM_CPU=0",
+        "FULLMAG_FEM_ALL_IN_GPU=0",
+        "FULLMAG_WINDOWS_CONTAINER_MANAGED=1",
+        "FULLMAG_CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/direct",
+        "CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/direct",
+        "FULLMAG_CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets",
+        "CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets",
+        "CARGO_HOME=/build/cargo",
+        "RUSTUP_HOME=/root/.rustup",
+        "RUSTUP_TOOLCHAIN=nightly",
+        "RUSTUP_AUTO_INSTALL=0"
+      ],
+      "ExposedPorts": {
+        "8080/tcp": {},
+        "8081/tcp": {}
+      },
+      "Healthcheck": {
+        "Interval": 5000000000,
+        "Retries": 6,
+        "StartPeriod": 3900000000000,
+        "Test": [
+          "CMD-SHELL",
+          "/usr/local/bin/python3 /opt/fullmag/healthcheck.py"
+        ],
+        "Timeout": 10000000000
+      },
+      "Hostname": "cf5b8ffbefb4",
+      "Image": "sha256:c8b03789c307db4b69e12ca32266df40998ce8f2da917489d3b1cb70408e7d0a",
+      "Labels": {
+        "com.docker.compose.config-hash": "42fb07b6475b4d3339c3fb7feee5a55e7d24a373035a207f921af010482b20b8",
+        "com.docker.compose.container-number": "1",
+        "com.docker.compose.depends_on": "backend:service_started:false",
+        "com.docker.compose.image": "sha256:c8b03789c307db4b69e12ca32266df40998ce8f2da917489d3b1cb70408e7d0a",
+        "com.docker.compose.oneoff": "False",
+        "com.docker.compose.project": "fullmag-master",
+        "com.docker.compose.project.config_files": "-",
+        "com.docker.compose.project.working_dir": "/home/kkingstoun/git/fullmag/fullmag",
+        "com.docker.compose.service": "frontend",
+        "com.docker.compose.version": "5.6.1",
+        "desktop.docker.io/wsl-distro": "Ubuntu2",
+        "maintainer": "NVIDIA CORPORATION <cudatools@nvidia.com>",
+        "org.fullmag.build.input-digest": "a0d253acb195646a694b744403a1c6facc60d10b1048980930d13058d6592867",
+        "org.fullmag.compose.project": "fullmag-master",
+        "org.fullmag.development": "source-bind-v1",
+        "org.fullmag.direct-development.backend-context-sha256": "",
+        "org.fullmag.direct-development.base-context-sha256": "",
+        "org.fullmag.direct-development.context-schema": "",
+        "org.fullmag.direct-development.context-sha256": "",
+        "org.fullmag.direct-development.receipt-schema": "",
+        "org.fullmag.direct-development.runtime-context-sha256": "",
+        "org.fullmag.runtime": "docker-all-gpu-v1",
+        "org.fullmag.source.checkout-kind": "main-checkout",
+        "org.fullmag.source.project-id": "fullmag-902a54b7b1f633a7",
+        "org.fullmag.source.worktree-id": "fullmag-902a54b7b1f633a7",
+        "org.fullmag.toolchain.dependencies": "/opt/fullmag-deps/share/fullmag/dependency-versions.json",
+        "org.fullmag.toolchain.image-id": "sha256:efe1c5b5ef051387c4e6b32f960effd382a6e3cbc7de1627c15508be0ac96ebf",
+        "org.opencontainers.image.ref.name": "ubuntu",
+        "org.opencontainers.image.version": "22.04"
+      },
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "StopTimeout": 60,
+      "Tty": false,
+      "User": "65532:65532",
+      "Volumes": null,
+      "WorkingDir": "/build"
+    },
+    "Created": "2026-11-05T07:05:48.486135472Z",
+    "Driver": "overlay2",
+    "ExecIDs": null,
+    "GraphDriver": {
+      "Data": {
+        "ID": "cf5b8ffbefb4b2e41e2ecf36db299f2b0253c5a4c69a60253a40390af50a2808",
+        "LowerDir": "/var/lib/docker/overlay2/1ea8b92928063a15f2fb2403ee739255e566933778e0893f678e69ac49e2580c-init/diff:/var/lib/docker/overlay2/716v54jbf2xeri1jzgg6vgy78/diff:/var/lib/docker/overlay2/k1360ecwzywlbyifsfj1xbbw9/diff:/var/lib/docker/overlay2/7wxgzynmgd942k7zxbgisv8rn/diff:/var/lib/docker/overlay2/uhcs1mest6i0re2xti447miuu/diff:/var/lib/docker/overlay2/v14790mvrkc5dwqf7voq492wj/diff:/var/lib/docker/overlay2/2lvrk8o8mkv0q2wzou77it8gp/diff:/var/lib/docker/overlay2/ik5xlia1rzjqztcxgbdd672vl/diff:/var/lib/docker/overlay2/1geh7mgyqlrs5f7t4ua58yu73/diff:/var/lib/docker/overlay2/h9qar01cmly28xwcgk18uo7za/diff:/var/lib/docker/overlay2/nuzs026vnfhrslku0l9z8ltf9/diff:/var/lib/docker/overlay2/urlymq1hkvitwj32dywac0k8w/diff:/var/lib/docker/overlay2/ng421duqnsx9161j2i7i2yqqt/diff:/var/lib/docker/overlay2/jg1n84ymic722oyor2574y0x5/diff:/var/lib/docker/overlay2/s2vzskxtr3nd5lmrv8377ddkm/diff:/var/lib/docker/overlay2/u4fs16jburi57jw4e6de6r8h4/diff:/var/lib/docker/overlay2/achkm6mr00pbwhsv1niwx7w53/diff:/var/lib/docker/overlay2/mimv4rs2ogtbrbnx71awyircq/diff:/var/lib/docker/overlay2/mikh4th7smsuv2rzjur93hoes/diff:/var/lib/docker/overlay2/pewsqgd4hiv6kzopea9mlrdi7/diff:/var/lib/docker/overlay2/k3p7ecrufvihq97iyn0ryx9rs/diff:/var/lib/docker/overlay2/96pcn09qpurv8k7z49lh5z1pw/diff:/var/lib/docker/overlay2/rahczi3k12188ankabnout56v/diff:/var/lib/docker/overlay2/xzp7nwmopanm7rzl9jt4yy8l0/diff:/var/lib/docker/overlay2/eswftbb5g19b0y6r5curegud3/diff:/var/lib/docker/overlay2/kmsjo66f3s2t9yn2x53xx2bxd/diff:/var/lib/docker/overlay2/2gd1ia7zokij5tpzt1n43qyz3/diff:/var/lib/docker/overlay2/b5q5nq9pjhxscjtoemcjq3pxo/diff:/var/lib/docker/overlay2/6q3lqjtrwntj6m3u7ifojfrin/diff:/var/lib/docker/overlay2/ektyl3od9nh6iozimeocgm0iw/diff:/var/lib/docker/overlay2/i50avoc40ahifnvchvi2wfeqf/diff:/var/lib/docker/overlay2/i4y8at8w2b9ooqkajqesspmtr/diff:/var/lib/docker/overlay2/eegf69a489su8vlpokfpl945b/diff:/var/lib/docker/overlay2/9t1c5l5z3otnlvepopcbsed08/diff:/var/lib/docker/overlay2/l8mdjvfqosirz75bncz8lb12j/diff:/var/lib/docker/overlay2/3vt1f91q4e476ual2pi352r5a/diff:/var/lib/docker/overlay2/x8hgukmnfj9snjesxny5vp9hm/diff:/var/lib/docker/overlay2/vuo7ejrjrlg45wir0i97alrj8/diff:/var/lib/docker/overlay2/dwlb0e1a0n82t8feb6sgrljwc/diff:/var/lib/docker/overlay2/nh2gobyk84ba8th1g4ljf3xrk/diff:/var/lib/docker/overlay2/yf8bv7oec8tfkr71vfc8eimg9/diff:/var/lib/docker/overlay2/6jnkqsglz93ptojxo88apiewt/diff:/var/lib/docker/overlay2/p9i15bo7vv88iio3u307lwzss/diff:/var/lib/docker/overlay2/n6pmh51nsppxnjdfjex42irht/diff:/var/lib/docker/overlay2/ywslye8e6obltlthsx08wnhw5/diff:/var/lib/docker/overlay2/q95zkevbxm8ypdcht36kvme0i/diff:/var/lib/docker/overlay2/zid79bj99t2uktzjvm0n3xfyt/diff:/var/lib/docker/overlay2/ocpuab6awdfho6269d0oxfhhs/diff:/var/lib/docker/overlay2/bzqhmt3sw3v2xak27u26gv5bh/diff:/var/lib/docker/overlay2/jb94v6tzapo796tg3wvr1tydq/diff:/var/lib/docker/overlay2/rthe82rq5fsvu7lzem64yd5l7/diff:/var/lib/docker/overlay2/ab81l9suozxgxqj5cixpz6c75/diff:/var/lib/docker/overlay2/w02eherm2o7u74b29ls4psl6e/diff:/var/lib/docker/overlay2/4c753cf5eb6a4151251ad9089b85f28c51e37ed0d6ee33483ac2db22dcdd1fe4/diff:/var/lib/docker/overlay2/0a7da449910aa0ca156dd9b5cf97261d2b36ea2a4ba15f18e959ebdac980fd81/diff:/var/lib/docker/overlay2/66d263ba9d6638dacd08cdad3a7c902fab7511f42faf6030839df08d0300b9b5/diff:/var/lib/docker/overlay2/076511b487f870857b5151b31982b97a945bc0897518e2cc4ce1812411e093ba/diff:/var/lib/docker/overlay2/34bfea7d9ceea51289a7316d88a453ab20e839e1a0ca36e58d3843001c4e6688/diff:/var/lib/docker/overlay2/ddb2ab177c42ba98d8e8616b4305fa7919be9e03870d8aedf37cdb28c5598d9e/diff:/var/lib/docker/overlay2/bdc1c8a7e8ab9d59fb7128a743c76dd2579a2e8f10c5a848716e8adaed05b275/diff:/var/lib/docker/overlay2/cf88a3fc82c1e67528d1f19fef153843490a8b0761692069e97ea1395fc2c44b/diff:/var/lib/docker/overlay2/27533bdc0a596b43035fad7ae1137716b2cf58b934f20f3823bf11372ada34dd/diff:/var/lib/docker/overlay2/98280925ac85ba34de78778b54d426416b545e9f829fe480bf128a51cb7f46c1/diff:/var/lib/docker/overlay2/12b08a845ce13ffeba310db825e7cc7daef0931164a0fae4605a7bb51952128a/diff",
+        "MergedDir": "/var/lib/docker/overlay2/1ea8b92928063a15f2fb2403ee739255e566933778e0893f678e69ac49e2580c/merged",
+        "UpperDir": "/var/lib/docker/overlay2/1ea8b92928063a15f2fb2403ee739255e566933778e0893f678e69ac49e2580c/diff",
+        "WorkDir": "/var/lib/docker/overlay2/1ea8b92928063a15f2fb2403ee739255e566933778e0893f678e69ac49e2580c/work"
+      },
+      "Name": "overlay2"
+    },
+    "HostConfig": {
+      "AutoRemove": false,
+      "Binds": null,
+      "BlkioDeviceReadBps": null,
+      "BlkioDeviceReadIOps": null,
+      "BlkioDeviceWriteBps": null,
+      "BlkioDeviceWriteIOps": null,
+      "BlkioWeight": 0,
+      "BlkioWeightDevice": null,
+      "CapAdd": null,
+      "CapDrop": [
+        "ALL"
+      ],
+      "Cgroup": "",
+      "CgroupParent": "",
+      "CgroupnsMode": "private",
+      "ConsoleSize": [
+        0,
+        0
+      ],
+      "ContainerIDFile": "",
+      "CpuCount": 0,
+      "CpuPercent": 0,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "CpuRealtimePeriod": 0,
+      "CpuRealtimeRuntime": 0,
+      "CpuShares": 0,
+      "CpusetCpus": "",
+      "CpusetMems": "",
+      "DeviceCgroupRules": null,
+      "DeviceRequests": null,
+      "Devices": null,
+      "Dns": null,
+      "DnsOptions": null,
+      "DnsSearch": null,
+      "ExtraHosts": [],
+      "GroupAdd": [
+        "1000"
+      ],
+      "IOMaximumBandwidth": 0,
+      "IOMaximumIOps": 0,
+      "Init": true,
+      "IpcMode": "private",
+      "Isolation": "",
+      "Links": null,
+      "LogConfig": {
+        "Config": {
+          "max-file": "3",
+          "max-size": "10m"
+        },
+        "Type": "local"
+      },
+      "MaskedPaths": [
+        "/proc/acpi",
+        "/proc/asound",
+        "/proc/interrupts",
+        "/proc/kcore",
+        "/proc/keys",
+        "/proc/latency_stats",
+        "/proc/sched_debug",
+        "/proc/scsi",
+        "/proc/timer_list",
+        "/proc/timer_stats",
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware"
+      ],
+      "Memory": 17179869184,
+      "MemoryReservation": 0,
+      "MemorySwap": 34359738368,
+      "MemorySwappiness": null,
+      "Mounts": [
+        {
+          "BindOptions": {},
+          "ReadOnly": true,
+          "Source": "/home/kkingstoun/git/fullmag/fullmag/apps/control-room/app",
+          "Target": "/state/development/workspace/apps/control-room/app",
+          "Type": "bind"
+        },
+        {
+          "BindOptions": {},
+          "ReadOnly": true,
+          "Source": "/home/kkingstoun/git/fullmag/fullmag/apps/control-room/src",
+          "Target": "/state/development/workspace/apps/control-room/src",
+          "Type": "bind"
+        },
+        {
+          "BindOptions": {},
+          "ReadOnly": true,
+          "Source": "/home/kkingstoun/git/fullmag/fullmag/apps/control-room/public",
+          "Target": "/state/development/workspace/apps/control-room/public",
+          "Type": "bind"
+        },
+        {
+          "BindOptions": {},
+          "ReadOnly": true,
+          "Source": "/home/kkingstoun/git/fullmag/fullmag/apps/control-room/scripts",
+          "Target": "/state/development/workspace/apps/control-room/scripts",
+          "Type": "bind"
+        },
+        {
+          "Source": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+          "Target": "/state/development",
+          "Type": "volume",
+          "VolumeOptions": {
+            "NoCopy": true,
+            "Subpath": "namespaces/d5caee179fce44569fa9eabc16bc7101/private/frontend"
+          }
+        },
+        {
+          "ReadOnly": true,
+          "Source": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+          "Target": "/opt/fullmag/control",
+          "Type": "volume",
+          "VolumeOptions": {
+            "NoCopy": true,
+            "Subpath": "namespaces/d5caee179fce44569fa9eabc16bc7101/frontend"
+          }
+        },
+        {
+          "Source": "fullmag-shared-pnpm-v1-4881c0403b693b235f4eadec",
+          "Target": "/opt/fullmag/shared-pnpm",
+          "Type": "volume",
+          "VolumeOptions": {
+            "NoCopy": true,
+            "Subpath": "store"
+          }
+        },
+        {
+          "BindOptions": {},
+          "ReadOnly": true,
+          "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/902a54b7b1f633a711db875c7c4f0df3be26032e7c473d7383e7e83fd376ff10",
+          "Target": "/opt/fullmag/source",
+          "Type": "bind"
+        }
+      ],
+      "NanoCpus": 4000000000,
+      "NetworkMode": "fullmag-master_fullmag",
+      "OomKillDisable": null,
+      "OomScoreAdj": 0,
+      "PidMode": "",
+      "PidsLimit": 512,
+      "PortBindings": {
+        "8080/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "3342"
+          }
+        ]
+      },
+      "Privileged": false,
+      "PublishAllPorts": false,
+      "ReadonlyPaths": [
+        "/proc/bus",
+        "/proc/fs",
+        "/proc/irq",
+        "/proc/sys",
+        "/proc/sysrq-trigger"
+      ],
+      "ReadonlyRootfs": true,
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "no"
+      },
+      "Runtime": "runc",
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "ShmSize": 67108864,
+      "Tmpfs": {
+        "/run/fullmag/frontend-owner": "rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700",
+        "/tmp": "rw,nosuid,nodev,size=512m"
+      },
+      "UTSMode": "",
+      "Ulimits": null,
+      "UsernsMode": "",
+      "VolumeDriver": "",
+      "VolumesFrom": null
+    },
+    "HostnamePath": "/var/lib/docker/containers/cf5b8ffbefb4b2e41e2ecf36db299f2b0253c5a4c69a60253a40390af50a2808/hostname",
+    "HostsPath": "/var/lib/docker/containers/cf5b8ffbefb4b2e41e2ecf36db299f2b0253c5a4c69a60253a40390af50a2808/hosts",
+    "Id": "cf5b8ffbefb4b2e41e2ecf36db299f2b0253c5a4c69a60253a40390af50a2808",
+    "Image": "sha256:c8b03789c307db4b69e12ca32266df40998ce8f2da917489d3b1cb70408e7d0a",
+    "LogPath": "",
+    "MountLabel": "",
+    "Mounts": [
+      {
+        "Destination": "/state/development",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+        "Propagation": "",
+        "RW": true,
+        "Source": "/var/lib/docker/volumes/fullmag-build-control-fullmag-master-a7f7e9b9a4026499/_data",
+        "Type": "volume"
+      },
+      {
+        "Destination": "/opt/fullmag/control",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+        "Propagation": "",
+        "RW": false,
+        "Source": "/var/lib/docker/volumes/fullmag-build-control-fullmag-master-a7f7e9b9a4026499/_data",
+        "Type": "volume"
+      },
+      {
+        "Destination": "/opt/fullmag/shared-pnpm",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "fullmag-shared-pnpm-v1-4881c0403b693b235f4eadec",
+        "Propagation": "",
+        "RW": true,
+        "Source": "/var/lib/docker/volumes/fullmag-shared-pnpm-v1-4881c0403b693b235f4eadec/_data",
+        "Type": "volume"
+      },
+      {
+        "Destination": "/opt/fullmag/source",
+        "Mode": "",
+        "Propagation": "rprivate",
+        "RW": false,
+        "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/902a54b7b1f633a711db875c7c4f0df3be26032e7c473d7383e7e83fd376ff10",
+        "Type": "bind"
+      },
+      {
+        "Destination": "/state/development/workspace/apps/control-room/app",
+        "Mode": "",
+        "Propagation": "rprivate",
+        "RW": false,
+        "Source": "/home/kkingstoun/git/fullmag/fullmag/apps/control-room/app",
+        "Type": "bind"
+      },
+      {
+        "Destination": "/state/development/workspace/apps/control-room/public",
+        "Mode": "",
+        "Propagation": "rprivate",
+        "RW": false,
+        "Source": "/home/kkingstoun/git/fullmag/fullmag/apps/control-room/public",
+        "Type": "bind"
+      },
+      {
+        "Destination": "/state/development/workspace/apps/control-room/scripts",
+        "Mode": "",
+        "Propagation": "rprivate",
+        "RW": false,
+        "Source": "/home/kkingstoun/git/fullmag/fullmag/apps/control-room/scripts",
+        "Type": "bind"
+      },
+      {
+        "Destination": "/state/development/workspace/apps/control-room/src",
+        "Mode": "",
+        "Propagation": "rprivate",
+        "RW": false,
+        "Source": "/home/kkingstoun/git/fullmag/fullmag/apps/control-room/src",
+        "Type": "bind"
+      }
+    ],
+    "Name": "/fullmag-master-frontend-1",
+    "NetworkSettings": {
+      "Networks": {
+        "fullmag-master_fullmag": {
+          "Aliases": [
+            "fullmag-master-frontend-1",
+            "frontend"
+          ],
+          "DNSNames": [
+            "fullmag-master-frontend-1",
+            "frontend",
+            "cf5b8ffbefb4"
+          ],
+          "DriverOpts": null,
+          "EndpointID": "",
+          "Gateway": "",
+          "GlobalIPv6Address": "",
+          "GlobalIPv6PrefixLen": 0,
+          "GwPriority": 0,
+          "IPAMConfig": null,
+          "IPAddress": "",
+          "IPPrefixLen": 0,
+          "IPv6Gateway": "",
+          "Links": null,
+          "MacAddress": "",
+          "NetworkID": "9d7f07ae1a189fbef568371aeed21bf853909f9b9cf05d596abfe4509cb55420"
+        }
+      },
+      "Ports": {},
+      "SandboxID": "",
+      "SandboxKey": ""
+    },
+    "Path": "/usr/local/bin/python3",
+    "Platform": "linux",
+    "ProcessLabel": "",
+    "ResolvConfPath": "/var/lib/docker/containers/cf5b8ffbefb4b2e41e2ecf36db299f2b0253c5a4c69a60253a40390af50a2808/resolv.conf",
+    "RestartCount": 0,
+    "State": {
+      "Dead": false,
+      "Error": "",
+      "ExitCode": 0,
+      "FinishedAt": "2026-11-05T12:35:04.260395511Z",
+      "Health": {
+        "FailingStreak": 1,
+        "Log": [
+          {
+            "End": "2026-11-05T12:34:42.278859788Z",
+            "ExitCode": 0,
+            "Output": "",
+            "Start": "2026-11-05T12:34:42.173173722Z"
+          },
+          {
+            "End": "2026-11-05T12:34:47.949905895Z",
+            "ExitCode": 0,
+            "Output": "",
+            "Start": "2026-11-05T12:34:47.848192755Z"
+          },
+          {
+            "End": "2026-11-05T12:34:53.056829432Z",
+            "ExitCode": 0,
+            "Output": "",
+            "Start": "2026-11-05T12:34:52.95052527Z"
+          },
+          {
+            "End": "2026-11-05T12:34:58.168270812Z",
+            "ExitCode": 0,
+            "Output": "",
+            "Start": "2026-11-05T12:34:58.058543319Z"
+          },
+          {
+            "End": "2026-11-05T12:35:03.272571396Z",
+            "ExitCode": 1,
+            "Output": "Traceback (most recent call last):\n  File \"/opt/fullmag/healthcheck.py\", line 251, in <module>\n    _run()\n  File \"/opt/fullmag/healthcheck.py\", line 247, in _run\n    _check_frontend_dev_liveness()\n  File \"/opt/fullmag/healthcheck.py\", line 202, in _check_frontend_dev_liveness\n    raise RuntimeError(f\"frontend receipt is not running: {receipt.get('state')!r}\")\nRuntimeError: frontend receipt is not running: 'stopping'\n",
+            "Start": "2026-11-05T12:35:03.1695599Z"
+          }
+        ],
+        "Status": "unhealthy"
+      },
+      "OOMKilled": false,
+      "Paused": false,
+      "Pid": 0,
+      "Restarting": false,
+      "Running": false,
+      "StartedAt": "2026-11-05T07:05:50.495286076Z",
+      "Status": "exited"
+    }
+  }
+]

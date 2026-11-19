@@ -344,6 +344,52 @@ describe("ObjectRegionMagneticParametersPanel session fence", () => {
       dom.restore();
     }
   });
+
+  it("renders vector controls and easy-axis presets for anisotropy_axis (anisu) overrides", async () => {
+    mocks.sceneData = {
+      objects: [{
+        id: "object-a",
+        physics_stack: [{
+          enabled: true,
+          kind: "uniaxial_anisotropy",
+          params: { axis: [0, 1, 0], ku1: 50_000 },
+        }],
+      }],
+      materials: [],
+    } as unknown as typeof mocks.sceneData;
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    const props = panelProps();
+    const updateMaterialOverride = vi.fn();
+    props.updateMaterialOverride = updateMaterialOverride;
+    props.draft.materialOverrides = [{
+      conflictPolicy: "error",
+      parameter: "anisotropy_axis",
+      priority: 0,
+      unit: "",
+      value: 0,
+      vectorValue: [1, 0, 0],
+    }];
+    try {
+      await act(async () => root.render(<ObjectRegionMagneticParametersPanel {...props} />));
+      expect(fieldRowValue(container, "Inherited parent")).toBe("[0, 1, 0]");
+      expect(container.textContent).toContain("+X [1, 0, 0]");
+      expect(container.textContent).toContain("+Y [0, 1, 0]");
+      expect(container.textContent).toContain("+Z [0, 0, 1] (PMA)");
+      expect(container.textContent).toContain("Normalize |u|=1");
+
+      await act(async () => findButton(container, "+Z [0, 0, 1] (PMA)").click());
+      expect(updateMaterialOverride).toHaveBeenCalledWith(0, {
+        vectorValue: [0, 0, 1],
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });
 
 function panelProps(): RegionSubPanelProps {

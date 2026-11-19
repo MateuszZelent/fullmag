@@ -83,9 +83,14 @@ __global__ void apply_full_domain_demag_correction_kernel(
     const double *__restrict__ h_demag_full,
     const double *__restrict__ h_demag_magnetic,
     double *__restrict__ h_eff_full,
+    const uint8_t *__restrict__ magnetic_node_mask,
     int N)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N &&
+        (magnetic_node_mask == nullptr || magnetic_node_mask[i] != 0u)) {
+        return;
+    }
     if (i < N) {
         h_eff_full[i] += h_demag_full[i] - h_demag_magnetic[i];
     }
@@ -195,6 +200,7 @@ void fullmag_cuda_apply_full_domain_demag_correction(
     const double *h_demag_full,
     const double *h_demag_magnetic,
     double *h_eff_full,
+    const uint8_t *magnetic_node_mask,
     int N,
     cudaStream_t stream)
 {
@@ -203,6 +209,7 @@ void fullmag_cuda_apply_full_domain_demag_correction(
         h_demag_full,
         h_demag_magnetic,
         h_eff_full,
+        magnetic_node_mask,
         N);
 }
 

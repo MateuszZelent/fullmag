@@ -45,7 +45,7 @@ export function ViewportClippingControls({ resource, ownerKey }: {
       <option value="x">X normal · YZ plane</option><option value="y">Y normal · XZ plane</option><option value="z">Z normal · XY plane</option>
     </FormField>
     <FieldRow label="Section position" value={position.toFixed(1)} unit="%" />
-    <Slider aria-label="Section position" min={0} max={100} step={0.5} value={[position]} disabled={!available}
+    <Slider aria-label="Section position" valueText={(v) => `${v.toFixed(1)}%`} min={0} max={100} step={0.5} value={[position]} disabled={!available}
       onValueChange={([value]) => { if (Number.isFinite(value)) setDraft({ owner: ownerKey, value }); }}
       onValueCommit={([value]) => {
         if (Number.isFinite(value) && value >= 0 && value <= 100) { void apply({ position_percent: value, enabled: true }); }

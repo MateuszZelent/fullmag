@@ -31,6 +31,7 @@ pub(crate) struct LegacySpinTorqueFields {
     pub slonczewski_formula_version: Option<String>,
     pub slonczewski_target: Option<RegionRefIR>,
     pub slonczewski_stack_normal: Option<[f64; 3]>,
+    pub slonczewski_time_expression: Option<fullmag_ir::TimeExpressionIR>,
     pub slonczewski_realization_version: Option<String>,
     pub zhang_li_formula_version: Option<String>,
     pub zhang_li_operator_version: Option<String>,
@@ -52,6 +53,7 @@ impl LegacySpinTorqueFields {
             slonczewski_formula_version: None,
             slonczewski_target: None,
             slonczewski_stack_normal: None,
+            slonczewski_time_expression: None,
             slonczewski_realization_version: None,
             zhang_li_formula_version: None,
             zhang_li_operator_version: None,
@@ -226,8 +228,40 @@ pub(crate) fn resolve_legacy_spin_torque(
             free_layer_thickness_m,
             fixed_layer_position,
             realization,
+            time_expression,
             ..
         } => {
+            if time_expression.is_some() && (lane != SpinTorqueExecutableLane::Fdm
+                || !matches!(problem.study, fullmag_ir::StudyIR::TimeEvolution { .. }))
+            {
+                return Err(PlanError {
+                    reasons: vec!["Slonczewski time_expression requires FDM time evolution".into()],
+                });
+            }
+            if time_expression.is_some()
+                && problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Extended
+            {
+                return Err(PlanError {
+                    reasons: vec![
+                        "Slonczewski time_expression requires execution_mode='extended'".into(),
+                    ],
+                });
+            }
+            if time_expression.is_some()
+                && problem.backend_policy.execution_precision
+                    != fullmag_ir::ExecutionPrecision::Double
+            {
+                return Err(PlanError {
+                    reasons: vec!["Slonczewski time_expression requires FP64 execution".into()],
+                });
+            }
+            if time_expression.is_some() && problem.magnets.len() != 1 {
+                return Err(PlanError {
+                    reasons: vec![
+                        "Slonczewski time_expression requires a single-grid FDM problem".into(),
+                    ],
+                });
+            }
             if matches!(
                 realization,
                 Some(fullmag_ir::SlonczewskiRealizationIR::InterfaceFlux {
@@ -285,6 +319,7 @@ pub(crate) fn resolve_legacy_spin_torque(
                 slonczewski_formula_version: Some(formula_version.clone()),
                 slonczewski_target: target.clone(),
                 slonczewski_stack_normal: normalized_stack,
+                slonczewski_time_expression: time_expression.clone(),
                 slonczewski_realization_version: realization.as_ref().map(|realization| {
                     match realization {
                         fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
@@ -351,6 +386,7 @@ pub(crate) fn resolve_legacy_spin_torque(
                 slonczewski_formula_version: None,
                 slonczewski_target: None,
                 slonczewski_stack_normal: None,
+            slonczewski_time_expression: None,
                 slonczewski_realization_version: None,
                 zhang_li_formula_version: Some(formula_version.clone()),
                 zhang_li_operator_version: operator_version.clone(),
@@ -866,6 +902,7 @@ mod tests {
             epsilon_prime: 0.0,
             free_layer_thickness_m: None,
             fixed_layer_position: None,
+            time_expression: None,
             realization: None,
         }];
         let resolved =
@@ -896,6 +933,7 @@ mod tests {
             epsilon_prime: 0.0,
             free_layer_thickness_m: Some(1.0e-9),
             fixed_layer_position: None,
+            time_expression: None,
             realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
                 realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
             }),
@@ -910,6 +948,69 @@ mod tests {
         assert_eq!(resolved.slonczewski_stack_normal, Some([0.0, 1.0, 0.0]));
         assert_eq!(resolved.stt_spin_polarization, Some([0.0, 0.0, 1.0]));
         assert_eq!(resolved.current_density, Some([3.0e10, -4.0e10, 0.0]));
+    }
+
+    fn canonical_time_expression_slonczewski_module() -> fullmag_ir::SpinTorqueModuleIR {
+        fullmag_ir::SpinTorqueModuleIR::Slonczewski {
+            schema_version: Some("slonczewski_torque.v1".to_string()),
+            id: Some("cpp-time-drive".to_string()),
+            target: None,
+            formula_version: "slonczewski.fullmag.v2".to_string(),
+            current_density: Some([0.0, 0.0, -2.6e10]),
+            current_source: None,
+            degree: 0.21,
+            spin_polarization: [0.0, 1.0, 0.0],
+            stack_normal: Some([0.0, 0.0, -1.0]),
+            lambda_asymmetry: 1.0,
+            epsilon_prime: 0.0,
+            free_layer_thickness_m: Some(1.7e-9),
+            fixed_layer_position: None,
+            time_expression: Some(fullmag_ir::TimeExpressionIR {
+                source: "heaviside(t - t_on) - heaviside(t - t_off)".into(),
+                constants: std::collections::BTreeMap::from([
+                    ("t_off".into(), 270.0e-9),
+                    ("t_on".into(), 70.0e-9),
+                ]),
+                event_times_s: vec![70.0e-9, 270.0e-9],
+            }),
+            realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
+                realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn time_expression_slonczewski_requires_extended_fp64_single_grid_fdm() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
+        if let fullmag_ir::StudyIR::TimeEvolution {
+            dynamics: fullmag_ir::DynamicsIR::Llg { integrator, .. },
+            ..
+        } = &mut problem.study
+        {
+            *integrator = "rk45".to_string();
+        }
+        problem.spin_torque_modules = vec![canonical_time_expression_slonczewski_module()];
+        let resolved = resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fdm, &[])
+            .expect("extended FP64 single-grid time evolution should admit J(t)");
+        assert_eq!(
+            resolved.slonczewski_time_expression.as_ref().unwrap().event_times_s,
+            vec![70.0e-9, 270.0e-9],
+        );
+
+        problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+        let error = resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fdm, &[])
+            .expect_err("strict mode must not silently accept a time-expression plan");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("execution_mode='extended'")));
+
+        problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
+        problem.backend_policy.execution_precision = fullmag_ir::ExecutionPrecision::Single;
+        let error = resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fdm, &[])
+            .expect_err("FP32 must fail closed for time-expression STT");
+        assert!(error.reasons.iter().any(|reason| reason.contains("FP64")));
     }
 
     #[test]
@@ -932,6 +1033,7 @@ mod tests {
             epsilon_prime: 0.0,
             free_layer_thickness_m: Some(1.0e-9),
             fixed_layer_position: None,
+            time_expression: None,
             realization: Some(fullmag_ir::SlonczewskiRealizationIR::InterfaceFlux {
                 interface_id: "fixed_to_free".to_string(),
                 realization_version: "slonczewski_interface_flux.v1".to_string(),
@@ -966,6 +1068,7 @@ mod tests {
             epsilon_prime: 0.0,
             free_layer_thickness_m: None,
             fixed_layer_position: None,
+            time_expression: None,
             realization: Some(fullmag_ir::SlonczewskiRealizationIR::InterfaceFlux {
                 interface_id: "fixed-to-free".to_string(),
                 realization_version: "slonczewski_interface_flux.v1".to_string(),
@@ -1011,6 +1114,7 @@ mod tests {
                 epsilon_prime: 0.0,
                 free_layer_thickness_m: None,
                 fixed_layer_position: None,
+                time_expression: None,
                 realization: None,
             },
         ];
@@ -1089,6 +1193,7 @@ mod tests {
             epsilon_prime: 0.0,
             free_layer_thickness_m: None,
             fixed_layer_position: None,
+            time_expression: None,
             realization: None,
         }];
         let resolved = resolve_legacy_spin_torque(
@@ -1129,6 +1234,7 @@ mod tests {
             epsilon_prime: 0.0,
             free_layer_thickness_m: Some(2.0e-9),
             fixed_layer_position: Some("top".to_string()),
+            time_expression: None,
             realization: None,
         }];
 

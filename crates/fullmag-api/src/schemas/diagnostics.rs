@@ -671,3 +671,42 @@ fn default_sample_every() -> u64 {
 fn default_max_samples() -> usize {
     128
 }
+
+/// Bounded automatic run telemetry. GPU samples describe the whole device.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RunPerformancePointResource {
+    pub elapsed_monotonic_ns: u64,
+    pub step_index: Option<u64>,
+    /// Process CPU utilization; can exceed 100 percent for multiple cores.
+    pub cpu_percent: Option<f64>,
+    pub rss_bytes: Option<u64>,
+    pub gpu_percent: Option<f64>,
+    pub gpu_memory_bytes: Option<u64>,
+    pub gpu_power_watts: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RunPerformanceResource {
+    pub revision: String,
+    pub state: String,
+    pub reason: Option<String>,
+    pub run_id: Option<String>,
+    pub task_id: Option<String>,
+    pub step_id: Option<String>,
+    pub attempt_id: Option<String>,
+    pub ownership_epoch: Option<u64>,
+    pub sample_sequence: u64,
+    pub elapsed_monotonic_ns: u64,
+    pub first_step_index: Option<u64>,
+    pub step_index: Option<u64>,
+    pub unique_step_callback_records: u64,
+    pub rows_dropped: u64,
+    pub collection_overhead_ns: Option<u64>,
+    pub latest_step_wall_ns: Option<u64>,
+    pub latest_rejected_attempts: Option<u64>,
+    pub latest_evaluate_host_wall_ns: Option<u64>,
+    pub gpu_scope: String,
+    pub gpu_unavailable_reason: Option<String>,
+    #[schema(max_items = 120)]
+    pub points: Vec<RunPerformancePointResource>,
+}

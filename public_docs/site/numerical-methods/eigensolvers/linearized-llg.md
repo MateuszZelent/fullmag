@@ -4,7 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: docs/physics/0600-fem-eigenmodes-linearized-llg.md
+source_of_truth: /physics/foundations/llg-equation, /physics/interactions/demagnetization/fem-poisson-airbox
 ---
 
 (public-docs-numerical-methods-eigensolvers-linearized-llg)=
@@ -146,7 +146,7 @@ after eliminating $\delta\phi$ via the magnetostatic Poisson equation.
 ### 2.4 Rate-form and energy-Hessian generalized eigenvalue pencils
 
 FullMag maintains two mathematically equivalent, unit-consistent normalizations of the linearized
-LLG eigenvalue problem (`docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`):
+LLG eigenvalue problem ({doc}`/physics/foundations/llg-equation` and {doc}`/numerical-methods/frequency-domain/response-solver`):
 
 1. **Rate-form dynamic operator pencil (`LinearizedDynamicPencil`)**:
    Starting from the Gilbert equation $\partial_t\mathbf m - \alpha\,\mathbf m\times\partial_t\mathbf m = -\gamma_0\,\mathbf m\times\mathbf H_{\mathrm{eff}}$
@@ -693,7 +693,7 @@ quadrature provenance in the stage receipt.
 1. C. Herring and C. Kittel, “On the theory of spin waves in ferromagnetic media,” *Physical Review*, 81, 869–880 (1951).
 2. M. d'Aquino, C. Serpico, G. Miano, and C. Forestiere, “A novel formulation for the numerical computation of magnetization modes in complex micromagnetic systems,” *Journal of Computational Physics*, 228, 6130–6149 (2009).
 3. V. Hernandez, J. E. Roman, and V. Vidal, “SLEPc: A scalable and flexible toolkit for the solution of eigenvalue problems,” *ACM Transactions on Mathematical Software*, 31, 351–362 (2005).
-4. FullMag physics contracts: `docs/physics/0600-fem-eigenmodes-linearized-llg.md`, `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`, and `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`.
+4. FullMag public physics contracts: {doc}`/physics/foundations/llg-equation` and {doc}`/physics/interactions/demagnetization/fem-poisson-airbox`.
 
 (linearized-llg-source-code-index)=
 ## 13. Source-code index

@@ -162,6 +162,25 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     expect(JSON.stringify(result).length).toBeLessThan(64 * 1024);
   });
 
+  it("reports float32 payload precision and storage size in debug snapshots", () => {
+    const values = new Float32Array([0.1, -0.2, 0.3, 1, 2, 3]);
+    const decoded: DecodedFieldVector = {
+      ...field(),
+      dtype: "float32",
+      values,
+    };
+    const result = snapshot([carrier({ decoded })]);
+    const snapshotCarrier = result.carriers[0];
+
+    expect(snapshotCarrier?.payload?.dtype).toBe("float32");
+    expect(snapshotCarrier?.memory.find((row) => row.id === "values")?.byteLength).toBe(
+      values.byteLength,
+    );
+    expect(snapshotCarrier?.samples[0]?.componentValues).toEqual(
+      Array.from(values.subarray(0, 3)),
+    );
+  });
+
   it("keeps per-carrier Airbox resource states and degrades the aggregate snapshot", () => {
     const result = snapshot([
       carrier({

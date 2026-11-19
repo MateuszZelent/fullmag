@@ -49,9 +49,13 @@ E[\mathbf{m}]=\sum_{k\in\mathcal{K}}E_k[\mathbf{m}].
 (foundation-energy-assumptions-and-validity)=
 ## Assumptions and validity
 
-The sum includes only explicitly enabled terms. Each interaction owns its sign, units,
-discretization, and boundary law. FEM and FDM reductions can use different weights and
-quadrature, so the composition equation alone is not a parity claim.
+The sum includes only explicitly enabled terms (see
+{numref}`fig-interactions-taxonomy-energy-vs-torque` for the taxonomy across all 12 interactions
+and {numref}`fig-effective-field-and-direct-torque-composition` for how conservative energy
+variation $\delta E_k$ maps to $\mathbf{H}_k$ separately from direct torques
+$\boldsymbol{\tau}_{\mathrm{direct}}$). Each interaction owns its sign, units, discretization,
+and boundary law. FEM and FDM reductions can use different weights and quadrature, so the
+composition equation alone is not a parity claim.
 
 (foundation-energy-python-api)=
 ## Python API
@@ -85,9 +89,9 @@ for complete argument tables, support matrices, and rejection semantics.
 (foundation-energy-problem-ir)=
 ## ProblemIR
 
-Exchange.to_ir() produces {"kind":"exchange"} and Zeeman.to_ir() produces
-{"kind":"zeeman","B":[0.0,0.0,0.001]}. Lowering inserts these fragments into
-ProblemIR.energy_terms and preserves requested values before planner resolution.
+`Exchange.to_ir()` produces `{"kind": "exchange"}` and `Zeeman.to_ir()` produces
+`{"kind": "zeeman", "B": [0.0, 0.0, 0.001]}`. Lowering inserts these fragments into
+`ProblemIR.energy_terms` and preserves requested values before planner resolution.
 
 (foundation-energy-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
@@ -110,14 +114,14 @@ silently dropped from the energy sum.
 (foundation-energy-implementation-mapping)=
 ## Implementation mapping
 
-energy.py owns typed terms and to_ir serialization. _build_problem assembles enabled
-objects, and ProblemIR owns the typed energy_terms field. Native backends own term evaluation.
+`energy.py` owns typed terms and `to_ir()` serialization. `_build_problem` assembles enabled
+objects, and `ProblemIR` owns the typed `energy_terms` field. Native backends own term evaluation.
 
 (foundation-energy-validation)=
 ## Validation
 
-The source map checks all listed Python and Rust symbols. The example is parsed by the
-public-example guard. Energy-derivative and cross-backend parity evidence remains
+The stage-first Python example is verified against the public study API and object-level
+serialization checks. Energy-derivative and cross-backend parity evidence remains
 interaction-specific.
 
 (foundation-energy-limitations)=
@@ -129,11 +133,9 @@ term kind is executable on every lane.
 (foundation-energy-scientific-bibliography)=
 ## Scientific bibliography
 
-1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, 1963.
-   [WorldCat record](https://search.worldcat.org/title/536451).
-2. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European
-   Physical Journal B* 92, 120 (2019).
-   [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963. [WorldCat record](https://search.worldcat.org/title/536451).
+2. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *The European Physical Journal B* **92**(6), 120 (2019). [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6) · [Open Access (CC-BY PDF)](https://link.springer.com/content/pdf/10.1140/epjb/e2019-90599-6.pdf) · [arXiv:1810.12365](https://arxiv.org/abs/1810.12365).
+3. J. Joos, P. Bassirian, P. Gypens, J. Mulkers, K. Litzius, B. Van Waeyenberge, and J. Leliaert, "Tutorial: Simulating modern magnetic material systems in mumax3," *Journal of Applied Physics* **134**(17), 171101 (2023). [doi:10.1063/5.0160988](https://doi.org/10.1063/5.0160988) · [Open Access (CC-BY PDF)](https://pubs.aip.org/aip/jap/article-pdf/doi/10.1063/5.0160988/18193198/171101_1_5.0160988.pdf).
 
 (foundation-energy-source-code-index)=
 ## Source-code index
@@ -148,4 +150,4 @@ term kind is executable on every lane.
 | interfacial DMI authoring | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L128) | [`class InterfacialDMI`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L128) | serializes D and normal | planner-gated | source-backed |
 | bulk DMI authoring | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L161) | [`class BulkDMI`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L161) | serializes D | planner-gated | source-backed |
 | term assembly | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L9460) | [`_build_problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L9460) | assembles enabled terms | all lanes | source-backed |
-| canonical term container | [`crates/fullmag-ir/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | [`ProblemIR`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | stores energy_terms | all lanes | source-backed |
+| canonical term container | [`crates/fullmag-ir/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | [`ProblemIR`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | stores `energy_terms` | all lanes | source-backed |

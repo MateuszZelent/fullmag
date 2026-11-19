@@ -5,11 +5,12 @@
 
 use crate::fdm::cpu::fft::{combine_fields_4, zero_vectors};
 use crate::fdm::cpu::fft_backend::FdmFftBackend;
+use crate::fdm::cpu::soa_par::soa_fill;
+use crate::fdm::shared::terms::TimeEvaluationSide;
 #[cfg(test)]
 use crate::fdm::shared::types::AxisBoundary;
-use crate::magnetoelastic;
 use crate::telemetry::{sections, StepTelemetry};
-use crate::vector::{add, cross, dot, max_cross_norm, max_norm, norm, scale, squared_norm, sub};
+use crate::vector::{add, cross, dot, max_cross_norm, max_norm, norm, scale, sub};
 use crate::{
     ExchangeLlgProblem, FftWorkspace, OerstedCylinderConfig, RhsEvaluation, SlonczewskiFormula,
     SlonczewskiSttConfig, SotConfig, SotFormula, Vector3, VectorFieldSoA, ZhangLiFormula,
@@ -380,6 +381,9 @@ impl ExchangeLlgProblem {
         if self.alpha_field.is_some() {
             return Some("spatial_damping");
         }
+        if self.exchange_faces.is_some() {
+            return Some("exchange_faces");
+        }
         None
     }
 
@@ -604,20 +608,44 @@ impl ExchangeLlgProblem {
         h_eff: &VectorFieldSoA,
         out: &mut VectorFieldSoA,
     ) {
+        self.llg_rhs_soa_with_slonczewski_multiplier(magnetization, h_eff, out, 1.0);
+    }
+
+    pub(crate) fn llg_rhs_soa_into_at_time(
+        &self,
+        magnetization: &VectorFieldSoA,
+        h_eff: &VectorFieldSoA,
+        out: &mut VectorFieldSoA,
+        time_seconds: f64,
+        side: TimeEvaluationSide,
+    ) -> crate::Result<()> {
+        let multiplier = self.slonczewski_current_multiplier_at_time(time_seconds, side)?;
+        self.llg_rhs_soa_with_slonczewski_multiplier(magnetization, h_eff, out, multiplier);
+        Ok(())
+    }
+
+    fn llg_rhs_soa_with_slonczewski_multiplier(
+        &self,
+        magnetization: &VectorFieldSoA,
+        h_eff: &VectorFieldSoA,
+        out: &mut VectorFieldSoA,
+        current_multiplier: f64,
+    ) {
         let n = magnetization.len();
         debug_assert!(h_eff.len() >= n);
         debug_assert!(out.len() >= n);
-        for i in 0..n {
-            let rhs = self.llg_rhs_from_field_at(
+        soa_fill(out, n, |i| {
+            self.llg_rhs_from_field_at(
                 i,
                 [magnetization.x[i], magnetization.y[i], magnetization.z[i]],
                 [h_eff.x[i], h_eff.y[i], h_eff.z[i]],
-            );
-            out.x[i] = rhs[0];
-            out.y[i] = rhs[1];
-            out.z[i] = rhs[2];
-        }
-        self.direct_torques_add_into_soa(magnetization, out);
+            )
+        });
+        self.direct_torques_add_into_soa_with_slonczewski_multiplier(
+            magnetization,
+            out,
+            current_multiplier,
+        );
         if let Some(frozen) = &self.frozen_spins {
             frozen.mask_final_rhs_soa(out);
         }
@@ -629,13 +657,45 @@ impl ExchangeLlgProblem {
         h_eff: &[Vector3],
         out: &mut [Vector3],
     ) {
+        self.llg_rhs_from_fields_with_slonczewski_multiplier_into(magnetization, h_eff, out, 1.0);
+    }
+
+    pub(crate) fn llg_rhs_from_fields_with_direct_torques_at_time_into(
+        &self,
+        magnetization: &[Vector3],
+        h_eff: &[Vector3],
+        out: &mut [Vector3],
+        time_seconds: f64,
+        side: TimeEvaluationSide,
+    ) -> crate::Result<()> {
+        let multiplier = self.slonczewski_current_multiplier_at_time(time_seconds, side)?;
+        self.llg_rhs_from_fields_with_slonczewski_multiplier_into(
+            magnetization,
+            h_eff,
+            out,
+            multiplier,
+        );
+        Ok(())
+    }
+
+    fn llg_rhs_from_fields_with_slonczewski_multiplier_into(
+        &self,
+        magnetization: &[Vector3],
+        h_eff: &[Vector3],
+        out: &mut [Vector3],
+        current_multiplier: f64,
+    ) {
         let n = magnetization.len();
         debug_assert!(h_eff.len() >= n);
         debug_assert!(out.len() >= n);
         for i in 0..n {
             out[i] = self.llg_rhs_from_field_at(i, magnetization[i], h_eff[i]);
         }
-        self.direct_torques_add_into(magnetization, out);
+        self.direct_torques_add_into_with_slonczewski_multiplier(
+            magnetization,
+            out,
+            current_multiplier,
+        );
         if let Some(frozen) = &self.frozen_spins {
             frozen.mask_final_rhs(&mut out[..n]);
         }
@@ -1145,7 +1205,7 @@ impl ExchangeLlgProblem {
         h_eff: &mut [Vector3],
         h_scratch: &mut [Vector3],
         rhs_out: &mut [Vector3],
-    ) -> RhsEvaluation {
+    ) -> crate::Result<RhsEvaluation> {
         self.compute_step_observables_zero_alloc_at_time(
             magnetization,
             ws,
@@ -1165,7 +1225,11 @@ impl ExchangeLlgProblem {
         h_scratch: &mut [Vector3],
         rhs_out: &mut [Vector3],
         time_seconds: f64,
-    ) -> RhsEvaluation {
+    ) -> crate::Result<RhsEvaluation> {
+        let current_multiplier = self.slonczewski_current_multiplier_at_time(
+            time_seconds,
+            TimeEvaluationSide::LeftLimit,
+        )?;
         let n = magnetization.len();
 
         // Zero h_eff
@@ -1260,7 +1324,12 @@ impl ExchangeLlgProblem {
             self.zhang_li_stt_torque_add_into(magnetization, zl, &mut rhs_out[..n]);
         }
         if let Some(ref slon) = self.terms.slonczewski_stt {
-            self.slonczewski_stt_torque_add_into(magnetization, slon, &mut rhs_out[..n]);
+            self.slonczewski_stt_torque_add_into_scaled(
+                magnetization,
+                slon,
+                &mut rhs_out[..n],
+                current_multiplier,
+            );
         }
         if let Some(ref sot) = self.terms.sot {
             self.sot_torque_add_into(magnetization, sot, &mut rhs_out[..n]);
@@ -1278,7 +1347,7 @@ impl ExchangeLlgProblem {
             frozen.max_cross_norm_free(&magnetization[..n], &h_eff[..n])
         });
 
-        RhsEvaluation {
+        Ok(RhsEvaluation {
             exchange_energy_joules,
             demag_energy_joules,
             external_energy_joules,
@@ -1296,7 +1365,7 @@ impl ExchangeLlgProblem {
             max_rhs_all_amplitude,
             max_torque_Apm,
             max_torque_all_Apm,
-        }
+        })
     }
 
     /// Minimal observables: compute h_eff and rhs only, skip per-term energy
@@ -1311,7 +1380,7 @@ impl ExchangeLlgProblem {
         ws: &mut FftWorkspace,
         h_eff: &mut [Vector3],
         rhs_out: &mut [Vector3],
-    ) -> RhsEvaluation {
+    ) -> crate::Result<RhsEvaluation> {
         self.compute_step_observables_minimal_at_time(magnetization, ws, h_eff, rhs_out, 0.0)
     }
 
@@ -1323,7 +1392,11 @@ impl ExchangeLlgProblem {
         h_eff: &mut [Vector3],
         rhs_out: &mut [Vector3],
         time_seconds: f64,
-    ) -> RhsEvaluation {
+    ) -> crate::Result<RhsEvaluation> {
+        let current_multiplier = self.slonczewski_current_multiplier_at_time(
+            time_seconds,
+            TimeEvaluationSide::LeftLimit,
+        )?;
         // Compute h_eff in-place (zero + accumulate all terms)
         self.effective_field_into_ws_at_time(magnetization, ws, h_eff, time_seconds);
 
@@ -1353,7 +1426,12 @@ impl ExchangeLlgProblem {
             self.zhang_li_stt_torque_add_into(magnetization, zl, &mut rhs_out[..n]);
         }
         if let Some(ref slon) = self.terms.slonczewski_stt {
-            self.slonczewski_stt_torque_add_into(magnetization, slon, &mut rhs_out[..n]);
+            self.slonczewski_stt_torque_add_into_scaled(
+                magnetization,
+                slon,
+                &mut rhs_out[..n],
+                current_multiplier,
+            );
         }
         if let Some(ref sot) = self.terms.sot {
             self.sot_torque_add_into(magnetization, sot, &mut rhs_out[..n]);
@@ -1371,7 +1449,7 @@ impl ExchangeLlgProblem {
             frozen.max_cross_norm_free(&magnetization[..n], &h_eff[..n])
         });
 
-        RhsEvaluation {
+        Ok(RhsEvaluation {
             exchange_energy_joules: 0.0,
             demag_energy_joules: 0.0,
             external_energy_joules: 0.0,
@@ -1384,7 +1462,7 @@ impl ExchangeLlgProblem {
             max_rhs_all_amplitude,
             max_torque_Apm,
             max_torque_all_Apm,
-        }
+        })
     }
 
     /// Dispatch to full or minimal observables based on evaluation request.
@@ -1397,7 +1475,7 @@ impl ExchangeLlgProblem {
         h_scratch: &mut [Vector3],
         rhs_out: &mut [Vector3],
         request: crate::EvaluationRequest,
-    ) -> RhsEvaluation {
+    ) -> crate::Result<RhsEvaluation> {
         self.compute_step_observables_at_time(
             magnetization,
             ws,
@@ -1418,7 +1496,7 @@ impl ExchangeLlgProblem {
         rhs_out: &mut [Vector3],
         request: crate::EvaluationRequest,
         time_seconds: f64,
-    ) -> RhsEvaluation {
+    ) -> crate::Result<RhsEvaluation> {
         match request {
             crate::EvaluationRequest::Minimal => self.compute_step_observables_minimal_at_time(
                 magnetization,
@@ -1490,60 +1568,10 @@ impl ExchangeLlgProblem {
             );
         }
 
-        // Brown thermal field.  Keep this legacy public path on the same
-        // per-cell material contract as the fused execution path.
-        let thermal_dt = self.thermal_dt_for_evaluation();
-        if let (Some(base_factor), true) = (
-            thermal_base_factor(
-                self.temperature,
-                self.dynamics.gyromagnetic_ratio,
-                self.cell_size.volume(),
-            ),
-            thermal_dt > 0.0 && thermal_dt.is_finite(),
-        ) {
-            use std::cell::RefCell;
-
-            thread_local! {
-                static RNG: RefCell<u64> = const { RefCell::new(42u64) };
-            }
-
-            let dt_scale = 1.0 / thermal_dt.sqrt();
-
-            RNG.with(|seed_cell| {
-                let mut seed = *seed_cell.borrow();
-                for (i, h) in h_eff.iter_mut().enumerate() {
-                    let (n0, n1, n2) = {
-                        let next_u = |s: &mut u64| -> f64 {
-                            *s ^= *s >> 12;
-                            *s ^= *s << 25;
-                            *s ^= *s >> 27;
-                            ((*s).wrapping_mul(0x2545F4914F6CDD1D) >> 11) as f64
-                                / (1u64 << 53) as f64
-                        };
-                        let u1 = next_u(&mut seed).max(1e-300);
-                        let u2 = next_u(&mut seed);
-                        let u3 = next_u(&mut seed).max(1e-300);
-                        let u4 = next_u(&mut seed);
-                        let r1 = (-2.0 * u1.ln()).sqrt();
-                        let r2 = (-2.0 * u3.ln()).sqrt();
-                        let theta1 = 2.0 * std::f64::consts::PI * u2;
-                        let theta2 = 2.0 * std::f64::consts::PI * u4;
-                        (r1 * theta1.cos(), r1 * theta1.sin(), r2 * theta2.cos())
-                    };
-                    if let Some(sigma) = thermal_sigma_for_cell(
-                        base_factor,
-                        dt_scale,
-                        self.ms_at(i),
-                        self.alpha_at(i),
-                    ) {
-                        h[0] += sigma * n0;
-                        h[1] += sigma * n1;
-                        h[2] += sigma * n2;
-                    }
-                }
-                *seed_cell.borrow_mut() = seed;
-            });
-        }
+        // Brown thermal field. Keep this public path on the same stateless
+        // SplitMix64 counter RNG and per-cell material contract as the fused
+        // execution path.
+        self.thermal_field_add_into(&mut h_eff);
 
         // Oersted field from cylindrical conductor (STNO / MTJ)
         self.oersted_field_add_into_at_time(&mut h_eff, time_seconds);
@@ -1579,6 +1607,16 @@ impl ExchangeLlgProblem {
         debug_assert!(h_eff.len() >= n);
         debug_assert!(out.len() >= n);
         for i in 0..n {
+            if self
+                .frozen_spins
+                .as_ref()
+                .is_some_and(|frozen| frozen.is_frozen(i))
+            {
+                out.x[i] = 0.0;
+                out.y[i] = 0.0;
+                out.z[i] = 0.0;
+                continue;
+            }
             let m_dot_h = magnetization.x[i] * h_eff.x[i]
                 + magnetization.y[i] * h_eff.y[i]
                 + magnetization.z[i] * h_eff.z[i];
@@ -2269,10 +2307,61 @@ mod stt_tests {
             &mut effective_field,
             &mut scratch,
             &mut rhs,
-        );
+        ).expect("constant-current observables");
 
         assert_eq!(observables.max_torque_Apm, 0.0);
         assert!(observables.max_rhs_amplitude > 0.0);
+    }
+
+    #[test]
+    fn step_observables_apply_the_time_dependent_slonczewski_multiplier() {
+        let mut problem = one_cell_problem(0.2);
+        problem.terms.exchange = false;
+        problem.terms.demag = false;
+        problem.terms.slonczewski_stt = Some(SlonczewskiSttConfig {
+            formula: SlonczewskiFormula::FullmagV2,
+            current_density_magnitude: 1.0e12,
+            spin_polarization_axis: [0.0, 0.0, 1.0],
+            lambda: 1.0,
+            epsilon_prime: 0.0,
+            degree: 0.4,
+            thickness: 1.0e-9,
+            current_sign: 1.0,
+            active_mask: None,
+        });
+        problem
+            .set_slonczewski_time_expression(&fullmag_ir::TimeExpressionIR {
+                source: "heaviside(t - on)".into(),
+                constants: [("on".to_string(), 1.0e-9)].into_iter().collect(),
+                event_times_s: vec![1.0e-9],
+            })
+            .expect("valid current expression");
+
+        let magnetization = [[1.0, 0.0, 0.0]];
+        let mut workspace = problem.create_workspace();
+        let mut effective_field = [[0.0; 3]];
+        let mut rhs = [[0.0; 3]];
+        let before = problem
+            .compute_step_observables_minimal_at_time(
+                &magnetization,
+                &mut workspace,
+                &mut effective_field,
+                &mut rhs,
+                0.5e-9,
+            )
+            .expect("off-state observables");
+        assert_eq!(before.max_rhs_amplitude, 0.0);
+
+        let on = problem
+            .compute_step_observables_minimal_at_time(
+                &magnetization,
+                &mut workspace,
+                &mut effective_field,
+                &mut rhs,
+                1.5e-9,
+            )
+            .expect("on-state observables");
+        assert!(on.max_rhs_amplitude > 0.0);
     }
 
     #[test]

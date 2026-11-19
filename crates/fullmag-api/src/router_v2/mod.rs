@@ -295,6 +295,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .delete(handlers::model::delete_authoring_object_region),
         )
         .route(
+            "/v2/sessions/current/model/objects/:object_id/source-surface",
+            get(handlers::model::imported_surface::get_imported_source_surface),
+        )
+        .route(
+            "/v2/sessions/current/model/objects/:object_id/source-surface/topology",
+            get(handlers::model::imported_surface::get_imported_source_surface_topology),
+        )
+        .route(
             "/v2/sessions/current/model/objects/:object_id/geometry",
             patch(handlers::model::patch_authoring_object_geometry),
         )
@@ -365,6 +373,24 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             "/v2/sessions/current/model/field-drives/:drive_id",
             axum::routing::put(handlers::model::replace_authoring_field_drive)
                 .delete(handlers::model::delete_authoring_field_drive),
+        )
+        .route(
+            "/v2/sessions/current/model/mask-field-drives",
+            get(handlers::model::get_authoring_mask_field_drives)
+                .post(handlers::model::create_authoring_mask_field_drive),
+        )
+        .route(
+            "/v2/sessions/current/model/mask-field-drives/:drive_id",
+            axum::routing::put(handlers::model::replace_authoring_mask_field_drive)
+                .delete(handlers::model::delete_authoring_mask_field_drive),
+        )
+        .route(
+            "/v2/sessions/current/model/ready-antennas",
+            get(handlers::model::get_ready_antennas),
+        )
+        .route(
+            "/v2/sessions/current/model/ready-antennas/terms",
+            post(handlers::model::build_ready_antenna_terms),
         )
         .route(
             "/v2/sessions/current/model/regions/:region_id",
@@ -518,6 +544,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/simulation/commands/:command_id/failure",
             post(handlers::simulation::report_command_failure),
+        )
+        .route(
+            "/v2/sessions/current/diagnostics/performance",
+            get(handlers::diagnostics::get_run_performance),
         )
         .route(
             "/v2/sessions/current/diagnostics/solver-profile",
@@ -797,6 +827,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_scalars),
         )
         .route(
+            "/v2/sessions/current/simulation/stages/results",
+            get(handlers::data::stage_results::get_study_stage_results),
+        )
+        .route(
+            "/v2/sessions/current/simulation/stages/results/scalars",
+            get(handlers::data::scalars::get_historical_scalars),
+        )
+        .route(
             "/v2/sessions/current/data/tables",
             get(handlers::data::list_tables),
         )
@@ -897,6 +935,24 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             "/v2/sessions/current/workspace/tree/active-node",
             get(handlers::workspace::get_workspace_active_node)
                 .put(handlers::workspace::replace_workspace_active_node),
+        )
+        .route(
+            "/v2/workspace/material-library",
+            get(handlers::material_library::list_materials)
+                .post(handlers::material_library::create_material),
+        )
+        .route(
+            "/v2/workspace/material-library/:id",
+            axum::routing::put(handlers::material_library::update_material)
+                .delete(handlers::material_library::delete_material),
+        )
+        .route(
+            "/v2/workspace/material-library/versions",
+            post(handlers::material_library::publish_version),
+        )
+        .route(
+            "/v2/workspace/material-library/versions/:family/:version",
+            patch(handlers::material_library::patch_version),
         )
         .route(
             "/v2/workspace/items",
@@ -1274,6 +1330,30 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision",
             get(handlers::persistence::solutions::get_solution_revision),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/study-results",
+            get(handlers::persistence::solutions::study_state::list_project_study_results),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/study-results/:artifact_id",
+            get(handlers::persistence::solutions::study_state::get_study_result_state),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/study-results/:artifact_id/magnetization",
+            get(handlers::persistence::solutions::study_state::get_study_result_magnetization),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/study-results/:artifact_id/topology",
+            get(handlers::persistence::solutions::study_state::get_study_result_topology),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/study-results/:artifact_id/support",
+            get(handlers::persistence::solutions::study_state::get_study_result_support),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/study-results/:artifact_id/scalars",
+            get(handlers::persistence::solutions::study_state::get_study_result_scalars),
         )
         .route(
             "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets",

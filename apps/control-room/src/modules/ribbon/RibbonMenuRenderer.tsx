@@ -222,6 +222,7 @@ function SliderMenuItem({
     draftState?.sourceValue === node.value ? draftState.value : node.value;
 
   const pct = ((draftValue - node.min) / (node.max - node.min)) * 100;
+  const valueText = `${Number.isInteger(node.step) ? Math.round(draftValue) : draftValue.toFixed(1)}${node.unit ?? ""}`;
 
   return (
     <div
@@ -230,13 +231,12 @@ function SliderMenuItem({
     >
       <div className="fm-dropdown-slider__header">
         <span className="fm-dropdown-slider__label">{node.label}</span>
-        <span className="fm-dropdown-slider__value">
-          {Number.isInteger(node.step) ? Math.round(draftValue) : draftValue.toFixed(1)}
-          {node.unit ?? ""}
-        </span>
+        <span className="fm-dropdown-slider__value">{valueText}</span>
       </div>
       <input
         type="range"
+        aria-label={node.label}
+        aria-valuetext={valueText}
         className="fm-dropdown-slider__track"
         min={node.min}
         max={node.max}
@@ -447,7 +447,7 @@ function TextMenuItem({
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           event.stopPropagation();
-          if (event.key === "Enter") {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
             event.preventDefault();
             commit();
           }

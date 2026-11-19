@@ -6,6 +6,8 @@ import {
   useUniverseMeshPolicyResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { AIRBOX_VISUALIZATION_TARGET, resolveTargetVisualization } from "@/kernel/visualization/ObjectVisualizationController";
+import { useObjectVisualizationSelector } from "@/kernel/visualization/useObjectVisualization";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { shouldLoadRuntimeMeshBuild } from "@/kernel/resources/studyRuntimeResources";
 import { useKernel } from "@/kernel/KernelContext";
@@ -58,6 +60,13 @@ export function AirboxOverviewPanel({ selection }: InspectorPanelProps) {
   const build = useMeshBuildCurrent({ enabled: shouldLoadRuntimeMeshBuild(true, runtimeStatus) });
   const scene = useSceneResource();
   const visualization = useVisualizationStateResource();
+  const activeQuantityId = useObjectVisualizationSelector((snapshot) =>
+    resolveTargetVisualization({
+      snapshot,
+      target: AIRBOX_VISUALIZATION_TARGET,
+      visualizationState: visualization.optimisticData ?? visualization.data,
+    }).settings.activeQuantityId,
+  );
   const topologyMatches = matchesAirboxTopologyIdentity(runtimeStatus, manifest.data);
   const currentManifest = topologyMatches ? manifest.data : null;
   const airboxParts = findAirboxParts(currentManifest?.mesh_parts);
@@ -121,7 +130,7 @@ export function AirboxOverviewPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Elements (all carriers)" value={aggregate.elementCount?.toLocaleString("en-US") ?? "not available"} />
         <FieldRow label="Boundary faces (all carriers)" value={aggregate.boundaryFaceCount?.toLocaleString("en-US") ?? "not available"} />
         <FieldRow label="Node-count source" value={aggregate.nodeCountExact ? "deduplicated published carrier coverage" : "not fully published"} />
-        <FieldRow label="Active quantity" value={visualization.data?.active_quantity_id ?? "not available"} />
+        <FieldRow label="Active quantity" value={activeQuantityId} />
         <FieldRow label="Manifest state" value={manifest.status === "ready" && !topologyMatches ? "stale identity" : manifest.status} />
         <FieldRow label="Visualization state" value={visualization.status} />
         <FieldRow
@@ -134,7 +143,7 @@ export function AirboxOverviewPanel({ selection }: InspectorPanelProps) {
                 : "hidden"
           }
         />
-        <div className="fm-inspector-toolbar" aria-label="Airbox navigation">
+        <div role="group" className="fm-inspector-toolbar" aria-label="Airbox navigation">
           <Button size="sm" type="button" variant="secondary" onClick={() => navigateToAirboxRoute(kernel.selection, "meshParameters")}>
             Mesh Parameters
           </Button>

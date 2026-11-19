@@ -10,6 +10,7 @@ import {
 
 function materializationApi({
   sourceSceneRevision = 17,
+  validatedSceneRevision = undefined as number | undefined,
   status = "ready" as "ready" | "running",
 } = {}) {
   const preparation = vi.fn(async () => ({
@@ -19,6 +20,7 @@ function materializationApi({
   const scene = vi.fn(async () => ({ revision: 17 }));
   const sharedDomainManifest = vi.fn(async () => ({
     source_scene_revision: sourceSceneRevision,
+    validated_for_scene_revision: validatedSceneRevision,
   }));
   const materializePreparation = vi.fn(async () => ({
     disposition: "accepted" as const,
@@ -99,6 +101,21 @@ describe("Live preparation materialization", () => {
       SIMULATION_PREPARATION_PATH,
       `sha256:${"b".repeat(64)}`,
     );
+  });
+
+  it("uses the server's current-scene validation after a compatible FEM model edit", async () => {
+    const fixture = materializationApi({
+      sourceSceneRevision: 16,
+      validatedSceneRevision: 17,
+    });
+
+    const outcome = await materializeCurrentLivePreparation(fixture.context, {
+      expectedSceneRevision: 17,
+      requireCurrentSharedDomainMesh: true,
+    });
+
+    expect(outcome.kind).toBe("materialized");
+    expect(fixture.materializePreparation).toHaveBeenCalledOnce();
   });
 
   it("fails closed when the shared-domain mesh belongs to another scene revision", async () => {

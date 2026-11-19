@@ -6,7 +6,7 @@ use fullmag_fdm_demag::{
 use fullmag_ir::{
     AxisBoundary, BackendPlanIR, BackendTarget, CommonPlanMeta, ConstraintActivationIR,
     DiscretizationHintsIR, EnergyTermIR, ExchangeBoundaryCondition, ExchangeCouplingModeIR,
-    ExecutionPlanIR, ExecutionPrecision, FdmFftPlanIR, FdmGridCertificateIR, FdmLayerPlanIR,
+    ExecutionPlanIR, ExecutionPrecision, FdmDemagPeriodicityIR, FdmFftPlanIR, FdmGridCertificateIR, FdmLayerPlanIR,
     FdmMaterialIR, FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FdmPlanIR, FdmPrecisionPolicyIR,
     FrozenReferencePolicyIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR,
     IntegratorChoice, OutputPlanIR, ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR,
@@ -431,14 +431,18 @@ fn grid_sample_points(
     points
 }
 
-fn fdm_material_sample_spacing(
+fn fdm_material_sampling(
     cell_size: [f64; 3],
-) -> crate::material::MaterialSampleSpacing<'static> {
+    active_mask: Option<&[bool]>,
+) -> crate::material::MaterialSampling<'_> {
     let minimum_positive_cell_size = cell_size
         .into_iter()
         .filter(|value| value.is_finite() && *value > 0.0)
         .fold(f64::INFINITY, f64::min);
-    crate::material::MaterialSampleSpacing::Uniform(minimum_positive_cell_size)
+    crate::material::MaterialSampling::Cells {
+        spacing: minimum_positive_cell_size,
+        active_mask,
+    }
 }
 
 /// Validate the exchange stiffness used by the rotated-interfacial-DMI
@@ -1001,11 +1005,10 @@ fn materialize_object_region_mask(
     regions.sort_by_key(|region| (region.priority, region.region_id.as_str()));
 
     let mut region_ids = BTreeMap::new();
-    if regions.len() > fullmag_ir::MAX_FDM_REGION_IDS as usize {
+    if u32::try_from(regions.len()).map_or(true, |count| count >= u32::MAX) {
         errors.push(format!(
-            "fdm_region_lut_capacity_exceeded: requested_region_count={} supported_region_ids={}",
-            regions.len(),
-            fullmag_ir::MAX_FDM_REGION_IDS
+            "fdm_region_index_space_exhausted: requested_region_count={}",
+            regions.len()
         ));
         return (mask, region_ids);
     }
@@ -1037,7 +1040,6 @@ fn materialize_object_region_mask(
         .collect::<Vec<_>>();
     for (index, region) in regions.iter().enumerate() {
         let region_index = (index + 1) as u32;
-        debug_assert!(region_index <= fullmag_ir::MAX_FDM_REGION_IDS);
         region_ids.insert(region.region_id.clone(), region_index);
     }
     for (flat_index, point) in points.iter().enumerate() {
@@ -1629,11 +1631,12 @@ fn build_fdm_region_legend(
 
 fn materialize_region_exchange_couplings(
     problem: &ProblemIR,
-    material_exchange: f64,
     region_index_by_id: &BTreeMap<String, u32>,
     errors: &mut Vec<String>,
-) -> Vec<(u32, u32, f64)> {
-    let mut overrides = Vec::new();
+) -> Vec<fullmag_ir::FdmExchangePairRuleIR> {
+    use fullmag_ir::FdmExchangePairModeIR;
+
+    let mut rules = Vec::new();
     for coupling in problem.couplings.iter().filter(|coupling| coupling.enabled) {
         let (
             fullmag_ir::CouplingEndpointIR::Region {
@@ -1667,7 +1670,7 @@ fn materialize_region_exchange_couplings(
             ));
             continue;
         };
-        let exchange = match mode {
+        let mode = match mode {
             ExchangeCouplingModeIR::Explicit => {
                 let Some(value) = inter_exchange else {
                     errors.push(format!(
@@ -1676,20 +1679,30 @@ fn materialize_region_exchange_couplings(
                     ));
                     continue;
                 };
-                *value
+                FdmExchangePairModeIR::Explicit {
+                    exchange_stiffness: *value,
+                }
             }
-            ExchangeCouplingModeIR::Disabled => 0.0,
+            ExchangeCouplingModeIR::Disabled => FdmExchangePairModeIR::Disabled,
             ExchangeCouplingModeIR::HarmonicMean => {
                 let scale = scale.unwrap_or(1.0);
-                if (scale - 1.0).abs() <= f64::EPSILON {
+                // The unscaled harmonic mean is already the default rule.
+                if scale == 1.0 {
                     continue;
                 }
-                material_exchange * scale
+                FdmExchangePairModeIR::HarmonicScale { scale }
             }
         };
-        overrides.push((source_index, target_index, exchange));
+        rules.push(fullmag_ir::FdmExchangePairRuleIR {
+            region_i: source_index,
+            region_j: target_index,
+            mode,
+        });
     }
-    overrides
+    if let Err(error) = fullmag_ir::validate_fdm_exchange_pair_rules(&rules) {
+        errors.push(error);
+    }
+    rules
 }
 
 fn apply_region_texture_overrides(
@@ -2037,7 +2050,7 @@ mod region_shape_bounds_tests {
     }
 }
 
-fn top_level_geometry_translation(entry: &GeometryEntryIR) -> [f64; 3] {
+pub(crate) fn top_level_geometry_translation(entry: &GeometryEntryIR) -> [f64; 3] {
     match entry {
         GeometryEntryIR::Translate { base, by, .. } => {
             let nested = top_level_geometry_translation(base);
@@ -2394,6 +2407,13 @@ fn has_referenced_material_anisotropy(problem: &ProblemIR) -> bool {
     })
 }
 
+/// Resolve a study-level rDMI term onto one complete magnetic object.
+/// An explicit zero preserves the exclusion rather than inheriting global D.
+fn object_rotated_dmi(d: f64, object_ids: Option<&[String]>, magnet: &fullmag_ir::MagnetIR) -> f64 {
+    let id = magnet.object_id.as_deref().unwrap_or(magnet.name.as_str());
+    if object_ids.is_none_or(|ids| ids.iter().any(|candidate| candidate == id)) { d } else { 0.0 }
+}
+
 fn resolve_multilayer_material_dmi_scalar(
     problem: &ProblemIR,
     parameter: &str,
@@ -2521,9 +2541,10 @@ pub(crate) fn plan_fdm(
             EnergyTermIR::BulkDmi { .. } => {
                 has_bulk_dmi = true;
             }
-            EnergyTermIR::RotatedInterfacialDmi { d } => {
+            EnergyTermIR::RotatedInterfacialDmi { d, object_ids } => {
                 has_rotated_interfacial_dmi = true;
-                has_nonzero_rotated_interfacial_dmi |= *d != 0.0;
+                has_nonzero_rotated_interfacial_dmi |= problem.magnets.first()
+                    .is_some_and(|magnet| object_rotated_dmi(*d, object_ids.as_deref(), magnet) != 0.0);
             }
             EnergyTermIR::ThermalNoise { temperature, seed } => {
                 if has_thermal_noise {
@@ -2757,7 +2778,7 @@ pub(crate) fn plan_fdm(
             .iter()
             .any(|term| matches!(term, EnergyTermIR::ThermalNoise { .. })),
         has_prescribed_zeeman_mask_source(problem),
-        !problem.field_drives.is_empty(),
+        !problem.field_drives.is_empty() || !problem.mask_field_drives.is_empty(),
         // Transport field outputs are study-level declarations.  A stage may
         // deliberately disable the complete charge->spin->torque pipeline
         // (for example during zero-current relaxation), so validation must
@@ -3035,6 +3056,13 @@ pub(crate) fn plan_fdm(
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
     let requested_integrator = controls.requested_integrator;
     let integrator = controls.integrator;
+    if spin_torque.slonczewski_time_expression.is_some() {
+        if integrator != Some(IntegratorChoice::Rk45) {
+            errors.push(
+                "Slonczewski time_expression requires the resolved FDM RK45 integrator".into(),
+            );
+        }
+    }
     if !problem.field_drives.is_empty() && integrator == Some(IntegratorChoice::Abm3) {
         errors.push(
             "RegionalFieldDrive is not executable with ABM3 because the multistep history has no qualified discontinuity/event restart contract; use heun, rk4, rk23, or rk45"
@@ -3145,12 +3173,8 @@ pub(crate) fn plan_fdm(
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
-    let inter_region_exchange = materialize_region_exchange_couplings(
-        problem,
-        material.exchange_stiffness,
-        &region_index_by_id,
-        &mut errors,
-    );
+    let inter_region_exchange =
+        materialize_region_exchange_couplings(problem, &region_index_by_id, &mut errors);
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
@@ -3163,7 +3187,7 @@ pub(crate) fn plan_fdm(
         active_mask.as_ref(),
     );
     let point_coords: Vec<[f64; 3]> = sample_points.iter().map(|p| p.position_world).collect();
-    let material_sample_spacing = fdm_material_sample_spacing(cell_size);
+    let material_sampling = fdm_material_sampling(cell_size, active_mask.as_deref());
     let antenna_zeeman_masks =
         resolve_prescribed_zeeman_masks(problem, &point_coords, active_mask.as_deref())?;
 
@@ -3174,7 +3198,7 @@ pub(crate) fn plan_fdm(
         fullmag_ir::MaterialParameterNameIR::Ms,
         material.saturation_magnetisation,
         &point_coords,
-        material_sample_spacing,
+        material_sampling,
         top_level_translation,
     );
     let ms_field_opt = match ms_field_resolved {
@@ -3201,7 +3225,7 @@ pub(crate) fn plan_fdm(
         fullmag_ir::MaterialParameterNameIR::Aex,
         material.exchange_stiffness,
         &point_coords,
-        material_sample_spacing,
+        material_sampling,
         top_level_translation,
     );
     let aex_field_opt = match aex_field_resolved {
@@ -3246,7 +3270,7 @@ pub(crate) fn plan_fdm(
         fullmag_ir::MaterialParameterNameIR::Alpha,
         material.damping,
         &point_coords,
-        material_sample_spacing,
+        material_sampling,
         top_level_translation,
     );
     let alpha_field_opt = match alpha_field_resolved {
@@ -3291,6 +3315,10 @@ pub(crate) fn plan_fdm(
             "Sphere (r={:.3e}) voxelized to {}x{}x{} grid, {}/{} active cells",
             radius, grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
         ),
+        GeometryShape::Ellipsoid { radii } => format!(
+            "Ellipsoid (radii=[{:.3e}, {:.3e}, {:.3e}]) voxelized to {}x{}x{} grid, {}/{} active cells",
+            radii[0], radii[1], radii[2], grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
         GeometryShape::SinWaveguide {
             period, amplitude, ..
         } => format!(
@@ -3307,6 +3335,14 @@ pub(crate) fn plan_fdm(
         ),
         GeometryShape::Difference { .. } => format!(
             "CSG Difference voxelized to {}x{}x{} grid, {}/{} active cells",
+            grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
+        GeometryShape::Union { .. } => format!(
+            "CSG Union voxelized to {}x{}x{} grid, {}/{} active cells",
+            grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
+        GeometryShape::Intersection { .. } => format!(
+            "CSG Intersection voxelized to {}x{}x{} grid, {}/{} active cells",
             grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
         ),
         GeometryShape::Translate { .. } => format!(
@@ -3368,6 +3404,19 @@ pub(crate) fn plan_fdm(
             cell_size,
             &problem.geometry.entries,
         )?;
+    let time_stage = crate::util::time_stage_context(problem);
+    let mask_field_term_bases = crate::mask_field::resolve_fdm_mask_field_terms(
+        problem,
+        &crate::mask_field::FdmMaskFieldDomain {
+            cell_centres_m: &point_coords,
+            active_mask: active_mask.as_deref(),
+            region_mask: &region_mask,
+            region_legend: &grid_certificate.region_legend,
+            target_aliases: &owner_names,
+            object_translation_m: top_level_translation,
+            stage_start_time_s: time_stage.start_time_s,
+        },
+    )?;
 
     let mut resolved_ms_for_transport = ms_field_opt
         .clone()
@@ -3400,12 +3449,28 @@ pub(crate) fn plan_fdm(
         &spin_transport_context,
         &active_transport_graph,
     )?;
+    if spin_torque.slonczewski_time_expression.is_some() && !spin_transport_plans.is_empty() {
+        return Err(PlanError {
+            reasons: vec![
+                "Slonczewski time_expression does not support coupled spin/charge transport".into(),
+            ],
+        });
+    }
     let fdm_gpu_charge_transports = resolve_fdm_gpu_charge_transports_with_active_graph(
         problem,
         resolved_backend,
         &spin_transport_context,
         &active_transport_graph,
     )?;
+    if spin_torque.slonczewski_time_expression.is_some()
+        && !fdm_gpu_charge_transports.is_empty()
+    {
+        return Err(PlanError {
+            reasons: vec![
+                "Slonczewski time_expression does not support coupled spin/charge transport".into(),
+            ],
+        });
+    }
 
     let mut fdm_plan = FdmPlanIR {
         origin_m: native_origin,
@@ -3443,9 +3508,11 @@ pub(crate) fn plan_fdm(
         antenna_zeeman_masks,
         field_drives: active_field_drives,
         regional_field_drive_bases,
+        mask_field_term_bases,
         solved_antenna_drive_bases: Vec::new(),
-        time_stage: crate::util::time_stage_context(problem),
+        time_stage,
         inter_region_exchange,
+        region_owner: Vec::new(),
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
         precision_policy: resolve_precision_policy(problem)?,
@@ -3493,6 +3560,7 @@ pub(crate) fn plan_fdm(
         slonczewski_stack_normal: spin_torque.slonczewski_stack_normal,
         slonczewski_target: spin_torque.slonczewski_target.clone(),
         slonczewski_active_mask,
+        slonczewski_time_expression: spin_torque.slonczewski_time_expression.clone(),
         has_oersted_cylinder: false,
         oersted_current: None,
         oersted_radius: None,
@@ -3608,8 +3676,8 @@ pub(crate) fn plan_fdm(
             EnergyTermIR::BulkDmi { d } => {
                 fdm_plan.bulk_dmi = Some(*d);
             }
-            EnergyTermIR::RotatedInterfacialDmi { d } => {
-                fdm_plan.rotated_interfacial_dmi = Some(*d);
+            EnergyTermIR::RotatedInterfacialDmi { d, object_ids } => {
+                fdm_plan.rotated_interfacial_dmi = Some(object_rotated_dmi(*d, object_ids.as_deref(), magnet));
             }
             _ => {}
         }
@@ -3674,6 +3742,14 @@ pub(crate) fn plan_fdm(
                     fdm_plan.boundary_correction.as_deref().unwrap_or("?"),
                     shape,
                 )],
+            });
+        }
+    }
+
+    if runtime_requests_cuda(problem) {
+        if let Some(reason) = fdm_plan.cuda_heterogeneous_material_error() {
+            return Err(PlanError {
+                reasons: vec![reason],
             });
         }
     }
@@ -3767,11 +3843,9 @@ mod tests {
     }
 
     #[test]
-    fn fdm_region_mask_accepts_255_active_regions() {
+    fn fdm_region_mask_accepts_1000_regions() {
         let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
-        problem.object_regions = (0..fullmag_ir::MAX_FDM_REGION_IDS as usize)
-            .map(region)
-            .collect();
+        problem.object_regions = (0..1000).map(region).collect();
         let mut errors = Vec::new();
         let active_mask = vec![true];
         let (mask, ids) = materialize_object_region_mask(
@@ -3785,34 +3859,8 @@ mod tests {
             &mut errors,
         );
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
-        assert_eq!(ids.len(), fullmag_ir::MAX_FDM_REGION_IDS as usize);
-        assert_eq!(mask, vec![fullmag_ir::MAX_FDM_REGION_IDS]);
-    }
-
-    #[test]
-    fn fdm_region_mask_rejects_256_active_regions_before_sampling() {
-        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
-        problem.object_regions = (0..=fullmag_ir::MAX_FDM_REGION_IDS as usize)
-            .map(region)
-            .collect();
-        let mut errors = Vec::new();
-        let active_mask = vec![true];
-        let (mask, ids) = materialize_object_region_mask(
-            &problem,
-            &["strip"],
-            [1, 1, 1],
-            [1.0e-9; 3],
-            [0.0; 3],
-            [0.0; 3],
-            Some(&active_mask),
-            &mut errors,
-        );
-        assert!(ids.is_empty());
-        assert_eq!(mask, vec![0]);
-        assert!(errors.iter().any(|error| {
-            error.contains("fdm_region_lut_capacity_exceeded")
-                && error.contains("requested_region_count=256")
-        }));
+        assert_eq!(ids.len(), 1000);
+        assert_eq!(mask, vec![1000]);
     }
 
     #[test]
@@ -4076,6 +4124,132 @@ pub fn fdm_multilayer_cuda_material_field_errors(layers: &[FdmLayerPlanIR]) -> V
         .collect()
 }
 
+/// Whether native voxels can be embedded exactly into a centered common grid.
+///
+/// This is a same-cell insertion/crop, not interpolation: XY offsets are
+/// integral and centered, and Z starts at the layer's own scratch origin.
+/// The shifted pair kernel carries the physical displacement between layers.
+/// Generic overlap/resampling remains outside this CUDA contract.
+pub fn fdm_multilayer_cuda_aligned_embedding_eligible(layers: &[FdmLayerPlanIR]) -> bool {
+    let Some(first) = layers.first() else { return false; };
+    let common = first.convolution_grid;
+    let cell = first.convolution_cell_size;
+    if common.iter().any(|&n| n == 0)
+        || cell.iter().any(|v| !v.is_finite() || *v <= 0.0)
+    { return false; }
+    layers.iter().all(|layer| {
+        if layer.convolution_grid != common
+            || layer.convolution_cell_size != cell
+            || layer.native_cell_size != cell
+            || !matches!(layer.transfer_kind.as_str(), "identity" | "push_pull")
+            || layer.native_grid.iter().zip(common).any(|(&n, c)| n == 0 || n > c)
+            || layer.native_origin.iter().chain(layer.convolution_origin.iter())
+                .any(|v| !v.is_finite())
+        { return false; }
+        for axis in 0..3 {
+            let difference = common[axis] - layer.native_grid[axis];
+            if axis < 2 && difference % 2 != 0 { return false; }
+            let offset = if axis < 2 { (difference / 2) as f64 } else { 0.0 };
+            let actual = (layer.native_origin[axis] - layer.convolution_origin[axis]) / cell[axis];
+            // Only accommodate arithmetic roundoff in resolved grid origins.
+            // The bound is dimensionless and scales with the coordinate ULP,
+            // not with an arbitrary physical geometry tolerance.
+            let scale = (layer.native_origin[axis] / cell[axis]).abs()
+                .max((layer.convolution_origin[axis] / cell[axis]).abs())
+                .max(common[axis] as f64).max(1.0);
+            if !actual.is_finite() || !scale.is_finite()
+                || (actual - offset).abs() > 64.0 * f64::EPSILON * scale { return false; }
+            if axis < 2 && (layer.convolution_origin[axis] - first.convolution_origin[axis]).abs()
+                > 64.0 * f64::EPSILON * scale * cell[axis]
+            { return false; }
+            if layer.transfer_kind == "identity" &&
+                (layer.native_grid[axis] != common[axis] || actual != 0.0)
+            { return false; }
+        }
+        true
+    })
+}
+
+/// Shared geometry and operator checks for FP64 multilayer PG-BB.
+fn fdm_multilayer_projected_bb_geometry_error(plan: &FdmMultilayerPlanIR) -> Option<String> {
+    let algorithm_ok = plan.relaxation.as_ref()
+        .is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb);
+    let reference = plan.layers.first();
+    let identity = !plan.layers.is_empty() && plan.layers.iter().all(|layer|
+        layer.transfer_kind == "identity" && layer.native_grid == layer.convolution_grid
+        && layer.native_cell_size == layer.convolution_cell_size);
+    let geometry = identity || fdm_multilayer_cuda_aligned_embedding_eligible(&plan.layers);
+    let common = reference.is_some_and(|first| first.convolution_grid == plan.common_cells
+        && plan.layers.iter().all(|layer| layer.convolution_grid == plan.common_cells
+            && layer.native_cell_size == first.native_cell_size
+            && layer.convolution_cell_size == first.native_cell_size));
+    let masks_ok = plan.layers.iter().all(|layer| layer.native_active_mask.as_ref()
+        .is_none_or(|mask| mask.len() == layer.initial_magnetization.len()));
+    let uniform_ms = plan.layers.iter().all(|layer| layer.material.ms_field.as_ref().is_none_or(|values|
+        values.len() == layer.initial_magnetization.len() && values.iter().enumerate().all(|(index, value)|
+            layer.native_active_mask.as_ref().is_some_and(|mask| mask.get(index).copied() == Some(false))
+                || *value == layer.material.saturation_magnetisation)));
+    if !algorithm_ok || !plan.enable_demag || plan.mode != "three_d"
+        || plan.planner_summary.resolved_mode != "three_d"
+        || plan.precision != fullmag_ir::ExecutionPrecision::Double
+        || plan.frozen_spins.is_some() || !geometry || !common || !uniform_ms || !masks_ok
+        || !fdm_multilayer_cuda_containment_reason_codes(plan.enable_demag, &plan.mode, &plan.layers).is_empty()
+    {
+        Some("fdm_multilayer_projected_gradient_bb_contract: PG-BB requires three_d FP64 coupled demag, equal native/convolution cell sizes, identity or centered aligned native grids, uniform Ms within each object, and no frozen spins; no device/precision/LLG fallback".into())
+    } else { None }
+}
+
+/// CPU multilayer PG-BB uses the open-boundary pair kernels.
+pub fn fdm_multilayer_projected_bb_error(plan: &FdmMultilayerPlanIR) -> Option<String> {
+    if plan.periodicity.as_ref().is_some_and(|policy| policy.has_any_periodic()) {
+        return Some("CPU multilayer PG-BB requires open boundaries".into());
+    }
+    fdm_multilayer_projected_bb_geometry_error(plan)
+}
+
+fn is_multilayer_xy_periodic(policy: &fullmag_ir::FdmPeriodicityIR) -> bool {
+    policy.axes == [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open]
+        && policy.demag == FdmDemagPeriodicityIR::TruncatedImages
+}
+
+/// CUDA PG-BB also accepts exact integer-cell embeddings in an XY lattice.
+pub fn fdm_multilayer_cuda_projected_bb_error(plan: &FdmMultilayerPlanIR) -> Option<String> {
+    if let Some(policy) = plan.periodicity.as_ref().filter(|policy| policy.has_any_periodic()) {
+        if !is_multilayer_xy_periodic(policy)
+            || plan.resolved_periodic_images.is_none()
+            || !fdm_multilayer_cuda_aligned_embedding_eligible(&plan.layers)
+        {
+            return Some("CUDA multilayer PG-BB periodicity requires truncated images in XY, open Z and centered aligned grids".into());
+        }
+    }
+    fdm_multilayer_projected_bb_geometry_error(plan)
+}
+
+/// Narrow execution contract for the new exact embedding lane. Identity plans
+/// retain their existing supported integrators and precisions.
+pub fn fdm_multilayer_cuda_aligned_embedding_error(plan: &FdmMultilayerPlanIR) -> Option<String> {
+    if plan.relaxation.as_ref().is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb) {
+        return fdm_multilayer_cuda_projected_bb_error(plan);
+    }
+    if plan.periodicity.as_ref().is_some_and(|policy| policy.has_any_periodic()) {
+        return Some("CUDA multilayer periodic axes require PG-BB".into());
+    }
+    if !plan.enable_demag || !plan.layers.iter().any(|l| l.transfer_kind == "push_pull") {
+        return None;
+    }
+    let geometry_ok = fdm_multilayer_cuda_aligned_embedding_eligible(&plan.layers)
+        && plan.layers.first().is_some_and(|l| l.convolution_grid == plan.common_cells);
+    if !geometry_ok || plan.mode != "three_d"
+        || plan.planner_summary.resolved_mode != "three_d"
+        || plan.precision != fullmag_ir::ExecutionPrecision::Double
+        || plan.integrator != IntegratorChoice::Heun
+        || !plan.fixed_timestep.is_some_and(|dt| dt.is_finite() && dt > 0.0)
+        || plan.frozen_spins.is_some()
+    {
+        Some("fdm_cuda_multilayer_aligned_embedding_contract: centered integer-cell insertion/crop requires common equal cells, open three_d, double precision, fixed-step Heun, and no frozen spins".to_string())
+    } else { None }
+}
+
 /// Return stable reason codes for multilayer operator classes which the
 /// current CUDA runner cannot execute with the canonical CPU semantics.
 pub fn fdm_multilayer_cuda_containment_reason_codes(
@@ -4090,10 +4264,8 @@ pub fn fdm_multilayer_cuda_containment_reason_codes(
     if mode == "two_d_stack" {
         reasons.push(FDM_CUDA_MULTILAYER_TWO_D_STACK_UNQUALIFIED);
     }
-    if layers
-        .iter()
-        .any(|layer| layer.transfer_kind == "push_pull")
-    {
+    let aligned_embedding = fdm_multilayer_cuda_aligned_embedding_eligible(layers);
+    if !aligned_embedding && layers.iter().any(|layer| layer.transfer_kind == "push_pull") {
         reasons.push(FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED);
     }
     if let Some(reference_hz) = layers.first().map(|layer| layer.native_cell_size[2]) {
@@ -4109,6 +4281,7 @@ pub fn fdm_multilayer_cuda_containment_reason_codes(
             .iter()
             .map(fdm_layer_xy_center)
             .any(|center| center != reference_center)
+            && !aligned_embedding
         {
             reasons.push(FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED);
         }
@@ -4167,6 +4340,7 @@ pub fn fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
     let reference_cell_size = first_layer.native_cell_size;
     if layers.iter().any(|layer| {
         layer.material != *reference_material || layer.native_cell_size != reference_cell_size
+            || layer.rotated_interfacial_dmi != first_layer.rotated_interfacial_dmi
     }) {
         return false;
     }
@@ -4330,6 +4504,7 @@ pub(crate) fn plan_fdm_multilayer(
     let mut external_field = None;
     let mut interfacial_dmi = None;
     let mut rotated_interfacial_dmi = None;
+    let mut rotated_dmi_object_ids: Option<&[String]> = None;
     let mut bulk_dmi = None;
     for term in &problem.energy_terms {
         match term {
@@ -4380,7 +4555,8 @@ pub(crate) fn plan_fdm_multilayer(
                 }
                 bulk_dmi = Some(*d);
             }
-            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d } => {
+            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d, object_ids } => {
+                rotated_dmi_object_ids = object_ids.as_deref();
                 if rotated_interfacial_dmi.replace(*d).is_some() {
                     errors.push("RotatedInterfacialDmi is declared more than once".to_string());
                 }
@@ -4441,22 +4617,23 @@ pub(crate) fn plan_fdm_multilayer(
                 .to_string(),
         );
     }
+    if !crate::mask_field::active_mask_field_drives(problem).is_empty() {
+        errors.push(
+            "mask_field_drive_unsupported_lane:fdm_multilayer: mask antennas are realized on a single FDM grid (one magnet) only"
+                .to_string(),
+        );
+    }
     if let Some(pbc) = problem.pbc.as_ref() {
         if let Err(reason) = pbc.resolve_demag_boundary(enable_demag) {
             errors.push(reason);
         }
-        if pbc.has_any_periodic() {
-            errors.push(
-                "FDM multilayer periodic axes are capability-gated until exchange seams and self/shifted demag kernels are qualified across every layer; use open boundaries or a qualified single-grid plan"
-                    .to_string(),
-            );
-        }
-        if problem.backend_policy.execution_precision == ExecutionPrecision::Single
-            && runtime_requests_cuda(problem)
-            && pbc.has_any_periodic()
+        if pbc.has_any_periodic()
+            && (!runtime_requests_cuda(problem)
+                || problem.backend_policy.execution_precision != ExecutionPrecision::Double
+                || !is_multilayer_xy_periodic(pbc))
         {
             errors.push(
-                "FDM multilayer execution_precision='single' with CUDA and periodic axes is capability-gated until FP32 seam exchange parity is qualified; use execution_precision='double'"
+                "FDM multilayer periodic axes require CUDA double PG-BB with XY truncated-image demag and open Z"
                     .to_string(),
             );
         }
@@ -4551,7 +4728,6 @@ pub(crate) fn plan_fdm_multilayer(
                 continue;
             }
         };
-        let material_sample_spacing = fdm_material_sample_spacing(cell_size);
         let provided_grid_asset = problem.geometry_assets.as_ref().and_then(|assets| {
             assets
                 .fdm_grid_assets
@@ -4639,6 +4815,7 @@ pub(crate) fn plan_fdm_multilayer(
             .iter()
             .map(|point| point.position_world)
             .collect::<Vec<_>>();
+        let material_sampling = fdm_material_sampling(cell_size, active_mask.as_deref());
         let resolve_material_field = |parameter, base_value, label: &str| {
             let values = crate::material::resolve_spatial_parameter(
                 problem,
@@ -4646,7 +4823,7 @@ pub(crate) fn plan_fdm_multilayer(
                 parameter,
                 base_value,
                 &point_coords,
-                material_sample_spacing,
+                material_sampling,
                 placed.translation,
             )?;
             if values.len() != n_cells {
@@ -4692,7 +4869,7 @@ pub(crate) fn plan_fdm_multilayer(
             "Aex",
         ) {
             Ok(values) => {
-                if rotated_interfacial_dmi.is_some_and(|d| d != 0.0) {
+                if rotated_interfacial_dmi.is_some_and(|d| object_rotated_dmi(d, rotated_dmi_object_ids, magnet) != 0.0) {
                     if let Err(reason) = validate_rotated_dmi_boundary_exchange_stiffness(
                         problem,
                         grid_cells,
@@ -5074,14 +5251,12 @@ pub(crate) fn plan_fdm_multilayer(
     let relaxation = controls.relaxation;
     let adaptive_timestep = controls.adaptive_timestep;
     let field_refresh = controls.field_refresh;
-    if relaxation
-        .as_ref()
-        .is_some_and(|control| control.algorithm != RelaxationAlgorithmIR::LlgOverdamped)
+    let projected_bb = relaxation.as_ref()
+        .is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb);
+    if relaxation.as_ref().is_some_and(|control| !matches!(control.algorithm,
+        RelaxationAlgorithmIR::LlgOverdamped | RelaxationAlgorithmIR::ProjectedGradientBb))
     {
-        errors.push(
-            "the public multilayer FDM runner currently supports only 'llg_overdamped' relaxation"
-                .to_string(),
-        );
+        errors.push("multilayer FDM supports llg_overdamped and the bounded FP64 three_d projected_gradient_bb lane; other direct minimizers remain unsupported".into());
     }
 
     if !errors.is_empty() {
@@ -5134,7 +5309,11 @@ pub(crate) fn plan_fdm_multilayer(
             let native_matches_scratch = body.native_grid == common_cells
                 && body.native_cell_size == convolution_cell_size
                 && body.native_origin == convolution_origin;
+            let layer_rotated_dmi = rotated_dmi_object_ids.map(|ids| {
+                if ids.iter().any(|id| id == &object_id) { rotated_interfacial_dmi.unwrap_or(0.0) } else { 0.0 }
+            });
             FdmLayerPlanIR {
+                rotated_interfacial_dmi: layer_rotated_dmi,
                 magnet_name: body.magnet_name,
                 layer_id,
                 object_id,
@@ -5158,6 +5337,7 @@ pub(crate) fn plan_fdm_multilayer(
         })
         .collect::<Vec<_>>();
     let native_cuda_single_grid = runtime_requests_cuda(problem)
+        && !projected_bb
         && requested_strategy == "auto"
         && integrator != Some(IntegratorChoice::Heun)
         && fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
@@ -5228,6 +5408,7 @@ pub(crate) fn plan_fdm_multilayer(
         );
     }
     let native_cuda_lane = runtime_requests_cuda(problem)
+        && !projected_bb
         && requested_strategy == "auto"
         && integrator != Some(IntegratorChoice::Heun)
         && fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
@@ -5245,7 +5426,7 @@ pub(crate) fn plan_fdm_multilayer(
     }
     let staged_cpu_abm3 =
         !runtime_requests_cuda(problem) && integrator == Some(IntegratorChoice::Abm3);
-    if !native_cuda_lane
+    if !projected_bb && !native_cuda_lane
         && !staged_cpu_abm3
         && !matches!(
             integrator,
@@ -5300,7 +5481,7 @@ pub(crate) fn plan_fdm_multilayer(
         fft,
         external_field,
         interfacial_dmi,
-        rotated_interfacial_dmi,
+        rotated_interfacial_dmi: if rotated_dmi_object_ids.is_some() { None } else { rotated_interfacial_dmi },
         bulk_dmi,
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
@@ -5308,7 +5489,8 @@ pub(crate) fn plan_fdm_multilayer(
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         periodicity: problem.pbc.clone(),
         resolved_periodic_images,
-        integrator: integrator.expect("validated multilayer FDM studies require LLG dynamics"),
+        // Required legacy field; PG-BB does not execute a time integrator.
+        integrator: integrator.unwrap_or(IntegratorChoice::Heun),
         fixed_timestep,
         field_refresh,
         relaxation,
@@ -5324,7 +5506,7 @@ pub(crate) fn plan_fdm_multilayer(
             warnings: {
                 let mut warnings = if has_distinct_xy_geometry {
                     vec![
-                    "xy_geometry_uses_common_scratch_transfer; native CUDA identity lane remains fail-closed until it consumes per-layer insertion/crop descriptors".to_string(),
+                    "xy_geometry_uses_common_scratch_transfer; CUDA accepts only centered integer-cell insertion/crop under the bounded FP64 fixed-Heun contract".to_string(),
                     ]
                 } else {
                     Vec::new()
@@ -5341,6 +5523,18 @@ pub(crate) fn plan_fdm_multilayer(
             },
         },
     };
+
+    if runtime_requests_cuda(problem) {
+        if let Some(message) = fdm_multilayer_cuda_aligned_embedding_error(&plan) {
+            return Err(PlanError { reasons: vec![message] });
+        }
+    }
+
+    if projected_bb && !runtime_requests_cuda(problem) {
+        if let Some(reason) = fdm_multilayer_projected_bb_error(&plan) {
+            return Err(PlanError { reasons: vec![reason] });
+        }
+    }
 
     let study_note = if let Some(control) = plan.relaxation.as_ref() {
         format!(

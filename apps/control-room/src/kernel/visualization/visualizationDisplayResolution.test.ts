@@ -48,6 +48,12 @@ describe("resolveVisualizationTopologyFreshness", () => {
     ).toBe("stale");
   });
 
+  it("accepts a retained mesh explicitly validated for the current scene", () => {
+    const manifest = { source_scene_revision: 11, validated_for_scene_revision: 12 };
+    expect(resolveVisualizationTopologyFreshness({ revision: 12 }, manifest)).toBe("current");
+    expect(resolveVisualizationTopologyFreshness({ revision: 13 }, manifest)).toBe("stale");
+  });
+
   it("accepts the API scene_revision alias", () => {
     expect(
       resolveVisualizationTopologyFreshness(

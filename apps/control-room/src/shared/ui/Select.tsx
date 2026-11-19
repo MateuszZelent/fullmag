@@ -33,7 +33,7 @@ export const SelectTrigger = React.forwardRef<
   >
     {children}
     <SelectPrimitive.Icon asChild>
-      <ChevronDown size={14} className="opacity-50" />
+      <ChevronDown size={14} className="opacity-50" aria-hidden="true" />
     </SelectPrimitive.Icon>
   </SelectPrimitive.Trigger>
 ));
@@ -52,7 +52,7 @@ export const SelectScrollUpButton = React.forwardRef<
     data-slot="select-scroll-up-button"
     {...props}
   >
-    <ChevronUp size={14} />
+    <ChevronUp size={14} aria-hidden="true" />
   </SelectPrimitive.ScrollUpButton>
 ));
 SelectScrollUpButton.displayName = SelectPrimitive.ScrollUpButton.displayName;
@@ -70,7 +70,7 @@ export const SelectScrollDownButton = React.forwardRef<
     data-slot="select-scroll-down-button"
     {...props}
   >
-    <ChevronDown size={14} />
+    <ChevronDown size={14} aria-hidden="true" />
   </SelectPrimitive.ScrollDownButton>
 ));
 SelectScrollDownButton.displayName = SelectPrimitive.ScrollDownButton.displayName;
@@ -78,7 +78,7 @@ SelectScrollDownButton.displayName = SelectPrimitive.ScrollDownButton.displayNam
 export const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
->(({ className, children, position = "popper", ...props }, ref) => (
+>(({ className, children, position = "popper", collisionPadding = 8, ...props }, ref) => (
   <SelectPrimitive.Portal>
     <SelectPrimitive.Content
       ref={ref}
@@ -89,6 +89,7 @@ export const SelectContent = React.forwardRef<
       )}
       data-slot="select-content"
       position={position}
+      collisionPadding={collisionPadding}
       {...props}
     >
       <SelectScrollUpButton />
@@ -131,7 +132,7 @@ export const SelectItem = React.forwardRef<
   >
     <span className="fm-select-item__indicator">
       <SelectPrimitive.ItemIndicator>
-        <Check size={14} />
+        <Check size={14} aria-hidden="true" />
       </SelectPrimitive.ItemIndicator>
     </span>
 

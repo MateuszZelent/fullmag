@@ -6,10 +6,88 @@
 #include "gpu/cuda/demag_poisson/demag_kernels.hpp"
 
 #include <cub/cub.cuh>
+#include <math_constants.h>
 
 namespace fullmag::fem {
 
 static constexpr int kBlockSize = 256;
+
+namespace {
+
+struct ScaledNorm {
+    double scale;
+    double sum_squares;
+};
+
+struct MergeScaledNorm {
+    __device__ ScaledNorm operator()(ScaledNorm a, ScaledNorm b) const
+    {
+        if (!isfinite(a.scale)) {
+            return a;
+        }
+        if (!isfinite(b.scale)) {
+            return b;
+        }
+        if (a.scale < b.scale) {
+            const ScaledNorm tmp = a;
+            a = b;
+            b = tmp;
+        }
+        if (b.scale != 0.0) {
+            const double ratio = b.scale / a.scale;
+            a.sum_squares += b.sum_squares * (ratio * ratio);
+        }
+        return a;
+    }
+};
+
+__global__ void demag_validation_norm_kernel(
+    const double *values, int rows, double *device_scalar)
+{
+    ScaledNorm local{0.0, 0.0};
+    const MergeScaledNorm merge;
+    for (int64_t i = threadIdx.x; i < rows; i += kBlockSize) {
+        const double magnitude = fabs(values[i]);
+        if (!isfinite(magnitude)) {
+            local = {CUDART_INF, 1.0};
+            break;
+        }
+        local = merge(local, {magnitude, 1.0});
+    }
+
+    using BlockReduce = cub::BlockReduce<ScaledNorm, kBlockSize>;
+    __shared__ BlockReduce::TempStorage storage;
+    const ScaledNorm reduced = BlockReduce(storage).Reduce(local, merge);
+    // One block owns the whole reduction. Finish all reads before a possible
+    // in-place write to values[0].
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        *device_scalar = reduced.scale * sqrt(reduced.sum_squares);
+    }
+}
+
+} // namespace
+
+cudaError_t fullmag_cuda_demag_validation_norm(
+    const double *values,
+    int rows,
+    double *device_scalar,
+    double &norm,
+    cudaStream_t stream)
+{
+    if (values == nullptr || rows <= 0 || device_scalar == nullptr || stream == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+
+    demag_validation_norm_kernel<<<1, kBlockSize, 0, stream>>>(values, rows, device_scalar);
+    const cudaError_t launch_status = cudaGetLastError();
+    if (launch_status != cudaSuccess) {
+        return launch_status;
+    }
+    const cudaError_t copy_status = cudaMemcpyAsync(
+        &norm, device_scalar, sizeof(norm), cudaMemcpyDeviceToHost, stream);
+    return copy_status == cudaSuccess ? cudaStreamSynchronize(stream) : copy_status;
+}
 
 __global__ void demag_rhs_csr_kernel(
     const uint32_t *__restrict__ csr_row_offsets,

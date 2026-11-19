@@ -47,6 +47,7 @@ import type {
 } from "@/shared/domain/analysis/postprocessingTypes";
 
 import type { ExplorerNode, ExplorerNodeKind } from "../explorerTypes";
+import { resourceHasDisplayableData } from "@/kernel/resources/resourceState";
 
 export interface PhysicsFirstResultProducts {
   coupling?: boolean;
@@ -577,7 +578,7 @@ function observationFramesRoot(
   const id = `${parentId}:observation-frames`;
   const resource = snapshot.observationFrames;
   const frames = resource?.data?.frames ?? [];
-  const resourceReady = resource?.status === "ready" && resource.data !== null;
+  const resourceReady = resource ? resourceHasDisplayableData(resource) : false;
   const resourceFailed = resource?.status === "error";
   const children = frames.map((frame) => {
     const pinned = frame.frame_id === snapshot.pinnedObservationFrameId;
@@ -1350,7 +1351,7 @@ function postprocessingDefinitions(
   }
   if (tableCatalog === undefined) {
     definitions.push(unavailableDefinition("table"));
-  } else if (tableCatalog.data === null || tableCatalog.status !== "ready") {
+  } else if (!resourceHasDisplayableData(tableCatalog)) {
     definitions.push(
       unavailableDefinition(
         "table",
@@ -1360,7 +1361,7 @@ function postprocessingDefinitions(
   }
   if (artifactCatalog === undefined) {
     definitions.push(unavailableDefinition("export"));
-  } else if (artifactCatalog.data === null || artifactCatalog.status !== "ready") {
+  } else if (!resourceHasDisplayableData(artifactCatalog)) {
     definitions.push(
       unavailableDefinition(
         "export",

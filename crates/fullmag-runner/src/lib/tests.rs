@@ -555,6 +555,7 @@ fn make_test_plan() -> FdmPlanIR {
         boundary_correction: None,
         boundary_geometry: None,
         inter_region_exchange: vec![],
+        region_owner: Vec::new(),
         enable_exchange: true,
         enable_demag: false,
         external_field: None,

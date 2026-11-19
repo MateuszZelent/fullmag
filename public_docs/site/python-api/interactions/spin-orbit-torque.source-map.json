@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-spin_orbit_torque",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_spin_orbit_torque"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_spin_orbit_torque",
@@ -63,7 +46,7 @@
         "python": "name",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "torque module identifier",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -73,7 +56,7 @@
         "python": "target",
         "type": "RegionRef",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "typed region reference",
         "meaning": "free-layer target",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -83,17 +66,17 @@
         "python": "drive",
         "type": "SignedScalarDrive or VectorCurrentDrive",
         "default": "required",
-        "si_unit": "A/m^2 or source",
+        "si_unit": "$\\mathrm{A\\,m^{-2}}$ or $1$",
         "validation": "typed drive",
-        "meaning": "FEM/FDM CPU/GPU: IR; resolver-specific",
-        "backend_support": "drive",
-        "problem_ir": "see_constructor_to_ir"
+        "meaning": "prescribed current or vector drive",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "drive"
       },
       {
         "python": "xi_dl",
         "type": "float",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "finite",
         "meaning": "damping-like efficiency",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -103,7 +86,7 @@
         "python": "xi_fl",
         "type": "float",
         "default": "0.0",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "finite",
         "meaning": "field-like efficiency",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -113,13 +96,13 @@
         "python": "free_layer_thickness_m",
         "type": "float",
         "default": "required",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "positive",
         "meaning": "free-layer thickness",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "free_layer_thickness_m"
       }
     ],
-    "returns": "typed ProblemIR record at to_ir()"
+    "returns": "typed ProblemIR record at to_ir_module()"
   }
 }

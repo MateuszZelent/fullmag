@@ -426,10 +426,17 @@ fn build_solution(
 }
 
 fn publish_revision(store: &SessionStore, desired: SolutionSet) -> Result<()> {
+    // Obtain the writer before publishing so contention does not force a
+    // second coordinator replay. After admission, publication can fail
+    // following rename. Propagate that uncertainty without replaying the write.
+    let publish = |revision: &SolutionSet| {
+        let _writer = crate::retry_store_writer_busy(|| store.write_transaction())?;
+        store.publish_solution_set(revision)
+    };
     let current = store.solution_sets().read(&desired.solution_set_id)?;
     match current {
         None if desired.execution_status == SolutionExecutionStatus::Running => {
-            store.publish_solution_set(&desired)
+            publish(&desired)
         }
         None => {
             let mut open = desired.clone();
@@ -441,10 +448,10 @@ fn publish_revision(store: &SessionStore, desired: SolutionSet) -> Result<()> {
                 member.execution_status = SolutionExecutionStatus::Running;
                 member.scientific_assessment = open.scientific_assessment.clone();
             }
-            store.publish_solution_set(&open)?;
+            publish(&open)?;
             let mut closed = desired;
             closed.revision = 2;
-            store.publish_solution_set(&closed)
+            publish(&closed)
         }
         Some(current) if current.manifest_state == SolutionSetManifestState::Closed => {
             ensure_same_solution_payload(&current, &desired)?;
@@ -474,8 +481,63 @@ fn publish_revision(store: &SessionStore, desired: SolutionSet) -> Result<()> {
                 .revision
                 .checked_add(1)
                 .context("study solution revision exhausted")?;
-            store.publish_solution_set(&closed)
+            publish(&closed)
         }
+    }
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn closes_portable_solution_after_transient_store_writer_conflict() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let other = SessionStore::open_existing(directory.path().to_path_buf()).unwrap();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let open = SolutionSet {
+            schema_version: SOLUTION_SET_SCHEMA_VERSION.into(),
+            solution_set_id: "solution:run-publication-test".into(),
+            revision: 1,
+            run_id: "run:publication-test".into(),
+            manifest_state: SolutionSetManifestState::Open,
+            execution_status: SolutionExecutionStatus::Running,
+            scientific_assessment: unassessed(RUNNING_ASSESSMENT_REASON),
+            provenance: SolutionSetProvenance {
+                run_spec_digest: digest.clone(),
+                model_digest: digest.clone(),
+                physics_digest: digest.clone(),
+                discretization_digest: digest.clone(),
+                resolved_plan_digest: digest.clone(),
+                acquisition_digest: digest,
+                seed_digest: None,
+            },
+            members: Vec::new(),
+            coverage: Vec::new(),
+        };
+        publish_revision(&store, open.clone()).unwrap();
+        let mut closed = open.clone();
+        closed.revision = 2;
+        closed.manifest_state = SolutionSetManifestState::Closed;
+        closed.execution_status = SolutionExecutionStatus::Succeeded;
+        let to_publish = closed.clone();
+        let writer = store.write_transaction().unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (completions_tx, completions_rx) = mpsc::channel();
+        let publisher = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            completions_tx.send(publish_revision(&other, to_publish)).unwrap();
+        });
+        started_rx.recv().unwrap();
+        let premature = completions_rx.recv_timeout(Duration::from_millis(250));
+        drop(writer);
+        assert!(matches!(premature, Err(mpsc::RecvTimeoutError::Timeout)));
+        completions_rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        publisher.join().unwrap();
+        assert_eq!(store.solution_sets().read(&closed.solution_set_id).unwrap(), Some(closed));
     }
 }
 

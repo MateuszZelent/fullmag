@@ -676,6 +676,9 @@ pub enum KnownSceneSpinTorque {
         stack_normal: Option<[f64; 3]>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         realization: Option<SlonczewskiRealization>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schema(value_type = Option<Object>)]
+        time_expression: Option<fullmag_ir::TimeExpressionIR>,
     },
     ZhangLi {
         #[serde(default)]

@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { cn } from "@/shared/utils/className";
 
 export type InspectorMetricTone =
+  | "accent"
   | "danger"
   | "degraded"
   | "neutral"
@@ -31,6 +32,7 @@ export interface InspectorMetricStripProps {
 }
 
 const toneClasses: Record<InspectorMetricTone, string> = {
+  accent: "text-fm-accent",
   danger: "text-fm-danger",
   degraded: "text-fm-degraded",
   neutral: "text-fm-primary",

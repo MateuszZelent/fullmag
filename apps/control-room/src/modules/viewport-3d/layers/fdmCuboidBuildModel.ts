@@ -9,7 +9,10 @@ import {
   buildFdmFieldIndexResolver,
   type FdmFieldIndexingResult,
 } from "../model/fdmFieldIndexing";
-import { resolveViewport3DAdaptiveVectorGlyphLength } from "../model/viewport3DVectorGlyphScale";
+import {
+  resolveViewport3DAdaptiveVectorGlyphLength,
+  resolveViewport3DAdaptiveVectorGlyphSpacing,
+} from "../model/viewport3DVectorGlyphScale";
 import {
   sampleFdmDisplayCellIndices,
   sampleFdmSpatialCellIndices,
@@ -19,6 +22,7 @@ import {
 const FDM_VECTOR_SEGMENT_STRIDE = 7;
 
 const CELL_VISUAL_FILL = 0.92;
+const FDM_VECTOR_SPACING_FILL = 0.75;
 
 export interface FdmCuboidInstanceModel {
   cellSize: [number, number, number];
@@ -32,8 +36,8 @@ export interface FdmCuboidInstanceModel {
   matrixContentRevision: string;
   /** Stable checksum of sampled cell membership and instance order. */
   membershipRevision: string;
-  /** Realized numeric region IDs for sampled cells. */
-  regionIds: Uint32Array;
+  /** Realized numeric region IDs, or null for geometry-only previews. */
+  regionIds: Uint32Array | null;
 }
 
 function writeFdmCuboidMatrix(
@@ -452,16 +456,15 @@ export function buildFdmVectorSegmentsFromAnchors(
   ) {
     return null;
   }
+  const [nx, ny, nz] = request.gridShape;
+  const totalCells = nx * ny * nz;
   const hasExactMembership = hasExactFdmMembership(
     request.realizedRegionIds,
     request.gridShape,
   );
   const nativeActiveMask = request.nativeActiveMask ?? null;
   const hasExactNativeMask = nativeActiveMask
-    ? isValidFdmNativeActiveMask(
-        nativeActiveMask,
-        request.gridShape[0] * request.gridShape[1] * request.gridShape[2],
-      )
+    ? isValidFdmNativeActiveMask(nativeActiveMask, totalCells)
     : false;
   if (request.realizedRegionIds && !hasExactMembership) return null;
   if (nativeActiveMask && !hasExactNativeMask) return null;
@@ -479,10 +482,7 @@ export function buildFdmVectorSegmentsFromAnchors(
   ) {
     return null;
   }
-  const indexing = buildFdmFieldIndexResolver(
-    fieldVector,
-    request.gridShape[0] * request.gridShape[1] * request.gridShape[2],
-  );
+  const indexing = buildFdmFieldIndexResolver(fieldVector, totalCells);
   if (indexing.status !== "compatible") return null;
 
   const candidates: number[] = [];
@@ -538,26 +538,40 @@ export function buildFdmVectorSegmentsFromAnchors(
   if (renderedGlyphCount <= 0) return null;
   const segments = new Float32Array(count * FDM_VECTOR_SEGMENT_STRIDE);
   const geometryScope = request.geometryScope ?? "full";
-  const scopedCarrierCount = scoped.length;
-  const requestedScale = request.vectorLengthScale === undefined
-    ? request.scale
-    : resolveViewport3DAdaptiveVectorGlyphLength({
-        boundsSize: resolveFdmVectorOnlyTargetBoundsSize(
-          request,
-          scoped,
-        ),
+  const adaptiveInput = request.vectorLengthScale === undefined
+    ? null
+    : {
+        boundsSize: resolveFdmVectorOnlyTargetBoundsSize(request, scoped),
         glyphCount: renderedGlyphCount,
         lengthScale: request.vectorLengthScale,
         scope: geometryScope,
-      });
-  const safeScale = resolveFdmVectorGlyphScaleForCellSize(
+      };
+  const requestedScale = adaptiveInput
+    ? resolveViewport3DAdaptiveVectorGlyphLength(adaptiveInput)
+    : request.scale;
+  const exactCarrierCount = adaptiveInput && geometryScope === "full"
+    ? resolveFdmVectorOnlyFullCarrierCount(request, totalCells, fieldVector.pointCount)
+    : null;
+  const cellCappedScale = resolveFdmVectorGlyphScaleForCellSize(
     request.cellSize,
     requestedScale,
     resolveFdmVectorGlyphSamplingSpacingScale(
-      scopedCarrierCount,
+      exactCarrierCount ?? scoped.length,
       renderedGlyphCount,
     ),
   );
+  // FMVP can already be scoped and sampled when anchors are built. If the
+  // pre-sampling population is unknown, estimate spacing from its support
+  // rather than treating each received sample as an adjacent lattice cell.
+  const spatialSpacing = adaptiveInput && exactCarrierCount === null
+    ? resolveViewport3DAdaptiveVectorGlyphSpacing(adaptiveInput) ?? 0
+    : 0;
+  const safeScale = spatialSpacing > 0 && Number.isFinite(spatialSpacing)
+    ? Math.max(
+        cellCappedScale,
+        Math.min(requestedScale, spatialSpacing * FDM_VECTOR_SPACING_FILL),
+      )
+    : cellCappedScale;
   const halfScale = safeScale / 2;
   const scaleMagnitude = Math.max(maxMagnitude, 1e-12);
   const surfaceOffsetDistance = resolveFdmSurfaceOffsetDistance(
@@ -609,6 +623,31 @@ export function buildFdmVectorSegmentsFromAnchors(
     cellIndices: Uint32Array.from(selected, (ordinal) => cellIndices[ordinal] ?? 0),
     segments,
   };
+}
+
+function resolveFdmVectorOnlyFullCarrierCount(
+  request: FdmVectorOnlyBuildRequest,
+  totalCells: number,
+  fieldPointCount: number,
+): number | null {
+  const selection = request.cellSelection ?? "all";
+  // Full-domain geometry admission also accepts indexed fields of unknown
+  // coverage. Only a field indexing every cell proves the complete count.
+  if (selection === "all") {
+    return fieldPointCount === totalCells ? totalCells : null;
+  }
+  if (selection !== "active" && selection !== "inactive") return null;
+  if (request.realizedRegionIds) {
+    return request.realizedRegionIds.reduce(
+      (count, regionId) => count + Number(cellMatchesSelection(regionId, selection)),
+      0,
+    );
+  }
+  if (request.nativeActiveMask) {
+    const active = request.nativeActiveMask.reduce((count, value) => count + value, 0);
+    return selection === "active" ? active : totalCells - active;
+  }
+  return null;
 }
 
 function resolveAnchorSurfaceOrdinals(
@@ -758,29 +797,41 @@ export function buildFdmCuboidInstanceModel(
     options.realizedRegionIds,
     totalCells,
   );
-  if (!realizedRegionIds) {
+  if (
+    domain.geometryOnly === true &&
+    (options.cellSelection !== "all" ||
+      options.fieldVector != null ||
+      realizedRegionIds !== null)
+  ) {
+    return null;
+  }
+  const unclassifiedPreview = domain.geometryOnly === true;
+  if (!realizedRegionIds && !unclassifiedPreview) {
     return null;
   }
   const fieldIndexing = options.fieldVector
     ? buildFdmFieldIndexResolver(options.fieldVector, totalCells)
     : null;
-  const displayCellIndices = sampleFdmDisplayCellIndicesWithMinimumMembership({
-    cellSelection: options.cellSelection,
-    displayCellCount: domain.displayCellCount,
-    fieldIndexing,
-    fieldVector: options.fieldVector,
-    realizedRegionIds,
-    threshold,
-    totalCells,
-  });
+  const displayCellIndices = unclassifiedPreview
+    ? sampleFdmDisplayCellIndices(totalCells, domain.displayCellCount)
+    : sampleFdmDisplayCellIndicesWithMinimumMembership({
+        cellSelection: options.cellSelection,
+        displayCellCount: domain.displayCellCount,
+        fieldIndexing,
+        fieldVector: options.fieldVector,
+        realizedRegionIds: realizedRegionIds!,
+        threshold,
+        totalCells,
+      });
   if (displayCellIndices.length <= 0) return null;
   const sampledCellIndices = new Uint32Array(displayCellIndices.length);
   let sampledCellCount = 0;
 
   for (const cellIndex of displayCellIndices) {
-    const isInactive =
-      (realizedRegionIds[cellIndex] ?? FMRM_INACTIVE_REGION_ID) ===
-      FMRM_INACTIVE_REGION_ID;
+    const isInactive = realizedRegionIds
+      ? (realizedRegionIds[cellIndex] ?? FMRM_INACTIVE_REGION_ID) ===
+        FMRM_INACTIVE_REGION_ID
+      : false;
     if (
       (options.cellSelection === "active" && isInactive) ||
       (options.cellSelection === "inactive" && !isInactive)
@@ -807,7 +858,7 @@ export function buildFdmCuboidInstanceModel(
   const centers = new Float32Array(count * 3);
   const matrices = new Float32Array(count * 16);
   const cellIndices = new Uint32Array(count);
-  const sampledRegionIds = new Uint32Array(count);
+  const sampledRegionIds = realizedRegionIds ? new Uint32Array(count) : null;
 
   const cellSize: [number, number, number] = [
     Math.max(dx * fillRatio, 1e-18),
@@ -817,7 +868,9 @@ export function buildFdmCuboidInstanceModel(
   for (let instance = 0; instance < count; instance += 1) {
     const cellIndex = sampledCellIndices[instance] ?? 0;
     cellIndices[instance] = cellIndex;
-    sampledRegionIds[instance] = realizedRegionIds[cellIndex] ?? 0;
+    if (sampledRegionIds) {
+      sampledRegionIds[instance] = realizedRegionIds?.[cellIndex] ?? 0;
+    }
     const ix = cellIndex % nx;
     const iy = Math.floor(cellIndex / nx) % ny;
     const iz = Math.floor(cellIndex / (nx * ny)) % nz;
@@ -1616,7 +1669,7 @@ export function resolveFdmVectorGlyphScaleForCellSize(
   );
   return Math.min(
     safeScale,
-    maxCellSize * 0.75 * safeSamplingSpacingScale,
+    maxCellSize * FDM_VECTOR_SPACING_FILL * safeSamplingSpacingScale,
   );
 }
 

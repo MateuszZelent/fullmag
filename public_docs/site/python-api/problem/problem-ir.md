@@ -10,27 +10,22 @@ owner: fullmag-public-docs
 # Problem IR
 
 (python-api-problem-problem-ir-problem-statement)=
-<!-- (problem-statement)= -->
 ## Contract
 This page records the current public Python authoring contract and canonical lowering; it does not redefine solver physics.
 
 (python-api-problem-problem-ir-governing-equations)=
-<!-- (governing-equations)= -->
 ## Governing equations
 This API page introduces no independent governing equation. Physical equations belong to interaction and solver-lane pages.
 
 (python-api-problem-problem-ir-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 Every owned input has its SI unit below; $1$ denotes dimensionless data.
 
 (python-api-problem-problem-ir-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 Constructor checks run immediately. Lowering and planning additionally check mesh cardinality, capability, and backend legality.
 
 (python-api-problem-problem-ir-python-api)=
-<!-- (python-api)= -->
 ## Python API
 No constructor parameters are owned by this conceptual page.
 
@@ -69,57 +64,48 @@ assert state_ir["kind"] == "uniform"
 
 
 (python-api-problem-problem-ir-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
 The final column gives the serialized destination owned by the current lowering implementation.
 
 (python-api-problem-problem-ir-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Requested intent is preserved in Python and IR. Resolved execution is selected by the planner. Validation errors reject malformed values; unsupported combinations fail capability checks without silent fallback.
+Requested intent is preserved in Python and `ProblemIR`. Resolved execution is selected by the planner. Validation errors reject malformed values; unsupported combinations fail capability checks without silent fallback.
 
 (python-api-problem-problem-ir-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
 This page owns authoring and lowering only; numerical realization belongs to solver-lane documentation.
 
 (python-api-problem-problem-ir-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## Implementation mapping
-The adjacent map anchors claims to `packages/fullmag-py/src/fullmag/model/problem.py` and `class Problem`.
+Anchor: `packages/fullmag-py/src/fullmag/model/problem.py` (`class Problem`).
 
 (python-api-problem-problem-ir-validation)=
-<!-- (validation)= -->
 ## Validation
-Tests compare this inventory with live signatures and validate its source map.
+Tests compare this inventory with live Python signatures.
 
 (python-api-problem-problem-ir-limitations)=
-<!-- (limitations)= -->
 ## Limitations
 Representability does not prove every backend combination executable; planner capabilities are authoritative.
 
 (python-api-problem-problem-ir-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## Scientific bibliography
 No physical model is introduced. Primary references belong to consuming interaction pages.
 
-(python-api-problem-problem-ir-source-code-index)=
-<!-- (source-code-index)= -->
+## Control Room support
 
-## Control Room crosswalk
-
-Status: The Control Room authors a study and lowers it to ProblemIR; direct Problem/IR editing is not exposed.
+Status: Control Room authors a study in the workspace and lowers it to `ProblemIR`; direct `Problem`/`ProblemIR` editing remains Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `No standalone Control Room route` | `not implemented` | No supported frontend transaction |
-| Parameters without a named UI field | `No standalone Control Room route` | `not implemented` | Python-only until implemented |
+| Parameters documented on this page | `No standalone Control Room route` | `Python-only` | Authored in Python |
+| Parameters without a named UI field | `No standalone Control Room route` | `Python-only` | Authored in Python |
 
-frontend support is not implemented for standalone Problem/ProblemIR authoring.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx (StudyInspectorPanel)`.
+Standalone `Problem` and `ProblemIR` authoring remains Python-only.
+See [Control Room capability register](/frontend/capability-register) for the UI support matrix.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx` (`StudyInspectorPanel`).
 
+(python-api-problem-problem-ir-source-code-index)=
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Constructor, validation, lowering | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | [`class Problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | Canonical Python API behavior | Ownership test and source-map validator |
+| Constructor, validation, lowering | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | [`class Problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | Canonical Python API behavior | Ownership and API contract tests |

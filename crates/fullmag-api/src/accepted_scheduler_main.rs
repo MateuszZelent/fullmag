@@ -1,3 +1,4 @@
+mod scheduler_idle_backoff;
 mod scheduler_owner_control;
 mod worker_startup_gate;
 
@@ -27,6 +28,9 @@ use std::sync::{
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+const ACTIVE_WORKER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const MAX_ACTIVE_ADMISSION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct SchedulerResourceOffer {
@@ -50,6 +54,10 @@ fn scheduler_startup_event(phase: &str, started_at: Instant) {
     );
 }
 
+fn bounded_active_admission_interval(idle_poll_interval: Duration) -> Duration {
+    idle_poll_interval.min(MAX_ACTIVE_ADMISSION_POLL_INTERVAL)
+}
+
 struct SchedulerArgs {
     store_root: PathBuf,
     run_ids: Vec<String>,
@@ -68,6 +76,9 @@ struct SchedulerArgs {
     max_tasks: Option<usize>,
     max_idle_polls: usize,
     idle_poll_interval: Duration,
+    /// Cap of the adaptive idle interval; equals `idle_poll_interval` when
+    /// the scheduler is not resident.
+    idle_poll_maximum: Duration,
     worker_timeout: Duration,
     heartbeat_interval: Duration,
     max_automatic_retries: usize,
@@ -463,6 +474,14 @@ fn run_scheduler(
     let mut first_loop_reported = false;
     let mut reconciliation_deferred_detail = None::<String>;
     let mut reconciliation_stages_reported = false;
+    let active_admission_interval = bounded_active_admission_interval(args.idle_poll_interval);
+    let mut next_admission_pass_at = Instant::now();
+    let mut drain_reconciliation_pending = false;
+    let mut drain_observed = false;
+    let mut idle_backoff = scheduler_idle_backoff::IdleBackoff::new(
+        args.idle_poll_interval,
+        args.idle_poll_maximum,
+    );
     while args
         .max_tasks
         .map_or(true, |max_tasks| executed.len() < max_tasks)
@@ -474,11 +493,26 @@ fn run_scheduler(
             first_loop_reported = true;
         }
         let draining = shutdown_requested.load(Ordering::Acquire);
-        resolve_pending_task_outcomes(&store, &mut pending_task_outcomes)?;
+        if draining && !drain_observed {
+            drain_reconciliation_pending = true;
+            drain_observed = true;
+        }
+        let finished_resource_id = active_workers.iter().find_map(|(resource_id, worker)| {
+            worker.handle.is_finished().then(|| resource_id.clone())
+        });
         if draining && active_workers.is_empty() && pending_task_outcomes.is_empty() {
             break;
         }
         let mut reconciliation_deferred = false;
+        let should_run_admission_pass = active_workers.is_empty()
+            || finished_resource_id.is_some()
+            || drain_reconciliation_pending
+            || Instant::now() >= next_admission_pass_at;
+        if !should_run_admission_pass {
+            std::thread::sleep(ACTIVE_WORKER_EXIT_POLL_INTERVAL);
+            continue;
+        }
+        resolve_pending_task_outcomes(&store, &mut pending_task_outcomes)?;
         if let Some(host_admission) = host_admission.as_ref() {
             let log_reconciliation_stages = !reconciliation_stages_reported;
             let reconciliation = (|| -> Result<()> {
@@ -884,8 +918,15 @@ fn run_scheduler(
                 }
             }
         }
+        if draining {
+            drain_reconciliation_pending = false;
+        }
+        if !active_workers.is_empty() {
+            next_admission_pass_at = Instant::now() + active_admission_interval;
+        }
         if active_workers.is_empty() {
             if reconciliation_deferred || scheduling_deferred {
+                idle_backoff.reset();
                 if shutdown_requested.load(Ordering::Acquire)
                     && pending_task_outcomes.is_empty()
                 {
@@ -895,9 +936,11 @@ fn run_scheduler(
                 continue;
             }
             if scheduled_any {
+                idle_backoff.reset();
                 continue;
             }
             if !pending_task_outcomes.is_empty() {
+                idle_backoff.reset();
                 std::thread::sleep(args.idle_poll_interval);
                 continue;
             }
@@ -909,22 +952,18 @@ fn run_scheduler(
             }
             idle_poll_count += 1;
             consecutive_idle_polls += 1;
-            std::thread::sleep(args.idle_poll_interval);
+            idle_backoff.sleep_idle(&shutdown_requested);
             continue;
         }
-        let Some(resource_id) = active_workers.iter().find_map(|(resource_id, worker)| {
-            worker.handle.is_finished().then(|| resource_id.clone())
-        }) else {
-            std::thread::sleep(if reconciliation_deferred || scheduling_deferred {
-                args.idle_poll_interval
-            } else {
-                Duration::from_millis(10)
-            });
+        idle_backoff.reset();
+        let Some(resource_id) = finished_resource_id else {
+            std::thread::sleep(ACTIVE_WORKER_EXIT_POLL_INTERVAL);
             continue;
         };
         let worker = active_workers
             .remove(&resource_id)
             .context("finished scheduler worker handle disappeared")?;
+        next_admission_pass_at = Instant::now();
         let worker_run_id = worker.run_id.clone();
         let worker_task_id = worker.task_id.clone();
         let completed = match worker.handle.join() {
@@ -943,7 +982,23 @@ fn run_scheduler(
                     error = ?error,
                     "compute scheduler deferred worker launch; runtime remains available"
                 );
-                std::thread::sleep(args.idle_poll_interval);
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "schema_version": "scheduler_worker_launch_deferred.v1",
+                        "component": "accepted_compute_scheduler",
+                        "run_id": worker_run_id.as_str(),
+                        "task_id": &worker_task_id,
+                        "resource_id": &resource_id,
+                        "detail": format!("{error:#}"),
+                    })
+                );
+                if active_workers.is_empty() {
+                    std::thread::sleep(args.idle_poll_interval);
+                } else {
+                    next_admission_pass_at = Instant::now() + active_admission_interval;
+                    std::thread::sleep(ACTIVE_WORKER_EXIT_POLL_INTERVAL);
+                }
                 continue;
             }
             Ok(Err(error)) => {
@@ -1076,6 +1131,17 @@ fn run_scheduler(
 }
 
 fn build_run_queue_snapshot(
+    store: &SessionStore,
+    run_ids: &[RunId],
+    next_run_id: Option<&RunId>,
+    max_queued_runs: usize,
+) -> Result<RunQueueSnapshot> {
+    store.retry_windows_folder_observation("build accepted scheduler run queue snapshot", || {
+        build_run_queue_snapshot_once(store, run_ids, next_run_id, max_queued_runs)
+    })
+}
+
+fn build_run_queue_snapshot_once(
     store: &SessionStore,
     run_ids: &[RunId],
     next_run_id: Option<&RunId>,
@@ -1733,6 +1799,15 @@ fn parse_args() -> Result<SchedulerArgs> {
         .map(|value| parse_u64("--idle-poll-milliseconds", value))
         .transpose()?
         .unwrap_or(100);
+    let idle_poll_max_milliseconds = values
+        .remove("--idle-poll-max-milliseconds")
+        .map(|value| parse_u64("--idle-poll-max-milliseconds", value))
+        .transpose()?;
+    let idle_poll_maximum = scheduler_idle_backoff::idle_poll_maximum(
+        idle_poll_max_milliseconds,
+        resident,
+        Duration::from_millis(idle_poll_milliseconds),
+    )?;
     let max_automatic_retries = values
         .remove("--max-automatic-retries")
         .map(|value| parse_usize("--max-automatic-retries", value))
@@ -1778,6 +1853,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         max_tasks,
         max_idle_polls,
         idle_poll_interval: Duration::from_millis(idle_poll_milliseconds),
+        idle_poll_maximum,
         worker_timeout: Duration::from_secs(worker_timeout_seconds),
         heartbeat_interval: Duration::from_millis(heartbeat_interval_milliseconds),
         max_automatic_retries,

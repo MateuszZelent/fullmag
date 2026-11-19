@@ -107,7 +107,8 @@ inline FsalReuseDecision rhs_allows_fsal_reuse(const Context &ctx, double dt) {
     input.cache_valid = ctx.fsal_valid;
     input.temperature = ctx.temperature;
     input.waveform_discontinuity = ctx.oersted_time_dep_kind != 0 ||
-                                   ctx.gpu_transport_rhs.active;
+                                   ctx.gpu_transport_rhs.active ||
+                                   !ctx.slonczewski_time_program.empty();
     input.cached = context_cached_fsal_identity(ctx);
     input.requested = context_current_fsal_identity(ctx, dt);
     return rhs_allows_fsal_reuse(input);
@@ -118,6 +119,8 @@ inline bool context_should_use_adaptive_device_graph(const Context &ctx) {
            ctx.stats_mode == FULLMAG_FDM_STATS_NONE &&
            ctx.temperature <= 0.0 &&
            !(ctx.has_oersted_field && ctx.oersted_time_dep_kind != 0) &&
+           !ctx.regional_field_drive_time_dependent &&
+           ctx.slonczewski_time_program.empty() &&
            !ctx.gpu_transport_rhs.active &&
            !ctx.gpu_transport_test_force_adaptive_retry;
 }

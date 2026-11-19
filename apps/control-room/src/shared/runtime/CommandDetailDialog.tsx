@@ -2,7 +2,7 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 
-import type { CommandDetailResource } from "@/kernel/api/apiTypes";
+import type { CommandDetailResource, RuntimeCommandTarget } from "@/kernel/api/apiTypes";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 
 export function CommandDetailDialog({
@@ -71,7 +71,11 @@ function CommandDetailBody({
         <CommandDetailRow label="Status" value={command.status} />
         <CommandDetailRow label="Kind" value={command.kind} />
         <CommandDetailRow label="Seq" value={String(command.seq)} />
-        <CommandDetailRow label="Run ID" value={command.run_id ?? "—"} />
+        <CommandDetailRow
+          label="Requested target"
+          value={formatCommandTarget(command.execution_binding?.requested_target)}
+        />
+        <CommandDetailRow label="Run ID" value={command.execution_binding?.run_id ?? command.run_id ?? "—"} />
         <CommandDetailRow
           label="Requested execution"
           value={formatExecutionReadback(command.requested_execution)}
@@ -113,7 +117,10 @@ function CommandDetailBody({
           label="Terminal"
           value={formatCommandTimestamp(command.terminal_at_unix_ms)}
         />
-        <CommandDetailRow label="Stage ID" value={command.stage_id ?? "—"} />
+        <CommandDetailRow
+          label={command.execution_binding ? "Resolved step" : "Stage ID"}
+          value={(command.execution_binding ? command.execution_binding.step_id : command.stage_id) ?? "—"}
+        />
         <CommandDetailRow
           label="Stage index"
           value={command.stage_index == null ? "—" : String(command.stage_index)}
@@ -154,6 +161,7 @@ function CommandDetailBody({
             precondition: command.precondition ?? null,
             resource_invalidations: command.resource_invalidations ?? [],
             target: command.target ?? null,
+            execution_binding: command.execution_binding ?? null,
           },
           null,
           2,
@@ -161,6 +169,18 @@ function CommandDetailBody({
       </pre>
     </>
   );
+}
+
+function formatCommandTarget(target: RuntimeCommandTarget | null | undefined): string {
+  switch (target?.kind) {
+    case "study": return "Study";
+    case "run": return target.run_id ? `Run ${target.run_id}` : "Run";
+    case "stage_id": return `Stage ${target.stage_id}`;
+    case "stage_index": return `Stage index ${target.stage_index}`;
+    case "current_stage": return target.stage_id ? `Current stage ${target.stage_id}` : "Current stage";
+    case "command_id": return `Command ${target.command_id}`;
+    default: return "—";
+  }
 }
 
 function formatCommandTimestamp(

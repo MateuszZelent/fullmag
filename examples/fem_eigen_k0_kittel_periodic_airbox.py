@@ -65,7 +65,9 @@ study.universe.mesh(
     minimum_element_size=MAG_HMAX_M,
     maximum_element_size=AIRBOX_HMAX_M,
     growth_rate=1.5,
-    grading="linear",
+    # Scoped thin-film fields mesh through the exact-cell layered GEO route,
+    # which plans air z-layers with geometric grading only (note 0104).
+    grading="geometric",
 )
 study.objects.mesh.defaults(
     periodic_pair_ids=["x_faces", "y_faces"],

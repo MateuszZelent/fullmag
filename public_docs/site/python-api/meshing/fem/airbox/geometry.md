@@ -9,26 +9,15 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-airbox-geometry)=
 # Airbox Geometry API
 
-(python-api-meshing-fem-airbox-geometry-python-api)=
-<!-- (python-api)= -->
-## Python API
-
-The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
-
-(python-api-meshing-fem-airbox-geometry-problem-statement)=
-<!-- (problem-statement)= -->
-(python-api-meshing-fem-airbox-geometry-governing-equations)=
-<!-- (governing-equations)= -->
 (python-api-meshing-fem-airbox-geometry-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
 
 (python-api-meshing-fem-airbox-geometry-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
+(python-api-meshing-fem-airbox-geometry-problem-statement)=
 ## 1. What it is and when to use it
 
 `study.universe(mode="manual", size=(Lx, Ly, Lz))` defines the exterior universe
@@ -39,6 +28,7 @@ Impact on the simulation: airbox dimensions set the distance of boundary
 conditions from the bodies — a too-small airbox distorts the stray field and
 demagnetization; a too-large one adds unnecessary elements.
 
+(python-api-meshing-fem-airbox-geometry-governing-equations)=
 ## 2. Physical and mathematical explanation
 
 The airbox is the magnetostatics solution domain ({doc}`index`, section 2). The
@@ -88,9 +78,10 @@ study.build_domain_mesh()
 study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 ```
 
+(python-api-meshing-fem-airbox-geometry-python-api)=
 ## 4. Exact API
 
-`study.universe(**kwargs)` (`StudyBuilder.universe`, `world.py`):
+`study.universe(**kwargs)` (`StudyBuilder.universe`, `packages/fullmag-py/src/fullmag/world.py`):
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -105,17 +96,14 @@ ProblemIR mapping: universe policy in mesh workflow metadata; realization in the
 report/provenance.
 
 (python-api-meshing-fem-airbox-geometry-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
 The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
 
 (python-api-meshing-fem-airbox-geometry-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
 Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
 
 (python-api-meshing-fem-airbox-geometry-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
 The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
 
@@ -126,11 +114,14 @@ Model Explorer
 └── Universe / Airbox      → selection kinds: airbox.*
 ```
 
-Exterior geometry (size, padding, center) is editable in the universe geometry
-panels; air sizing lives in **Airbox Mesh Parameters**
-({doc}`../../../../frontend/meshing/airbox-mesh`). Full panel overview:
-{doc}`../../../../frontend/meshing/index`.
+Exterior geometry (`mode`, `size`, `padding`, `center`) is editable in the universe geometry panels (`AirboxMeshParametersPanel`); air sizing and **Apply & Build Shared-Domain Mesh** (`mesh.build-shared-domain`) live in **Airbox Mesh Parameters** ({doc}`../../../../frontend/meshing/airbox-mesh`). Full panel overview: {doc}`../../../../frontend/meshing/index`.
 
+```{image} /_static/images/ui/viewport-3d-fem-mesh-airbox.png
+:alt: 3D Viewport rendering the FEM exterior airbox domain framing the magnetic geometry
+:width: 92%
+```
+
+(python-api-meshing-fem-airbox-geometry-implementation-mapping)=
 ## 6. Backend support
 
 | Solver | Device | Status | Notes |
@@ -140,12 +131,10 @@ panels; air sizing lives in **Airbox Mesh Parameters**
 | FDM | CPU/GPU | not applicable | FDM defines the domain through its grid |
 
 (python-api-meshing-fem-airbox-geometry-validation)=
-<!-- (validation)= -->
 ## Validation
 Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
 
 (python-api-meshing-fem-airbox-geometry-limitations)=
-<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - Changing universe geometry invalidates a built mesh (invalidation).
@@ -153,28 +142,15 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
   airbox size instead of assuming one "good" size.
 
 (python-api-meshing-fem-airbox-geometry-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. J. D. Jackson, *Classical Electrodynamics*, 3rd ed., Wiley, 1999.
 
-(python-api-meshing-fem-airbox-geometry-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 (python-api-meshing-fem-airbox-geometry-source-code-index)=
-<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
+| airbox option schema and validation | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | [`class AirboxOptions`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | option schema and API tests |
 | universe facade | `packages/fullmag-py/src/fullmag/world.py` | `StudyBuilder.universe` | method signature |
 | airbox configuration | `packages/fullmag-py/src/fullmag/world.py` | `_configure_study_universe` | implementation |
-## Source-code index
-
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
-
-
-### Source-map coverage
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Airbox option schema and validation. | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | [`class AirboxOptions`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | Airbox option schema and validation. | Source-map validator and focused API tests |

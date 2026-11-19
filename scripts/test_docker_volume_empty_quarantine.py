@@ -343,6 +343,40 @@ class EmptyStoreAdmissionTests(unittest.TestCase):
         control.namespace_registry["retirement"]["schema"] = "fullmag.docker-control-namespace-quarantine.v1"
         self.assertIsNone(volume_dev._empty_stopped_namespace_ledger_generation(control))
 
+    def test_cold_terminal_quarantine_uses_its_own_ledger_generation(self):
+        token = "d" * 32
+        record = {"schema": "fullmag.docker-failed-bootstrap-quarantine.v1",
+                  "state": "failed-bootstrap-quarantined-not-drained",
+                  "recovery_id": token, "ledger_volume": "fullmag-dev-group-ledger-v1-old",
+                  "native_owner_drained": False, "allow_old_request_replay": False}
+        control = type("Control", (), {"namespace": "namespaces/" + token,
+                                       "namespace_registry": {"retirement": record}})()
+        self.assertEqual(volume_dev._empty_stopped_namespace_ledger_generation(control), token)
+        for field, value in (("state", "drained"), ("native_owner_drained", True),
+                             ("allow_old_request_replay", True)):
+            original = record[field]
+            record[field] = value
+            with self.subTest(field=field), self.assertRaises(volume_dev.BuildControlError):
+                volume_dev._empty_stopped_namespace_ledger_generation(control)
+            record[field] = original
+        control.namespace = "namespaces/" + "e" * 32
+        with self.assertRaises(volume_dev.BuildControlError):
+            volume_dev._empty_stopped_namespace_ledger_generation(control)
+
+    def test_cold_private_ledger_reuses_volume_only_for_a_distinct_namespace_subpath(self):
+        token = "d" * 32
+        record = {"schema": "fullmag.docker-failed-bootstrap-quarantine.v1",
+                  "ledger_volume": "stable-control",
+                  "ledger_subpath": "namespaces/" + "c" * 32 + "/private/ledger"}
+        control = type("Control", (), {"namespace": "namespaces/" + token,
+                                       "volume": "stable-control",
+                                       "namespace_registry": {"retirement": record}})()
+        volume_dev._validate_empty_quarantine_ledger_volume(control, token, control.volume)
+        for subpath in ("", "../private/ledger", control.namespace + "/private/ledger"):
+            record["ledger_subpath"] = subpath
+            with self.subTest(subpath=subpath), self.assertRaises(volume_dev.BuildControlError):
+                volume_dev._validate_empty_quarantine_ledger_volume(control, token, control.volume)
+
     def test_existing_archive_rotation_wins_and_old_root_needs_no_namespace_registry(self):
         self.assertEqual(volume_dev._select_group_ledger_generation(
             "d" * 32, {"generation": "e" * 32}), "e" * 32)

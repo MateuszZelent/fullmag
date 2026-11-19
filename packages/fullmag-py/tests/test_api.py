@@ -1815,7 +1815,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn('study = fm.study("region_owned")', exported)
         self.assertIn("film_core_region = film.add_region", exported)
         self.assertIn('region_id="film:core_region"', exported)
-        self.assertIn('fm.fields.constant(760000, unit="A/m")', exported)
+        self.assertIn('fm.fields.constant(760000.0, unit="A/m")', exported)
         self.assertIn("film_core_region.texture = fm.texture.neel_skyrmion", exported)
         self.assertIn("film.set_material_field", exported)
         self.assertIn("study.couplings.rkky", exported)
@@ -6117,7 +6117,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn('body_ui_core_region = body.add_region("ui_core"', rewritten)
         self.assertIn('body_ui_core_region.mesh(maximum_element_size=1e-09', rewritten)
         self.assertIn(
-            'body_ui_core_region.set_material("ms", fm.fields.constant(700000, unit="A/m"), priority=5',
+            'body_ui_core_region.set_material("ms", fm.fields.constant(700000.0, unit="A/m"), priority=5',
             rewritten,
         )
         self.assertIn(
@@ -7237,55 +7237,6 @@ class ProblemApiTests(unittest.TestCase):
             reloaded.stages[0].problem.study.to_ir()["settle_pipeline"]["steps"],
             steps,
         )
-
-    def test_hysteresis_minimize_step_optional_energy_tolerance(self) -> None:
-        self.assertEqual(fm.MinimizeStep().to_ir()["energy_tolerance"], 1e-20)
-        step = fm.MinimizeStep(energy_tolerance=None)
-        self.assertIsNone(step.energy_tolerance)
-        self.assertNotIn("energy_tolerance", step.to_ir())
-        self.assertEqual(
-            fm.MinimizeStep(energy_tolerance=2e-21).to_ir()["energy_tolerance"],
-            2e-21,
-        )
-        for value in (0.0, -1e-20, float("nan"), float("inf")):
-            with self.subTest(value=value):
-                with self.assertRaisesRegex(ValueError, "energy_tolerance"):
-                    fm.MinimizeStep(energy_tolerance=value)
-
-    def test_hysteresis_minimize_step_energy_tolerance_round_trip(self) -> None:
-        for argument, expected in (
-            ("", 1e-20),
-            ("energy_tolerance=None", None),
-            ("energy_tolerance=2e-21", 2e-21),
-        ):
-            with self.subTest(argument=argument), TemporaryDirectory() as tmp_dir:
-                path = Path(tmp_dir) / "hysteresis.py"
-                path.write_text(textwrap.dedent(f"""
-                    import fullmag as fm
-
-                    study = fm.study("sweep")
-                    body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
-                    body.Ms = 800e3
-                    body.Aex = 13e-12
-                    body.m = fm.texture.uniform(1, 0, 0)
-                    study.stages.add_hysteresis_sweep(
-                        field_values_mT=[0.0, 1.0],
-                        settle_pipeline=fm.SettlePipeline([
-                            fm.MinimizeStep({argument}),
-                            fm.RelaxStep(),
-                        ]),
-                    )
-                """), encoding="utf-8")
-                loaded = fm.load_problem_from_script(path, lightweight_assets=True)
-                original_ir = loaded.stages[0].problem.study.to_ir()
-                rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-                if expected is None:
-                    self.assertIn("energy_tolerance=None", rewritten)
-                path.write_text(rewritten, encoding="utf-8")
-                reloaded = fm.load_problem_from_script(path, lightweight_assets=True)
-                self.assertEqual(reloaded.stages[0].problem.study.to_ir(), original_ir)
-                step = reloaded.stages[0].problem.study.settle_pipeline.steps[0]
-                self.assertEqual(step.energy_tolerance, expected)
 
     def test_hysteresis_direct_minimizer_settle_step_rejects_physical_time(self) -> None:
         with self.assertRaisesRegex(ValueError, "direct minimizer.*max_physical_time_s"):

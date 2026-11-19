@@ -159,7 +159,7 @@
   overflow: auto;
   padding: var(--fm-space-1) var(--fm-space-1);
   scrollbar-width: thin;
-  scrollbar-color: var(--fm-border-default) transparent;
+  scrollbar-color: var(--fm-scrollbar-thumb) var(--fm-scrollbar-track);
 }
 
 /* ── Tree rows ── */
@@ -408,6 +408,7 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-explorer-node-tooltip {
@@ -609,3 +610,14 @@
 .fm-explorer-tree-row[data-status] { color: var(--fm-text-primary); }
 .fm-explorer-tree-row__status { color: var(--fm-text-secondary); }
 .fm-explorer-toolbar__action { min-width: 24px; min-height: 28px; }
+
+/* Reduced motion: transform transitions snap; colour/shadow transitions remain. */
+@media (prefers-reduced-motion: reduce) {
+  .fm-explorer-tree-row__branch svg {
+    transition: none;
+  }
+
+  .fm-explorer-toolbar__action {
+    transition-property: background-color, border-color, color;
+  }
+}

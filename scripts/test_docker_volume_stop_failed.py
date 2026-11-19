@@ -552,5 +552,359 @@ class SupervisionStopOperationTests(unittest.TestCase):
                 receipts=[v for p,v in writes if p.endswith('/receipt.json')];self.assertEqual(receipts[-1]['state'],'outcome-unknown-resources-retained');self.assertFalse(any(p.endswith('/terminal.json') for p,v in writes));logger.wait.assert_not_called()
 
 
+class LinuxOOMReadyStopTests(unittest.TestCase):
+    def test_terminal_only_flag_refuses_oom_before_stop_dispatch(self):
+        import json, tempfile, subprocess
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            args=['stop','--source-root',temporary,'--container-id','a'*64,
+                  '--image-id','sha256:'+'b'*64,'--process-receipt-sha256','c'*64,'--terminal-only']
+            actual={'Id':'a'*64,'Image':'sha256:'+'b'*64,
+                    'Config':{'Labels':{'com.docker.compose.project':'own','com.docker.compose.service':'backend'},
+                              'Env':['FULLMAG_SESSION_STORAGE_PROFILE=linux-native-v1']},
+                    'State':{'Running':True,'OOMKilled':True}}
+            with patch.object(sys,'argv',args), patch.object(stop.storage,'resolve_layout'), \
+                 patch.object(stop,'compose_project_identity',return_value={'project_name':'own'}), \
+                 patch.object(stop,'validate_source_labels'), \
+                 patch.object(stop,'docker_capture',return_value=subprocess.CompletedProcess([],0,json.dumps([actual]).encode(),b'')), \
+                 patch.object(stop,'_stop_linux_oom_ready') as dispatch:
+                with self.assertRaisesRegex(stop.BuildControlError,'Terminal-only'):
+                    stop.main()
+                dispatch.assert_not_called()
+
+    store = '/state/runs/docker-all/session-store'
+    group_host_id = 'c' * 64
+    api_error = ('runtime observation stayed degraded for 30s: '
+                 + stop.SUPERVISION_FAILURE_ERROR)
+
+    def ready_probe(self):
+        import hashlib
+        import docker_build_control as build
+        ready = ready_owner()
+        receipt = {
+            'schema': 'fullmag.docker-process-tree.v1', 'state': 'failed_outcome_retained',
+            'api_pid': 3227, 'api_exit_code': -9, 'error': self.api_error,
+            'api_diagnostic_only': False, 'runtime_pid': None, 'service_owner': ready,
+            'accepted_store': self.store,
+        }
+        owner_key = stop._owner_identity_key(ready, 'fixture READY owner')
+        return {
+            'schema': stop.LINUX_OOM_READY_PROBE_SCHEMA,
+            'process_receipt_sha256': 'a' * 64, 'process_receipt': receipt,
+            'ready_pin_sha256': hashlib.sha256(build.canonical(ready)).hexdigest(),
+            'owner_identity_sha256': hashlib.sha256(build.canonical(owner_key)).hexdigest(),
+            'current_owner_sha256': 'b' * 64,
+            'runtime_config_sha256': 'd' * 64, 'certificate_sha256': 'e' * 64,
+            'group_ledger_host_id': self.group_host_id,
+            'group_ledger_policy_host_id': self.group_host_id, 'group_ledger_sha256': 'f' * 64,
+            'store_id': 'sha256:' + '1' * 64, 'store_proof_sha256': '2' * 64,
+            'group_ledger_stable_sha256': '3' * 64, 'store_admission_sha256': '4' * 64,
+            'catalog_count': 17, 'task_count': 17, 'terminal_run_count': 17,
+            'lease_count': 17, 'reservation_count': 17,
+            'no_pending_transactions': True, 'all_tasks_terminal': True,
+            'all_leases_released': True, 'all_reservations_released': True,
+            'api_pid': 3227, 'api_pid_exists': False, 'api_listener_open': False,
+            'native_process_pids': sorted([ready['pid'], *[child['pid'] for child in ready['children']]]),
+        }
+
+    def drained_receipt(self, probe):
+        receipt = dict(probe['process_receipt'])
+        ready = receipt['service_owner']
+        terminal = dict(ready, state='drained', heartbeat_at='2026-10-19T10:01:00Z',
+                        children=[dict(child, status='exited_success') for child in ready['children']])
+        receipt.update(state='drained', api_exit_code=-9, terminal_service_owner=terminal)
+        return receipt
+
+    def test_ready_probe_script_is_parseable_and_uses_locked_store_inventory(self):
+        import ast
+        script = stop._linux_oom_ready_probe_script(
+            process_receipt_sha256='a' * 64, image_id='sha256:' + 'b' * 64,
+            compose_project='fixture', group_host_id=self.group_host_id,
+            daemon_id_sha256='d' * 64, ledger_subpath='private/ledger',
+            private_group_storage='group-volume-v1',
+        )
+        ast.parse(script)
+        self.assertIn('observe_store(store, ledger, store_id, terminal_only=True)', script)
+        self.assertIn('LOCK_EX | fcntl.LOCK_NB', script)
+        self.assertIn("api_diagnostic_only') is False", script)
+
+    def test_probe_requires_exact_api_owner_ledger_and_idle_catalog_state(self):
+        valid = self.ready_probe()
+        accepted = stop._validate_linux_oom_ready_probe(
+            valid, 'a' * 64, expected_store=self.store, expected_group_host_id=self.group_host_id
+        )
+        self.assertEqual(accepted['catalog_count'], 17)
+        api_probe_failure = dict(valid)
+        api_probe_failure['process_receipt'] = dict(valid['process_receipt'])
+        api_probe_failure['process_receipt']['error'] = (
+            'runtime observation stayed degraded for 30s: '
+            'API identity probe failed during supervision: API runtime-service liveness is not ready'
+        )
+        stop._validate_linux_oom_ready_probe(
+            api_probe_failure, 'a' * 64, expected_store=self.store,
+            expected_group_host_id=self.group_host_id,
+        )
+        for path, value in (
+            (('process_receipt', 'api_diagnostic_only'), True),
+            (('api_pid_exists',), True), (('api_listener_open',), True),
+            (('all_tasks_terminal',), False), (('all_leases_released',), False),
+            (('all_reservations_released',), False), (('no_pending_transactions',), False),
+            (('terminal_run_count',), 16), (('group_ledger_policy_host_id',), '9' * 64),
+        ):
+            with self.subTest(path=path):
+                changed = dict(valid)
+                if len(path) == 2:
+                    changed['process_receipt'] = dict(valid['process_receipt'])
+                    changed['process_receipt'][path[1]] = value
+                else:
+                    changed[path[0]] = value
+                with self.assertRaises(stop.BuildControlError):
+                    stop._validate_linux_oom_ready_probe(
+                        changed, 'a' * 64, expected_store=self.store,
+                        expected_group_host_id=self.group_host_id,
+                    )
+
+    def test_drain_requires_same_ready_identity_and_successful_children(self):
+        before = self.ready_probe()
+        drained = self.drained_receipt(before)
+        accepted = stop._validate_linux_oom_drained_receipt(drained, before)
+        self.assertEqual(accepted['state'], 'drained')
+        for change in ('failed-child', 'changed-child-pid', 'changed-owner'):
+            with self.subTest(change=change):
+                candidate = dict(drained)
+                terminal = dict(drained['terminal_service_owner'])
+                children = [dict(child) for child in terminal['children']]
+                if change == 'failed-child':
+                    children[0]['status'] = 'exited_failure'
+                elif change == 'changed-child-pid':
+                    children[0]['pid'] += 1
+                else:
+                    terminal['owner_token'] = 'other-owner'
+                terminal['children'] = children
+                candidate['terminal_service_owner'] = terminal
+                with self.assertRaises(stop.BuildControlError):
+                    stop._validate_linux_oom_drained_receipt(candidate, before)
+
+    def run_stop(self, fault=None, *, stop_frontend=False):
+        import contextlib, copy, hashlib, io, json, types
+        import docker_build_control as build
+        import docker_group_ledger as group_ledger
+        import docker_volume_dev as dev
+        import docker_volume_reconcile as reconcile
+        import docker_volume_stop_unadmitted as unadmitted
+        from unittest.mock import Mock, patch
+
+        backend_id, frontend_id = 'b' * 64, 'f' * 64
+        image, source = 'sha256:' + 'a' * 64, Path('/fixture/source')
+        document = {'name': 'fixture', 'services': {
+            'backend': {'image': image}, 'frontend': {'image': image},
+        }}
+        config_sha = hashlib.sha256(build.canonical(document)).hexdigest()
+        previous = {
+            'state': 'succeeded', 'attempt': '1' * 32, 'compose_project': 'fixture',
+            'config_sha256': config_sha,
+            'inputs': {'source_root': str(source), 'image_id': image},
+            'backend_container': backend_id, 'frontend_container': frontend_id,
+        }
+        profile = {
+            'profile': 'group-ledger-v1', 'volume_name': 'fullmag-dev-group-ledger-v1-fixture',
+            'ledger_subpath': 'private/ledger',
+            'environment': {
+                'FULLMAG_GROUP_LEDGER_HOST_ID': self.group_host_id,
+                'FULLMAG_DOCKER_HOST_ID': 'd' * 64,
+                'FULLMAG_PRIVATE_GROUP_STORAGE': 'group-volume-v1',
+            },
+        }
+        group_record = {
+            'schema': 'fullmag.docker-group-ledger.v1', 'profile': 'group-ledger-v1',
+            'compose_project': 'fixture', 'volume_name': profile['volume_name'],
+            'host_id': self.group_host_id, 'daemon_id_sha256': 'd' * 64,
+        }
+        attestation = {
+            'schema': group_ledger.ATTESTATION_SCHEMA, 'backend_container_id': backend_id,
+            'compose_project': 'fixture', 'volume_name': profile['volume_name'],
+            'host_id': self.group_host_id,
+        }
+        services = {
+            backend_id: {
+                'Id': backend_id, 'Image': image,
+                'State': {'StartedAt': 'backend-start', 'Running': True, 'OOMKilled': True,
+                          'Health': {'Status': 'unhealthy'}, 'Pid': 100, 'ExitCode': 0},
+                'Config': {'Env': ['FULLMAG_SESSION_STORAGE_PROFILE=linux-native-v1']},
+                'HostConfig': {}, 'Mounts': [],
+            },
+            frontend_id: {
+                'Id': frontend_id, 'Image': image,
+                'State': {'StartedAt': 'frontend-start', 'Running': True, 'Pid': 101, 'ExitCode': 0},
+                'Config': {'Env': []}, 'HostConfig': {}, 'Mounts': [],
+            },
+        }
+        events, writes, logger = [], [], Mock()
+        logger.stdin = io.BytesIO()
+        logger.wait.return_value = 0
+        control = types.SimpleNamespace(
+            project='fixture', volume='fixture-control', namespace=None,
+            _active_operation=None, _pin_operation_helper=Mock(return_value='c' * 64),
+        )
+        control.path = lambda value: '/control/' + value
+        control.helper_args = lambda *args, **kwargs: ['mock-helper']
+        control.space = lambda: {'available_bytes': 100 * 1024**3}
+        control._line = Mock(side_effect=['READY', 'LOGGED'])
+        def read(path, optional=False):
+            if path == 'development/current.json' or path.endswith('/terminal.json'):
+                return previous
+            if path.endswith('/compose.json'):
+                return document
+            if path.endswith('/group-ledger.json'):
+                return group_record
+            if path.endswith('/group-ledger-attestation.json'):
+                return attestation
+            if optional:
+                return None
+            raise AssertionError(path)
+        def write(path, value):
+            if fault == 'journal-write' and path.startswith('verification/') and value.get('state') == 'stopped-confirmed':
+                raise OSError('injected final journal write')
+            writes.append((path, copy.deepcopy(value)))
+        control.read = read
+        control.write = write
+        control.operation = types.MethodType(build.BuildControl.operation, control)
+        control.operation_script = types.MethodType(build.BuildControl.operation_script, control)
+        proof = self.ready_probe()
+        probe_count = 0
+        def docker(*args, **kwargs):
+            nonlocal probe_count
+            if args[:2] == ('image', 'inspect'):
+                return types.SimpleNamespace(stdout=b'[{"Config":{}}]', returncode=0, stderr=b'')
+            if args[0] == 'inspect':
+                if fault == 'frontend-restarted' and events and events[-1] == 'terminal-receipt':
+                    services[frontend_id]['State']['StartedAt'] = 'replacement-start'
+                selected = [services[item] for item in args[1:]]
+                return types.SimpleNamespace(stdout=json.dumps(selected).encode(), returncode=0, stderr=b'')
+            if args[0] == 'exec':
+                probe_count += 1
+                events.append('probe')
+                value = copy.deepcopy(proof)
+                if fault == 'evidence-drift' and probe_count == 2:
+                    value['store_admission_sha256'] = '9' * 64
+                if fault == 'telemetry-drift' and probe_count == 2:
+                    value['group_ledger_sha256'] = '8' * 64
+                    value['store_proof_sha256'] = '9' * 64
+                return types.SimpleNamespace(stdout=json.dumps(value).encode(), returncode=0, stderr=b'')
+            if args[0] == 'stop':
+                self.assertEqual(args[1:5], ('--signal', 'SIGTERM', '--time', '-1'))
+                if args[-1] == frontend_id:
+                    events.append('frontend-stop')
+                    if fault == 'frontend-stop-unknown':
+                        raise build.ControlOutcomeUnknown('injected frontend stop outcome unknown')
+                    services[frontend_id]['State'].update(Running=False, Pid=0, ExitCode=0)
+                    return types.SimpleNamespace(stdout=b'', returncode=0, stderr=b'')
+                events.append('stop')
+                if fault == 'stop-unknown':
+                    raise build.ControlOutcomeUnknown('injected daemon transport unknown')
+                services[backend_id]['State'].update(Running=False, Pid=0, ExitCode=1)
+                return types.SimpleNamespace(stdout=b'', returncode=0, stderr=b'')
+            raise AssertionError(args)
+        drained = self.drained_receipt(proof)
+        if fault == 'drain-child':
+            drained['terminal_service_owner']['children'][0]['status'] = 'exited_failure'
+        def read_drained(*args, **kwargs):
+            events.append('terminal-receipt')
+            raw = (json.dumps(drained, sort_keys=True, separators=(',', ':')) + '\n').encode()
+            return raw, drained
+        args = types.SimpleNamespace(container_id=backend_id, image_id=image,
+                                     process_receipt_sha256='a' * 64, stop_frontend=stop_frontend)
+        error = None
+        with (
+            patch.object(stop, 'BuildControl', return_value=control),
+            patch.object(build, 'toolchain_configuration', return_value={
+                'services': {'fem-gpu-toolchain': {'build': {'args': {'FULLMAG_CUDA_BASE_IMAGE': 'helper'}}}}
+            }),
+            patch.object(stop, 'docker_capture', side_effect=docker),
+            patch.object(reconcile, 'fingerprint', side_effect=lambda value: value['Id']),
+            patch.object(dev, '_retained_ledger_profile', return_value=profile),
+            patch.object(dev, '_validate_retained_service'),
+            patch.object(dev, '_assert_private_restart_network'),
+            patch.object(dev, '_read_runtime_config_digest', return_value='d' * 64),
+            patch.object(group_ledger, 'validate_container', return_value=attestation),
+            patch.object(stop, '_linux_oom_ready_probe_script', return_value='fixture'),
+            patch.object(unadmitted, '_preflight_terminal_process_receipt'),
+            patch.object(unadmitted, '_read_terminal_process_receipt', side_effect=read_drained),
+            patch.object(build.subprocess, 'Popen', return_value=logger),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            try:
+                stop._stop_linux_oom_ready(args, source, {}, copy.deepcopy(services[backend_id]))
+            except Exception as caught:
+                error = caught
+        return writes, events, logger, error
+
+    def test_managed_stop_rechecks_before_sigterm_and_retains_successful_drain(self):
+        writes, events, logger, error = self.run_stop()
+        self.assertIsNone(error)
+        self.assertEqual(events, ['probe', 'probe', 'stop', 'terminal-receipt'])
+        journal = next(value for path, value in reversed(writes) if path.startswith('verification/'))
+        self.assertEqual(journal['state'], 'stopped-confirmed')
+        self.assertEqual(journal['terminal_process_receipt']['state'], 'drained')
+        self.assertEqual(journal['released_lease_count'], 17)
+        self.assertTrue(any(path.endswith('/terminal.json') and value['state'] == 'succeeded'
+                            for path, value in writes))
+        logger.wait.assert_called_once()
+
+    def test_telemetry_refresh_preserves_stop_admission_and_retains_raw_observations(self):
+        writes, events, logger, error = self.run_stop('telemetry-drift')
+        self.assertIsNone(error)
+        self.assertIn('stop', events)
+        before = next(value for path, value in writes if path.endswith('/idle-proof-before.json'))
+        recheck = next(value for path, value in writes if path.endswith('/idle-proof-recheck.json'))
+        self.assertNotEqual(before['group_ledger_sha256'], recheck['group_ledger_sha256'])
+        self.assertEqual(before['group_ledger_stable_sha256'], recheck['group_ledger_stable_sha256'])
+        self.assertEqual(before['store_admission_sha256'], recheck['store_admission_sha256'])
+        self.assertTrue(any(path.endswith('/terminal.json') and value['state'] == 'succeeded'
+                            for path, value in writes))
+
+    def test_changed_idle_evidence_blocks_stop_and_unverified_drain_retains_lease(self):
+        writes, events, logger, error = self.run_stop('evidence-drift')
+        self.assertIsInstance(error, stop.BuildControlError)
+        self.assertNotIn('stop', events)
+        self.assertFalse(any(value.get('state') == 'stopped-confirmed' for path, value in writes))
+        self.assertTrue(any(path.endswith('/terminal.json') and value.get('state') == 'failed-confirmed'
+                            for path, value in writes))
+        logger.wait.assert_called_once()
+        writes, events, logger, error = self.run_stop('drain-child')
+        self.assertIsInstance(error, stop.BuildControlError)
+        self.assertEqual(events[-2:], ['stop', 'terminal-receipt'])
+        receipts = [value for path, value in writes if path.endswith('/receipt.json')]
+        self.assertEqual(receipts[-1]['state'], 'outcome-unknown-resources-retained')
+        self.assertFalse(any(path.endswith('/terminal.json') for path, value in writes))
+        logger.wait.assert_not_called()
+
+    def test_group_stop_closes_frontend_after_authenticated_backend_drain(self):
+        writes, events, logger, error = self.run_stop(stop_frontend=True)
+        self.assertIsNone(error)
+        self.assertEqual(events, ['probe', 'probe', 'stop', 'terminal-receipt', 'frontend-stop'])
+        journal = next(value for path, value in reversed(writes) if path.startswith('verification/'))
+        self.assertTrue(journal['frontend_stopped'])
+        self.assertEqual(journal['frontend_container_id'], 'f' * 64)
+        logger.wait.assert_called_once()
+
+    def test_group_stop_preserves_frontend_on_failed_drain_or_changed_incarnation(self):
+        for fault in ('drain-child', 'frontend-restarted'):
+            with self.subTest(fault=fault):
+                writes, events, logger, error = self.run_stop(fault, stop_frontend=True)
+                self.assertIsInstance(error, stop.BuildControlError)
+                self.assertNotIn('frontend-stop', events)
+                self.assertFalse(any(path.endswith('/terminal.json') for path, value in writes))
+                logger.wait.assert_not_called()
+
+    def test_unknown_frontend_stop_retains_the_operation_lease(self):
+        from docker_build_control import ControlOutcomeUnknown
+        writes, events, logger, error = self.run_stop('frontend-stop-unknown', stop_frontend=True)
+        self.assertIsInstance(error, ControlOutcomeUnknown)
+        self.assertIn('frontend-stop', events)
+        self.assertFalse(any(path.endswith('/terminal.json') for path, value in writes))
+        logger.wait.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

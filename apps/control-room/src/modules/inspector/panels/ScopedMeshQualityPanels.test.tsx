@@ -24,6 +24,7 @@ vi.mock("../InspectorTabState", () => ({
 vi.mock("@/kernel/KernelContext", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/kernel/KernelContext")>();
   const { createContext } = await import("react");
+  const { ObjectVisualizationController } = await import("@/kernel/visualization/ObjectVisualizationController");
   const kernel = {
     api: {
       meshing: {
@@ -40,6 +41,7 @@ vi.mock("@/kernel/KernelContext", async (importOriginal) => {
     resources: {
       invalidate: vi.fn(),
     },
+    visualization: new ObjectVisualizationController(),
   };
   return {
     ...original,
@@ -960,8 +962,7 @@ describe("scoped mesh quality panels", () => {
     expect(overview).toContain("0.000001, 0.000002, 0.000003");
     expect(overview).toContain("12,345");
     expect(overview).toContain("59,244");
-    expect(overview).toContain("Active quantity");
-    expect(overview).toContain("m");
+    expect(overview).toMatch(/>Active quantity<\/span><span[^>]*>H_demag<\/span>/);
     expect(overview).toContain("Mesh Parameters");
     expect(overview).toContain("Mesh Build");
     expect(overview).toContain("Visualization");

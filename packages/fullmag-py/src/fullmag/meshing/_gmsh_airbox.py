@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from ._stl_shells import ShellTopology
+from ._gmsh_stl_shells import shell_surface_loops, StlTopologyError
+
 import itertools
 import math
 import warnings
@@ -1076,6 +1079,7 @@ def _add_airbox_geo(
     component_volume_groups: dict[str, list[int]] | None = None,
     component_surface_groups: dict[str, list[int]] | None = None,
     mesh_options: MeshOptions | None = None,
+    shell_topology: ShellTopology | None = None,
 ) -> int | None:
     """Add an airbox around a GEO-kernel body using pure GEO primitives.
 
@@ -1119,6 +1123,13 @@ def _add_airbox_geo(
 
     x0, y0, z0 = cx - ox / 2, cy - oy / 2, cz - oz / 2
     x1, y1, z1 = cx + ox / 2, cy + oy / 2, cz + oz / 2
+    if shell_topology is not None:
+        lower = np.array([x0,y0,z0])
+        upper = np.array([x1,y1,z1])
+        tolerance = 256*np.finfo(float).eps*max(ox,oy,oz)
+        for shell in shell_topology.shells:
+            if np.any(shell.triangles.min(axis=(0,1)) <= lower+tolerance) or np.any(shell.triangles.max(axis=(0,1)) >= upper-tolerance):
+                raise StlTopologyError('STL shell touches or lies outside the declared airbox universe')
     h_outer = (
         airbox.maximum_element_size
         if airbox.maximum_element_size is not None
@@ -1171,22 +1182,24 @@ def _add_airbox_geo(
     s_right = gmsh.model.geo.addPlaneSurface([cl_right])
     outer_surf_tags = [s_bot, s_top, s_front, s_back, s_left, s_right]
 
-    # 4 — airbox volume: outer box faces + body surfaces as inner holes.
-    # When multiple disconnected bodies are present each body needs its own
-    # surface loop (Gmsh requires each hole to be a separate shell); passing
-    # all body surfaces in a single surface loop is only valid for one body.
+    # Reuse the exact imported wall surfaces for both sides of every
+    # material/air interface. A cavity is an air volume, not another solid.
     outer_sl = gmsh.model.geo.addSurfaceLoop(outer_surf_tags)
-    if component_surface_groups is not None and len(component_surface_groups) > 1:
-        body_sls = [
-            gmsh.model.geo.addSurfaceLoop(list(surfs))
-            for surfs in component_surface_groups.values()
-            if surfs
-        ]
-        air_vol = gmsh.model.geo.addVolume([outer_sl] + body_sls)
+    if shell_topology is not None:
+        loops = shell_surface_loops(gmsh,shell_topology)
+        roots = [loops[i] for i,parent in enumerate(shell_topology.parent_indices) if parent is None]
+        air_volumes = [gmsh.model.geo.addVolume([outer_sl,*roots])]
+        for i,depth in enumerate(shell_topology.depths):
+            if depth%2:
+                children = [loops[j] for j,parent in enumerate(shell_topology.parent_indices) if parent == i]
+                air_volumes.append(gmsh.model.geo.addVolume([loops[i],*children]))
+    elif component_surface_groups is not None and len(component_surface_groups)>1:
+        body_sls = [gmsh.model.geo.addSurfaceLoop(list(surfs))
+                    for surfs in component_surface_groups.values() if surfs]
+        air_volumes = [gmsh.model.geo.addVolume([outer_sl,*body_sls])]
     else:
-        # Single body (or no grouping info): classic combined surface loop hole
         hole_sl = gmsh.model.geo.addSurfaceLoop(body_surf_tags)
-        air_vol = gmsh.model.geo.addVolume([outer_sl, hole_sl])
+        air_volumes = [gmsh.model.geo.addVolume([outer_sl,hole_sl])]
     gmsh.model.geo.synchronize()
 
     # 5 — physical groups (same convention as the OCC path)
@@ -1200,7 +1213,7 @@ def _add_airbox_geo(
             gmsh.model.addPhysicalGroup(3, [body_vol_tag], tag=index)
             gmsh.model.setPhysicalName(3, index, f"magnetic_{index}")
         air_tag = len(body_vol_tags) + 1
-    gmsh.model.addPhysicalGroup(3, [air_vol], tag=air_tag)
+    gmsh.model.addPhysicalGroup(3, air_volumes, tag=air_tag)
     gmsh.model.setPhysicalName(3, air_tag, "air")
     gmsh.model.addPhysicalGroup(2, outer_surf_tags, tag=airbox.boundary_marker)
     gmsh.model.setPhysicalName(2, airbox.boundary_marker, "Gamma_out")
@@ -1210,7 +1223,7 @@ def _add_airbox_geo(
     feature_field_ids = add_airbox_feature_fields(
         gmsh,
         airbox,
-        air_volume_tags=[air_vol],
+        air_volume_tags=air_volumes,
         body_surface_groups=(
             component_surface_groups
             if component_surface_groups
@@ -1846,7 +1859,7 @@ def _extract_airbox_mesh_data(
             marker = 1 if vol_tag in mag_set else 0
             reindexed = reindex[tets.ravel()].reshape(-1, 4)
             all_elements.append(reindexed)
-            all_markers.append(np.full(n_tets, marker, dtype=np.int32))
+            all_markers.append(np.full(n_tets, marker, dtype=np.uint32))
 
     if not all_elements:
         raise RuntimeError("air-box mesh generation produced zero tetrahedra")
@@ -1872,14 +1885,14 @@ def _extract_airbox_mesh_data(
             # Check if this surface belongs to the outer boundary physical group
             phys_groups = gmsh.model.getPhysicalGroupsForEntity(2, surf_tag)
             bm = boundary_marker if boundary_marker in phys_groups else 1
-            all_bnd_markers.append(np.full(n_tris, bm, dtype=np.int32))
+            all_bnd_markers.append(np.full(n_tris, bm, dtype=np.uint32))
 
     if all_bnd_faces:
         boundary_faces = np.concatenate(all_bnd_faces, axis=0)
         boundary_markers_arr = np.concatenate(all_bnd_markers, axis=0)
     else:
         boundary_faces = np.zeros((0, 3), dtype=np.int32)
-        boundary_markers_arr = np.zeros(0, dtype=np.int32)
+        boundary_markers_arr = np.zeros(0, dtype=np.uint32)
 
     return MeshData.from_legacy_tet4(
         nodes=nodes,

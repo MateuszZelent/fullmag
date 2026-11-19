@@ -3,6 +3,7 @@
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import { JsonResourceSection, MeshResourceFields } from "./MeshResourceView";
 import { MeshBuildHistorySection } from "./mesh-details/MeshBuildHistorySection";
 import { MeshBuildPipelineSection } from "./mesh-details/MeshBuildPipelineSection";
@@ -75,43 +76,34 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
       return [
         "overview",
         "shared-policy",
-        "identity",
         "pipeline",
-        "mixed-topology",
-        "policy-comparison",
         "viewport-delivery",
         "editor-capabilities",
         "json-capabilities",
         "json-semantics",
-        "json-mesh-build-report",
       ];
     case "mesh.shared-domain":
       return [
-        "overview",
         "shared-policy",
         "identity",
         "counts",
         "mixed-topology",
         "viewport-delivery",
-        "editor-capabilities",
         "json-universe-report",
         "json-shared-report",
-        "json-mesh-build-report",
       ];
     case "mesh.builds":
       return [
-        "overview",
         "pipeline",
         "mixed-topology",
         "build-history",
         "operation-statuses",
         "thin-film",
-        "editor-capabilities",
+        "json-mesh-build-report",
         "json-last-build",
       ];
     case "mesh.quality":
       return [
-        "overview",
         "quality-gates",
         "quality-statistics",
         "json-universe-quality",
@@ -119,15 +111,14 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
       ];
     case "mesh.size-fields":
       return [
-        "overview",
         "size-fields",
+        "thin-film",
       ];
     case "mesh.regions":
       return [
-        "overview",
+        "policy-comparison",
         "identity",
         "counts",
-        "policy-comparison",
       ];
     default:
       return [
@@ -157,7 +148,11 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
   }
 }
 
-export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
+export interface MeshDetailsPanelProps extends InspectorPanelProps {
+  sectionScope?: string;
+}
+
+export function MeshDetailsPanel({ selection, sectionScope }: MeshDetailsPanelProps) {
   const model = useMeshDetailsModel(selection);
   if (model.lane === "fdm") {
     // The global Mesh node is shared by both lanes.  FDM contributes the
@@ -176,14 +171,27 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
       </div>
     );
   }
-  const sections = meshDetailsInspectorSections(selection.kind);
+  const effectiveKind = sectionScope ?? selection.kind;
+  const sections = meshDetailsInspectorSections(effectiveKind);
   const showSection = (section: string) => sections.includes(section);
 
   return (
     <div
-      key={selection.kind ?? "default"}
+      key={effectiveKind ?? "default"}
       className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
     >
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Lane", value: "FEM" },
+          { label: "Status", value: model.summaryStatus ?? "unknown" },
+          {
+            label: "Freshness",
+            tone: model.meshIsStale ? "stale" : "neutral",
+            value: model.meshFreshness ?? "unknown",
+          },
+          { label: "Targets", value: String(model.targetCount ?? 0) },
+        ]}
+      />
       {showSection("overview") ? (
         <MeshOverviewSection
           activeBuildRevision={model.activeBuildRevision}

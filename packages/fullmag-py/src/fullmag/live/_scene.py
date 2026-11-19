@@ -49,6 +49,7 @@ def build_world_scene(source_path: Path) -> dict[str, Any]:
             default_until_seconds=stage.default_until_seconds,
             action=stage.action,
             stage_id=stage.stage_id,
+            magnetization_assignments=stage.magnetization_assignments,
         )
         for stage in state._live_stages
     )
@@ -72,7 +73,9 @@ def build_world_scene(source_path: Path) -> dict[str, Any]:
             entrypoint_kind="flat_workspace",
             workspace_problem=problem,
         )
-    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    scene = build_scene_document_from_builder(
+        export_builder_draft(loaded, replay_initial_magnetization=False)
+    )
     _trim_pipeline_run_payloads(scene)
     return scene
 
@@ -88,6 +91,7 @@ _PIPELINE_RUN_PAYLOAD_KEYS = (
     "until_seconds",
     "output_every_seconds",
     "autosave",
+    "magnetization_assignments",
 )
 
 
@@ -135,9 +139,12 @@ def plan_transactions(
     before: Optional[Mapping[str, Any]],
     after: Mapping[str, Any],
     base_revision: Optional[int],
+    *,
+    magnetization_apply: Optional[Mapping[str, Any]] = None,
 ) -> list[dict[str, Any]]:
     """Translate a scene change into the authoring transactions to commit, in order.
 
+    * explicit magnetization apply: one scoped operation with the complete candidate;
     * no previous baseline: one ``replace_scene`` (attaching to the session);
     * only one material's ``properties`` changed: ``patch_material`` (keeps the
       server's interfacial/bulk DMI synchronisation);
@@ -145,6 +152,17 @@ def plan_transactions(
       the server requires instead of a recursive merge;
     * anything else: one ``merge_patch`` with the RFC 7386 difference.
     """
+    if magnetization_apply is not None:
+        if before is None or base_revision is None:
+            raise ValueError("applying magnetization requires a committed scene revision")
+        return [_with_revision(
+            {
+                "kind": "replace_scene",
+                "scene": copy.deepcopy(dict(after)),
+                "magnetization_apply": copy.deepcopy(dict(magnetization_apply)),
+            },
+            base_revision,
+        )]
     authored_after = _authored(after)
     if before is None:
         return [_with_revision({"kind": "replace_scene", "scene": dict(after)}, base_revision)]
@@ -183,6 +201,71 @@ def plan_transactions(
 
 def _authored(scene: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in scene.items() if key not in _IGNORED_TOP_LEVEL}
+
+
+def reconcile_scene_changes(
+    baseline: Mapping[str, Any], local: Mapping[str, Any], current: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Apply local changes to the current scene, failing on overlapping edits."""
+
+    def ordered_ids(values: list[Any]) -> list[str] | None:
+        ids: list[str] = []
+        for value in values:
+            if not isinstance(value, Mapping):
+                return None
+            identity = value.get("id") or value.get("region_id") or value.get("stage_id")
+            if not isinstance(identity, str) or not identity:
+                return None
+            ids.append(identity)
+        return ids if len(set(ids)) == len(ids) else None
+
+    def merge(before: Any, after: Any, remote: Any, path: str) -> Any:
+        if before == after:
+            return remote
+        if before == remote or after == remote:
+            return after
+        if all(isinstance(value, Mapping) for value in (before, after, remote)):
+            result: dict[str, Any] = {}
+            for key in dict.fromkeys((*remote, *after, *before)):
+                value = merge(
+                    before.get(key, _MISSING), after.get(key, _MISSING),
+                    remote.get(key, _MISSING), f"{path}.{key}",
+                )
+                if value is not _MISSING:
+                    result[key] = value
+            return result
+        if isinstance(before, list) and isinstance(after, list) and isinstance(remote, list):
+            ids = ordered_ids(before)
+            local_ids = ordered_ids(after)
+            if ids is not None and local_ids is not None and ids == ordered_ids(remote) == local_ids[:len(ids)]:
+                # A local append preserves indices when the remote kept the same ordered prefix.
+                prefix = [
+                    merge(base_item, local_item, remote_item, f"{path}[{identity}]")
+                    for identity, base_item, local_item, remote_item in zip(ids, before, after, remote)
+                ]
+                return prefix + after[len(ids):]
+        raise ValueError(f"{path} changed in both Python and the current scene. Align the local draft.")
+
+    metadata = {key: current[key] for key in _IGNORED_TOP_LEVEL if key in current}
+    return {**metadata, **merge(_authored(baseline), _authored(local), _authored(current), "scene")}
+
+
+def magnetization_scope_texture(scene: Mapping[str, Any], object_id: str, region_id: str | None) -> Any:
+    obj = next((obj for obj in scene.get("objects", ()) if obj["id"] == object_id), None)
+    if obj is None or obj.get("role") != "magnet":
+        raise ValueError(f"magnetization apply object '{object_id}' is missing")
+    if region_id is not None:
+        region = next((item for item in obj.get("regions", ()) if item["region_id"] == region_id), None)
+        if region is None:
+            raise ValueError(f"magnetization apply region '{region_id}' is missing")
+        if region.get("texture_override") is not None:
+            return region["texture_override"]
+    asset = next((asset for asset in scene.get("magnetization_assets", ())
+                  if asset["id"] == obj.get("magnetization_ref")), None)
+    if asset is None:
+        return None
+    return {key: value for key, value in asset.items()
+            if value is not None and key not in {"id", "name", "ui_label"}}
 
 
 def _with_revision(transaction: dict[str, Any], base_revision: Optional[int]) -> dict[str, Any]:

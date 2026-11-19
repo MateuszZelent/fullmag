@@ -113,6 +113,65 @@ fn stale_revision_missing_version_and_bad_input_are_distinct() {
     assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
 }
 
+fn unbound_single_precision_fixture() -> (ComputePreviewRequest, ExecutionProfileCatalog) {
+    let (mut request, mut profiles) = fixture();
+    let entry = &mut profiles.entries[0];
+    entry.profile.defaults.device = fullmag_ir::FieldPatch::Value(fullmag_ir::ExecutionDevice::Gpu);
+    entry.profile.defaults.precision = fullmag_ir::FieldPatch::Value(fullmag_ir::ExecutionPrecision::Single);
+    entry.profile_sha256 = entry.profile.canonical_sha256().unwrap();
+    for input in &mut request.inputs {
+        input.problem.backend_policy.execution_precision = fullmag_ir::ExecutionPrecision::Single;
+        input.problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".into(),
+            json!({"backend":"fdm", "device":"auto", "execution_precision":"single"}),
+        );
+    }
+    (request, profiles)
+}
+
+#[test]
+fn preview_binds_auto_single_to_the_pinned_gpu_profile() {
+    let (request, profiles) = unbound_single_precision_fixture();
+    let digest = profiles.entries[0].profile_sha256.clone();
+    let preview = build_preview(request, profiles, "instance").unwrap();
+    assert_eq!(preview.admission_state, ComputeAdmissionState::NotEvaluated);
+    assert_eq!(preview.steps.len(), 2);
+    for step in preview.steps {
+        assert_eq!(step.execution.requested.device, fullmag_ir::ExecutionDevice::Gpu);
+        assert_eq!(step.execution.requested.precision, fullmag_ir::ExecutionPrecision::Single);
+        assert_eq!(step.execution.profile_sha256.as_deref(), Some(digest.as_str()));
+    }
+}
+
+#[test]
+fn preview_preserves_validation_before_and_after_gpu_profile_binding() {
+    let (request, profiles) = unbound_single_precision_fixture();
+    let mut unresolved_profiles = profiles.clone();
+    let entry = &mut unresolved_profiles.entries[0];
+    entry.profile.defaults.device = fullmag_ir::FieldPatch::Value(fullmag_ir::ExecutionDevice::Auto);
+    entry.profile_sha256 = entry.profile.canonical_sha256().unwrap();
+    let error = build_preview(request.clone(), unresolved_profiles, "instance").unwrap_err();
+    assert!(error.message.contains("device='auto' with execution_precision='single'"));
+
+    let mut unpinned_profiles = profiles.clone();
+    let entry = &mut unpinned_profiles.entries[0];
+    entry.profile.version = "2".into();
+    entry.profile_sha256 = entry.profile.canonical_sha256().unwrap();
+    let error = build_preview(request.clone(), unpinned_profiles, "instance").unwrap_err();
+    assert_eq!(error.code.as_deref(), Some("execution_profile_reference_conflict"));
+
+    let mut invalid_selection = request.clone();
+    invalid_selection.inputs[0].problem.problem_meta.runtime_metadata
+        .get_mut("runtime_selection").unwrap()["device"] = json!("invalid");
+    let error = build_preview(invalid_selection, profiles.clone(), "instance").unwrap_err();
+    assert!(error.message.contains("runtime_selection.device 'invalid' is unsupported"));
+
+    let mut invalid_physics = request;
+    invalid_physics.inputs[0].problem.materials[0].saturation_magnetisation = -1.0;
+    let error = build_preview(invalid_physics, profiles, "instance").unwrap_err();
+    assert!(error.message.contains("saturation_magnetisation"));
+}
+
 #[test]
 fn preview_catalogue_read_does_not_create_missing_storage() {
     let directory = tempfile::tempdir().unwrap();

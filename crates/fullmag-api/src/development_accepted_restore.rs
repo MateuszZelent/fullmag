@@ -364,6 +364,7 @@ pub(crate) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), S
             state,
             &context,
             "accepted_run_reattach",
+            None,
         )
         .await
         .map_err(|error| format!("accepted-run preparation projection failed: {error}"))?;

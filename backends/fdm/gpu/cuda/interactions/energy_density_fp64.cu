@@ -61,6 +61,7 @@ __global__ void energy_density_kernel(
     int nz,
     int has_active_mask,
     int has_volume_fraction,
+    double exchange_phi_floor,
     int include_exchange,
     int include_demag,
     int include_external,
@@ -93,7 +94,8 @@ __global__ void energy_density_kernel(
     int include_rotated_interfacial_dmi,
     int include_bulk_dmi,
     int kind,
-    double ms,
+    double ms_scalar,
+    const double *ms_field,
     double external_x,
     double external_y,
     double external_z,
@@ -102,6 +104,7 @@ __global__ void energy_density_kernel(
     const Scalar *regional_drive_z,
     const RegionalFieldDriveParams *regional_drive_params,
     const double *regional_drive_points,
+    RegionalFieldDriveHostMultipliers regional_drive_host,
     uint32_t regional_drive_count,
     uint64_t regional_drive_cell_count,
     double evaluation_time_s,
@@ -114,7 +117,16 @@ __global__ void energy_density_kernel(
     double inv_2dz,
     int periodic_x,
     int periodic_y,
-    int periodic_z)
+    int periodic_z,
+    int include_magnetoelastic,
+    double mel_b1,
+    double mel_b2,
+    double mel_e11,
+    double mel_e22,
+    double mel_e33,
+    double mel_e23,
+    double mel_e13,
+    double mel_e12)
 {
     const uint64_t index = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (index >= cell_count) return;
@@ -128,12 +140,17 @@ __global__ void energy_density_kernel(
     const double mmy = static_cast<double>(my[index]);
     const double mmz = static_cast<double>(mz[index]);
     const double phi_i = has_volume_fraction ? volume_fraction[index] : 1.0;
+    // T0/T1 exchange fields carry 1/phi_eff, so the exchange density takes
+    // phi_eff like the scalar exchange energy (note 0400 §3.1.2).
+    const double phi_exchange = has_volume_fraction ? fmax(phi_i, exchange_phi_floor) : 1.0;
+    const double ms = ms_field ? ms_field[index] : ms_scalar;
     double density = 0.0;
+    double exchange_density = 0.0;
     double dmi_density = 0.0;
 
     const bool wants_total = kind == FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL;
     if ((wants_total || kind == FULLMAG_FDM_OBSERVABLE_EDEN_EX) && include_exchange) {
-        density += -0.5 * MU0 * ms * (
+        exchange_density = -0.5 * MU0 * ms * (
             mmx * static_cast<double>(h_ex_x[index]) +
             mmy * static_cast<double>(h_ex_y[index]) +
             mmz * static_cast<double>(h_ex_z[index]));
@@ -153,17 +170,19 @@ __global__ void energy_density_kernel(
             field_y += static_cast<double>(h_oe_y[index]);
             field_z += static_cast<double>(h_oe_z[index]);
         }
-        if (include_regional_field) {
-            field_x += regional_field_drive_component(
-                regional_drive_x, regional_drive_params, regional_drive_points,
-                regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
-            field_y += regional_field_drive_component(
-                regional_drive_y, regional_drive_params, regional_drive_points,
-                regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
-            field_z += regional_field_drive_component(
-                regional_drive_z, regional_drive_params, regional_drive_points,
-                regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
-        }
+        density += -MU0 * ms * (mmx * field_x + mmy * field_y + mmz * field_z);
+    }
+    if ((wants_total || kind == FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE) &&
+        include_regional_field) {
+        const double field_x = regional_field_drive_component(
+            regional_drive_x, regional_drive_params, regional_drive_points, regional_drive_host,
+            regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
+        const double field_y = regional_field_drive_component(
+            regional_drive_y, regional_drive_params, regional_drive_points, regional_drive_host,
+            regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
+        const double field_z = regional_field_drive_component(
+            regional_drive_z, regional_drive_params, regional_drive_points, regional_drive_host,
+            regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
         density += -MU0 * ms * (mmx * field_x + mmy * field_y + mmz * field_z);
     }
     if (kind == FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE && include_drive) {
@@ -197,6 +216,13 @@ __global__ void energy_density_kernel(
             density += kc1_value * sigma +
                 kc2_value * m1_sq * m2_sq * m3_sq + kc3_value * sigma * sigma;
         }
+    }
+
+    // Magnetoelastic density (prescribed strain, tensor shear e_jk) has no
+    // separate observable; it belongs to the total like the scalar E_total.
+    if (wants_total && include_magnetoelastic) {
+        density += mel_b1 * (mmx * mmx * mel_e11 + mmy * mmy * mel_e22 + mmz * mmz * mel_e33) +
+            2.0 * mel_b2 * (mmx * mmy * mel_e12 + mmx * mmz * mel_e13 + mmy * mmz * mel_e23);
     }
 
     const bool wants_rotated_dmi =
@@ -285,7 +311,8 @@ __global__ void energy_density_kernel(
 
     // Scalar DMI reduction currently uses full cell volume; preserve that
     // measure while applying partial-cell volume to the other energy terms.
-    out[index] = static_cast<Scalar>(phi_i * density + dmi_density);
+    out[index] = static_cast<Scalar>(
+        phi_exchange * exchange_density + phi_i * density + dmi_density);
 }
 
 bool is_energy_density_observable(fullmag_fdm_observable observable) {
@@ -349,6 +376,7 @@ bool launch_energy_density_observable(
             static_cast<int>(ctx.nx), static_cast<int>(ctx.ny), static_cast<int>(ctx.nz),
             ctx.has_active_mask ? 1 : 0,
             has_volume_fraction,
+            ctx.phi_floor,
             ctx.enable_exchange ? 1 : 0,
             ctx.enable_demag ? 1 : 0,
             include_external,
@@ -376,6 +404,7 @@ bool launch_energy_density_observable(
             ctx.has_bulk_dmi ? 1 : 0,
             static_cast<int>(observable),
             ctx.Ms,
+            ctx.ms_field,
             ctx.has_external_field ? ctx.external_field[0] : 0.0,
             ctx.has_external_field ? ctx.external_field[1] : 0.0,
             ctx.has_external_field ? ctx.external_field[2] : 0.0,
@@ -384,13 +413,17 @@ bool launch_energy_density_observable(
             static_cast<const double *>(ctx.regional_field_drive_z),
             ctx.regional_field_drive_params,
             ctx.regional_field_drive_points,
+            context_regional_field_drive_host_multipliers(ctx, ctx.current_time),
             ctx.regional_field_drive_count,
             ctx.cell_count,
             ctx.current_time,
             drive_scale,
             ctx.D_interfacial, ctx.D_rotated_interfacial, ctx.D_bulk,
             0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
-            ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0);
+            ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0,
+            ctx.has_magnetoelastic ? 1 : 0, ctx.mel_b1, ctx.mel_b2,
+            ctx.mel_strain[0], ctx.mel_strain[1], ctx.mel_strain[2],
+            0.5 * ctx.mel_strain[3], 0.5 * ctx.mel_strain[4], 0.5 * ctx.mel_strain[5]);
     } else {
         energy_density_kernel<<<block_count, BLOCK_SIZE, 0, context_compute_stream(ctx)>>>(
             static_cast<const float *>(ctx.m.x),
@@ -415,6 +448,7 @@ bool launch_energy_density_observable(
             static_cast<int>(ctx.nx), static_cast<int>(ctx.ny), static_cast<int>(ctx.nz),
             ctx.has_active_mask ? 1 : 0,
             has_volume_fraction,
+            ctx.phi_floor,
             ctx.enable_exchange ? 1 : 0,
             ctx.enable_demag ? 1 : 0,
             include_external,
@@ -442,6 +476,7 @@ bool launch_energy_density_observable(
             ctx.has_bulk_dmi ? 1 : 0,
             static_cast<int>(observable),
             ctx.Ms,
+            ctx.ms_field,
             ctx.has_external_field ? ctx.external_field[0] : 0.0,
             ctx.has_external_field ? ctx.external_field[1] : 0.0,
             ctx.has_external_field ? ctx.external_field[2] : 0.0,
@@ -450,13 +485,17 @@ bool launch_energy_density_observable(
             static_cast<const float *>(ctx.regional_field_drive_z),
             ctx.regional_field_drive_params,
             ctx.regional_field_drive_points,
+            context_regional_field_drive_host_multipliers(ctx, ctx.current_time),
             ctx.regional_field_drive_count,
             ctx.cell_count,
             ctx.current_time,
             drive_scale,
             ctx.D_interfacial, ctx.D_rotated_interfacial, ctx.D_bulk,
             0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
-            ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0);
+            ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0,
+            ctx.has_magnetoelastic ? 1 : 0, ctx.mel_b1, ctx.mel_b2,
+            ctx.mel_strain[0], ctx.mel_strain[1], ctx.mel_strain[2],
+            0.5 * ctx.mel_strain[3], 0.5 * ctx.mel_strain[4], 0.5 * ctx.mel_strain[5]);
     }
 
     cudaError_t err = cudaGetLastError();

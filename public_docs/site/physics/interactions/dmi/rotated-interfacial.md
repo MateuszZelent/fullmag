@@ -69,6 +69,15 @@ Periodic faces do not receive the open-surface correction. A material-mask edge
 is an open magnetic surface; the non-magnetic airbox contributes neither rDMI
 field nor rDMI energy.
 
+```{figure} /_static/diagrams/dmi-three-variants-chirality.svg
+:alt: Three-panel DMI comparison highlighting panel (c) for rotated interfacial DMI stabilizing an in-plane Göbel 2019 bimeron with opposite-sign m_z meron cores in a +x_hat background, distinct from conventional interfacial DMI in panel (a) and isotropic bulk DMI in panel (b).
+:width: 100%
+:name: fig-rotated-dmi-variants-comparison
+:figclass: fm-physics-figure
+
+Panel (c) shows the rotated Lifshitz invariant $D(L_{zx}^x + L_{xy}^y)$ and numerically evaluated Göbel *et al.* (2019) in-plane bimeron in contrast to conventional interfacial (a) and bulk (b) DMI variants.
+```
+
 (rotated-interfacial-dmi-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -250,10 +259,7 @@ validation criteria are shared; FDM/FEM and CPU/GPU keep separate numerical owne
 (rotated-interfacial-dmi-validation)=
 ## Göbel 2019 validation
 
-The reference case is a $500\times40\times0.5\,\mathrm{nm^3}$ film with one
-$0.5\,\mathrm{nm}$ FDM cell through thickness, periodic $x$, $M_s=0.58\,
-\mathrm{MA\,m^{-1}}$, $A=15\,\mathrm{pJ\,m^{-1}}$, $D=3\,
-\mathrm{mJ\,m^{-2}}$, $K_x=0.8\,\mathrm{MJ\,m^{-3}}$, and $\alpha=0.3$.
+The reference case is a $500\times40\times0.5\,\mathrm{nm^3}$ film with one $0.5\,\mathrm{nm}$ FDM cell through thickness, periodic $x$, $M_s=0.58\,\mathrm{MA\,m^{-1}}$, $A=15\,\mathrm{pJ\,m^{-1}}$, $D=3\,\mathrm{mJ\,m^{-2}}$, $K_x=0.8\,\mathrm{MJ\,m^{-3}}$, and $\alpha=0.3$.
 
 The stored strict FP64 CUDA report was generated before the verifier gained its
 current 19 checks. It previously passed 15/15 checks after 20 ps relaxation and
@@ -301,8 +307,8 @@ velocity results in Fig. 3 of the paper.
 
 1. B. Göbel, A. Mook, J. Henk, I. Mertig, and O. A. Tretiakov, “Magnetic
    bimerons as skyrmion analogues in in-plane magnets,” *Physical Review B*
-   **99**, 060407(R) (2019),
-   [doi:10.1103/PhysRevB.99.060407](https://doi.org/10.1103/PhysRevB.99.060407).
+   **99**(6), 060407(R) (2019).
+   [doi:10.1103/PhysRevB.99.060407](https://doi.org/10.1103/PhysRevB.99.060407) | [arXiv:1811.07068](https://arxiv.org/abs/1811.07068).
 
 (rotated-interfacial-dmi-source-code-index)=
 ## Source-code index

@@ -42,6 +42,7 @@ from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Any, Callable, Generic, Literal, Mapping, Sequence, TypeVar, cast
 
+from fullmag._material_versions import PublishedMaterialVersion
 from fullmag._progress import emit_progress
 from fullmag._validation import (
     SamplingPeriod,
@@ -59,12 +60,16 @@ from fullmag.model.antenna import (
     AntennaTargetProjection,
     AntennaPortMode,
     AntennaSpectrumRequest,
+    DriveActivation,
+    FieldTarget,
     RegionalFieldDrive,
     RfDrive,
     SolvedAntennaDrive,
     SpinWaveExcitationAnalysis,
 )
-from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
+from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer, AbsorbingBoundaryLayers, SpatialAbsorbingLayer
+from fullmag.model.mask_field_drive import MaskAntenna
+from fullmag.model.vector_mask import VectorMask
 from fullmag.model.antenna_inventory import AntennaAuthoringInventory
 from fullmag.model.couplings import CouplingEndpoint, CouplingRegistry
 from fullmag.model.constraints import FrozenSpins, merge_constraint_stage_ids
@@ -156,6 +161,7 @@ from fullmag.model.study import (
 )
 from fullmag.model.structure import (
     Ferromagnet,
+    MagnetizationAssignment,
     Material,
     MaterialParameterAssignment,
     MaterialParameterField,
@@ -483,18 +489,28 @@ class AlphaControl:
         self,
         parameters: AbsorbingBoundaryLayer | None = None,
         *,
+        layers: Sequence[SpatialAbsorbingLayer] | None = None,
         total_width: float | None = None,
         ramp_width: float | None = None,
         max_damping: float | None = None,
         faces: Sequence[str] | None = None,
         profile: str | None = None,
         frame: str | None = None,
-    ) -> AbsorbingBoundaryLayer:
+        expression: str | None = None,
+    ) -> AbsorbingBoundaryLayer | AbsorbingBoundaryLayers:
         self._owner._assert_active_context()
+        if layers is not None:
+            if any(value is not None for value in (
+                parameters, total_width, ramp_width, max_damping, faces, profile, frame, expression
+            )):
+                raise TypeError("layers cannot be combined with single-layer parameters")
+            collection = AbsorbingBoundaryLayers(tuple(layers))
+            self._owner._absorbing_boundary = collection
+            return collection
         if parameters is not None:
             if any(
                 value is not None
-                for value in (total_width, ramp_width, max_damping, faces, profile, frame)
+                for value in (total_width, ramp_width, max_damping, faces, profile, frame, expression)
             ):
                 raise TypeError("absorbing_boundary accepts either parameters or keyword values, not both")
             if not isinstance(parameters, AbsorbingBoundaryLayer):
@@ -521,6 +537,7 @@ class AlphaControl:
                 faces=tuple(faces) if faces is not None else ("x+",),
                 profile=profile or "smootherstep",
                 frame=frame or "object",
+                expression=expression,
             )
         self._owner._absorbing_boundary = layer
         return layer
@@ -564,7 +581,7 @@ class MagnetHandle:
     # Public state consumed by export, plus the dedicated control handles.
     # Unknown attributes must not appear to configure physics and then vanish.
     _PUBLIC_ATTRIBUTES = frozenset({
-        "region_name", "Ms", "Aex", "Dind", "Dbulk", "Ku1", "anisU", "Kc1",
+        "region_name", "Ms", "Aex", "Ku1", "anisU", "Kc1",
         "mesh", "regions",
     })
 
@@ -586,9 +603,11 @@ class MagnetHandle:
         self.Aex: float | None = None
         self._alpha_value: float = 0.01
         self._alpha_control = AlphaControl(self)
-        self._absorbing_boundary: AbsorbingBoundaryLayer | None = None
-        self.Dind: float | None = None
-        self.Dbulk: float | None = None
+        self._absorbing_boundary: AbsorbingBoundaryLayer | AbsorbingBoundaryLayers | None = None
+        self._material_version: PublishedMaterialVersion | None = None
+        self._dind_value: float | None = None
+        self._dbulk_value: float | None = None
+        self._active_material_dmi: set[str] = set()
         self.Ku1: float | None = None
         self.anisU: tuple[float, float, float] | None = None
         self.Kc1: float | None = None
@@ -636,13 +655,24 @@ class MagnetHandle:
         return self._object_id
 
     @property
+    def add_simpleantenna(self) -> "ScopedSimpleAntennaFactory":
+        """Antennas that act on this magnet: ``magnet.add_simpleantenna.arbitrary_mask(...)``."""
+        self._assert_active_context()
+        return ScopedSimpleAntennaFactory(_mask_antenna_target(self))
+
+    @property
     def m(self) -> "MagnetizationHandle":
         self._assert_active_context()
         return self._m_proxy
 
     @m.setter
     def m(self, value: Any) -> None:  # type: ignore[assignment]
+        self._set_magnetization(value)
+
+    def _set_magnetization(self, value: Any) -> None:
+        self._assert_active_context()
         self._m_value = value
+        _record_magnetization_assignment(self._object_id or self._name, None, value)
 
     @property
     def alpha(self) -> AlphaControl:
@@ -655,6 +685,56 @@ class MagnetHandle:
         if not math.isfinite(numeric) or numeric < 0.0:
             raise ValueError("alpha must be finite and non-negative")
         self._alpha_value = numeric
+
+    @property
+    def material(self) -> PublishedMaterialVersion | None:
+        """Return the published version last copied to this magnet, if any."""
+        self._assert_active_context()
+        return self._material_version
+
+    @material.setter
+    def material(self, value: PublishedMaterialVersion) -> None:
+        self._assert_active_context()
+        if not isinstance(value, PublishedMaterialVersion):
+            raise TypeError("material must be a published version selected through fm.materials")
+        properties = value._source["properties"]
+        self.Ms = properties["Ms"]
+        self.Aex = properties["Aex"]
+        self.alpha = properties["alpha"]
+        # Copy DMI coefficients without changing the explicitly authored activation.
+        self._dind_value = properties["Dind"]
+        self._dbulk_value = properties["Dbulk"]
+        self._material_version = value
+
+    @property
+    def Dind(self) -> float | None:
+        return self._dind_value
+
+    @Dind.setter
+    def Dind(self, value: float | None) -> None:
+        self._dind_value = value
+        if value is None:
+            self._active_material_dmi.discard("Dind")
+        else:
+            self._active_material_dmi.add("Dind")
+
+    @property
+    def Dbulk(self) -> float | None:
+        return self._dbulk_value
+
+    @Dbulk.setter
+    def Dbulk(self, value: float | None) -> None:
+        self._dbulk_value = value
+        if value is None:
+            self._active_material_dmi.discard("Dbulk")
+        else:
+            self._active_material_dmi.add("Dbulk")
+
+    def _dmi_coefficient(self, parameter: str) -> float | None:
+        if parameter not in self._active_material_dmi:
+            return None
+        value = getattr(self, parameter)
+        return value if value is not None else 0.0
 
     @property
     def dind(self) -> float | None:
@@ -701,8 +781,8 @@ class MagnetHandle:
             Ku1=self.Ku1,
             anisU=as_vector3(self.anisU, "anisU") if self.anisU is not None else None,
             Kc1=self.Kc1,
-            Dind=self.Dind,
-            Dbulk=self.Dbulk,
+            Dind=self._dmi_coefficient("Dind"),
+            Dbulk=self._dmi_coefficient("Dbulk"),
         )
 
         if self._m_value is None:
@@ -719,14 +799,27 @@ class MagnetHandle:
             else None
         )
 
+        # Capture region data without retaining the editable DSL handles.
+        object_regions = tuple(
+            copy.deepcopy(
+                replace(
+                    region,
+                    _delete_callback=None,
+                    _context_guard=None,
+                    _texture_assignment_callback=None,
+                )
+            )
+            for region in self._object_regions
+        )
+
         return Ferromagnet(
             name=self._name,
             geometry=resolved_geometry,
             material=mat,
-            object_id=self._object_id,
+            object_id=self._object_id or (self._name if self._material_version is not None else None),
             region=region,
             m0=m0,
-            object_regions=tuple(self._object_regions),
+            object_regions=object_regions,
             allocated_region_ids=tuple(self._allocated_region_ids),
             material_parameter_fields=tuple(self._material_parameter_assignments),
             absorbing_boundary=self._absorbing_boundary,
@@ -763,14 +856,24 @@ class MagnetHandle:
         )
         region._context_guard = self._assert_active_context
         region._delete_callback = lambda region_id=region.region_id: self.remove_region(region_id)
+        region._simpleantenna_factory = lambda region=region: ScopedSimpleAntennaFactory(
+            _mask_antenna_target(region)
+        )
+        region._texture_assignment_callback = _record_region_texture_assignment
         self._object_regions.append(region)
         return region
 
     def remove_region(self, region: ObjectRegion | str | int) -> ObjectRegion:
         self._assert_active_context()
         index, resolved = self._resolve_region_index(region)
+        if isinstance(self._absorbing_boundary, AbsorbingBoundaryLayers):
+            for layer in self._absorbing_boundary.layers:
+                if resolved.region_id in layer.referenced_regions():
+                    raise ValueError(f"region {resolved.region_id!r} is referenced by absorbing layer {layer.layer_id!r}")
         removed = self._object_regions.pop(index)
         removed._delete_callback = None
+        removed._simpleantenna_factory = None
+        removed._texture_assignment_callback = None
         self._material_parameter_assignments = [
             assignment
             for assignment in self._material_parameter_assignments
@@ -1015,7 +1118,7 @@ class MagnetHandle:
                 f"field state contains quantity '{state.quantity_id}', expected '{quantity_id}'"
             )
         if mode in {"auto", "apply"} and quantity_id == "m":
-            self._m_value = state.as_sampled_magnetization()
+            self._set_magnetization(state.as_sampled_magnetization())
         elif mode == "apply":
             raise ValueError(f"quantity '{quantity_id}' cannot be applied to object state")
         self._field_states[quantity_id] = state
@@ -1083,12 +1186,12 @@ class MagnetizationHandle:
 
     def set(self, value: Any) -> Any:
         self._owner._assert_active_context()
-        self._owner._m_value = value
+        self._owner._set_magnetization(value)
         return value
 
     def clear(self) -> None:
         self._owner._assert_active_context()
-        self._owner._m_value = None
+        self._owner._set_magnetization(None)
 
     def loadfile(
         self,
@@ -1102,7 +1205,7 @@ class MagnetizationHandle:
         from fullmag.init import load_magnetization
 
         state = load_magnetization(path, format=format, dataset=dataset, sample=sample)
-        self._owner._m_value = state
+        self._owner._set_magnetization(state)
         return state
 
     def savefile(
@@ -2626,6 +2729,11 @@ class _WorldState:
         default_factory=AntennaAuthoringInventory
     )
     _field_drives: list[RegionalFieldDrive] = field(default_factory=list)
+    _mask_field_drives: list[MaskAntenna] = field(default_factory=list)
+    # Antennas created with add_simpleantenna.arbitrary_mask(...), and the ids that
+    # were added to the physics; the difference is reported at capture end.
+    _created_mask_antennas: list[MaskAntenna] = field(default_factory=list)
+    _added_mask_antenna_ids: set[str] = field(default_factory=set)
     _planar_monitors: list[PlanarMonitor] = field(default_factory=list)
     _spin_torques: list[SpinTorqueModule] = field(default_factory=list)
     _spin_torque_activation: dict[str, bool] = field(default_factory=dict)
@@ -2681,8 +2789,7 @@ class CapturedStage:
     output_every_seconds: float | None = None
     table_autosave: TableAutosave | None = None
     autosave: StageAutosave | None = None
-    # mumax3 tablesave() after this stage; see fullmag.flat_field_sweep.
-    table_save: bool = False
+    magnetization_assignments: tuple[MagnetizationAssignment, ...] = ()
 
 
 @dataclass
@@ -2690,6 +2797,41 @@ class _CaptureState:
     enabled: bool = False
     skip_geometry_assets: bool = False
     stages: list[CapturedStage] = field(default_factory=list)
+    has_physical_stage: bool = False
+    pending_magnetization_assignments: list[MagnetizationAssignment] = field(default_factory=list)
+
+
+def _record_magnetization_assignment(object_id: str, region_id: str | None, initializer: Any) -> None:
+    capture = _capture_binding.current()
+    if capture.enabled:
+        if capture.has_physical_stage:
+            capture.pending_magnetization_assignments.append(
+                MagnetizationAssignment(object_id, region_id, copy.deepcopy(initializer))
+            )
+        return
+    session = _state._live_session
+    if session is not None and not session.closed:
+        session.record_magnetization_assignment(
+            MagnetizationAssignment(object_id, region_id, copy.deepcopy(initializer))
+        )
+
+
+def _record_region_texture_assignment(region: ObjectRegion) -> None:
+    _record_magnetization_assignment(region.owner_object, region.region_id, region.texture)
+
+
+def _capture_magnetization_assignments(stage: CapturedStage) -> CapturedStage:
+    capture = _capture_binding.current()
+    if not capture.enabled or stage.entrypoint_kind not in {"flat_run", "flat_relax"}:
+        return stage
+    capture.has_physical_stage = True
+    if not capture.pending_magnetization_assignments:
+        return stage
+    captured = replace(
+        stage, magnetization_assignments=tuple(capture.pending_magnetization_assignments)
+    )
+    capture.pending_magnetization_assignments.clear()
+    return captured
 
 
 _ContextValue = TypeVar("_ContextValue")
@@ -4008,8 +4150,7 @@ def reset() -> None:
     if session is not None and not getattr(session, "closed", True) and not _capture_binding.current().enabled:
         _state._live_session = session
         _state._live_auto_attempted = True
-        session.state = _state.current()
-        session.baseline = None
+        session.reset_authored_world(_state.current())
 
 
 def begin_script_capture(source_root: str | Path | None = None) -> None:
@@ -4026,11 +4167,22 @@ def set_script_capture_lightweight_assets(enabled: bool) -> None:
     _capture_binding.current().skip_geometry_assets = bool(enabled)
 
 
+def _warn_unused_mask_antennas() -> None:
+    for antenna in _state._created_mask_antennas:
+        if antenna.id not in _state._added_mask_antenna_ids:
+            warnings.warn(
+                f"antenna {antenna.id!r} was created with add_simpleantenna.arbitrary_mask(...) "
+                "but never added; use study.stages.add_field_drive(antenna) or "
+                "study.field_drives.add(antenna)",
+                UserWarning,
+                stacklevel=3,
+            )
+
+
 def finish_script_capture() -> list[CapturedStage]:
     """Return captured flat-script execution data and clear capture mode."""
-    from fullmag.flat_field_sweep import coalesce_field_sweeps
-
-    captured = coalesce_field_sweeps(_capture_binding.current().stages)
+    _warn_unused_mask_antennas()
+    captured = list(_capture_binding.current().stages)
     _capture_binding.replace(_CaptureState())
     reset()
     return captured
@@ -4238,7 +4390,7 @@ class StudyStagesBuilder:
         merged_constraints: list[FrozenSpins],
     ) -> None:
         _state._magnetization_constraints = merged_constraints
-        _state._declared_stages.append(captured_stage)
+        _state._declared_stages.append(_capture_magnetization_assignments(captured_stage))
 
     def add_stage(
         self,
@@ -4447,13 +4599,29 @@ class StudyStagesBuilder:
 
     def add_field_drive(
         self,
-        drive: RegionalFieldDrive,
+        drive: RegionalFieldDrive | MaskAntenna,
         *,
         stage_id: str | None = None,
     ) -> "StudyStagesBuilder":
-        """Add a regional field drive after all preceding pipeline stages."""
+        """Add a regional field drive or a mask antenna after all preceding stages."""
+        if isinstance(drive, MaskAntenna):
+            resolved_id = self._allocate_stage_id("add-field-drive", stage_id)
+            problem_before_action = _build_problem()
+            StudyFieldDriveRegistry().add(drive)
+            _state._declared_stages.append(
+                CapturedStage(
+                    problem=problem_before_action,
+                    entrypoint_kind="flat_add_mask_field_drive",
+                    default_until_seconds=None,
+                    action={"kind": "add_mask_field_drive", "drive": drive.to_ir()},
+                    stage_id=resolved_id,
+                )
+            )
+            if _state._interactive:
+                _state._wait_for_solve = True
+            return self
         if not isinstance(drive, RegionalFieldDrive):
-            raise TypeError("add_field_drive() requires RegionalFieldDrive")
+            raise TypeError("add_field_drive() requires a RegionalFieldDrive or a mask antenna")
         resolved_id = self._allocate_stage_id("add-field-drive", stage_id)
         problem_before_action = _build_problem()
         StudyFieldDriveRegistry().add(drive)
@@ -4535,7 +4703,7 @@ class StudyStagesBuilder:
         *,
         stage_id: str | None = None,
     ) -> "StudyStagesBuilder":
-        """Remove one persistent regional field drive from subsequent stages."""
+        """Remove one persistent field drive or mask antenna from subsequent stages."""
         if not isinstance(drive_id, str):
             raise TypeError("remove_field_drive() drive_id must be a string")
         if not drive_id.strip():
@@ -4545,17 +4713,97 @@ class StudyStagesBuilder:
             for index, drive in enumerate(_state._field_drives)
             if drive.id == drive_id
         ]
-        if not matching:
+        matching_masks = [
+            index
+            for index, antenna in enumerate(_state._mask_field_drives)
+            if antenna.id == drive_id
+        ]
+        if not matching and not matching_masks:
             raise ValueError(f"field drive id '{drive_id}' does not exist")
         resolved_id = self._allocate_stage_id("remove-field-drive", stage_id)
         problem_before_action = _build_problem()
-        del _state._field_drives[matching[0]]
+        if matching:
+            del _state._field_drives[matching[0]]
+        else:
+            del _state._mask_field_drives[matching_masks[0]]
         _state._declared_stages.append(
             CapturedStage(
                 problem=problem_before_action,
                 entrypoint_kind="flat_remove_field_drive",
                 default_until_seconds=None,
                 action={"kind": "remove_field_drive", "drive_id": drive_id},
+                stage_id=resolved_id,
+            )
+        )
+        if _state._interactive:
+            _state._wait_for_solve = True
+        return self
+
+    def update_field_drive(
+        self,
+        drive: MaskAntenna | str,
+        *,
+        mask_parameters: Mapping[str, float] | None = None,
+        time_parameters: Mapping[str, float] | None = None,
+        term: str | int | None = None,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Change parameter values of an active mask antenna for subsequent stages.
+
+        ``term`` (a name given in ``antenna.add(..., name=...)`` or an index)
+        selects the term; it may be omitted for an antenna with one term. The
+        antenna's own definition is not changed: after ``remove_field_drive``,
+        ``add_field_drive(antenna)`` installs its base values again.
+        """
+        if isinstance(drive, MaskAntenna):
+            drive_id = drive.id
+        elif isinstance(drive, str) and drive.strip():
+            drive_id = drive
+        else:
+            raise TypeError("update_field_drive() needs a mask antenna or its id")
+        index = next(
+            (
+                position
+                for position, active in enumerate(_state._mask_field_drives)
+                if active.id == drive_id
+            ),
+            None,
+        )
+        if index is None:
+            if any(existing.id == drive_id for existing in _state._field_drives):
+                raise ValueError(
+                    f"mask_update_invalid: field drive {drive_id!r} is not a mask antenna; "
+                    "update_field_drive() changes mask antennas only"
+                )
+            raise ValueError(
+                f"mask_update_invalid: antenna {drive_id!r} is not active at this point; "
+                "add it with study.stages.add_field_drive(antenna) first"
+            )
+        patched = _state._mask_field_drives[index].with_parameters(
+            term=term,
+            mask_parameters=mask_parameters,
+            time_parameters=time_parameters,
+        )
+        resolved_id = self._allocate_stage_id("update-field-drive", stage_id)
+        problem_before_action = _build_problem()
+        _state._mask_field_drives[index] = patched
+        action: dict[str, object] = {"kind": "update_mask_field_drive", "drive_id": drive_id}
+        if term is not None:
+            action["term"] = term
+        if mask_parameters:
+            action["mask_parameters"] = {
+                name: float(value) for name, value in mask_parameters.items()
+            }
+        if time_parameters:
+            action["time_parameters"] = {
+                name: float(value) for name, value in time_parameters.items()
+            }
+        _state._declared_stages.append(
+            CapturedStage(
+                problem=problem_before_action,
+                entrypoint_kind="flat_update_mask_field_drive",
+                default_until_seconds=None,
+                action=action,
                 stage_id=resolved_id,
             )
         )
@@ -5640,14 +5888,38 @@ class StudyMeshHandle:
         )
         return saved
 
-    def load(self, path: str | Path) -> MeshPersistenceResult:
+    def load(
+        self,
+        path: str | Path,
+        *,
+        expected_sha256: str | None = None,
+        build_requested: bool | None = None,
+    ) -> MeshPersistenceResult:
         from fullmag.meshing.persistence import load_mesh_artifact
 
+        if build_requested is not None:
+            if not isinstance(build_requested, bool):
+                raise TypeError("build_requested must be a bool when provided")
+        previous_build_requested = _state._default_mesh_spec.build_requested
+        if build_requested is not None:
+            _state._default_mesh_spec.build_requested = build_requested
+        try:
+            expected_authoring_document = _current_mesh_authoring_document()
+        finally:
+            _state._default_mesh_spec.build_requested = previous_build_requested
         artifact = load_mesh_artifact(
             path,
-            expected_authoring_document=_current_mesh_authoring_document(),
+            expected_authoring_document=expected_authoring_document,
+            expected_sha256=expected_sha256,
+            _include_source_sha256=expected_sha256 is not None,
         )
-        _bind_mesh_artifact(artifact, Path(path))
+        if build_requested is not None:
+            _state._default_mesh_spec.build_requested = build_requested
+        _bind_mesh_artifact(
+            artifact,
+            Path(path),
+            canonical_scene_reference=expected_sha256 is not None,
+        )
         return MeshPersistenceResult(
             action="loaded",
             path=Path(path),
@@ -5655,7 +5927,10 @@ class StudyMeshHandle:
             authoring_fingerprint=artifact.authoring_fingerprint,
         )
 
-    def save_or_load(self, path: str | Path) -> MeshPersistenceResult:
+    def save_or_load(
+        self,
+        path: str | Path,
+    ) -> MeshPersistenceResult:
         from fullmag.meshing.persistence import (
             MeshConfigurationMismatch,
             load_mesh_artifact,
@@ -5830,12 +6105,23 @@ class StudyCouplingsHandle:
 
 
 class StudyFieldDriveRegistry:
-    """Typed authoring registry for prescribed regional magnetic-field drives."""
+    """Typed authoring registry for prescribed magnetic-field drives."""
 
-    def add(self, drive: RegionalFieldDrive) -> RegionalFieldDrive:
+    def add(self, drive: RegionalFieldDrive | MaskAntenna) -> RegionalFieldDrive | MaskAntenna:
+        if isinstance(drive, MaskAntenna):
+            if any(existing.id == drive.id for existing in _state._field_drives) or any(
+                existing.id == drive.id for existing in _state._mask_field_drives
+            ):
+                raise ValueError(f"duplicate field drive id {drive.id!r}")
+            drive._freeze()
+            _state._mask_field_drives.append(drive)
+            _state._added_mask_antenna_ids.add(drive.id)
+            return drive
         if not isinstance(drive, RegionalFieldDrive):
-            raise TypeError("study.field_drives.add() requires RegionalFieldDrive")
-        if any(existing.id == drive.id for existing in _state._field_drives):
+            raise TypeError("study.field_drives.add() requires RegionalFieldDrive or a mask antenna")
+        if any(existing.id == drive.id for existing in _state._field_drives) or any(
+            existing.id == drive.id for existing in _state._mask_field_drives
+        ):
             raise ValueError(f"duplicate field drive id {drive.id!r}")
         if any(existing.name == drive.name for existing in _state._field_drives):
             raise ValueError(f"duplicate field drive name {drive.name!r}")
@@ -5844,6 +6130,144 @@ class StudyFieldDriveRegistry:
 
     def items(self) -> tuple[RegionalFieldDrive, ...]:
         return tuple(_state._field_drives)
+
+
+_SCOPED_TARGET_UNSET = object()
+
+
+def _mask_antenna_target(target: object) -> FieldTarget:
+    """FieldTarget of a magnet, a region of a magnet, ``"global"`` or a magnet name."""
+    if isinstance(target, FieldTarget):
+        return target
+    if isinstance(target, MagnetHandle):
+        return FieldTarget.object(
+            target._object_id if target._object_id is not None else target._name
+        )
+    if isinstance(target, ObjectRegion):
+        return FieldTarget.region(target.owner_object, str(target.region_id))
+    if isinstance(target, str):
+        text = require_non_empty(target, "target")
+        return FieldTarget.global_domain() if text == "global" else FieldTarget.object(text)
+    raise TypeError(
+        "target must be a magnet returned by study.geometry(...), a region from "
+        "magnet.add_region(...), 'global' or a magnet name"
+    )
+
+
+def _create_mask_antenna(
+    target: FieldTarget,
+    shape: object,
+    position: Sequence[float],
+    *,
+    frame: str,
+    time_origin: str,
+    activation: DriveActivation | None,
+    name: str | None,
+    id: str | None,
+) -> MaskAntenna:
+    used = {antenna.id for antenna in _state._created_mask_antennas}
+    used |= {drive.id for drive in _state._field_drives}
+    if name is not None:
+        # Names identify antennas and drives in the Control Room and its API,
+        # which refuse a second drive with the same name.
+        taken_names = {antenna.name for antenna in _state._created_mask_antennas}
+        taken_names |= {drive.name for drive in _state._field_drives}
+        if name in taken_names:
+            raise ValueError(
+                f"duplicate antenna name {name!r}; give each antenna its own name"
+            )
+    if id is None:
+        base = "antenna" if name is None else "_".join(name.lower().split()) or "antenna"
+        id = base
+        suffix = 2
+        while id in used:
+            id = f"{base}_{suffix}"
+            suffix += 1
+    elif id in used:
+        raise ValueError(f"duplicate antenna id {id!r}")
+    antenna = MaskAntenna(
+        id=id,
+        target=target,
+        shape=shape,
+        position=position,
+        frame=frame,
+        time_origin=time_origin,
+        activation=activation,
+        name=name,
+    )
+    _state._created_mask_antennas.append(antenna)
+    return antenna
+
+
+class StudySimpleAntennaFactory:
+    """``study.add_simpleantenna``: prescribed antennas written by hand."""
+
+    def arbitrary_mask(
+        self,
+        target: object,
+        shape: object,
+        position: Sequence[float] = (0.0, 0.0, 0.0),
+        *,
+        frame: str = "local",
+        time_origin: str = "stage_local",
+        activation: DriveActivation | None = None,
+        name: str | None = None,
+        id: str | None = None,
+    ) -> MaskAntenna:
+        """Create a mask antenna on ``target``; add terms with ``antenna.add(...)``.
+
+        ``target`` is a magnet, a region of a magnet or ``"global"``. Creating
+        the antenna only authors it. It acts from the pipeline point of
+        ``study.stages.add_field_drive(antenna)`` or, for the whole study, after
+        ``study.field_drives.add(antenna)``.
+        """
+        return _create_mask_antenna(
+            _mask_antenna_target(target),
+            shape,
+            position,
+            frame=frame,
+            time_origin=time_origin,
+            activation=activation,
+            name=name,
+            id=id,
+        )
+
+
+class ScopedSimpleAntennaFactory:
+    """``magnet.add_simpleantenna`` and ``region.add_simpleantenna``: the target is bound."""
+
+    def __init__(self, target: FieldTarget) -> None:
+        self._target = target
+
+    def arbitrary_mask(
+        self,
+        shape: object,
+        position: Sequence[float] = (0.0, 0.0, 0.0),
+        *,
+        frame: str = "local",
+        time_origin: str = "stage_local",
+        activation: DriveActivation | None = None,
+        name: str | None = None,
+        id: str | None = None,
+        target: object = _SCOPED_TARGET_UNSET,
+    ) -> MaskAntenna:
+        """Create a mask antenna on the bound magnet or region."""
+        if target is not _SCOPED_TARGET_UNSET:
+            raise ValueError(
+                "scoped_target_override_not_allowed: this factory already acts on "
+                f"{self._target.to_ir()}; use study.add_simpleantenna.arbitrary_mask(target, ...) "
+                "for another target"
+            )
+        return _create_mask_antenna(
+            self._target,
+            shape,
+            position,
+            frame=frame,
+            time_origin=time_origin,
+            activation=activation,
+            name=name,
+            id=id,
+        )
 
 
 class StudyEnergyTermRegistry:
@@ -5970,6 +6394,7 @@ class StudyBuilder:
         _state._api_surface = "study"
         self.stages = StudyStagesBuilder()
         self.field_drives = StudyFieldDriveRegistry()
+        self.add_simpleantenna = StudySimpleAntennaFactory()
         self.terms = StudyEnergyTermRegistry()
         self.monitors = StudyMonitorRegistry(_state._planar_monitors)
         self.universe = StudyUniverseHandle(self)
@@ -5984,6 +6409,52 @@ class StudyBuilder:
     def name(self, problem_name: str) -> "StudyBuilder":
         name(problem_name)
         return self
+
+    def new_vector_mask(
+        self,
+        size: Sequence[int] | None = None,
+        cell: Sequence[float] | None = None,
+        origin: Sequence[float] | None = None,
+    ) -> VectorMask:
+        """An empty array mask (mumax3 ``newVectorMask``), by default on the FDM grid.
+
+        The default lattice is the manual study universe divided into
+        ``study.cell(...)`` cells; give ``size``, ``cell`` and ``origin`` for any
+        other lattice (for example on FEM studies without a cell size).
+        """
+        if size is not None and cell is not None and origin is not None:
+            return VectorMask(size, cell, origin)
+        universe = _state._study_universe
+        cell_size = cell if cell is not None else _state._cell
+        if (
+            cell_size is None
+            or universe is None
+            or universe.mode != "manual"
+            or universe.size is None
+            or any(value != 0.0 for value in universe.padding)
+        ):
+            raise ValueError(
+                "new_vector_mask() takes its default lattice from study.cell(...) and a "
+                "manual study.universe(...) without padding; otherwise give size, cell "
+                "and origin"
+            )
+        counts = []
+        for axis in range(3):
+            ratio = universe.size[axis] / float(cell_size[axis])
+            if abs(ratio - round(ratio)) > 1e-6 * max(1.0, ratio):
+                raise ValueError(
+                    "new_vector_mask(): the universe is not a whole number of cells; "
+                    "give size, cell and origin"
+                )
+            counts.append(int(round(ratio)))
+        lattice_origin = tuple(
+            universe.center[axis] - 0.5 * universe.size[axis] for axis in range(3)
+        )
+        return VectorMask(
+            size if size is not None else counts,
+            cell_size,
+            origin if origin is not None else lattice_origin,
+        )
 
     def add_antenna_port_mode(self, *, port_mode: AntennaPortMode) -> AntennaPortMode:
         """Register one authored, signed antenna current-port mode."""
@@ -6711,12 +7182,14 @@ class StudyBuilder:
         *,
         every_steps: int | None = None,
         table_id: str = "default",
+        enabled: bool = True,
     ) -> "StudyBuilder":
         tableautosave(
             every,
             quantities=quantities,
             every_steps=every_steps,
             table_id=table_id,
+            enabled=enabled,
         )
         return self
 
@@ -6903,9 +7376,6 @@ class StudyBuilder:
             field_refresh=field_refresh,
             stop=stop,
         )
-
-    def tablesave(self) -> None:
-        tablesave()
 
     def minimize(
         self,
@@ -8470,6 +8940,15 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         mesh_workflow["domain_mesh_mode"] = "explicit_shared_domain_mesh"
         mesh_workflow["domain_mesh_source"] = _state._domain_mesh_source
         mesh_workflow["domain_region_markers"] = list(_state._domain_region_markers or [])
+        reference = _state._extra_runtime_metadata.get("fem_domain_mesh")
+        if (
+            isinstance(reference, Mapping)
+            and Path(str(reference.get("source", ""))).resolve()
+            == Path(_state._domain_mesh_source).resolve()
+            and isinstance(reference.get("sha256"), str)
+            and _is_sha256_hex(reference["sha256"])
+        ):
+            mesh_workflow["domain_mesh_sha256"] = reference["sha256"]
         if _state._domain_object_region_markers is not None:
             mesh_workflow["domain_object_region_markers"] = list(
                 _state._domain_object_region_markers
@@ -8548,19 +9027,41 @@ def _boundary_semantic_map(mesh: object) -> dict[str, int]:
     return result
 
 
-def _bind_mesh_artifact(artifact: object, source: Path) -> None:
+def _bind_mesh_artifact(
+    artifact: object,
+    source: Path,
+    *,
+    canonical_scene_reference: bool = False,
+) -> None:
+    source_path = source.expanduser()
     _state._active_mesh_artifact = artifact
-    _state._domain_mesh_source = str(source)
+    _state._domain_mesh_source = str(source_path)
     _state._domain_region_markers = [dict(entry) for entry in artifact.region_markers]
     _state._domain_object_region_markers = [
         dict(entry) for entry in artifact.object_region_markers
     ]
     _state._extra_runtime_metadata["mesh_persistence"] = {
-        "source": str(source),
+        "source": str(source_path),
         "origin": (artifact.provenance or {}).get("origin", "native_load"),
         "topology_fingerprint": artifact.topology_fingerprint,
         "authoring_fingerprint": artifact.authoring_fingerprint,
     }
+    source_sha256 = getattr(artifact, "source_sha256", None)
+    if (
+        canonical_scene_reference
+        and source_path.suffix == ".fullmag-mesh"
+        and isinstance(source_sha256, str)
+        and _is_sha256_hex(source_sha256)
+    ):
+        reference = {
+            "source": str(source_path.resolve()),
+            "sha256": source_sha256,
+            "build_requested": bool(_state._default_mesh_spec.build_requested),
+        }
+        _state._extra_runtime_metadata["fem_domain_mesh"] = reference
+        _state._extra_runtime_metadata["mesh_persistence"]["sha256"] = source_sha256
+    else:
+        _state._extra_runtime_metadata.pop("fem_domain_mesh", None)
 
 
 def _clear_bound_mesh_artifact() -> None:
@@ -8569,6 +9070,15 @@ def _clear_bound_mesh_artifact() -> None:
     _state._domain_region_markers = None
     _state._domain_object_region_markers = None
     _state._extra_runtime_metadata.pop("mesh_persistence", None)
+    _state._extra_runtime_metadata.pop("fem_domain_mesh", None)
+
+
+def _is_sha256_hex(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _build_explicit_mesh_assets(
@@ -8637,6 +9147,7 @@ def _build_explicit_mesh_assets(
                 "anisotropy_axis": list(handle.anisU or (0.0, 0.0, 1.0)),
             }
             for handle in _state._magnets
+            if handle.Ms is not None and handle.Aex is not None
         },
         discretization=DiscretizationHints(**discretization_kwargs),
         study_universe=(
@@ -9479,13 +9990,23 @@ def tableautosave(
     *,
     every_steps: int | None = None,
     table_id: str = "default",
+    enabled: bool = True,
 ) -> None:
     """Configure a mumax-style scalar table autosave cadence.
 
     Registers the canonical ``sampling.table_autosave`` observable table.
     ``quantities`` may use compatibility names such as ``time``, ``solver_dt``,
     and ``E_total``; the public table contract stores canonical quantity ids.
+    ``enabled=False`` clears the clock for subsequent declarations without
+    inserting a configuration stage. It cannot be combined with a cadence.
     """
+    if type(enabled) is not bool:
+        raise TypeError("tableautosave enabled must be a boolean")
+    if not enabled:
+        if every is not None or every_steps is not None or quantities is not None or table_id != "default":
+            raise ValueError("disabled tableautosave cannot specify cadence, quantities or table_id")
+        _state._table_autosave = None
+        return
     _state._table_autosave = TableAutosave(
         t_sampl=every,
         every_steps=every_steps,
@@ -9740,6 +10261,8 @@ def _build_problem(
     if not s._magnets and study_kind != "antenna_field_solve" and not (field_only and s._auxiliary_geometries):
         raise ValueError("No magnets defined — call fm.geometry(...) first")
 
+    dind = _uniform_material_dmi_coefficient(s._magnets, "Dind")
+    dbulk = _uniform_material_dmi_coefficient(s._magnets, "Dbulk")
     # Convert handles to Ferromagnet objects
     magnets = [h._to_ferromagnet() for h in s._magnets]
 
@@ -9750,15 +10273,12 @@ def _build_problem(
         energy.append(Exchange())
     if s._magnets and s._demag_enabled:
         energy.append(Demag(realization=s._demag_realization))
-    # Check if any magnet has DMI
-    for h in s._magnets:
-        if h.Dind is not None:
-            energy.append(InterfacialDMI(D=h.Dind))
-            break
-    for h in s._magnets:
-        if h.Dbulk is not None:
-            energy.append(BulkDMI(D=h.Dbulk))
-            break
+    # The legacy study surface lowers uniform material DMI to one explicit
+    # global term. Mixed per-object values cannot be represented that way.
+    if dind is not None:
+        energy.append(InterfacialDMI(D=dind))
+    if dbulk is not None:
+        energy.append(BulkDMI(D=dbulk))
     energy.extend(s._explicit_energy_terms)
     if s._b_ext is not None:
         energy.append(Zeeman(B=s._b_ext))
@@ -9911,6 +10431,9 @@ def _build_problem(
     if mesh_workflow is not None:
         runtime_metadata["mesh_workflow"] = mesh_workflow
     runtime_metadata.update(copy.deepcopy(s._extra_runtime_metadata))
+    published_assets = _collect_published_material_assets(s._magnets, runtime_metadata.get("material_assets"))
+    if published_assets is not None:
+        runtime_metadata["material_assets"] = published_assets
 
     # Partition outputs by study family.
     _EIGEN_OUTPUT_TYPES = (SaveSpectrum, SaveMode, SaveDispersion, SaveEigenDiagnostics)
@@ -10024,6 +10547,7 @@ def _build_problem(
         solved_antenna_drives=tuple(s._solved_antenna_drives),
         antenna_spectrum_requests=tuple(s._antenna_spectrum_requests),
         field_drives=tuple(s._field_drives),
+        mask_field_drives=tuple(s._mask_field_drives),
         monitors=tuple(s._planar_monitors),
         spin_torques=tuple(s._spin_torques),
         spin_torque_activation=dict(s._spin_torque_activation),
@@ -10036,6 +10560,67 @@ def _build_problem(
         pbc=s._pbc,
         parameters=s._parameters if s._parameters.names else None,
     )
+
+
+def _collect_published_material_assets(
+    magnets: Sequence[MagnetHandle], current: object,
+) -> dict[str, Any] | None:
+    selected = [(magnet, version) for magnet in magnets if (version := magnet.material) is not None]
+    if not selected:
+        return None
+
+    from fullmag.runtime.material_assets import (
+        MATERIAL_ASSETS_VERSION,
+        add_published_material_asset,
+        canonical_material_assets,
+    )
+
+    metadata = canonical_material_assets(current) if current is not None else {
+        "version": MATERIAL_ASSETS_VERSION,
+        "materials": [],
+        "assignments": {},
+        "object_ids": {},
+    }
+    for magnet, version in selected:
+        add_published_material_asset(
+            metadata,
+            name=magnet._name,
+            object_id=magnet._object_id or magnet._name,
+            display_name=version.display_name,
+            source=version._copy_source(),
+            properties={
+                "Ms": magnet.Ms,
+                "Aex": magnet.Aex,
+                "alpha": magnet._alpha_value,
+                "Dind": magnet.Dind,
+                "Dbulk": magnet.Dbulk,
+            },
+            active_dmi=magnet._active_material_dmi,
+        )
+    return metadata
+
+
+def _uniform_material_dmi_coefficient(
+    magnets: Sequence[MagnetHandle],
+    parameter: str,
+) -> float | None:
+    """Return a legacy global DMI coefficient only when all objects agree."""
+    if not magnets:
+        return None
+    values = [magnet._dmi_coefficient(parameter) for magnet in magnets]
+    effective_values = [0.0 if value is None else value for value in values]
+    if any(value != effective_values[0] for value in effective_values[1:]):
+        details = ", ".join(
+            f"{magnet._object_id or magnet._name}={value!r}"
+            for magnet, value in zip(magnets, values)
+        )
+        raise ValueError(
+            f"legacy study-level {parameter} lowering requires the same value for every "
+            f"magnetic object; per-object values: {details}"
+        )
+    if all(value is None for value in values):
+        return None
+    return effective_values[0]
 
 
 # ---------------------------------------------------------------------------
@@ -10065,16 +10650,18 @@ def run(until: float) -> Any:
     live = _live_session_or_none()
     if live is not None:
         _require_live_timestep(problem)
-        _state._live_stages.append(
+        stage_index = live.author_physical_stage(
             CapturedStage(problem=problem, entrypoint_kind="flat_run", default_until_seconds=until)
         )
-        return live.submit_stage("run", len(_state._live_stages) - 1, until_seconds=float(until))
+        return live.submit_stage("run", stage_index, until_seconds=float(until))
     if _capture_binding.current().enabled:
         _capture_binding.current().stages.append(
-            CapturedStage(
-                problem=problem,
-                entrypoint_kind="flat_run",
-                default_until_seconds=until,
+            _capture_magnetization_assignments(
+                CapturedStage(
+                    problem=problem,
+                    entrypoint_kind="flat_run",
+                    default_until_seconds=until,
+                )
             )
         )
         return problem
@@ -10093,8 +10680,10 @@ def _append_live_loop_stage(*, relax: bool, chunk_time: float) -> int:
         problem = _build_problem(study_kind="time_evolution")
         stage = CapturedStage(problem=problem, entrypoint_kind="flat_run", default_until_seconds=chunk_time)
     _require_live_timestep(problem)
-    _state._live_stages.append(stage)
-    return len(_state._live_stages) - 1
+    live = _live_session_or_none()
+    if live is None:
+        raise RuntimeError("live loop stages require an active session")
+    return live.author_physical_stage(stage)
 
 
 def _require_live_timestep(problem: Any) -> None:
@@ -10431,12 +11020,12 @@ def relax(
 
     live = _live_session_or_none()
     if live is not None:
-        _state._live_stages.append(
+        stage_index = live.author_physical_stage(
             CapturedStage(problem=problem, entrypoint_kind="flat_relax", default_until_seconds=None)
         )
         return live.submit_stage(
             "relax",
-            len(_state._live_stages) - 1,
+            stage_index,
             **_drop_none_values(
                 {
                     "relax_algorithm": algorithm,
@@ -10453,10 +11042,12 @@ def relax(
 
     if _capture_binding.current().enabled:
         _capture_binding.current().stages.append(
-            CapturedStage(
-                problem=problem,
-                entrypoint_kind="flat_relax",
-                default_until_seconds=None,
+            _capture_magnetization_assignments(
+                CapturedStage(
+                    problem=problem,
+                    entrypoint_kind="flat_relax",
+                    default_until_seconds=None,
+                )
             )
         )
         return problem
@@ -10511,20 +11102,6 @@ def minimize(
         energy_tolerance=energy_tolerance,
         relax_alpha=None,
     )
-
-
-def tablesave() -> None:
-    """Save one table row of the state left by the preceding ``minimize()``.
-
-    mumax3 ``tablesave()``: in a loop over ``b_ext(...)`` and ``minimize()`` the
-    table-saved points fold into one hysteresis stage with one point per call.
-    """
-    capture = _capture_binding.current()
-    if not capture.enabled:
-        raise RuntimeError("tablesave() is available in scripts run by fullmag")
-    if not capture.stages:
-        raise RuntimeError("tablesave() needs a preceding minimize()")
-    capture.stages[-1] = replace(capture.stages[-1], table_save=True)
 
 
 def Minimize(

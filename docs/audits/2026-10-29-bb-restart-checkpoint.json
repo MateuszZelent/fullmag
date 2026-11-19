@@ -1,0 +1,183 @@
+{
+  "task": "bimeron-bb-restart-20261029",
+  "owner": "codex:01a1842f-f677-7940-be93-42f5112c2610",
+  "worktree": "/home/kkingstoun/.codex/worktrees/rdmi-object-scope-20261029/fullmag",
+  "branch": "codex/rdmi-object-scope-20261029",
+  "source_head": "b1896178b1a9abe2d7f981b3ba766d145ece29d4",
+  "integrated_master": "9f6505a1ee428d84bbd5626dee0e522326dc37b9",
+  "master_merge": "9f15e645445a69502ea29f1efb66dfe5d615bff6",
+  "frontend_commits": [
+    "8c4c2e681",
+    "b1896178b1a9abe2d7f981b3ba766d145ece29d4"
+  ],
+  "preserved_wip_stash": "a204ccd18910d561aa9af19189c782ebdd10ca4a",
+  "wip_note": "Frontend native/Airbox slice restored and committed; unfinished demand-driven live backend/typed store/f32 API/QA and audit docs remain preserved in stash; do not pop/drop wholesale over BB edits.",
+  "compose_project": "fullmag-worktree-fullmag-2e2994c954c2dd7a",
+  "port": 3342,
+  "old_run": {
+    "id": "run-live-c1070d76d5beefd6205c05a75d6a694138c7c3d0ca227ebe597ba50102a30dca",
+    "state": "failed",
+    "failure": "CUDA719 unspecified launch failure in cudaStreamSynchronize(multilayer receipt attempt)",
+    "package_source_sha256": "3ec0b408d2451bef01f6ffd2189250e1dbef121914fc8cfb93ff687baecb720b",
+    "stop_request_http_status": 409,
+    "stop_journal_entries": 0,
+    "stop_note": "Run already terminal; Stop was not accepted; no replay."
+  },
+  "backup": {
+    "user_path": "/mnt/c/Users/Mateusz/Documents/ChatGPT/Fullmag/bimeron-cylinder-relax/pre-bb-gradient-20261029",
+    "container_path": "/state/bimeron-cylinder-relax-results/pre-bb-gradient/ddd0917d39034221979635b58d816eae",
+    "fmvp_sha256": "53f0db0bb86b3fe569d3518e6bd3207e46463f6fa334fb6098311104dc48ab18",
+    "values": 787200,
+    "sha256_host_copy": "PASS",
+    "finite_values": "PASS",
+    "exact_resume": "NOT AVAILABLE; requested new run starts from authored texture"
+  },
+  "bb_source": {
+    "state": "bounded CPU/GPU FP64 runtime parity verified; full GPU run active; not production qualified",
+    "driver": "crates/fullmag-runner/src/relaxation/multilayer_bb.rs",
+    "gpu": "crates/fullmag-runner/src/fdm/gpu/cuda/multilayer_bb.rs",
+    "cpu": "crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs",
+    "scope": "open three_d FP64 identity/centered aligned native equal-cell geometry; per-object uniform Ms; no frozen spins; CPU oracle and CUDA operators with shared host BB control",
+    "review": "Source reviews complete for numerical adapters and API/Scene gates; accepted CPU BB exempts unused global LLG time policy through canonical BB scope validation."
+  },
+  "verification": {
+    "rust_parse_files": 10,
+    "compiled_unit_tests": "NOT RUN per user ban",
+    "dsl_capture": "verify_bb_gpu.py, verify_bb_cpu.py, relax.py PASS; no Solve",
+    "scientific_doc_validator": "PASS 0501 source map",
+    "frontend": "14/15 focused files initially passed; 3 inherited Footer fixture errors corrected; Footer54 PASS and tsc PASS",
+    "gpu_health": "Actual native CUDA/cuFFT execution on RTX 4080 SUPER, double, no fallback; no GPU reset performed",
+    "cpu_gpu_parity": {
+      "checks": 121,
+      "failures": 0,
+      "artifact_index_diagnostics": 8,
+      "m_max_abs": 6.52e-13,
+      "energy_max_abs_J": 3.08e-33,
+      "H_eff_max_abs_A_per_m": 3.89e-05,
+      "torque_max_abs_T": 1.64e-11,
+      "lambda_max_relative_delta": 1.59e-12,
+      "report": "/mnt/c/Users/Mateusz/Documents/ChatGPT/Fullmag/bimeron-cylinder-relax/qualification/cpu-gpu-parity.json",
+      "report_sha256": "bf6474e60407cb9ca024164cd83cb1108a49162fb022a6d73ac82f21c9a37e16",
+      "scope": "Five accepted steps, two different native meshes and materials, masked cylinder, film-only rDMI; bounded numerical verification only."
+    },
+    "scene_roundtrip": "16 interpreted fidelity tests PASS, including fixed/adaptive global LLG policy with BB and retained explicit-stage rejection",
+    "launcher_python": "46 interrupted-publication checks and 13 read-only observation retry/progress guards PASS; reused unchanged evidence"
+  },
+  "retention": {
+    "decision": "retain all current packages/pins/old run/results/cache; no deletion",
+    "reason": "active package and result provenance; no exhaustive obsolete-reference inventory",
+    "build_fs_free_gib": 258,
+    "user_data_fs_free_gib_at_preflight": 3.58
+  },
+  "next": [
+    "Keep the full GPU BB run and port3342 alive; no duplicate Solve or restart.",
+    "Record live per-object magnetization proof and monitor numerical termination.",
+    "Fix stage-global field payload_ref versus per-quantity Zarr row indices separately; do not hide diagnostics.",
+    "Complete remaining scientific/compiled-test/integration gates when permitted; preserve active runtime and foreign checkout.",
+    "Continue preserved demand-driven live/Airbox work after the bimeron priority task."
+  ],
+  "first_bb_application_build": {
+    "attempt": "e46075c660934282a0446b9c0f23455d",
+    "state": "failed-confirmed",
+    "reason": "Two Rust lifetime errors at the CUDA multilayer BB dispatch",
+    "correction": "Independent grid, layout and callback lifetimes in the child callback alias; parser checks passed",
+    "runtime_bb_verified": false
+  },
+  "qualification_materials": {
+    "film_Aex_J_per_m": 1.5e-11,
+    "cylinder_Aex_J_per_m": 1e-11,
+    "film_Ms_A_per_m": 580000,
+    "cylinder_Ms_A_per_m": 1000000
+  },
+  "bb_application_build": {
+    "state": "succeeded",
+    "compiled_unit_tests": false,
+    "api_ready_for_solve": true,
+    "runtime_state": "full main GPU BB run active",
+    "iteration": "03e20ab781304d089e0dade20f51ac31",
+    "source_snapshot_sha256": "35893a827d16569f2b18f81ee2f8ddc6296fee5a2279edc65db60e96a3751924",
+    "source_digest": "42b8f2ddb77ea9c218faa643355c3394cfc352db463be3553b3b1ec6bd195e8b",
+    "build_receipt_sha256": "e937a6182195c0f3c0f9e536445b8a1d4bfde97bdc480240389a71d3525aeec1"
+  },
+  "pending_resume": {
+    "attempt": "ddc3623d12044d478560187953b42ad3",
+    "state": "failed-confirmed; canonical resume subsequently succeeded",
+    "active_helper_retained": false,
+    "terminal_exists": true,
+    "automatic_retry_performed": false,
+    "historical_owner": "drained",
+    "historical_process_receipt": "drained",
+    "required_recovery": "Completed offline publication-interruption reconciliation after user-confirmed Docker/WSL reboot; preserved original unknown result and all user data."
+  },
+  "recovery": {
+    "user_confirmed_docker_or_wsl_restart": true,
+    "interrupted_attempt": "ddc3623d12044d478560187953b42ad3",
+    "request_sha256": "e0317019d9554c0b4132da53862dc44c018b6612c4b7cef5ef08e1bbb039c80d",
+    "result_sha256": "f875cf94e7a014df16627692852cdd73a04910d1d23a2a7fedd7be27d80a5432",
+    "canonical_resume_attempt": "67b6149ba8c544dea10af38fe24f168a",
+    "native_owner_reset": false,
+    "foreign_groups_stopped": false,
+    "old_drafts_stash": "8c6753d7308eefed0f5b4cbad8e578110f494217"
+  },
+  "qualification_runs": {
+    "cpu": "run-live-58daa53f71625d61dc8b7dadb9292bdf8a475454dfea9695e1fca58ba46d7334",
+    "gpu": "run-live-4da1e9c9f65c20447102425953a71be4580d67d237bdb99fe09f30c06012de5e",
+    "state": "completed, 5 accepted steps each, time=dt=0, converged=false",
+    "evidence_root": "/mnt/c/Users/Mateusz/Documents/ChatGPT/Fullmag/bimeron-cylinder-relax/qualification",
+    "immutable_copy_hashes": "58/58 source matches per device snapshot"
+  },
+  "main_run": {
+    "id": "run-live-b1c4a889ef6766964177c525c81b36b9c112be382c07efa361adf0dedfabeafd",
+    "activation": "70c26423579f42ad92ecb91a332279d4",
+    "state": "running",
+    "algorithm": "projected_gradient_bb",
+    "requested_device": "gpu",
+    "resolved_device": "gpu",
+    "precision": "double",
+    "both_objects_relax": true,
+    "observed_worker_step": 932,
+    "api_status_solver_steps_at_observation": 0,
+    "time": 0.0,
+    "dt": 0.0,
+    "converged": false,
+    "note": "Worker observation and scalar output prove advancement; aggregate status counter lag is recorded separately, not used as numerical proof.",
+    "observed_stage_progress_step": 931,
+    "observed_csv_step": 1101,
+    "live_verification": "Both objects changed from accepted-0 state; finite/unit active m, inactive exact zero; energy monotone through CSV step1101; still running, not converged.",
+    "per_object_change_from_initial": {
+      "film": {
+        "active_cells": 230400,
+        "native_cells": 230400,
+        "mean_vector_change": 0.0530181,
+        "rms_vector_change": 0.228284,
+        "max_vector_change": 1.91434
+      },
+      "upper-cylinder": {
+        "active_cells": 25280,
+        "native_cells": 32000,
+        "mean_vector_change": 1.35532,
+        "rms_vector_change": 1.46572,
+        "max_vector_change": 1.999998
+      }
+    },
+    "max_unit_norm_error": 3.34e-16,
+    "live_report": "/mnt/c/Users/Mateusz/Documents/ChatGPT/Fullmag/bimeron-cylinder-relax/qualification/main-live-verification.json",
+    "live_capture_at_utc": "2026-10-29T22:40:59.175Z",
+    "live_report_sha256": "8067ff866002d786f4c23217a63c9334b6cecbc1b1644f1a30e8f86b74d8701c",
+    "intermediate_preview": "/mnt/c/Users/Mateusz/Documents/ChatGPT/Fullmag/bimeron-cylinder-relax/qualification/main-live-step-932-intermediate.png"
+  },
+  "integration": {
+    "state": "review",
+    "branch": "codex/rdmi-object-scope-20261029",
+    "master_merged": false,
+    "pr": null,
+    "remaining_gates": "Compiled unit tests remain prohibited by user; full production/scientific matrix and remote integration not asserted. Preserve active main runtime/worktree."
+  },
+  "implementation_commits": [
+    {
+      "hash": "d0ca4c8af9a217b087e72883a803c2ed4abcff06",
+      "scope": "Docker read-only observation retries and pinned offline recovery after user-confirmed host reboot",
+      "verification": "46 interrupted-publication checks +13 read-only retry/progress checks and actual preview/apply/resume PASS"
+    }
+  ]
+}

@@ -94,19 +94,19 @@
       "id": "d0",
       "latex": "d_0",
       "meaning": "first requested layer thickness",
-      "si_unit": "m"
+      "si_unit": "$\\mathrm{m}$"
     },
     {
       "id": "q",
       "latex": "q",
       "meaning": "requested layer stretching ratio",
-      "si_unit": "1"
+      "si_unit": "$1$"
     },
     {
       "id": "N",
       "latex": "N",
       "meaning": "requested layer count",
-      "si_unit": "1"
+      "si_unit": "$1$"
     }
   ],
   "equations": [
@@ -134,7 +134,7 @@
         "python": "boundary_layer_count",
         "type": "int | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "coerced with int(...), then result must be >= 1; non-integral numeric values truncate toward zero",
         "meaning": "requested layer count",
         "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
@@ -144,7 +144,7 @@
         "python": "boundary_layer_thickness",
         "type": "float | None",
         "default": "None",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "finite and > 0 when supplied",
         "meaning": "first-wall spacing passed as hwall_n and thickness",
         "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
@@ -154,7 +154,7 @@
         "python": "boundary_layer_stretching",
         "type": "float | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "finite and > 0 when supplied",
         "meaning": "successive-layer growth ratio",
         "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
@@ -164,7 +164,7 @@
         "python": "boundary_layer_target_surface_tags",
         "type": "Sequence[int] | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "positive integer entity tags",
         "meaning": "explicit target surfaces; their boundary curves are derived",
         "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
@@ -174,7 +174,7 @@
         "python": "boundary_layer_target_curve_tags",
         "type": "Sequence[int] | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "positive integer entity tags",
         "meaning": "explicit target curves",
         "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
@@ -184,7 +184,7 @@
         "python": "boundary_layer_target_surface_selectors",
         "type": "Sequence[Mapping[str, object]] | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "each item must be a selector mapping",
         "meaning": "semantic surface targets resolved at build time",
         "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
@@ -194,7 +194,7 @@
         "python": "boundary_layer_target_curve_selectors",
         "type": "Sequence[Mapping[str, object]] | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "each item must be a selector mapping",
         "meaning": "semantic curve targets resolved at build time",
         "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",

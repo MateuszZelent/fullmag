@@ -238,97 +238,190 @@ class ContainerRuntimeRecoveryBridgeTests(unittest.TestCase):
                 with self.assertRaises(runtime_service.RuntimeServiceError):
                     runtime_service.recover_container_namespace(paths)
 
-    def test_archive_accepts_drained_owner_only_with_authenticated_drain_digest(self):
+    def _archive_fixture(self, root):
+        fixture = self._document_fixture(root)
+        owner = {**fixture["request"]["expected_owner"],
+                 "compute_pool_generation": 2, "preparation_pool_generation": 2}
+        owner_raw = (json.dumps(owner, sort_keys=True) + "\n").encode()
+        failed_owner_raw = (json.dumps({**owner, "state": "failed"}, sort_keys=True) + "\n").encode()
+        ready = {
+            **owner, "schema_version": "runtime_service_owner.v1", "protocol": "stdin-v1",
+            "owner_token": "7f3fb229-be61-4762-b88d-115c9bfe7bc5", "pid": 2987,
+            "host": "new-backend", "build_commit": "e" * 40, "build_snapshot": "f" * 64,
+            "compute_pool_generation": 3, "preparation_pool_generation": 3,
+            "control_address": "stdin://2987", "acquired_at": "2026-10-20T12:00:00Z",
+            "heartbeat_at": "2026-10-20T12:00:01Z",
+            "children": [{"role": "compute", "pid": 2988, "status": "running"},
+                         {"role": "preparation", "pid": 2989, "status": "running"}],
+        }
+        drained = {**ready, "state": "drained", "children": [
+            {**child, "status": "exited_success"} for child in ready["children"]]}
+        drained_raw = (json.dumps(drained, sort_keys=True) + "\n").encode()
+        request_sha = "9" * 64
+        offers = [{"resource_id": "existing-resource", "capacity": 1}]
+        config = {"target_id": "docker-all", "compute_pool_id": "docker-all.compute",
+                  "preparation_pool_id": "docker-all.preparation", "compute_resources": offers,
+                  "preparation_resources": offers, "host_execution": {"runtime_generation_sha256": "1" * 64}}
+        config_raw = json.dumps(config).encode()
+        config_sha = _sha(config_raw)
+        request = {**fixture["request"], "owner_sha256": _sha(owner_raw), "config_sha256": config_sha}
+        authorization = {"owner_sha256": request["owner_sha256"], "config_sha256": config_sha}
+        store = root / "store"
+        runtime_services = store / "runtime-services"
+        runtime_services.mkdir(parents=True)
+        paths = runtime_service.RuntimePaths(store=store, runtime_services=runtime_services,
+                                             state_root=root / "runtime-control", config=root / "runtime-control/config.json")
+        (runtime_services / "OWNER.json").write_bytes(drained_raw)
+        pin = runtime_services / ("docker-client-" + ready["owner_token"] + ".json")
+        pin.write_text(json.dumps(ready))
+        process_path = runtime_service.process_receipt_path(paths)
+        process_path.parent.mkdir(parents=True)
+        paths.config.write_text(json.dumps({**config, "host_execution": {"runtime_generation_sha256": "2" * 64}}))
+        process_path.write_text(json.dumps({"schema": "fullmag.docker-process-tree.v1", "state": "drained",
+                                            "service_owner": ready, "terminal_service_owner": drained}))
+        archive_root = store / "runtime-services" / "container-recovery" / request_sha / "archive"
+        archive_root.mkdir(parents=True)
+        pools = {
+            "scheduler_pools/docker-all.compute.resources.json": ("scheduler_resource_pool.v1", "docker-all.compute"),
+            "scheduler_pools/docker-all.preparation.preparation-resources.json": ("preparation_resource_pool.v1", "docker-all.preparation"),
+        }
+        archived_files = {}
+        for source in runtime_service._container_recovery_expected_sources(owner):
+            live_raw = None
+            if source == "configuration.json":
+                source_raw = config_raw
+            elif source == "runtime-services/OWNER.json":
+                source_raw = owner_raw
+            elif source == "runtime-services/LAUNCH.json":
+                old_launch = {"schema_version": "runtime_service_launch.v1", "state": "ready", "pid": 165,
+                              "launch_id": "9716ed4a-30bb-41b5-90d5-5fb07e0662b7"}
+                source_raw = json.dumps(old_launch).encode()
+                live_raw = json.dumps({**old_launch, "pid": 2987,
+                                      "launch_id": "e0fc26fe-1eba-48b6-9b6c-f7e0466ffef6"}).encode()
+            elif source in pools:
+                schema, pool_id = pools[source]
+                old_pool = {"schema_version": schema, "pool_id": pool_id, "generation": 2,
+                            "resources": [{"resource_id": "existing-resource", "capacity": 1}]}
+                source_raw = json.dumps(old_pool).encode()
+                live_raw = json.dumps({**old_pool, "generation": 3}).encode()
+            elif source.startswith("scheduler_pools/"):
+                pool_id = "docker-all.preparation" if source.endswith(".preparation.json") else "docker-all.compute"
+                source_raw = json.dumps({"schema_version": "scheduler_pool_checkpoint.v1", "pool_id": pool_id,
+                                         "sequence": 1, "run_source": "store", "run_ids": [], "next_run_id": None}).encode()
+            else:
+                source_raw = source.encode() + b"\n"
+            if source not in {"configuration.json", "runtime-services/OWNER.json"}:
+                live_path = runtime_service._store_relative_path(paths, runtime_service.PurePosixPath(source))
+                live_path.parent.mkdir(parents=True, exist_ok=True)
+                live_path.write_bytes(live_raw if live_raw is not None else source_raw)
+            (archive_root / Path(source).name).write_bytes(source_raw)
+            archived_files[source] = _sha(source_raw)
+        new_logs = runtime_services / ready["owner_token"]
+        new_logs.mkdir()
+        for name in ("compute.stdout.jsonl", "preparation.stdout.jsonl"):
+            (new_logs / name).write_text("{}\n")
+        attestation_sha = "d" * 64
+        archive_manifest = {
+            "schema_version": runtime_service.CONTAINER_RECOVERY_ARCHIVE_SCHEMA,
+            "request_sha256": request_sha, "config_sha256": config_sha, "attestation_sha256": attestation_sha,
+            "ledger_snapshot_sha256": request["ledger_snapshot_sha256"],
+            "prior_ready_owner_proof_sha256": request["prior_ready_owner_proof_sha256"],
+            "application": request["application"], "files": archived_files, "absent_sources": {},
+        }
+        archive_manifest_raw = (json.dumps(archive_manifest, sort_keys=True, indent=2) + "\n").encode()
+        (archive_root / "manifest.json").write_bytes(archive_manifest_raw)
+        result = {"owner_sha256_after": _sha(failed_owner_raw),
+                  "archived_evidence_path": str(archive_root / "manifest.json"),
+                  "archived_evidence_sha256": _sha(archive_manifest_raw), "archived_files": archived_files,
+                  "archived_absent_sources": {}}
+        context = {"request": request, "authorization": authorization, "request_sha256": request_sha,
+                   "attestation_sha256": attestation_sha, "expected_owner": owner}
+        return paths, context, result, _sha(drained_raw), archive_root, pin
+
+    def test_archive_accepts_new_launch_and_pool_generation_only_with_authenticated_drain(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            fixture = self._document_fixture(root)
-            owner = fixture["request"]["expected_owner"]
-            owner_raw = (json.dumps(owner, sort_keys=True) + "\n").encode()
-            failed_owner = {**owner, "state": "failed"}
-            failed_owner_raw = (json.dumps(failed_owner, sort_keys=True) + "\n").encode()
-            drained_owner = {**owner, "state": "drained"}
-            drained_owner_raw = (json.dumps(drained_owner, sort_keys=True) + "\n").encode()
-            request_sha = "9" * 64
-            config_raw = b"configuration\n"
-            config_sha = _sha(config_raw)
-            request = {
-                "owner_sha256": _sha(owner_raw),
-                "config_sha256": config_sha,
-                "ledger_snapshot_sha256": "a" * 64,
-                "prior_ready_owner_proof_sha256": "b" * 64,
-                "application": {"mode": "external_only", "raw_sha256": "c" * 64},
-                "expected_owner": owner,
-            }
-            authorization = {
-                "owner_sha256": request["owner_sha256"],
-                "config_sha256": config_sha,
-            }
-            store = root / "store"
-            runtime_services = store / "runtime-services"
-            runtime_services.mkdir(parents=True)
-            paths = runtime_service.RuntimePaths(
-                store=store,
-                runtime_services=runtime_services,
-            )
-            owner_path = runtime_services / "OWNER.json"
-            owner_path.write_bytes(drained_owner_raw)
-            archive_root = (
-                store / "runtime-services" / "container-recovery" / request_sha / "archive"
-            )
-            archive_root.mkdir(parents=True)
-            archived_files = {}
-            for source in runtime_service._container_recovery_expected_sources(owner):
-                if source == "configuration.json":
-                    source_raw = config_raw
-                elif source == "runtime-services/OWNER.json":
-                    source_raw = owner_raw
-                else:
-                    source_raw = source.encode("utf-8") + b"\n"
-                    live_path = runtime_service._store_relative_path(
-                        paths, runtime_service.PurePosixPath(source)
-                    )
-                    live_path.parent.mkdir(parents=True, exist_ok=True)
-                    live_path.write_bytes(source_raw)
-                (archive_root / Path(source).name).write_bytes(source_raw)
-                archived_files[source] = _sha(source_raw)
-            attestation_sha = "d" * 64
-            archive_manifest = {
-                "schema_version": runtime_service.CONTAINER_RECOVERY_ARCHIVE_SCHEMA,
-                "request_sha256": request_sha,
-                "config_sha256": config_sha,
-                "attestation_sha256": attestation_sha,
-                "ledger_snapshot_sha256": request["ledger_snapshot_sha256"],
-                "prior_ready_owner_proof_sha256": request["prior_ready_owner_proof_sha256"],
-                "application": request["application"],
-                "files": archived_files,
-                "absent_sources": {},
-            }
-            archive_manifest_raw = (
-                json.dumps(archive_manifest, sort_keys=True, indent=2) + "\n"
-            ).encode()
-            (archive_root / "manifest.json").write_bytes(archive_manifest_raw)
-            result = {
-                "owner_sha256_after": _sha(failed_owner_raw),
-                "archived_evidence_path": str(archive_root / "manifest.json"),
-                "archived_evidence_sha256": _sha(archive_manifest_raw),
-                "archived_files": archived_files,
-                "archived_absent_sources": {},
-            }
-            context = {
-                "request": request,
-                "authorization": authorization,
-                "request_sha256": request_sha,
-                "attestation_sha256": attestation_sha,
-                "expected_owner": owner,
-            }
+            paths, context, result, digest, _, _ = self._archive_fixture(Path(raw))
             runtime_service._validate_container_recovery_archive(
-                paths,
-                context,
-                result,
-                authenticated_drained_owner_sha256=_sha(drained_owner_raw),
-            )
+                paths, context, result, authenticated_drained_owner_sha256=digest)
             with self.assertRaises(runtime_service.RuntimeServiceError):
                 runtime_service._validate_container_recovery_archive(paths, context, result)
+            with self.assertRaises(runtime_service.RuntimeServiceError):
+                runtime_service._validate_container_recovery_archive(
+                    paths, context, result, authenticated_drained_owner_sha256="0" * 64)
+
+    def test_authenticated_replay_refuses_foreign_launch_resources_and_ready_pin(self):
+        with tempfile.TemporaryDirectory() as raw:
+            paths, context, result, digest, _, pin = self._archive_fixture(Path(raw))
+            def validate():
+                runtime_service._validate_container_recovery_archive(
+                    paths, context, result, authenticated_drained_owner_sha256=digest)
+            launch_path = runtime_service.runtime_services_root(paths) / "LAUNCH.json"
+            resources_path = paths.store / "scheduler_pools/docker-all.compute.resources.json"
+            cases = [(launch_path, {"pid": 999}), (launch_path, {"launch_id": "invalid"}),
+                     (launch_path, {"state": "spawned"}), (resources_path, {"generation": 4}),
+                     (resources_path, {"generation": 2}),
+                     (resources_path, {"resources": [{"resource_id": "existing-resource", "capacity": True}]}),
+                     (resources_path, {"resources": [{"resource_id": "existing-resource", "capacity": 1.0}]}),
+                     (resources_path, {"resources": []}), (resources_path, {"pool_id": "foreign"}),
+                     (pin, {"pid": 999})]
+            for path, change in cases:
+                with self.subTest(path=path, change=change):
+                    original = path.read_bytes()
+                    path.write_text(json.dumps({**json.loads(original), **change}))
+                    with self.assertRaises(runtime_service.RuntimeServiceError):
+                        validate()
+                    path.write_bytes(original)
+            validate()
+
+    def test_initial_failed_owner_replay_does_not_accept_new_generation_records(self):
+        with tempfile.TemporaryDirectory() as raw:
+            paths, context, result, _, _, _ = self._archive_fixture(Path(raw))
+            failed = {**context["expected_owner"], "state": "failed"}
+            runtime_service.runtime_services_root(paths).joinpath("OWNER.json").write_text(
+                json.dumps(failed, sort_keys=True) + "\n")
+            with self.assertRaisesRegex(runtime_service.RuntimeServiceError, "differs from live store"):
+                runtime_service._validate_container_recovery_archive(paths, context, result)
+
+    def test_successor_profile_keeps_resource_types_when_live_pool_matches_config(self):
+        with tempfile.TemporaryDirectory() as raw:
+            paths, context, result, digest, _, _ = self._archive_fixture(Path(raw))
+            original_config = paths.config.read_bytes()
+            pool_path = paths.store / "scheduler_pools/docker-all.compute.resources.json"
+            original_pool = pool_path.read_bytes()
+            for capacity in (True, 1.0):
+                with self.subTest(capacity=capacity):
+                    resources = [{"resource_id": "existing-resource", "capacity": capacity}]
+                    paths.config.write_text(json.dumps({**json.loads(original_config), "compute_resources": resources}))
+                    pool_path.write_text(json.dumps({**json.loads(original_pool), "resources": resources}))
+                    with self.assertRaisesRegex(runtime_service.RuntimeServiceError, "operator profile"):
+                        runtime_service._validate_container_recovery_archive(
+                            paths, context, result, authenticated_drained_owner_sha256=digest)
+
+    def test_authenticated_successor_preserves_completed_run_checkpoint_history(self):
+        with tempfile.TemporaryDirectory() as raw:
+            paths, context, result, digest, _, pin = self._archive_fixture(Path(raw))
+            checkpoint_path = paths.store / "scheduler_pools/docker-all.compute.json"
+            checkpoint_path.write_text(json.dumps({**json.loads(checkpoint_path.read_bytes()),
+                                                   "sequence": 2, "run_ids": ["completed-run"]}))
+            runtime_service._validate_container_recovery_archive(
+                paths, context, result, authenticated_drained_owner_sha256=digest,
+                authenticated_successor_owner=json.loads(pin.read_bytes()))
+
+    def test_authenticated_replay_keeps_archived_bytes_old_logs_and_checkpoints_immutable(self):
+        with tempfile.TemporaryDirectory() as raw:
+            paths, context, result, digest, archive_root, _ = self._archive_fixture(Path(raw))
+            old_token = context["expected_owner"]["owner_token"]
+            paths_to_change = [archive_root / "LAUNCH.json", archive_root / "docker-all.compute.resources.json",
+                               runtime_service.runtime_services_root(paths) / old_token / "compute.stdout.jsonl",
+                               paths.store / "scheduler_pools/docker-all.compute.json"]
+            for path in paths_to_change:
+                with self.subTest(path=path):
+                    original = path.read_bytes()
+                    path.write_bytes(original + b"changed")
+                    with self.assertRaises(runtime_service.RuntimeServiceError):
+                        runtime_service._validate_container_recovery_archive(
+                            paths, context, result, authenticated_drained_owner_sha256=digest)
+                    path.write_bytes(original)
 
     def test_entrypoint_orders_container_recovery_before_configuration(self):
         source = (RUNTIME_ROOT / "entrypoint.py").read_text(encoding="utf-8")

@@ -13,6 +13,7 @@
 #include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
+#include "gpu/cuda/integrators/rk/rk_fsal_policy.hpp"
 #include "gpu/cuda/integrators/rk/rk_stage_schedule.hpp"
 #include "cpu/mfem/integrators/rk_step_transaction.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
@@ -164,8 +165,12 @@ bool gpu_rk_run_accepted_attempt_loop(
         fsal_reused = stage_attempt.fsal_reused;
         GpuPerformanceCounterDelta performance_delta{};
         performance_delta.rhs_evaluations = stage_attempt.rhs_evaluations;
-        performance_delta.demag_solves =
-            ctx.poisson_demag.solves_current_step - demag_solves_before_attempt;
+        if (ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+            // Device Poisson reports each solve at its owner; other demag
+            // families retain their existing stage-level accounting.
+            performance_delta.demag_solves =
+                ctx.poisson_demag.solves_current_step - demag_solves_before_attempt;
+        }
         gpu_performance_note(ctx.gpu_state.performance_counters, performance_delta);
 
         if (adaptive) {
@@ -244,7 +249,10 @@ bool gpu_rk_run_accepted_attempt_loop(
                 if (!rk_restore_active_step_device_checkpoint(ctx, reason)) {
                     return false;
                 }
-                gpu.rk.fsal_valid = false;
+                // The checkpoint restored the same accepted m, time and k0.
+                // Keep an already valid derivative only under the existing
+                // source policy; fields and Poisson guesses stay invalid.
+                gpu_rk_retain_restored_fsal_on_retry(ctx);
                 active_dt = adaptive_result.dt_next;
                 ctx.base_plan.dt_seconds = active_dt;
                 ctx.adaptive_dt.current_dt = active_dt;

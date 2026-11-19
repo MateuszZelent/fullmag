@@ -82,6 +82,99 @@ fn config() -> ScriptExecutionConfig {
     }
 }
 
+fn captured_field_pipeline(first_payload: serde_json::Value) -> ScriptExecutionConfig {
+    let mut input = config();
+    input
+        .ir
+        .energy_terms
+        .push(fullmag_ir::EnergyTermIR::Zeeman {
+            b: [0.099, 0.0, 0.0],
+        });
+    input.study_pipeline = Some(
+        serde_json::from_value(json!({
+            "version": "study_pipeline.v1",
+            "nodes": [
+                {"node_kind": "primitive", "id": "relax", "label": "Relax", "stage_kind": "relax",
+                 "source": "script_imported", "payload": first_payload},
+                {"node_kind": "primitive", "id": "run", "label": "Run", "stage_kind": "run",
+                 "source": "script_imported", "payload": {
+                     "until_seconds": 1e-12, "external_field": [0.01, 0.0, 0.0],
+                     "gilbert_damping_by_object": {"strip": 0.15}
+                 }},
+                {"node_kind": "primitive", "id": "inherits", "label": "Inherits", "stage_kind": "run",
+                 "source": "script_imported", "payload": {"until_seconds": 2e-12}}
+            ]
+        }))
+        .unwrap(),
+    );
+    input
+}
+
+#[test]
+fn imported_run_and_relax_replay_uniform_fields_without_changing_the_base_ir() {
+    for (capture, expected) in [
+        (json!(null), None),
+        (json!([0.0, 0.0, 0.0]), Some([0.0; 3])),
+    ] {
+        let input = captured_field_pipeline(json!({"max_steps": 4, "external_field": capture}));
+        let compiled = materialize_script_pipeline_with_output_policy_bounded(
+            input,
+            fullmag_ir::configure_project_autosave_policy,
+            3,
+        )
+        .unwrap();
+        let fields: Vec<_> = compiled
+            .executions
+            .iter()
+            .map(|execution| {
+                let ir = &execution.stage.ir;
+                assert!(ir
+                    .energy_terms
+                    .iter()
+                    .any(|term| matches!(term, fullmag_ir::EnergyTermIR::Exchange)));
+                ir.energy_terms.iter().find_map(|term| match term {
+                    fullmag_ir::EnergyTermIR::Zeeman { b } => Some(*b),
+                    _ => None,
+                })
+            })
+            .collect();
+        assert_eq!(
+            fields,
+            vec![expected, Some([0.01, 0.0, 0.0]), Some([0.099, 0.0, 0.0])]
+        );
+        assert_eq!(compiled.executions[1].stage.ir.materials[0].damping, 0.15);
+        assert_eq!(compiled.executions[2].stage.ir.materials[0].damping, 0.02);
+    }
+}
+
+#[test]
+fn accepted_field_capture_rejects_invalid_vectors_and_ui_owned_overrides() {
+    let malformed =
+        captured_field_pipeline(json!({"max_steps": 4, "external_field": [0.0, true, 0.0]}));
+    let mut ui_owned =
+        captured_field_pipeline(json!({"max_steps": 4, "external_field": [0.0, 0.0, 0.0]}));
+    let StudyPipelineNode::Primitive { source, .. } =
+        &mut ui_owned.study_pipeline.as_mut().unwrap().nodes[0]
+    else {
+        panic!("expected a primitive Run or Relax");
+    };
+    *source = Some("ui_authored".into());
+
+    for (input, message) in [
+        (malformed, "finite vector in tesla"),
+        (ui_owned, "requires a script-imported Run or Relax"),
+    ] {
+        let error = materialize_script_pipeline_with_output_policy_bounded(
+            input,
+            fullmag_ir::configure_project_autosave_policy,
+            3,
+        )
+        .err()
+        .unwrap();
+        assert!(format!("{error:#}").contains(message), "{error:#}");
+    }
+}
+
 #[test]
 fn compilation_preserves_the_tree_without_fictitious_group_or_mutator_execution() {
     let input = config();
@@ -464,4 +557,21 @@ fn antenna_action_snapshots_preserve_complete_ordered_enabled_coverage() {
     if let StudyPipelineNode::Primitive { enabled, .. } = &mut disabled.study_pipeline.as_mut().unwrap().nodes[0] { *enabled = false; }
     let mut reordered = antenna_action_snapshots(); reordered.stages.swap(0, 1);
     for input in [missing, duplicate, disabled, reordered] { assert!(validate_snapshot_gate(&input).is_err()); }
+}
+
+#[test]
+fn physical_clock_crosses_relaxation_and_macro_expansion_without_advancing_during_relax() {
+    let mut input = config();
+    input.ir.problem_meta.runtime_metadata.insert("stage_start_time_s".into(), json!(4e-12));
+    input.study_pipeline = Some(serde_json::from_value(json!({"version":"study_pipeline.v1","nodes":[
+        {"node_kind":"macro","id":"first","label":"First","macro_kind":"relax_run","config":{"run_until_seconds":1e-12}},
+        {"node_kind":"macro","id":"second","label":"Second","macro_kind":"relax_run","config":{"run_until_seconds":2e-12}}
+    ]})).unwrap());
+    let compiled = materialize_script_pipeline_with_output_policy_bounded(input,
+        fullmag_ir::configure_project_autosave_policy, 4).unwrap();
+    assert_eq!(compiled.executions.len(), 4);
+    let starts: Vec<_> = compiled.executions.iter()
+        .filter(|execution| matches!(execution.stage.ir.study, fullmag_ir::StudyIR::TimeEvolution { .. }))
+        .map(|execution| read_physical_stage_start(&execution.stage.ir).unwrap()).collect();
+    assert_eq!(starts, vec![4e-12, 4e-12 + 1e-12]);
 }

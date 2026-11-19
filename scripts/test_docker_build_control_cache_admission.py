@@ -178,8 +178,8 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
              mock.patch.object(control, "bounded_capture", return_value=subprocess.CompletedProcess(
                  [], 0, json.dumps(MANIFEST).encode(), b"")), \
              mock.patch.object(control, "BuildControl", new=build_control_factory), \
-             mock.patch.object(storage, "resolve_layout", return_value={"worktree_id": "test"}), \
-             mock.patch.object(compose_identity, "compose_project_identity", return_value={
+             mock.patch.object(storage, "resolve_layout", side_effect=AssertionError("Image-only build must not resolve host storage")), \
+             mock.patch.object(compose_identity, "compose_source_identity", return_value={
                  "project_name": "fullmag-cache-test"}), \
              mock.patch.object(storage, "git", return_value=COMMIT), \
              mock.patch.object(bootstrap, "tracked_input_files", return_value=tracked), \
@@ -261,6 +261,19 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
                 repo, fake, {"image_id": PARENT_IMAGE}
             )
         return result, digests
+
+    def test_toolchain_and_both_image_producers_share_semantic_hash_contract(self):
+        digest=control.build_input_digest
+        fake=FakeControl(receipt={'state':'succeeded','source_digest':'MATCH',
+            'compose_project':'fullmag-cache-test','image_id':IMAGE})
+        with mock.patch.object(control,'build_input_digest',wraps=digest) as observed:
+            self._run_toolchain(fake)
+            self.assertEqual(observed.call_count,1)
+        fake=FakeControl()
+        with mock.patch.object(control,'build_input_digest',wraps=digest) as observed:
+            result,_=self._run_runtime_images(fake)
+            self.assertEqual(observed.call_count,2)
+            self.assertEqual(set(result),{'dev','backend'})
 
     def test_warm_cache_uses_bounded_budget_without_build(self):
         fake = FakeControl(receipt={

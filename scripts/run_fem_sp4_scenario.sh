@@ -46,7 +46,7 @@ export PYTHONPATH="$root/packages/fullmag-py/src:$root"
 
 started_ns="$(date +%s%N)"
 set +e
-just fullmag "build=$build" fem "$device" headless "$script"
+just fullmag-reference "build=$build" fem "$device" headless "$script"
 run_status=$?
 set -e
 finished_ns="$(date +%s%N)"

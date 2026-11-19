@@ -15,6 +15,8 @@
   - `docs/physics/0490-fem-higher-order-and-adaptive-time-integrators-mfem-gpu.md`
   - `docs/physics/0580-canonical-relaxation-equilibrium-contract.md`
 
+(problem-statement)=
+
 ## 1. Problem statement
 
 This note defines the canonical physical, numerical, public-API, provenance,
@@ -58,39 +60,46 @@ Stable contract identifiers used by cross-document checks are:
 
 ## 2. Physical model
 
+(governing-equations)=
+
 ### 2.1 Governing equation
 
 For reduced magnetization `m = M/Ms`, with `|m| = 1`, Fullmag advances
 
-\[
+```{math}
+:label: eq-canonical-llg-rhs
 \frac{\partial m}{\partial t}
 =-\frac{\gamma_0}{1+\alpha^2}
 \left[m\times H_\mathrm{eff}
 +\alpha m\times(m\times H_\mathrm{eff})\right]
 +\tau_\mathrm{nc},
-\]
+```
 
 where `gamma_0 = mu_0 |gamma|` under the canonical Fullmag convention and
 `tau_nc` collects explicitly enabled nonconservative torques.
 
 The effective field is the variational derivative of the modeled energy,
 
-\[
+```{math}
+:label: eq-effective-field-variational
 H_\mathrm{eff}=-\frac{1}{\mu_0 M_s}\frac{\delta E}{\delta m},
-\]
+```
 
 with the exact interaction set recorded in the problem and runtime
 provenance.
+
+(planned-dissipation-invariant)=
 
 ### 2.2 Autonomous dissipation invariant
 
 For time-independent energy, `alpha > 0`, and `tau_nc = 0`,
 
-\[
+```{math}
+:label: eq-autonomous-energy-dissipation
 \frac{dE}{dt}
 =-\frac{\alpha\gamma_0\mu_0 M_s}{1+\alpha^2}
 \int |m\times H_\mathrm{eff}|^2\,dV \le 0.
-\]
+```
 
 Discrete trajectories may exceed strict monotonicity by only the documented
 integration, field-solve, and energy-evaluation budget. A persistent or
@@ -98,6 +107,8 @@ convergence-order-inconsistent energy increase is a solver failure, not a
 physical consequence of large damping. Increasing `alpha` does not remove
 the explicit stability restriction; the dissipative rate is proportional to
 `alpha/(1+alpha^2)`.
+
+(symbols-and-si-units)=
 
 ### 2.3 Symbols and SI units
 
@@ -113,6 +124,24 @@ the explicit stability restriction; the dissipative rate is proportional to
 | `atol`, `rtol` | advanced absolute/relative error tolerances | 1 |
 | `eta` | normalized error acceptance metric | 1 |
 | `theta_max` | maximum spin rotation in an attempted step | rad |
+| $\tau_\mathrm{nc}$ | explicitly enabled nonconservative contribution to $\partial m/\partial t$ | `1/s` |
+| $\mu_0$ | vacuum permeability | `N A^-2` |
+| $E$ | modeled magnetic energy | `J` |
+| $\Omega_m$ | magnetic material domain of integration | `m^3` |
+| $e_i$ | embedded vector error at active degree of freedom $i$ | 1 |
+| $m_i^{lo}$ | low-order embedded magnetization state | 1 |
+| $m_i^{hi}$ | high-order embedded magnetization state | 1 |
+| $\eta_i$ | normalized embedded error at degree of freedom $i$ | 1 |
+| $i$ | active node or cell index | 1 |
+| $r$ | proposed timestep ratio | 1 |
+| $s$ | dimensionless controller safety factor | 1 |
+| $q$ | embedded estimator order | 1 |
+| $\eta_n$ | current normalized error metric | 1 |
+| $\eta_{n-1}$ | previous normalized error metric | 1 |
+| $m_i^n$ | accepted magnetization at active degree of freedom $i$ | 1 |
+| $dV$ | volume integration element | `m^3` |
+
+(assumptions-and-validity)=
 
 ### 2.4 Assumptions and validity limits
 
@@ -126,6 +155,8 @@ the explicit stability restriction; the dissipative rate is proportional to
 - Stochastic thermal dynamics require separate statistical validation and do
   not obey pathwise energy monotonicity.
 
+(discrete-realization)=
+
 ## 3. Numerical interpretation
 
 ### 3.1 Canonical fixed and adaptive policies
@@ -133,6 +164,7 @@ the explicit stability restriction; the dissipative rate is proportional to
 The fixed policy is
 
 ```python
+# %%
 study.solver(integrator="rk45", fix_dt=1e-15, g=2.115)
 ```
 
@@ -161,9 +193,10 @@ defined once in the public model and preserved in provenance.
 `fix_dt` cannot be combined with `dt_initial`, `dt_min`, `dt_max`, `max_err`,
 or an advanced adaptive-timestep object. Adaptive bounds require
 
-\[
+```{math}
+:label: eq-adaptive-timestep-bounds
 0 < dt_\min \le dt_\mathrm{initial} \le dt_\max
-\]
+```
 
 when the optional middle value is present.
 
@@ -172,10 +205,11 @@ when the optional middle value is present.
 The public convenience parameter `max_err` follows the MuMax-style maximum
 vector-error interpretation. For each active cell or FEM node/block,
 
-\[
+```{math}
+:label: eq-maximum-vector-error
 \eta_i=\frac{\|m_i^{hi}-m_i^{lo}\|_2}{\mathrm{max\_err}},
 \qquad \eta=\max_i\eta_i.
-\]
+```
 
 The embedded-error condition is `eta <= 1`. This is an absolute error on the
 dimensionless reduced-magnetization vector. It is intentionally not diluted
@@ -185,10 +219,11 @@ transverse perturbation is much smaller than `|m| = 1`.
 The lower-level `AdaptiveTimestep(atol=..., rtol=...)` policy remains an
 advanced alternative. It uses
 
-\[
+```{math}
+:label: eq-advanced-vector-error
 \eta_i=\frac{\|e_i\|_2}
 {atol+rtol\max(\|m_i^n\|_2,\|m_i^{hi}\|_2)}.
-\]
+```
 
 Exactly one tolerance policy is active. Canonical lowering of `max_err=x`
 may resolve numerically to `atol=x, rtol=0`, but ProblemIR and provenance must
@@ -218,16 +253,18 @@ from the selected tableau, with the defensive scalar-contract range
 `1 <= q <= 16`; current RK23 and RK45 use `q=2` and `q=4`. On startup, after a reset, or after an exactly zero
 accepted error, no PI history is active and
 
-\[
+```{math}
+:label: eq-adaptive-controller-startup
 r=s\,\eta_n^{-1/(q+1)}.
-\]
+```
 
 For an accepted step with positive current error and positive accepted-step
 history `eta_(n-1)`, the PI ratio is
 
-\[
+```{math}
+:label: eq-adaptive-controller-pi
 r=s\,\eta_n^{-0.7/(q+1)}\eta_{n-1}^{0.4/(q+1)}.
-\]
+```
 
 Rejected steps use the startup proportional expression and never publish
 their error as accepted history. The ratio is clamped to
@@ -243,6 +280,22 @@ attempts exactly at `dt_min` or `dt_max` are valid. The previous-error scalar
 must always be finite, even while history is inactive; it must additionally be
 positive when history is active. Finite zero is the canonical inactive-history
 placeholder and is ignored by the startup expression.
+
+A physical stage endpoint has one narrow exception to the attempted-step lower
+bound. When the positive remaining physical interval is shorter than `dt_min`,
+the runtime may make one terminal RK45 attempt using that exact remaining
+interval to reach the requested endpoint. This endpoint-bounded interval is
+not a controller proposal: the adaptive controller keeps the authored
+`[dt_min, dt_max]` bounds for every subsequent proposal. The terminal attempt
+must pass the same error, geometry, stability, and final-field checks as any
+other attempt, and its magnetization and physical clock commit together. If the
+error estimate exceeds tolerance, the runtime reports `dt_min_exhausted`; any
+other failed guard keeps its typed failure. Every failed terminal attempt
+restores the pre-attempt state and is never retried below the endpoint interval
+or force-accepted. The runtime must not extend the physical stage beyond its
+endpoint or change a checkpoint time without solving the corresponding
+interval. This exception does not change ordinary attempt bounds or the
+resolved first-step policy.
 
 The bounded decision vocabulary is `accepted`, `retry`, and `failed`. The
 bounded reason vocabulary is `within_tolerance`, `error_above_tolerance`,
@@ -379,6 +432,8 @@ the complete legacy base plus optional norm/rotation guards, together with
 `fullmag_fem_backend_create_v2`. A stale version or size fails before any v2
 field is interpreted; the legacy entrypoint never reads the v2 tail.
 
+(planned-tangent-plane-weak-form)=
+
 ### 3.9 Stiff tangent-plane time-integration lane
 
 The existing `tangent_plane_implicit` relaxation algorithm is not a physical
@@ -386,10 +441,11 @@ time integrator: its step is an energy-search scale, it omits the full
 precessional LLG operator, and it advances no physical clock. It must not be
 advertised as a stiff time-domain solver.
 
-The selected first production scheme is the normalized first-order
-theta-tangent-plane method with `theta = 1`. It is selected explicitly as
-`integrator="tangent_plane"` and uses a fixed physical `fix_dt`. Adaptive
-control and switching from an explicit method are not part of this lane.
+The approved design selects the normalized first-order theta-tangent-plane
+method with `theta = 1` as the intended first production scheme. Once
+implemented, it will be selected explicitly as `integrator="tangent_plane"`
+and use a fixed physical `fix_dt`. Adaptive control and switching from an
+explicit method are not part of this lane.
 
 Let `V_h` be the vector P1 magnetic finite-element space and
 
@@ -403,7 +459,8 @@ the accepted state `(m_h^n,t_n)`. It then finds a tangent velocity
 `v_h^n in K_h(m_h^n)`, with SI unit `1/s`, such that for every
 `phi_h in K_h(m_h^n)`:
 
-\[
+```{math}
+:label: eq-tangent-plane-weak-form
 \begin{aligned}
 &\int_{\Omega_m}\mu_0 M_s
   \left[\alpha v_h^n+m_h^n\times v_h^n\right]\cdot\phi_h\,dV\\
@@ -416,7 +473,7 @@ the accepted state `(m_h^n,t_n)`. It then finds a tangent velocity
   \left[\alpha\tau_{\mathrm{nc}}^n
   +m_h^n\times\tau_{\mathrm{nc}}^n\right]\cdot\phi_h\,dV .
 \end{aligned}
-\]
+```
 
 Here `H_other = H_eff - H_ex`; it includes enabled demagnetization, Zeeman,
 anisotropy, DMI, Oersted, magnetoelastic, thermal, and regional-drive fields.
@@ -430,32 +487,34 @@ the tangent solve.
 
 After the linear solve, active nodal values are retracted once:
 
-\[
+```{math}
+:label: eq-tangent-plane-retraction
 m_h^{n+1}(z)=
 \frac{m_h^n(z)+\Delta t\,v_h^n(z)}
 {\left|m_h^n(z)+\Delta t\,v_h^n(z)\right|}.
-\]
+```
 
-The method is first-order in physical time. With `theta=1`, exchange is
-implicit and the qualified lane has no explicit `dt proportional to h^2`
-exchange-stability restriction. Explicit local/nonlocal interactions can
-still impose accuracy or stability restrictions; this is not an
-unconditionally stable solver for every enabled model. There is no dense
-output. The runtime shortens a step to land exactly on an output event or
-rejects an incompatible fixed clock; it never interpolates this method as if
-it were RK45.
+The planned method is first-order in physical time. With `theta=1`, exchange
+is implicit; qualification must establish whether the implemented lane avoids
+an explicit `dt proportional to h^2` exchange-stability restriction. Explicit
+local/nonlocal interactions can still impose accuracy or stability
+restrictions, so the method is not intended to be an unconditionally stable
+solver for every enabled model. Dense output is not part of this contract.
+The planned runtime shortens a step to land exactly on an output event or
+rejects an incompatible fixed clock; it does not interpolate this method as
+if it were RK45.
 
-The tangent system is nonsymmetric because of the gyrotropic
-`m cross v` block. The CPU realization therefore uses MFEM/Hypre GMRES with
-an exchange-plus-damping symmetric proxy preconditioner. The frozen production
-defaults are relative residual `1e-10`, absolute residual `0`, maximum `500`
-iterations, and restart dimension `50`. The achieved finite true residual,
-iteration count, requested limits, and convergence flag are checked after
-every solve. Reaching the iteration limit, a nonfinite residual, or a residual
-above the requested bound fails the attempted step. These values are typed
-resolved configuration and provenance; changing them requires a new
-qualification identity. A future public expert override must be added as a
-typed object, not an unvalidated JSON escape hatch.
+The planned tangent system is nonsymmetric because of the gyrotropic
+`m cross v` block. Its proposed CPU solver is MFEM/Hypre GMRES with an
+exchange-plus-damping symmetric proxy preconditioner. Proposed defaults are
+relative residual `1e-10`, absolute residual `0`, maximum `500` iterations,
+and restart dimension `50`. A future implementation must check the achieved
+finite true residual, iteration count, requested limits, and convergence flag
+after every solve. Reaching the iteration limit, a nonfinite residual, or a
+residual above the requested bound must fail the attempted step. These values
+are intended as typed resolved configuration and provenance; changing them
+would require a new qualification identity. A future public expert override
+must be added as a typed object, not an unvalidated JSON escape hatch.
 
 One attempted step is a transaction. The old magnetization, time, fields,
 demagnetization cache and potential, direct-torque state, solver diagnostics,
@@ -467,14 +526,16 @@ linear-solve/roundoff budget, while explicit non-exchange terms are required
 to converge under `dt`, `dt/2`, and `dt/4`; an energy increase is never hidden
 by normalization.
 
-The CPU owner is
-`backends/fem/cpu/mfem/integrators/tangent_plane/`. Backend-neutral immutable
-scheme configuration and diagnostics live under `backends/fem/core/`. The GPU
-owner is `backends/fem/gpu/cuda/integrators/tangent_plane/` and implements the
-same frozen weak form with device-resident state; it may not call the CPU
-implementation or fall back to it. The relaxation function
-`run_tangent_plane_implicit_step()` remains an energy minimizer and is never
-called by either physical-time realization.
+The planned CPU implementation location is
+`backends/fem/cpu/mfem/integrators/tangent_plane/`; planned backend-neutral
+scheme configuration and diagnostics belong under `backends/fem/core/`. The
+planned GPU implementation location is
+`backends/fem/gpu/cuda/integrators/tangent_plane/`. These physical-time source
+paths are not present in the current checkout and neither lane is implemented
+or qualified. Any future GPU implementation must use device-resident state and
+must not call the CPU implementation or fall back to it. The existing
+`run_tangent_plane_implicit_step()` remains an energy minimizer and is not
+physical-time evidence.
 
 ### 3.10 Hybrid interpretation
 
@@ -482,7 +543,11 @@ Hybrid execution is unsupported until it can preserve the complete timestep
 policy, transaction, trace, and convergence contracts across the boundary.
 It must fail closed rather than silently drop adaptive intent.
 
+(implementation-mapping)=
+
 ## 4. API, IR, planner, runtime, and artifacts
+
+(python-api)=
 
 ### 4.1 Python API surface
 
@@ -495,16 +560,18 @@ Both module-level `solver(...)` and `StudyBuilder.solver(...)` expose:
 - advanced `adaptive_timestep` where already supported.
 
 `integrator="tangent_plane"` accepts `fix_dt` and rejects every adaptive knob.
-It is FEM-only. The initial production capability is strict FP64 CPU, followed
-by a separately qualified strict FP64 GPU realization. FDM, FP32, hybrid,
-multilayer configurations that cannot assemble the documented material weak
-form, and unsupported direct-torque combinations fail during validation or
-planning before native materialization.
+It is FEM-only. The intended first qualification target is strict FP64 CPU,
+followed by a separately qualified strict FP64 GPU realization. FDM, FP32,
+and hybrid execution, plus multilayer configurations that cannot assemble the
+documented material weak form and unsupported direct-torque combinations, fail
+during validation or planning before native materialization.
 
 Canonical script export emits `fix_dt` for fixed mode and the four adaptive
 names for maximum-error mode. It never reconstructs adaptive intent as a
 fixed `dt`. Import/export and UI/scene round-trips preserve omitted
 `dt_initial` losslessly.
+
+(problem-ir)=
 
 ### 4.2 ProblemIR representation
 
@@ -540,6 +607,8 @@ time-domain integration, with backend, device, precision, supported guards,
 demag realization, validation scope, and status. A narrow fixture cannot
 promote a broad production claim.
 
+(round-trip-and-failure-semantics)=
+
 ### 4.4 Requested and resolved provenance
 
 Provenance stores typed requested and resolved policies, not a lossy string.
@@ -547,6 +616,10 @@ For adaptive mode it records requested nullable `dt_initial`, resolved first
 `dt`, resolution reason `explicit` or `dt_min_default`, bounds, tolerance
 mode, estimator order, controller parameters, guards, backend, device,
 precision, and capability/qualification identity.
+
+Canonical round-trips preserve requested intent.
+They record resolved execution separately. Validation errors reject invalid or
+lossy policies before materialization, and unsupported combinations fail closed.
 
 ### 4.5 Runtime telemetry and artifacts
 
@@ -639,9 +712,9 @@ its exact validator:
 
 | `energy_balance_kind` | Required validator | Acceptance contract |
 |---|---|---|
-| `undriven_dissipative` | `undriven_dissipative_energy_balance.v1` | \(\Delta E \le \varepsilon_E\) |
-| `externally_driven` | `externally_driven_power_balance.v1` | \(|\Delta E-W_\mathrm{source}+E_\mathrm{diss}|\le\varepsilon_E\) |
-| `spin_torque_driven` | `spin_torque_power_balance.v1` | \(|\Delta E-W_\mathrm{source}-W_\mathrm{nc}+E_\mathrm{diss}|\le\varepsilon_E\) |
+| `undriven_dissipative` | `undriven_dissipative_energy_balance.v1` | $\Delta E \le \varepsilon_E$ |
+| `externally_driven` | `externally_driven_power_balance.v1` | $|\Delta E-W_\mathrm{source}+E_\mathrm{diss}|\le\varepsilon_E$ |
+| `spin_torque_driven` | `spin_torque_power_balance.v1` | $|\Delta E-W_\mathrm{source}-W_\mathrm{nc}+E_\mathrm{diss}|\le\varepsilon_E$ |
 
 Here all energies and works are in joules and `epsilon_E` is the recorded
 discretization, field-solve, and energy-evaluation budget. The driven
@@ -650,6 +723,8 @@ validator additionally requires the nonconservative-work term. If a backend
 does not publish those observables, that scope remains unqualified; it is not
 tested with the autonomous monotonic-energy rule. CPU/GPU parity requires the
 same energy-balance class and validator on both lanes.
+
+(validation)=
 
 ## 5. Validation strategy
 
@@ -790,6 +865,8 @@ increment, while each relaxation must independently hold a strict certificate.
 - [x] explicit FEM analytical and CPU/GPU FP64 qualification
 - [x] canonical documentation contract
 
+(limitations)=
+
 ## 7. Known limits and deferred work
 
 - This note freezes the stiff-lane requirements but does not declare an
@@ -804,6 +881,8 @@ increment, while each relaxation must independently hold a strict certificate.
 - The approved reduced periodic-antidot fixture qualifies the explicit FEM
   FP64 path only; it does not qualify FP32 or the stiff tangent-plane lanes.
 
+(scientific-bibliography)=
+
 ## 8. References
 
 - MuMax3 API, adaptive timestep variables and fixed-step override:
@@ -813,3 +892,25 @@ increment, while each relaxation must independently hold a strict certificate.
   `https://doc.comsol.com/6.4/doc/com.comsol.help.comsol/comsol_ref_solver.36.139.html`
 - Local MuMax3 source: `external_solvers/3/engine/`
 - Local TetraX source: `external_solvers/TetraX/`
+
+(source-code-index)=
+
+## 9. Source Code Index
+
+| Repository path | Symbol | Responsibility |
+|---|---|---|
+| `backends/fem/cpu/mfem/integrators/rk_stage_rhs.cpp` | `evaluate_rk_stage_rhs` | Compose FEM CPU effective fields, LLG contribution, and enabled direct-torque terms for an RK stage. |
+| `backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu` | `gpu_rk_compute_rhs_for_magnetization` | Compose the FEM GPU effective-field, LLG, and direct-torque RHS for an RK stage. |
+| `backends/fem/cpu/mfem/interactions/effective_field.cpp` | `compute_effective_fields_for_magnetization` | Assemble the FEM CPU effective field consumed by the time integrator. |
+| `backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu` | `gpu_rk_compute_effective_field_for_magnetization` | Assemble the FEM GPU effective field for a magnetization state. |
+| `backends/fem/cpu/mfem/integrators/adaptive_dt.cpp` | `compute_adaptive_error_norm` | Compute the maximum active-node scaled embedded error. |
+| `native/include/fullmag_adaptive_step_decision.hpp` | `decide` | Implement the shared order-aware scalar adaptive timestep decision. |
+| `crates/fullmag-ir/src/study.rs` | `AdaptiveTimeStepIR` | Preserve requested adaptive-timestep policy in ProblemIR. |
+| `crates/fullmag-ir/src/validation.rs` | `validate_adaptive_timestep` | Reject invalid adaptive settings and incompatible integrators. |
+| `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | Expose the public study-level solver authoring API. |
+| `backends/fem/tests/llg_rhs_contract.cpp` | `llg_rhs_uses_llg_gilbert_form_and_nodewise_damping` | Check the FEM LLG RHS convention and nodewise damping behavior. |
+| `backends/fem/tests/adaptive_dt_contract.cpp` | `adaptive_error_norm_uses_nodewise_vector_l2_scale` | Check the adaptive vector-error norm against nodewise golden expectations. |
+| `backends/fem/tests/adaptive_dt_contract.cpp` | `shared_golden_vectors_match_cpu_and_gpu_host_adapters` | Check shared adaptive-controller decisions across CPU and GPU host adapters. |
+| `packages/fullmag-py/tests/test_llg_solver_contract.py` | `test_adaptive_policy_preserves_omitted_initial` | Check that omitted initial timestep intent survives Python-to-IR lowering. |
+| `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md` | `DOC-ANCHOR:planned-dissipation-invariant` | Scientific dissipation requirement only; it does not claim production qualification. |
+| `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md` | `DOC-ANCHOR:planned-tangent-plane-weak-form` | Future tangent-plane formulation only; no present physical-time implementation is claimed. |

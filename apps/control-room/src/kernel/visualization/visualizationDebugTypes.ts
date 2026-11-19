@@ -82,7 +82,7 @@ export interface VisualizationDebugCarrierSnapshot {
   memory: readonly VisualizationDebugMemoryRow[];
   payload: {
     component: string | null;
-    dtype: "float64";
+    dtype: "float32" | "float64";
     formatVersion: number | null;
     grid: readonly [number, number, number];
     indexing: string;

@@ -134,6 +134,9 @@ export function SimulationStartupOverlayView({
 }: {
   state: SimulationStartupOverlayState;
 }) {
+  // Reading state the backend already has (a page reload) is not preparation;
+  // the window opens only once the backend reports work or a failure.
+  if (state.kind === "syncing") return null;
   // A finished preparation stays mounted but closed, so the status bar can
   // reopen it with its stages and log.
   const hasPreparation = state.kind !== "hidden" && state.preparation !== null;

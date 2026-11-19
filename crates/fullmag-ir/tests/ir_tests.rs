@@ -3009,62 +3009,6 @@ fn hysteresis_validation_rejects_unknown_minor_loop_continuation_policy() {
 }
 
 #[test]
-fn hysteresis_minimize_energy_tolerance_round_trips_optional_values() {
-    for value in [None, Some(serde_json::Value::Null), Some(serde_json::json!(1e-20))] {
-        let mut payload = serde_json::json!({
-            "kind": "minimize",
-            "method": "projected_gradient_bb",
-            "torque_tolerance": 1.0,
-            "max_steps": 500,
-            "on_non_convergence": "continue_with_warning"
-        });
-        if let Some(value) = value {
-            payload["energy_tolerance"] = value;
-        }
-        let step: SettleStepIR = serde_json::from_value(payload.clone()).unwrap();
-        let SettleStepIR::Minimize { energy_tolerance, .. } = &step else {
-            panic!("expected minimize settle step");
-        };
-        assert_eq!(*energy_tolerance, payload["energy_tolerance"].as_f64());
-        let serialized = serde_json::to_value(&step).unwrap();
-        if energy_tolerance.is_none() {
-            payload.as_object_mut().unwrap().remove("energy_tolerance");
-        }
-        assert_eq!(serialized, payload);
-    }
-}
-
-#[test]
-fn hysteresis_minimize_energy_tolerance_is_positive_when_present() {
-    for energy_tolerance in [None, Some(1e-20), Some(0.0), Some(-1e-20)] {
-        let mut ir = ProblemIR::bootstrap_example();
-        ir.study = serde_json::from_value(serde_json::json!({
-            "kind": "hysteresis",
-            "field_values_mT": [0.0, 1.0],
-            "initial_protocol": "as_authored",
-            "settle_pipeline": {
-                "kind": "sequence",
-                "steps": [{
-                    "kind": "minimize",
-                    "method": "projected_gradient_bb",
-                    "torque_tolerance": 1.0,
-                    "energy_tolerance": energy_tolerance,
-                    "max_steps": 500,
-                    "on_non_convergence": "continue_with_warning"
-                }]
-            },
-            "sampling": ir.study.sampling()
-        })).unwrap();
-        if energy_tolerance.is_some_and(|value| value <= 0.0) {
-            let errors = ir.validate().expect_err("nonpositive energy tolerance must fail");
-            assert!(errors.iter().any(|error| error.contains("energy_tolerance must be positive")));
-        } else {
-            ir.validate().expect("absent or positive energy tolerance must be valid");
-        }
-    }
-}
-
-#[test]
 fn hysteresis_validation_rejects_run_next_algorithm_without_next_step() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.study = StudyIR::Hysteresis {
@@ -3087,7 +3031,7 @@ fn hysteresis_validation_rejects_run_next_algorithm_without_next_step() {
             steps: vec![SettleStepIR::Minimize {
                 method: "projected_gradient_bb".to_string(),
                 torque_tolerance: 5e-5,
-                energy_tolerance: Some(1e-20),
+                energy_tolerance: 1e-20,
                 max_steps: 2000,
                 applies_to: None,
                 stop_criteria: None,
@@ -3145,7 +3089,7 @@ fn hysteresis_validation_rejects_run_next_algorithm_tree_without_fallback_branch
             default: SettleStepIR::Minimize {
                 method: "projected_gradient_bb".to_string(),
                 torque_tolerance: 5e-5,
-                energy_tolerance: Some(1e-20),
+                energy_tolerance: 1e-20,
                 max_steps: 2000,
                 applies_to: None,
                 stop_criteria: None,
@@ -3329,7 +3273,7 @@ fn hysteresis_validation_rejects_direct_minimizer_physical_time_budget() {
             steps: vec![SettleStepIR::Minimize {
                 method: "projected_gradient_bb".to_string(),
                 torque_tolerance: 5e-5,
-                energy_tolerance: Some(1e-20),
+                energy_tolerance: 1e-20,
                 max_steps: 100,
                 applies_to: None,
                 stop_criteria: None,
@@ -5098,6 +5042,7 @@ fn execution_plan_ir_serializes() {
             boundary_delta_min: None,
             boundary_geometry: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             current_density: None,
             stt_degree: None,
             stt_beta: None,
@@ -6800,6 +6745,7 @@ fn canonical_slonczewski_requires_oriented_versioned_thin_layer_realization() {
         epsilon_prime: 0.0,
         free_layer_thickness_m: Some(1.5e-9),
         fixed_layer_position: None,
+        time_expression: None,
         realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
             realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
         }),
@@ -6836,6 +6782,7 @@ fn canonical_slonczewski_rejects_nonfinite_scalar_coefficients() {
             epsilon_prime,
             free_layer_thickness_m,
             fixed_layer_position: None,
+            time_expression: None,
             realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
                 realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
             }),
@@ -6871,6 +6818,7 @@ fn canonical_slonczewski_interface_flux_does_not_require_bulk_thickness() {
         epsilon_prime: 0.0,
         free_layer_thickness_m: None,
         fixed_layer_position: None,
+        time_expression: None,
         realization: Some(fullmag_ir::SlonczewskiRealizationIR::InterfaceFlux {
             interface_id: "fixed-to-free".to_string(),
             realization_version: "slonczewski_interface_flux.v1".to_string(),
@@ -6929,6 +6877,7 @@ fn slonczewski_fixed_layer_position_accepts_top_and_bottom() {
             epsilon_prime: 0.0,
             free_layer_thickness_m: Some(1.5e-9),
             fixed_layer_position: Some(position.to_string()),
+            time_expression: None,
             realization: None,
         }];
 
@@ -6954,6 +6903,7 @@ fn slonczewski_rejects_invalid_fixed_layer_position() {
         epsilon_prime: 0.0,
         free_layer_thickness_m: Some(1.5e-9),
         fixed_layer_position: Some("side".to_string()),
+        time_expression: None,
         realization: None,
     }];
 
@@ -6982,6 +6932,7 @@ fn slonczewski_rejects_non_positive_free_layer_thickness() {
         epsilon_prime: 0.0,
         free_layer_thickness_m: Some(0.0),
         fixed_layer_position: Some("top".to_string()),
+        time_expression: None,
         realization: None,
     }];
 
@@ -7214,7 +7165,7 @@ fn validation_rejects_invalid_dmi_energy_terms() {
 
 #[test]
 fn rotated_interfacial_dmi_round_trips_and_preserves_signed_d() {
-    let term = EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3 };
+    let term = EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3, object_ids: None };
     let json = serde_json::to_value(&term).unwrap();
     assert_eq!(
         json,
@@ -7228,7 +7179,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
     let mut non_finite = ProblemIR::bootstrap_example();
     non_finite
         .energy_terms
-        .push(EnergyTermIR::RotatedInterfacialDmi { d: f64::NAN });
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: f64::NAN, object_ids: None });
     let errors = non_finite
         .validate()
         .expect_err("non-finite rotated interfacial DMI must fail validation");
@@ -7238,8 +7189,8 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
 
     let mut duplicate = ProblemIR::bootstrap_example();
     duplicate.energy_terms.extend([
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
-        EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
+        EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3, object_ids: None },
     ]);
     let errors = duplicate
         .validate()
@@ -7250,7 +7201,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
 
     let mut mixed = ProblemIR::bootstrap_example();
     mixed.energy_terms.extend([
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
         EnergyTermIR::BulkDmi { d: 1.0e-3 },
     ]);
     let errors = mixed
@@ -7264,7 +7215,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
     let mut material_mixed = ProblemIR::bootstrap_example();
     material_mixed
         .energy_terms
-        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None });
     material_mixed.materials[0].interfacial_dmi = Some(1.0e-3);
     let errors = material_mixed
         .validate()
@@ -7277,7 +7228,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
     let mut dormant_material = ProblemIR::bootstrap_example();
     dormant_material
         .energy_terms
-        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None });
     let mut unused_material = dormant_material.materials[0].clone();
     unused_material.name = "unused".to_string();
     unused_material.interfacial_dmi = Some(1.0e-3);
@@ -7292,7 +7243,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
 fn empty_material_dmi_fields_do_not_conflict_with_rotated_dmi() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.energy_terms
-        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None });
     ir.materials[0].dind_field = Some(Vec::new());
     ir.materials[0].dbulk_field = Some(Vec::new());
 
@@ -9179,4 +9130,21 @@ fn eigen_spectrum_scope_is_typed_and_legacy_wire_defaults_to_per_sample() {
         error.to_string().contains("unknown variant"),
         "expected an enum deserialization error, got {error}"
     );
+}
+
+#[test]
+fn rotated_dmi_object_scope_roundtrip_and_validation() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.magnets[0].object_id = Some("film-id".into());
+    for ids in [vec![], vec!["unknown".into()], vec!["film-id".into(), "film-id".into()], vec!["".into()]] {
+        ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d: 0.0, object_ids: Some(ids) }];
+        let errors = ir.validate().expect_err("invalid scope must not become global, including D=0");
+        assert!(errors.iter().any(|e| e.contains("object_id")), "{errors:?}");
+    }
+    let term = EnergyTermIR::RotatedInterfacialDmi { d: -0.004, object_ids: Some(vec!["film-id".into()]) };
+    let value = serde_json::to_value(&term).unwrap();
+    assert_eq!(value["object_ids"], serde_json::json!(["film-id"]));
+    assert_eq!(serde_json::from_value::<EnergyTermIR>(value).unwrap(), term);
+    ir.energy_terms = vec![EnergyTermIR::Exchange, term];
+    ir.validate().expect("existing explicit magnet ID is legal");
 }

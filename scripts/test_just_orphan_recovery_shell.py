@@ -119,6 +119,24 @@ class DockerDevelopmentShellBoundaryTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout), ['--repo-root', '/registered/checkout', 'build',
             '--gpu-access', 'disabled', '--source-root', '/selected/worktree'])
 
+    def test_native_contract_up_dispatches_allowlisted_argv_with_empty_script_spacing(self):
+        for script in (None, "examples/run.py"):
+            for spacing in (" ", "  ", "   "):
+                with self.subTest(script=script, spacing=spacing):
+                    recipe = self.recipe(source_root="/selected/worktree", script=script,
+                                         suffix=spacing + "--native-contract 'fem-demag-poisson'")
+                    result = self.dispatch(recipe)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(result.stdout)[-2:],
+                                     ["--native-contract", "fem-demag-poisson"])
+        for suffix in (" --native-contract 'unknown-contract'",
+                       " --native-contract 'fem-demag-poisson'; printf injected",
+                       " --native-contract 'fem-demag-poisson' --native-contract 'fem-demag-poisson'"):
+            with self.subTest(suffix=suffix):
+                result = self.dispatch(self.recipe(suffix=suffix))
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(result.stdout.strip())
+
     def test_rejects_retired_host_receipt_recreate_recipe(self):
         recipe = ('python "/ignored/checkout/scripts/docker_dev.py" --repo-root "/ignored/checkout" '
                   "recreate --direct-development --run-receipt '/storage/runs/failed.json' "

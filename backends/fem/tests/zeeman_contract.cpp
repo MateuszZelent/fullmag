@@ -318,6 +318,18 @@ void regional_drive_waveform_golden_values() {
     check(fullmag::fem::copy_time_dependence(desc, waveform, error), error.c_str());
     points[1].value = 99.0;
     check_near(fullmag::fem::evaluate_time_dependence(waveform, 1.0), 3.0, 1e-15, "owned PWL interpolation");
+
+    // Host expression (mask terms): 3 t + 1 as fullmag_time_expr.v1 words
+    // (PUSH 3, LOAD_T, MUL, PUSH 1, ADD, RETURN); the program is copied.
+    double program[] = {1.0, 3.0, 2.0, 5.0, 1.0, 1.0, 3.0, 0.0};
+    desc = constant_waveform_desc();
+    desc.kind = FULLMAG_FEM_TIME_HOST_EXPRESSION;
+    desc.time_program = program;
+    desc.time_program_len = 8;
+    check(fullmag::fem::copy_time_dependence(desc, waveform, error), error.c_str());
+    program[1] = 99.0;
+    check_near(fullmag::fem::evaluate_time_dependence(waveform, 2.0), 7.0, 0.0, "owned host expression");
+    check_near(fullmag_fem_time_expression_eval_v1(program, 8, 2.0), 199.0, 0.0, "exported interpreter");
 }
 
 void regional_drive_invalid_numeric_descriptors_fail_closed() {
@@ -343,6 +355,25 @@ void regional_drive_invalid_numeric_descriptors_fail_closed() {
     check(
         !fullmag::fem::copy_time_dependence(waveform_desc, waveform, error),
         "non-increasing pulse interval rejected");
+
+    const double valid_program[] = {1.0, 1.0, 0.0};
+    const double malformed_program[] = {5.0, 0.0};
+    waveform_desc = constant_waveform_desc();
+    waveform_desc.kind = FULLMAG_FEM_TIME_HOST_EXPRESSION;
+    check(
+        !fullmag::fem::copy_time_dependence(waveform_desc, waveform, error),
+        "host expression without a program rejected");
+    waveform_desc.time_program = malformed_program;
+    waveform_desc.time_program_len = 2;
+    check(
+        !fullmag::fem::copy_time_dependence(waveform_desc, waveform, error),
+        "malformed host-expression program rejected");
+    waveform_desc = constant_waveform_desc();
+    waveform_desc.time_program = valid_program;
+    waveform_desc.time_program_len = 3;
+    check(
+        !fullmag::fem::copy_time_dependence(waveform_desc, waveform, error),
+        "time program on a built-in waveform rejected");
 
     waveform_desc = constant_waveform_desc();
     waveform_desc.kind = FULLMAG_FEM_TIME_SINC_PULSE;
