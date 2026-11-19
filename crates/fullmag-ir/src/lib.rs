@@ -849,6 +849,20 @@ impl ProblemIR {
     }
 
     pub fn validate(&self) -> Result<(), Vec<String>> {
+        self.validate_with_execution_selection(true)
+    }
+
+    /// Validate authored input before binding a pinned execution profile.
+    /// An authored `auto` device with single precision can be resolved by the
+    /// profile. The bound input must pass [`Self::validate`] before planning.
+    pub fn validate_before_execution_profile_binding(&self) -> Result<(), Vec<String>> {
+        self.validate_with_execution_selection(false)
+    }
+
+    fn validate_with_execution_selection(
+        &self,
+        require_qualified_execution: bool,
+    ) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
 
         if self.ir_version.trim().is_empty() {
@@ -886,7 +900,7 @@ impl ProblemIR {
                 )),
             }
         }
-        validate_runtime_selection(self, &mut errors);
+        validate_runtime_selection(self, require_qualified_execution, &mut errors);
         match ComputeResourcesIR::from_problem(self) {
             Ok(Some(resources)) => {
                 if let Err(resource_errors) = resources.validate() {
