@@ -602,6 +602,46 @@ study.stages.add_run(stage_id="run-after-enable", until=1e-12)
         self.assertEqual(reloaded.stages[0].action, disabled.action)
         self.assertEqual(reloaded.stages[2].action, enabled.action)
 
+    def test_scene_export_preserves_torque_and_sampling_switches_with_storage(self) -> None:
+        from fullmag.runtime.run_config_export import RunConfigExportOptions, export_run_config
+
+        source = _PREAMBLE + """
+study.storage(output_dir="result.zarr")
+study.spin_torque(fm.ZhangLiSTT(
+    current_density=(1e10, 0.0, 0.0), id="stt", target=fm.RegionRef("film"),
+    lande_g=2.0, operator_version="zl_mumax3_central_v1",
+))
+study.stages.set_spin_torque_enabled(module_id="stt", enabled=False)
+study.stages.add_run(stage_id="before", until=1e-12)
+study.stages.tableautosave(1e-13, quantities=["t", "my"])
+study.stages.set_spin_torque_enabled(module_id="stt", enabled=True)
+study.stages.add_run(stage_id="pulse", until=2e-12)
+study.stages.tableautosave(enabled=False)
+study.stages.set_spin_torque_enabled(module_id="stt", enabled=False)
+study.stages.add_run(stage_id="after", until=1e-12)
+"""
+        loaded = _load(source)
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        reloaded = _load(render_scene_document_as_script(scene))
+        self.assertEqual(
+            [s.action for s in reloaded.stages], [s.action for s in loaded.stages]
+        )
+        config = export_run_config(
+            reloaded,
+            reloaded.to_ir(requested_backend=None, execution_mode=None, execution_precision=None),
+            options=RunConfigExportOptions(include_geometry_assets=False),
+        )
+        physical = [s["ir"] for s in config["stages"] if s["entrypoint_kind"] == "flat_run"]
+        self.assertEqual(
+            [next(m["activation"] for m in ir["physics_graph"]["modules"] if m["id"] == "stt")
+             for ir in physical],
+            ["inactive", "active", "inactive"],
+        )
+        self.assertEqual(
+            [bool(ir["study"]["sampling"].get("table_autosave")) for ir in physical],
+            [False, True, False],
+        )
+
     def test_tableadd_serializes_object_magnetization_expression(self) -> None:
         loaded = _load(
             _PREAMBLE

@@ -73,7 +73,9 @@ class LoadedStage:
             runtime_metadata["output_storage_source_dir"] = str(Path(source_root).resolve())
             if source_stem:
                 runtime_metadata["output_storage_source_stem"] = source_stem
-        if isinstance(runtime_metadata, dict):
+        # Actions inherit the surrounding study snapshot but do not execute its
+        # integrator or produce a time-domain output stream of their own.
+        if isinstance(runtime_metadata, dict) and self.action is None:
             configure_problem_ir_autosave(
                 ir,
                 runtime_metadata.get("output_storage"),

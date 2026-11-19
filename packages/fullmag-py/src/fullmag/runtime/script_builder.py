@@ -777,6 +777,7 @@ def render_loaded_problem_as_script(
         surface=surface,
         magnet_vars=magnet_vars,
         initial_outputs=_study_outputs(base_problem.study),
+        initial_table=_study_table_autosave(base_problem.study),
         magnet_names={magnet.object_id or magnet.name: magnet.name for magnet in base_problem.magnets},
         region_vars=region_vars,
         source_root=source_root,
@@ -1882,7 +1883,11 @@ def _enabled_scene_stages(stages: list[object]) -> list[object]:
             raise ValueError(
                 f"SceneDocument stages[{index}].enabled must be a boolean"
             )
-        if flag:
+        # For these commands the flag is the value being assigned. Their
+        # pipeline node has its own enable flag, checked during traversal.
+        if flag or stage.get("kind") in {
+            "set_spin_torque_enabled", "table_autosave", "autosave", "fft_response",
+        }:
             enabled.append(stage)
     return enabled
 
@@ -9239,6 +9244,7 @@ def _render_stages(
     surface: str,
     magnet_vars: dict[str, str],
     initial_outputs: Sequence[object],
+    initial_table: TableAutosave | None,
     magnet_names: dict[str, str],
     region_vars: dict[tuple[str, str], str],
     source_root: Path,
@@ -9255,6 +9261,8 @@ def _render_stages(
     stage_overrides = overrides.get("stages")
     is_study_surface = surface == "study"
     active_outputs = list(initial_outputs)
+    table_override = _table_autosave_from_override(overrides.get("table_autosave"))
+    has_table_action = False
     lines = ["# Stages" if is_study_surface else "# Run"]
     magnet_vars_by_id = {
         object_id: magnet_vars[name]
@@ -9287,6 +9295,8 @@ def _render_stages(
             lines.extend(output_lines)
         if stage.action is not None:
             action_kind = str(stage.action.get("kind") if isinstance(stage.action, dict) else "").strip().lower()
+            if action_kind == "table_autosave":
+                has_table_action = True
             if action_kind == "antenna_field_solve":
                 if not is_study_surface:
                     raise ValueError("antenna_field_solve action requires the study API surface")
@@ -10015,6 +10025,8 @@ def _render_stages(
         # Reproduce non-action sampling changes between Runs without inserting
         # configuration stages into the authored pipeline.
         stage_table = _study_table_autosave(study)
+        if not has_table_action and stage_table == initial_table and table_override is not None:
+            stage_table = table_override
         if stage_table is not None:
             lines.extend(_render_table_autosave_policy(stage_table, surface=surface))
         else:
