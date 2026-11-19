@@ -17,6 +17,7 @@ use crate::types::{CurrentLiveRequestContext, SessionStateResponse};
 #[derive(Debug, Clone)]
 pub(crate) struct AuthoredInitialStatePublication {
     pub(crate) frame: AcceptedObservationFrameRef,
+    pub(crate) retain_accepted_scalar_series: bool,
     owner_run_id: String,
     retired_run_id: Option<String>,
 }
@@ -47,6 +48,7 @@ impl AuthoredInitialStatePublication {
             });
         Self {
             frame,
+            retain_accepted_scalar_series: false,
             owner_run_id: snapshot.session.run_id.clone(),
             retired_run_id,
         }

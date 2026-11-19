@@ -277,6 +277,7 @@ struct DurableProjection {
     /// quantity registry that admits its published fields for reading.
     resolved_capabilities: Option<fullmag_runner::BackendCapabilities>,
     latest_state: Option<VerifiedOutput>,
+    live_checkpoint_preparation_id: Option<String>,
     latest_total_energy: Option<fullmag_application::StudyScalarArtifact>,
     terminal_stats: Option<(fullmag_runner::StepStats, crate::types::AcceptedLiveScalarIdentity)>,
     active_scalar_series: Option<crate::types::AcceptedLiveScalarIdentity>,
@@ -449,6 +450,7 @@ async fn poll_once(
     // Preparation performs catalog/plan validation outside the transition
     // fence and uses its own exact final CAS.
     let mut running_capabilities = None;
+    let mut live_checkpoint_preparation_id = None;
     let stage_preparation = observe_projection_phase("stage_preparation", async {
         if projection.terminal_without_outputs {
             // A terminal catalog without outputs still carries authoritative
@@ -458,12 +460,28 @@ async fn poll_once(
         } else if let Some((_, observation)) = projection
             .live_observation
             .as_ref()
-            .filter(|(_, observation)| observation.magnetization_values.is_some())
+            .filter(|(_, observation)| {
+                observation.magnetization_values.is_some()
+                    || (projection.active_scalar_series.is_some()
+                        && matches!(observation.header.realization.as_str(), "fdm_cpu" | "fdm_gpu"))
+            })
         {
             ensure_stage_preparation_for_step(state, &context, &observation.header.step_id, None)
                 .await
             .and_then(|prepared| {
-                validate_live_magnetization_domain(observation, &prepared.execution_plan)?;
+                if observation.magnetization_values.is_some() {
+                    validate_live_magnetization_domain(observation, &prepared.execution_plan)?;
+                } else if let Some(VerifiedOutput {
+                    decoded: fullmag_application::DecodedStudyArtifact::MagnetizationState(checkpoint),
+                    ..
+                }) = projection.latest_state.as_ref() {
+                    if validate_exact_study_layout(
+                        &checkpoint.layout,
+                        &prepared.execution_plan,
+                    ).is_ok() {
+                        live_checkpoint_preparation_id = Some(prepared.preparation_id.clone());
+                    }
+                }
                 if !matches!(projection.status, "completed" | "failed" | "cancelled") {
                     running_capabilities = projection
                         .accepted_runtime_problem
@@ -532,6 +550,7 @@ async fn poll_once(
         projection.accepted_runtime_capabilities = Some(capabilities);
         projection.accepted_runtime_mode = Some(mode);
     }
+    projection.live_checkpoint_preparation_id = live_checkpoint_preparation_id;
     if matches!(projection.status, "completed" | "failed" | "cancelled") {
         if let Some(output) = projection.latest_state.as_ref() {
             if let fullmag_application::DecodedStudyArtifact::MagnetizationState(state_output) =
@@ -653,8 +672,13 @@ fn load_durable_projection_with_journal(
     // Mandatory authority snapshot. Release this short shared fence before
     // planning, CAS decoding, journal scanning, or any live publication work.
     let core_elapsed = ProjectionPhaseTimer::new("core_snapshot");
-    let core_transaction = store.read_transaction().map_err(|error|
-        ApiError::conflict(format!("read accepted projection core fence: {error:#}")))?;
+    // The stage writer and the scheduler can leave very short read windows.
+    // Wait for the shared fence on this blocking thread before backing off.
+    let core_transaction = fullmag_runtime_control::acquire_store_read_transaction(
+        &store,
+        Duration::from_secs(4),
+    )
+    .map_err(|error| ApiError::conflict(format!("read accepted projection core fence: {error:#}")))?;
     let Some(intent) = store
         .read_run_intent(&context.run_id)
         .map_err(|error| ApiError::internal(format!("read accepted RunIntent: {error}")))?
@@ -1201,6 +1225,7 @@ fn load_durable_projection_with_journal(
         preclaim_cancellations,
         resolved_capabilities,
         latest_state,
+        live_checkpoint_preparation_id: None,
         latest_total_energy,
         terminal_stats,
         active_scalar_series,
@@ -3476,7 +3501,21 @@ async fn apply_projection(
     } else {
         projection.active_scalar_series.as_ref()
     };
-    if crate::session::select_current_accepted_scalar_series(&mut next, &context.run_id, scalar_series) {
+    let scalar_stats = if terminal {
+        projection.terminal_stats.as_ref().map(|(stats, _)| stats)
+    } else {
+        projection.live_observation.as_ref()
+            .filter(|_| active_live_scalar_identity.as_ref().is_some_and(|live| Some(live) == scalar_series))
+            .and_then(|(_, observation)| observation.header.stats.as_ref())
+    };
+    let scalar_sample = scalar_stats.filter(|stats| stats.kind.is_physical_observation())
+        .map(|stats| (stats, crate::types::ScalarRow::from_accepted_stats(stats)))
+        .filter(|(_, row)| row.is_physical_observation());
+    // A new stage changes the series owner together with its first sample.
+    // Keep the previous series available while its successor is being prepared.
+    if scalar_sample.is_some()
+        && crate::session::select_current_accepted_scalar_series(&mut next, &context.run_id, scalar_series)
+    {
         changed = true;
     }
     let request_scope_epoch = format!("{}:{}", context.api_instance_id, context.session_epoch);
@@ -3491,55 +3530,45 @@ async fn apply_projection(
         changed = true;
     }
 
-    let scalar_stats = if matches!(projection.status, "completed" | "failed" | "cancelled") {
-        projection.terminal_stats.as_ref().map(|(stats, _)| stats)
-    } else {
-        projection.live_observation.as_ref()
-            .filter(|_| active_live_scalar_identity.as_ref().is_some_and(|live| Some(live) == scalar_series))
-            .and_then(|(_, observation)| observation.header.stats.as_ref())
-    };
-    if let Some(stats) = scalar_stats {
-        if stats.kind.is_physical_observation() {
-            let row = crate::types::ScalarRow::from_accepted_stats(stats);
-            // Repeated headers may retain the same physical row. Deduplicate
-            // only for the same accepted attempt identity; equal clocks and
-            // values from a changed task/attempt must refresh the current pin.
-            let already_projected = accepted_scalar_row_already_projected(
-                next.scalar_rows.last(),
-                &row,
-                next.latest_scalar_source.as_ref(),
-                active_live_scalar_identity.as_ref(),
-                next.scalar_revision,
-                &context.session_id,
-                &context.run_id,
-                &request_scope_epoch,
-                terminal,
-            );
-            if row.is_physical_observation() && !already_projected {
-                let scalar_revision = next.scalar_revision;
-                let series = scalar_series.ok_or_else(|| {
-                    ApiError::conflict("accepted scalar sample has no verified series")
-                })?;
-                crate::session::apply_current_live_accepted_scalar_row(&mut next, series, row)?;
-                if next.scalar_revision != scalar_revision {
-                    let source_state = next.latest_scalar_source
-                        .get_or_insert_with(crate::types::CurrentScalarSourceState::default);
-                    source_state.public_source = Some(crate::schemas::scalars::ScalarObservationSource {
-                        session_id: context.session_id.clone(),
-                        run_id: context.run_id.clone(),
-                        request_scope_epoch: request_scope_epoch.clone(),
-                        source_step: stats.step,
-                        scalar_revision: next.scalar_revision,
-                    });
-                    source_state.accepted_live_identity = if terminal {
-                        None
-                    } else {
-                        active_live_scalar_identity.clone()
-                    };
-                    source_state.active_live_identity = active_live_scalar_identity.clone();
-                    changed = true;
-                    scalar_sample_advanced = true;
-                }
+    if let Some((stats, row)) = scalar_sample {
+        // Repeated headers may retain the same physical row. Deduplicate
+        // only for the same accepted attempt identity; equal clocks and
+        // values from a changed task/attempt must refresh the current pin.
+        let already_projected = accepted_scalar_row_already_projected(
+            next.scalar_rows.last(),
+            &row,
+            next.latest_scalar_source.as_ref(),
+            active_live_scalar_identity.as_ref(),
+            next.scalar_revision,
+            &context.session_id,
+            &context.run_id,
+            &request_scope_epoch,
+            terminal,
+        );
+        if !already_projected {
+            let scalar_revision = next.scalar_revision;
+            let series = scalar_series.ok_or_else(|| {
+                ApiError::conflict("accepted scalar sample has no verified series")
+            })?;
+            crate::session::apply_current_live_accepted_scalar_row(&mut next, series, row)?;
+            if next.scalar_revision != scalar_revision {
+                let source_state = next.latest_scalar_source
+                    .get_or_insert_with(crate::types::CurrentScalarSourceState::default);
+                source_state.public_source = Some(crate::schemas::scalars::ScalarObservationSource {
+                    session_id: context.session_id.clone(),
+                    run_id: context.run_id.clone(),
+                    request_scope_epoch: request_scope_epoch.clone(),
+                    source_step: stats.step,
+                    scalar_revision: next.scalar_revision,
+                });
+                source_state.accepted_live_identity = if terminal {
+                    None
+                } else {
+                    active_live_scalar_identity.clone()
+                };
+                source_state.active_live_identity = active_live_scalar_identity.clone();
+                changed = true;
+                scalar_sample_advanced = true;
             }
         }
     }
@@ -3557,6 +3586,36 @@ async fn apply_projection(
             .then_some(observation)
             .filter(|observation| observation.magnetization_values.is_some())
     });
+    let active_identity = projection.live_observation_identity.as_deref();
+    let displayed_field = next.latest_fields.get("m");
+    let displayed_identity = displayed_field
+        .and_then(|field| field.pointer("/provenance/observation_identity"))
+        .and_then(Value::as_str);
+    let displayed_is_accepted = active_identity.is_some() && displayed_identity == active_identity;
+    let active_step = projection.live_observation.as_ref()
+        .map(|(_, observation)| observation.header.step_id.as_str());
+    let current_stage_workspace = next.mesh_workspace.as_ref().filter(|workspace| {
+        workspace.get("accepted_run_id").and_then(Value::as_str) == Some(context.run_id.as_str())
+            && active_step.is_some() && workspace.get("accepted_step_id").and_then(Value::as_str) == active_step
+    });
+    let displayed_is_prepared = crate::live_authored_initial_state::current_publication(&next)
+        .is_some_and(|prepared| {
+            current_stage_workspace.is_some() && displayed_field
+                .and_then(|field| field.pointer("/observation_frame/observation_frame_id"))
+                .and_then(Value::as_str) == Some(prepared.frame.observation_frame_id.as_str())
+        });
+    let displayed_is_current = displayed_is_accepted || displayed_is_prepared;
+    let checkpoint_matches_current_stage = projection.live_checkpoint_preparation_id.as_deref()
+        .is_some_and(|id| current_stage_workspace.and_then(|workspace| workspace.get("preparation_id"))
+            .and_then(Value::as_str) == Some(id));
+    let displayed_is_checkpoint = displayed_field
+        .is_some_and(|field| {
+            field.get("state_object_ref").and_then(Value::as_str)
+                .zip(projection.latest_output_identity.as_deref())
+                .is_some_and(|(displayed, verified)| displayed == verified)
+                && field.pointer("/observation_frame/domain_generation_id").and_then(Value::as_str)
+                    .is_some_and(|generation| generation == crate::router_v2::handlers::sessions::status::domain_generation_id(&next))
+        });
     if let Some(observation) = live_field {
         let reference = observation
             .header
@@ -3639,19 +3698,11 @@ async fn apply_projection(
             frame,
         )?;
         changed |= crate::router_v2::handlers::sessions::status::field_revision(&next) != field_revision;
-    } else if live_stage_is_newer {
-        let active_identity = projection.live_observation_identity.as_deref();
-        let displayed_identity = next
-            .latest_fields
-            .get("m")
-            .and_then(|field| field.pointer("/provenance/observation_identity"))
-            .and_then(Value::as_str);
-        // Only fields of another task attempt are stale. The worker replaces
-        // its payload on every published step, so a header read can name a
-        // payload that is already gone; the displayed older frame of the same
-        // observation stays valid under its own source step until the next
-        // complete read. Clearing it made m and every live field flap to 204.
-        let stale_field = active_identity.is_some_and(|identity| displayed_identity != Some(identity));
+    } else if live_stage_is_newer && (displayed_is_current || !checkpoint_matches_current_stage) {
+        // A scalar-only header does not invalidate this attempt's last field,
+        // or a verified state from the preceding stage. Both retain their
+        // original clock and frame identity until a new field arrives.
+        let stale_field = active_identity.is_some() && !displayed_is_current && !displayed_is_checkpoint;
         if stale_field && next.latest_fields.get("m").is_some() {
             let mut fields = next.latest_fields.clone();
             fields.remove("m");
@@ -3683,7 +3734,7 @@ async fn apply_projection(
             changed |= crate::router_v2::handlers::sessions::status::field_revision(&next) != field_revision;
         }
     } else {
-        if let Some(output) = projection.latest_state.as_ref() {
+        if let Some(output) = projection.latest_state.as_ref().filter(|_| terminal || !displayed_is_checkpoint) {
             if let fullmag_application::DecodedStudyArtifact::MagnetizationState(state_output) =
                 &output.decoded
             {
@@ -4834,6 +4885,71 @@ mod tests {
                 "session_id":context.session_id,"status":"running","total_steps":3,"artifact_dir":""})).unwrap());
         }
         state
+    }
+
+    #[tokio::test]
+    async fn live_view_continuity_keeps_chart_rows_until_the_new_accepted_sample() {
+        let (_directory, store, context, mut catalog) =
+            accepted_projection_fixture(None, &["step:run"], false);
+        let task = &mut catalog.tasks[0];
+        task.lifecycle = fullmag_session::FmsTaskLifecycle::Running;
+        task.attempt_id = Some("attempt-live".into());
+        task.ownership_epoch = Some(1);
+        catalog.revision += 1;
+        store.commit_run_catalog(&catalog).unwrap();
+        let projection = load_durable_projection(store.root(), &context, None, &mut None)
+            .unwrap().unwrap();
+        let successor = projection.active_scalar_series.as_ref().unwrap().clone();
+        let previous = crate::types::AcceptedLiveScalarIdentity {
+            task_id: "task-previous".into(),
+            step_id: "step:previous".into(),
+            attempt_id: "attempt-previous".into(),
+            ..successor.clone()
+        };
+        let state = projection_workspace(&context).await;
+        let previous_revision = {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            assert!(crate::session::select_current_accepted_scalar_series(
+                snapshot, &context.run_id, Some(&previous),
+            ));
+            let stats = fullmag_runner::StepStats { step: 8, time: 8e-12, dt: 1e-12, ..Default::default() };
+            crate::session::apply_current_live_accepted_scalar_row(snapshot, &previous,
+                crate::types::ScalarRow::from_accepted_stats(&stats)).unwrap();
+            snapshot.scalar_revision
+        };
+        apply_projection(&state, &context, projection).await.unwrap();
+        {
+            let current = state.current_live_state.read().await;
+            let snapshot = current.as_ref().unwrap();
+            assert_eq!(snapshot.scalar_revision, previous_revision);
+            assert_eq!(snapshot.scalar_rows[0].step, 8);
+            assert_eq!(snapshot.latest_scalar_source.as_ref().unwrap().series.as_ref().unwrap().identity, previous);
+        }
+
+        let dir = store.root().join("runs").join(&context.run_id).join("worker-attempts")
+            .join(&successor.task_id).join("attempt-live/epoch-1");
+        std::fs::create_dir_all(&dir).unwrap();
+        let header = crate::accepted_study_worker::AcceptedLiveObservationHeader {
+            schema_version: crate::accepted_study_worker::ACCEPTED_LIVE_OBSERVATION_SCHEMA.into(),
+            run_id: context.run_id.clone(), task_id: successor.task_id.clone(),
+            step_id: successor.step_id.clone(), attempt_id: successor.attempt_id.clone(),
+            ownership_epoch: successor.ownership_epoch, realization: "fdm_cpu".into(),
+            sequence: 1, written_at_unix_ms: 1000,
+            stats: Some(fullmag_runner::StepStats { step: 1, time: 9e-12, dt: 1e-12, ..Default::default() }),
+            operation_progress: None, magnetization: None,
+        };
+        std::fs::write(dir.join(crate::accepted_study_worker::ACCEPTED_LIVE_OBSERVATION_FILE),
+            serde_json::to_vec(&header).unwrap()).unwrap();
+        let projection = load_durable_projection(store.root(), &context, None, &mut None)
+            .unwrap().unwrap();
+        apply_projection(&state, &context, projection).await.unwrap();
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        assert!(snapshot.scalar_revision > previous_revision);
+        assert_eq!(snapshot.scalar_rows.len(), 1);
+        assert_eq!(snapshot.scalar_rows[0].step, 1);
+        assert_eq!(snapshot.latest_scalar_source.as_ref().unwrap().series.as_ref().unwrap().identity, successor);
     }
 
     #[tokio::test]

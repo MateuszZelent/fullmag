@@ -114,6 +114,38 @@ pub fn retry_worker_store_transient<T>(mut operation: impl FnMut() -> Result<T>)
     }
 }
 
+/// Retry only acquisition, before any catalog, journal or payload has been read.
+/// Preserve the native error chain so the facade can still report store contention.
+pub fn acquire_store_read_transaction(
+    store: &SessionStore,
+    wait: std::time::Duration,
+) -> Result<fullmag_session::ReadTransaction> {
+    use std::hash::{Hash, Hasher};
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + wait;
+    let mut attempt = 0_u64;
+    loop {
+        match store.read_transaction() {
+            Ok(transaction) => return Ok(transaction),
+            Err(error) if error.chain().any(|cause| matches!(
+                cause.downcast_ref::<std::fs::TryLockError>(), Some(std::fs::TryLockError::WouldBlock)
+            )) && Instant::now() < deadline => {
+                // Use jitter so readers and writers do not keep retrying in step.
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                std::process::id().hash(&mut hasher);
+                std::thread::current().id().hash(&mut hasher);
+                attempt.hash(&mut hasher);
+                attempt = attempt.saturating_add(1);
+                let delay = Duration::from_millis(5 + hasher.finish() % 36);
+                std::thread::sleep(delay.min(deadline.saturating_duration_since(Instant::now())));
+                if Instant::now() >= deadline { return Err(error); }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 pub fn commit_worker_checkpoint(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,

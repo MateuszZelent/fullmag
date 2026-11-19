@@ -541,11 +541,13 @@ fn prepared_domain_publication(
 fn publish_prepared_initial_state(
     snapshot: &mut SessionStateResponse,
     read_model: &LiveScenePreparationReadModel,
+    retain_accepted_scalar_series: bool,
 ) -> Result<(), ApiError> {
     if let Some(carrier) = prepare_initial_magnetization(&read_model.execution_plan)? {
         carrier.publish(
             snapshot, &read_model.preparation_id, &read_model.plan_fingerprint,
             read_model.scene_revision, serde_json::json!({"source_kind": "prepared_initial_state"}),
+            retain_accepted_scalar_series,
         )?;
     }
     Ok(())
@@ -612,8 +614,9 @@ impl PreparedInitialMagnetization {
         plan_fingerprint: &str,
         scene_revision: u64,
         mut provenance: Value,
+        retain_accepted_scalar_series: bool,
     ) -> Result<(), ApiError> {
-        let publication = crate::live_authored_initial_state::AuthoredInitialStatePublication::new(
+        let mut publication = crate::live_authored_initial_state::AuthoredInitialStatePublication::new(
             snapshot,
             crate::schemas::common::AuthoredInitialStateOrigin {
                 preparation_id: preparation_id.into(),
@@ -624,6 +627,7 @@ impl PreparedInitialMagnetization {
             },
             self.start_time_s,
         );
+        publication.retain_accepted_scalar_series = retain_accepted_scalar_series;
         provenance["preparation_id"] = preparation_id.into();
         provenance["plan_fingerprint"] = plan_fingerprint.into();
         let mut field = self.field;
@@ -946,7 +950,7 @@ pub(crate) async fn prepare_current_live_scene_with_transition(
                 fem_mesh,
             },
         )?;
-        publish_prepared_initial_state(&mut prepared_snapshot, &read_model)?;
+        publish_prepared_initial_state(&mut prepared_snapshot, &read_model, false)?;
         *snapshot = prepared_snapshot;
     }
     if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
@@ -1789,7 +1793,7 @@ async fn publish_accepted_task_preparation_with_mode(
     // its completed solver clock. The output projector installs the verified
     // final state and terminal quantity bundle after this domain publication.
     if !terminal_observation {
-        publish_prepared_initial_state(&mut prepared_snapshot, &read_model)?;
+        publish_prepared_initial_state(&mut prepared_snapshot, &read_model, true)?;
     }
     if let Some(store_root) = state.submit_store_root.as_deref().filter(|_| !terminal_observation) {
         // Evaluated fields are optional: without them the prepared m stays the
@@ -3842,7 +3846,7 @@ mod tests {
         publication.metadata = Some(metadata);
         publication.fem_mesh = Some(mesh);
         crate::session::apply_current_live_snapshot(&mut snapshot, publication).unwrap();
-        publish_prepared_initial_state(&mut snapshot, &model).unwrap();
+        publish_prepared_initial_state(&mut snapshot, &model, false).unwrap();
         assert!(snapshot.fem_mesh.is_some());
         assert!(snapshot.latest_fields.get("m").is_none());
         assert!(snapshot.latest_fields.get("mat_ms").is_none());
@@ -4242,7 +4246,7 @@ mod tests {
         .unwrap();
         publication.metadata = Some(metadata.into());
         crate::session::apply_current_live_snapshot(&mut snapshot, publication).unwrap();
-        publish_prepared_initial_state(&mut snapshot, &model).unwrap();
+        publish_prepared_initial_state(&mut snapshot, &model, false).unwrap();
 
         let field = snapshot.latest_fields.get("m").expect("initial m field");
         assert_eq!(
@@ -4298,7 +4302,7 @@ mod tests {
         publication.metadata = Some(metadata.into());
         publication.fem_mesh = Some(mesh);
         crate::session::apply_current_live_snapshot(&mut snapshot, publication).unwrap();
-        publish_prepared_initial_state(&mut snapshot, &model).unwrap();
+        publish_prepared_initial_state(&mut snapshot, &model, false).unwrap();
         assert_eq!(
             snapshot.latest_fields.get("m").unwrap()["values"],
             json!(vec![[1.0, 0.0, 0.0]; 4])

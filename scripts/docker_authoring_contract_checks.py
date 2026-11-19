@@ -76,6 +76,10 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
              '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
              '-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-worker',
              'accepted_live_layout_tests'),
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0',
+             'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api', 'live_view_continuity'),
         ),
         "fem-response-worker-contracts": (
             ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
