@@ -36,7 +36,7 @@ AIR_MIN_MESH_M = 2.0 * MAGNETIC_MESH_M
 AIR_MESH_M = 500e-9
 MODE_COUNT = int(os.environ.get("FULLMAG_BUCKY_MODES", "10"))
 TARGET_HZ = float(os.environ.get("FULLMAG_BUCKY_TARGET_GHZ", "3.0")) * 1e9
-BIAS_T = float(os.environ.get("FULLMAG_BUCKY_BIAS_T", "0.0"))
+BIAS_T = float(os.environ.get("FULLMAG_BUCKY_BIAS_T", "0.394"))
 RELAX_DEVICE = os.environ.get("FULLMAG_BUCKY_RELAX_DEVICE", "gpu")
 RELAX_MAX_STEPS = int(os.environ.get("FULLMAG_BUCKY_RELAX_MAX_STEPS", "1000"))
 # Zero field relaxes slowly; "force" linearizes the state reached after
