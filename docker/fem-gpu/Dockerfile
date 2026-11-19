@@ -110,13 +110,13 @@ RUN git clone --depth 1 --branch ${LIBCEED_REF} https://github.com/CEED/libCEED.
     test "$(git -C /tmp/build/libCEED rev-parse HEAD)" = "${LIBCEED_SOURCE_COMMIT}"
 
 ARG FULLMAG_LIBCEED_CUDA_ARCHITECTURE=""
-RUN ceed_cuda_arch=""; \
+RUN ceed_cuda_args=(); \
     if [ -n "$FULLMAG_LIBCEED_CUDA_ARCHITECTURE" ]; then \
       [[ "$FULLMAG_LIBCEED_CUDA_ARCHITECTURE" =~ ^[1-9][0-9]{1,2}$ ]] || exit 1; \
-      ceed_cuda_arch="compute_${FULLMAG_LIBCEED_CUDA_ARCHITECTURE} --gpu-code=sm_${FULLMAG_LIBCEED_CUDA_ARCHITECTURE}"; \
+      ceed_cuda_args=("CUDA_ARCH=compute_${FULLMAG_LIBCEED_CUDA_ARCHITECTURE} --gpu-code=sm_${FULLMAG_LIBCEED_CUDA_ARCHITECTURE}"); \
     fi; \
-    make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} CUDA_ARCH="$ceed_cuda_arch" -j"$(nproc)" && \
-    make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} CUDA_ARCH="$ceed_cuda_arch" install prefix=${INSTALL_PREFIX}
+    make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} "${ceed_cuda_args[@]}" -j"$(nproc)" && \
+    make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} "${ceed_cuda_args[@]}" install prefix=${INSTALL_PREFIX}
 
 # S10: Build hypre (serial + CUDA) Ä‚ËĂ˘â€šÂ¬Ă˘â‚¬ĹĄ required for CG+AMG Poisson solver
 ENV UMPIRE_REF=v2024.07.0

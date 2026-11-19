@@ -36,9 +36,15 @@ class DevCudaTargetTests(unittest.TestCase):
                     expected, "--query-gpu=compute_cap", "--format=csv,noheader",
                 ])
 
+    def test_normalizes_h100_compute_capability(self):
+        targets, _ = self.probe("9.0\n")
+        with patch.object(control, "_host_cuda_targets", return_value=targets):
+            self.assertEqual(control._selected_dev_cuda_target({}), "90-real")
+
     def test_unknown_probe_does_not_guess_and_confirmed_target_is_accepted(self):
-        targets, _ = self.probe("8.6\n[N/A]\n")
-        self.assertEqual(targets, set())
+        for output in ("", "8.6\n[N/A]\n"):
+            targets, _ = self.probe(output)
+            self.assertEqual(targets, set())
         with patch.object(control, "_host_cuda_targets", return_value=targets):
             with self.assertRaisesRegex(control.BuildControlError, "FULLMAG_DEV_CUDA_ARCHITECTURES"):
                 control._selected_dev_cuda_target({})
@@ -75,6 +81,30 @@ class DevCudaTargetTests(unittest.TestCase):
                 **args, "FULLMAG_CUDA_ARCHITECTURES": "80-real;89-real",
                 "FULLMAG_LIBCEED_CUDA_ARCHITECTURE": "",
             }}}))
+
+
+class LibceedCudaTargetTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "GNU Bash dependency-stage shell")
+    def test_release_keeps_make_defaults_and_dev_passes_one_real_target(self):
+        dockerfile = Path(__file__).resolve().parents[1] / "docker/fem-gpu/Dockerfile"
+        recipe = dockerfile.read_text(encoding="utf-8").split("RUN ceed_cuda_", 1)[1].split(
+            "\n\n", 1,
+        )[0]
+        command = "make() { printf '%s\\n' \"$@\"; }; ceed_cuda_" + recipe
+        for capability, expected in (
+            ("", []),
+            ("86", ["CUDA_ARCH=compute_86 --gpu-code=sm_86"] * 2),
+        ):
+            with self.subTest(capability=capability):
+                run = subprocess.run(
+                    ["bash", "-c", command], text=True, capture_output=True, timeout=20,
+                    env={**os.environ, "FULLMAG_LIBCEED_CUDA_ARCHITECTURE": capability},
+                )
+                self.assertEqual(run.returncode, 0, run.stderr)
+                self.assertEqual(
+                    [line for line in run.stdout.splitlines() if line.startswith("CUDA_ARCH=")],
+                    expected,
+                )
 
 
 class ToolchainHostInputsTests(unittest.TestCase):
