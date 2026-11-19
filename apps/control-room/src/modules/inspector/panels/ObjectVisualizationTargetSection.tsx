@@ -248,6 +248,7 @@ export function VisualizationDisplayPassesSection({
 
 export function VisualizationRenderModeSection({
   artifactInspection = false,
+  settings,
   displaySettings,
   passControlsDisabled,
   isFieldPending,
@@ -255,6 +256,7 @@ export function VisualizationRenderModeSection({
   target,
 }: {
   artifactInspection?: boolean;
+  settings: VisualizationTargetSettings;
   displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
   isFieldPending: IsVisualizationFieldPending;
@@ -262,7 +264,9 @@ export function VisualizationRenderModeSection({
   target: VisualizationTargetRef;
 }) {
   const capabilities = visualizationTargetCapabilities(target, artifactInspection);
-  const currentMode = resolveVisualizationDisplayMode(displaySettings);
+  // A field-colored surface waits for a quantity before it can draw. Keep its
+  // selected mode editable while the user chooses that quantity.
+  const currentMode = resolveVisualizationDisplayMode(passControlsDisabled ? displaySettings : settings);
   const renderModeOptions = RENDER_MODE_VALUES.filter(
     (option) =>
       option === "off" ||

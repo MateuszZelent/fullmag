@@ -429,6 +429,7 @@ impl<'de> serde::Deserialize<'de> for RemeshCliResponse {
             .mesh_provenance
             .as_ref()
             .and_then(|value| value.get("shared_domain_build_report"))
+            .filter(|report| !report.is_null())
             .cloned()
             .map(serde_json::from_value)
             .transpose()
@@ -1066,13 +1067,9 @@ fn filter_non_progress_stderr(stderr_text: &str) -> String {
 }
 
 fn parse_remesh_cli_response(stdout: &[u8], output_label: &str) -> Result<RemeshCliResponse> {
-    let stdout_text = String::from_utf8_lossy(stdout);
-    let mesh: RemeshCliResponse = serde_json::from_slice(stdout).with_context(|| {
-        format!(
-            "failed to parse {output_label} ({} bytes):\n{}",
-            stdout.len(),
-            &stdout_text[..stdout_text.len().min(2000)]
-        )
+    let mesh: RemeshCliResponse = serde_json::from_slice(stdout).map_err(|error| {
+        let context = format!("failed to parse {output_label} ({} bytes): {error}", stdout.len());
+        anyhow::Error::new(error).context(context)
     })?;
     let mut mesh = mesh.hydrate_topology_artifact()?;
     mesh.retain_periodic_certificate_in_provenance();
@@ -2913,6 +2910,7 @@ mod tests {
             "boundary_faces": [],
             "boundary_markers": [],
             "quality": null,
+            "mesh_provenance": {"shared_domain_build_report": null},
             "object_region_markers": [{"geometry_name": "film:core", "marker": 2}]
         })
         .to_string();

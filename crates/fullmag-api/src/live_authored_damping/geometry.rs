@@ -46,6 +46,33 @@ fn pending(reason: impl Into<String>) -> Result<Evaluation, ApiError> {
     Ok(Evaluation::Pending(reason.into()))
 }
 
+/// Geometry-only packing assigns cells to whole objects. A projected mask
+/// uses those objects' native nodes and the authored predicate. A conformal
+/// region needs its own marker-to-owner mapping on the published carrier.
+pub(super) fn projected_region_binding_error(
+    scene: &SceneDocument,
+    asset: &fullmag_ir::FemDomainMeshAssetIR,
+) -> Option<&'static str> {
+    if !asset.object_region_markers.is_empty() || asset.build_report.as_ref()
+        .is_some_and(|report| !report.object_region_markers.is_empty())
+    {
+        return Some("geometry_region_marker_ownership_not_bound");
+    }
+    for owner in fullmag_authoring::scene_solve_objects(scene) {
+        for region in owner.regions.iter().filter(|region| region.enabled) {
+            if region.owner_object != owner.id
+                || !asset.region_markers.iter().any(|marker| marker.geometry_name == owner.id)
+            {
+                return Some("geometry_region_owner_mismatch");
+            }
+            if region.realization_policy == fullmag_authoring::SceneRegionRealizationPolicy::Conformal {
+                return Some("geometry_conformal_region_markers_missing");
+            }
+        }
+    }
+    None
+}
+
 /// Editing coefficients and completing Build Mesh both use this path. Geometry
 /// capture omits meshing; only the asset retained by the original build is used.
 pub(super) fn evaluate(
@@ -73,8 +100,11 @@ pub(super) fn evaluate(
     let Some(asset) = mesh_build::load_geometry_reuse_asset(&store, scene, &reference)? else {
         return pending("geometry_cas_asset_input_mismatch");
     };
-    if !mesh_build::can_qualify_live_geometry_reuse(scene, &asset) {
+    if !mesh_build::is_supported_geometry_only_p1_domain(scene, &asset) {
         return pending("geometry_asset_outside_supported_p1_reuse");
+    }
+    if let Some(reason) = projected_region_binding_error(scene, &asset) {
+        return pending(reason);
     }
 
     let requested = fullmag_application::RequestedExecution {

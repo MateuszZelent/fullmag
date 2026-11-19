@@ -11,11 +11,11 @@ import {
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELD_META_PATH,
-  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
   MODEL_SCENE_PATH,
   MODEL_UNIVERSE_PATH,
 } from "@/kernel/api/apiPaths";
+import { useMeshSharedDomainManifestResource } from "@/kernel/resources/geometryLifecycleResources";
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 import {
   canonicalFieldVectorQuery,
@@ -666,8 +666,6 @@ memoryBudgetRegistry.register("viewport3d.qualityDataCache", () => {
 
 const VIEWPORT_3D_DOMAIN_META_RESOURCE_KEY = DATA_DOMAIN_META_PATH;
 const VIEWPORT_3D_DOMAIN_TOPOLOGY_RESOURCE_KEY = DATA_DOMAIN_TOPOLOGY_PATH;
-const VIEWPORT_3D_SHARED_DOMAIN_MANIFEST_RESOURCE_KEY =
-  MESHING_SHARED_DOMAIN_MANIFEST_PATH;
 const VIEWPORT_3D_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH;
 const VIEWPORT_3D_SCENE_RESOURCE_KEY = MODEL_SCENE_PATH;
@@ -866,12 +864,6 @@ export function invalidateViewport3DFieldMetaResources(
 
 function resolveDomainMetaRevision(meta: { generation_id: string }) {
   return meta.generation_id;
-}
-
-function resolveSharedDomainManifestRevision(
-  manifest: { revision?: number | string | null } | null,
-) {
-  return manifest?.revision ?? null;
 }
 
 function resolveUniverseRevision(universe: { scene_revision: number }) {
@@ -2597,26 +2589,7 @@ export function useViewport3DMeshQualityData(enabled = true) {
 }
 
 export function useViewport3DSharedDomainManifest(enabled = true) {
-  const { api } = useKernel();
-  const sessionIdentity = useViewport3DSessionIdentity();
-  const resourceKey = sessionIdentity
-    ? sessionScopedResourceKey(
-        sessionIdentity,
-        VIEWPORT_3D_SHARED_DOMAIN_MANIFEST_RESOURCE_KEY,
-      )
-    : VIEWPORT_3D_SHARED_DOMAIN_MANIFEST_RESOURCE_KEY;
-  const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.meshing.sharedDomainManifest({ signal }),
-    [api],
-  );
-
-  return useResource({
-    enabled: enabled && sessionIdentity !== null,
-    load,
-    resolveRevision: resolveSharedDomainManifestRevision,
-    resourceKey,
-  });
+  return useMeshSharedDomainManifestResource({ enabled });
 }
 
 export function useViewport3DScene(enabled = true) {

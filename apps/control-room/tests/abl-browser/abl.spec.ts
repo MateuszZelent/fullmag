@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { test, expect, type Response } from "playwright/test";
+import { readFile, writeFile } from "node:fs/promises";
+import { test, expect, type APIResponse, type Request, type Response } from "playwright/test";
 import { scalarColorRgb } from "../../src/shared/visualization/scalarColorPalette";
 import { installFdmColorProbe } from "./renderedFdmColors";
 import { installInspectorCommitTrace } from "../../scripts/lib/inspector-commit-trace.mjs";
@@ -13,6 +13,7 @@ type FieldCase = Layer | Layer[] | null;
 
 test.use({
   browserName: "chromium",
+  screenshot: "only-on-failure",
   viewport: { width: 1440, height: 1000 },
   launchOptions: {
     executablePath: process.env.FULLMAG_QA_CHROMIUM || undefined,
@@ -85,8 +86,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   const samplesUrl = url("data/fields/mat_alpha/samples/vector");
   const viewport = page.locator(".fm-viewport-3d");
   const canvas = viewport.locator("canvas").first();
-  const label = viewport.locator('[data-quantity-id="mat_alpha"][data-field-state="data-ready"]');
-  const inspectField = async (response: Response, layer: FieldCase) => {
+  const inspectField = async (response: Response | APIResponse, layer: FieldCase) => {
     const bytes = await response.body();
     const packet = decodeFieldVector(Uint8Array.from(bytes).buffer);
     expect(packet.quantityId).toBe("mat_alpha");
@@ -105,15 +105,32 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   const observeChange = async (step: string, layer: FieldCase, action: () => Promise<void>) => {
     // Only traffic issued by this page after the edit counts. A separate API
     // poll could otherwise make a stale viewport look like an updated field.
-    const issued = new WeakSet();
-    const onRequest = (request: import("playwright/test").Request) => {
-      if (request.url().split("?")[0] === samplesUrl) issued.add(request);
+    const issued = new WeakSet<Request>();
+    const traffic: unknown[] = [];
+    const record = (entry: unknown) => {
+      if (traffic.length === 64) traffic.shift();
+      traffic.push(entry);
+    };
+    const onRequest = (request: Request) => {
+      if (request.url().split("?")[0] !== samplesUrl) return;
+      issued.add(request);
+      record({ event: "request", query: new URL(request.url()).search,
+        ifNoneMatch: request.headers()["if-none-match"] });
+    };
+    const onResponse = (response: Response) => {
+      if (issued.has(response.request())) record({ event: "response", status: response.status(),
+        etag: response.headers().etag, revision: response.headers()["x-fullmag-field-revision"] });
+    };
+    const onFailure = (request: Request) => {
+      if (issued.has(request)) record({ event: "failure", error: request.failure()?.errorText });
     };
     const beforeDraw = page.url() === "about:blank" ? 0 : await page.evaluate(() => {
       window.ablColorProbe.armed = true;
       return window.ablColorProbe.sequence;
     });
     page.on("request", onRequest);
+    page.on("response", onResponse);
+    page.on("requestfailed", onFailure);
     let lastObservation: Awaited<ReturnType<typeof inspectField>> | undefined;
     try {
       await Promise.all([
@@ -124,7 +141,6 @@ test("ABL editor updates the live FDM damping field and canonical script", async
         }, { timeout: step === "baseline" ? workspaceStartupTimeout + timeout : timeout }),
         action(),
       ]);
-      await expect(label).toBeVisible({ timeout });
       // The clean fixture uses the default Viridis palette and automatic range.
       // Compare the FMVP row with RGB actually bound to a cuboid draw, ordered
       // by world x from its per-instance matrices. A stale redraw cannot pass.
@@ -149,16 +165,37 @@ test("ABL editor updates the live FDM damping field and canonical script", async
       expect(Math.min(...drawingBuffer)).toBeGreaterThan(0);
       await canvas.screenshot({ path: info.outputPath(step + ".png") });
       evidence.push({ step, revision, layer, drawingBuffer, rendered, ...lastObservation });
+    } catch (error) {
+      const diagnostics: Record<string, unknown> = { revision, pin, traffic };
+      try {
+        await verifyIdentity();
+        const meta = await page.request.get(url("data/fields/mat_alpha/meta"), { headers, timeout: 5000 });
+        diagnostics.metaStatus = meta.status();
+        if (meta.ok()) {
+          const field = await meta.json();
+          diagnostics.field = Object.fromEntries(["state", "field_revision", "source_revision", "domain_generation_id",
+            "location", "stats", "materialization_reason_code"].map(key => [key, field[key]]));
+        }
+        const response = await page.request.get(samplesUrl + "?component=full", { headers, timeout: 5000 });
+        diagnostics.directStatus = response.status();
+        if (response.status() === 200) diagnostics.directField = await inspectField(response, layer);
+      } catch (probeError) {
+        diagnostics.probeError = String(probeError);
+      }
+      await writeFile(info.outputPath(step + "-field-diagnostics.json"), JSON.stringify(diagnostics, null, 2));
+      throw error;
     } finally {
       page.off("request", onRequest);
+      page.off("response", onResponse);
+      page.off("requestfailed", onFailure);
       if (!page.isClosed() && page.url() !== "about:blank") {
         const lastDraw = await page.evaluate(() => {
           window.ablColorProbe.armed = false;
           return window.ablColorProbe.draw;
         });
-        await info.attach(step + "-surface-rgb", { body: JSON.stringify(lastDraw), contentType: "application/json" });
+        await writeFile(info.outputPath(step + "-surface-rgb.json"), JSON.stringify(lastDraw));
       }
-      await info.attach(step + "-samples", { body: JSON.stringify(lastObservation ?? null), contentType: "application/json" });
+      await writeFile(info.outputPath(step + "-samples.json"), JSON.stringify(lastObservation ?? null));
     }
   };
 
@@ -168,14 +205,21 @@ test("ABL editor updates the live FDM damping field and canonical script", async
     const home = page.locator('.fm-home-overlay[data-state="home-overlay"]');
     if (await home.isVisible()) await page.getByRole("button", { name: "Back to simulation", exact: true }).click();
     await page.locator("#fm-main-content.fm-workspace-body").waitFor();
-    if (!(await viewport.locator('[data-quantity-id="mat_alpha"]').isVisible())) {
-      await page.locator("#fm-ribbon-tab-results").click();
-      await page.locator('[data-ribbon-action-id="res-m"] [data-ribbon-menu-trigger]').click();
-      await page.getByRole("menuitemradio", { name: "α", exact: true }).click();
-    }
+    await page.getByRole("tab", { name: "Workspace", exact: true }).click();
+    await page.getByTitle("Expand All", { exact: true }).click();
+    await page.locator(`[data-node-id="model:object:${fixture.object_id}:visualization"]`).click();
+    const shaded = page.getByRole("radio", { name: "Shaded", exact: true });
+    await page.getByRole("radio", { name: "Off", exact: true }).click();
+    await expect(page.getByRole("radio", { name: "Off", exact: true })).toBeChecked();
+    await shaded.click();
+    await expect(shaded).toBeChecked();
+    const quantity = page.getByRole("combobox", { name: "Quantity source", exact: true });
+    await expect(quantity).toBeEnabled({ timeout });
+    await quantity.click();
+    await page.getByRole("option", { name: /material alpha|gilbert damping|α/i }).first().click();
+    await expect(quantity).toContainText(/alpha|damping|α/i);
   });
-  await page.getByRole("tab", { name: "Workspace", exact: true }).click();
-  await page.getByTitle("Expand All", { exact: true }).click();
+  await page.screenshot({ path: info.outputPath("shaded-material-alpha.png") });
   const parentId = `model:object:${fixture.object_id}:magnetic-parameters`;
   const parent = page.locator(`[data-node-id="${parentId}"]`);
   const child = page.locator(`[data-node-id="${parentId}:absorbing-boundary"]`);
@@ -240,7 +284,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
         expect(calls[0]).toContain('expression="u**3"');
         expect(calls[0]).toContain('faces=("x-",)');
       }
-      await info.attach(step + "-export.py", { body: source, contentType: "text/x-python" });
+      await writeFile(info.outputPath(step + "-export.py"), source);
     }
   };
   await field("Total width").fill("4e-8");
@@ -337,6 +381,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
     expect(await inspectorSnapshot()).toEqual(baseline);
     expect(patchCount).toBe(1);
     expect(await commitCount() - beforeCommits).toBeLessThanOrEqual(48);
+    await page.screenshot({ path: info.outputPath("independent-planes-inspector.png") });
   } finally {
     await page.unroute(objectUrl);
   }
@@ -349,5 +394,5 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   await parent.click();
   await enabled.uncheck();
   await apply("removed", null);
-  await info.attach("abl-field-evidence", { body: JSON.stringify({ session: pin, evidence }), contentType: "application/json" });
+  await writeFile(info.outputPath("abl-field-evidence.json"), JSON.stringify({ session: pin, evidence }, null, 2));
 });

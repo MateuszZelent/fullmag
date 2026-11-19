@@ -2051,7 +2051,7 @@ fn periodic_pairs_resource_from_artifact(
     let current_scene_revision = snapshot.scene_document.as_ref().map(|scene| scene.revision);
     let expected_build_scene_revision = mesh_build_provenance(snapshot).source_scene_revision;
     let qualified_geometry = snapshot.scene_document.as_ref().is_some_and(|scene|
-        crate::live_geometry_mesh_build::bound_geometry_mesh_is_current(snapshot, scene) == Some(true));
+        bound_mesh_is_current(snapshot, scene) == Some(true));
     let artifact_stale_reason = match current_scene_revision {
         Some(current) if !qualified_geometry && artifact_source_scene_revision != Some(current) => Some(format!(
             "periodic pairs artifact source scene revision {:?} does not match current scene revision {}",
@@ -2184,8 +2184,7 @@ pub async fn get_mesh_shared_domain_manifest(
             let topology_hash = mesh.topology_fingerprint().to_owned();
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let validated_for_scene_revision = snapshot.scene_document.as_ref().and_then(|scene| {
-                (crate::live_geometry_mesh_build::bound_geometry_mesh_is_current(&snapshot, scene) == Some(true))
-                    .then_some(scene.revision)
+                (bound_mesh_is_current(&snapshot, scene) == Some(true)).then_some(scene.revision)
             });
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
                 "mesh-shared-domain-manifest:{generation_id}:{topology_hash}:{}:{}:{}:{validated_for_scene_revision:?}",
@@ -4330,6 +4329,14 @@ pub(crate) fn mesh_source_scene_revision(snapshot: &SessionStateResponse) -> Opt
     mesh_build_provenance(snapshot).source_scene_revision
 }
 
+fn bound_mesh_is_current(
+    snapshot: &SessionStateResponse,
+    scene: &fullmag_authoring::SceneDocument,
+) -> Option<bool> {
+    crate::live_geometry_mesh_build::bound_geometry_mesh_is_current(snapshot, scene)
+        .or_else(|| crate::live_authored_damping::desktop::published_mesh_is_current(snapshot, scene))
+}
+
 /// Currentness is an independent fact. A qualified mesh can retain its original
 /// build provenance after a compatible edit.
 pub(crate) fn shared_domain_mesh_is_current(
@@ -4337,7 +4344,7 @@ pub(crate) fn shared_domain_mesh_is_current(
     scene: &fullmag_authoring::SceneDocument,
 ) -> bool {
     snapshot.fem_mesh.is_some()
-        && crate::live_geometry_mesh_build::bound_geometry_mesh_is_current(snapshot, scene)
+        && bound_mesh_is_current(snapshot, scene)
             .unwrap_or_else(|| mesh_source_scene_revision(snapshot) == Some(scene.revision))
 }
 

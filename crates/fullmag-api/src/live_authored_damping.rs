@@ -1,6 +1,7 @@
 //! Re-evaluate edited Gilbert damping on an already prepared Live domain.
 //! Keep the immutable run receipt and the solver's magnetization untouched.
 
+pub(crate) mod desktop;
 pub(crate) mod geometry;
 #[cfg(test)]
 mod geometry_tests;
@@ -101,12 +102,19 @@ pub(crate) struct PreparedDamping {
     session_id: String,
     session_epoch: u64,
     domain: crate::session::LiveFieldDomainIdentity,
-    previous_metadata: Option<u64>,
-    previous_mesh_workspace: Option<u64>,
+    idle_desktop_run: Option<(String, u64)>,
+    // Idle CLI frames recreate SharedJson wrappers even when their content
+    // is unchanged. Keep cheap COW snapshots of the actual planning inputs.
+    previous_metadata: Option<SharedJson>,
+    previous_mesh_workspace: Option<SharedJson>,
     previous_scene_revision: u64,
     previous_preparation_revision: u64,
     binding: Value,
     field: Option<Value>,
+}
+
+fn same_planning_input(previous: Option<&SharedJson>, current: Option<&SharedJson>) -> bool {
+    previous.map(SharedJson::version) == current.map(SharedJson::version) || previous == current
 }
 
 impl PreparedDamping {
@@ -115,30 +123,51 @@ impl PreparedDamping {
         state: &AppState,
         snapshot: &SessionStateResponse,
     ) -> Result<(), ApiError> {
-        if self.session_id != snapshot.session.session_id
+        let conflict = if self.session_id != snapshot.session.session_id
             || self.session_epoch != state.current_live_session_epoch.load(Ordering::Acquire)
-            || self.domain != crate::session::current_live_field_domain_identity(snapshot)
-            || self.previous_metadata != snapshot.metadata.as_ref().map(SharedJson::version)
-            || self.previous_mesh_workspace != snapshot.mesh_workspace.as_ref().map(SharedJson::version)
-            || self.previous_scene_revision
-                != snapshot
-                    .scene_document
-                    .as_ref()
-                    .map_or(0, |scene| scene.revision)
-            || self.previous_preparation_revision != snapshot.simulation_preparation_revision
         {
-            return Err(ApiError::conflict_with_code(
-                "damping_domain_changed",
-                "the scene or prepared domain changed while evaluating damping",
-            ));
-        }
-        Ok(())
+            "session"
+        } else if self.idle_desktop_run.as_ref().is_some_and(|(run, stage_revision)| {
+            run != &snapshot.session.run_id || *stage_revision != snapshot.stage_execution_revision
+                || !desktop::idle(snapshot)
+        }) {
+            "execution state"
+        } else if self.idle_desktop_run.is_some()
+            && desktop::domain_identity(snapshot).as_ref() != self.binding.get("desktop_domain")
+        {
+            "desktop mesh ownership"
+        } else if self.domain != crate::session::current_live_field_domain_identity(snapshot) {
+            "field domain"
+        } else if self.previous_scene_revision != snapshot.scene_document.as_ref().map_or(0, |scene| scene.revision) {
+            "scene revision"
+        } else if self.previous_preparation_revision != snapshot.simulation_preparation_revision {
+            "preparation revision"
+        } else if !same_planning_input(self.previous_metadata.as_ref(), snapshot.metadata.as_ref()) {
+            "execution metadata"
+        } else if !same_planning_input(self.previous_mesh_workspace.as_ref(), snapshot.mesh_workspace.as_ref()) {
+            "mesh workspace"
+        } else {
+            return Ok(());
+        };
+        Err(ApiError::conflict_with_code(
+            "damping_domain_changed",
+            format!("the {conflict} changed while evaluating damping"),
+        ))
     }
 
     pub(crate) fn publish(self, snapshot: &mut SessionStateResponse) {
         // ReplaceScene can atomically apply magnetization too. Its candidate
         // already owns the new execution plan. Merge only our own publication.
         let metadata = snapshot.metadata.get_or_insert_with(|| json!({}).into());
+        tracing::info!(
+            target: "fullmag_api::scene_sync",
+            scene_revision = self.binding["scene_revision"].as_u64(),
+            source_revision = self.field.as_ref().and_then(|raw| raw["source_revision"].as_u64()),
+            requires_domain_rebuild = self.binding["requires_domain_rebuild"].as_bool(),
+            pending_reason = self.binding["pending_reason"].as_str(),
+            available = self.field.is_some(),
+            "publishing authored damping"
+        );
         metadata[PUBLICATION] = self.binding;
         crate::session::replace_authored_damping(snapshot, self.field);
     }
@@ -210,7 +239,6 @@ async fn prepare_snapshot(
     let workspace = state.current_workspace_root.clone();
     let store = state.submit_store_root.clone();
     tokio::task::spawn_blocking(move || {
-        let previous_metadata = snapshot.metadata.as_ref().map(SharedJson::version);
         let metadata = snapshot.metadata.as_ref();
         if metadata.is_some_and(|m| !m.is_object()) {
             return Err(ApiError::conflict(
@@ -226,7 +254,16 @@ async fn prepare_snapshot(
                 crate::scene_mesh_signature(previous) != crate::scene_mesh_signature(&scene)
             });
         let mut pending_reason = None;
-        let field = if !requires_domain_rebuild
+        let desktop_field = if !requires_domain_rebuild {
+            desktop::evaluate_edit(&repo, &workspace, &snapshot, &scene, revision)?
+        } else {
+            None
+        };
+        let idle_desktop_run = desktop_field.as_ref()
+            .map(|_| (snapshot.session.run_id.clone(), snapshot.stage_execution_revision));
+        let field = if desktop_field.is_some() {
+            desktop_field
+        } else if !requires_domain_rebuild
             && metadata.is_some_and(|m| m.get("execution_plan").is_some())
         {
             let result = plan_on_published_domain(
@@ -275,8 +312,9 @@ async fn prepare_snapshot(
             previous_scene_revision: scene.revision,
             previous_preparation_revision: snapshot.simulation_preparation_revision,
             domain: crate::session::current_live_field_domain_identity(&snapshot),
-            previous_metadata,
-            previous_mesh_workspace: snapshot.mesh_workspace.as_ref().map(SharedJson::version),
+            previous_metadata: snapshot.metadata.clone(),
+            idle_desktop_run,
+            previous_mesh_workspace: snapshot.mesh_workspace.clone(),
             binding,
             field,
         })
@@ -312,11 +350,15 @@ pub(crate) fn project_damping(plan: BackendPlanIR, layout: Value, revision: u64)
 }
 
 pub(crate) fn binding(revision: u64, field: Option<&Value>) -> Value {
-    json!({
+    let mut binding = json!({
         "scene_revision": revision,
         "samples_sha256": field.map(|raw| fullmag_session::canonical_json_sha256(&raw["values"])),
         "layout_sha256": field.map(|raw| fullmag_session::canonical_json_sha256(&raw["layout"])),
-    })
+    });
+    if let Some(domain) = field.and_then(|field| field.get("desktop_domain")) {
+        binding["desktop_domain"] = domain.clone();
+    }
+    binding
 }
 
 pub(crate) fn matches_publication(snapshot: &SessionStateResponse, raw: &Value) -> bool {
@@ -324,6 +366,11 @@ pub(crate) fn matches_publication(snapshot: &SessionStateResponse, raw: &Value) 
         return false;
     };
     let publication = &metadata[PUBLICATION];
+    if publication.get("desktop_domain").is_some_and(|expected| {
+        desktop::domain_identity(snapshot).as_ref() != Some(expected)
+    }) {
+        return false;
+    }
     if raw.get("authored_damping_revision").and_then(Value::as_u64)
         != publication["scene_revision"].as_u64()
     {
