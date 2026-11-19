@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
 import { exportChartData } from "@/shared/analysis-charts/chartExport";
 import { InteractiveChartSurface } from "@/shared/analysis-charts/InteractiveChartSurface";
+import type { InteractiveChartSurfaceIdentity } from "@/shared/analysis-charts/interactiveChartModel";
 import { liveChartExportModel, visibleLiveChartPanes } from "../liveChartsPresentation";
 import { LiveChartSignals } from "./LiveChartSignals";
 import type { LiveChartsViewProps } from "../liveChartsViewTypes";
@@ -15,8 +16,13 @@ type LiveChartSurfaceProps = Pick<LiveChartsViewProps, "initialRange" | "exportE
 };
 
 export function LiveChartSurface({ descriptorId, initialRange = null, exportErrorFormat, fitRequest, onChartSelected, onPointSelected, onRangeSelected, onRequestedExportFailed, onRequestedExportHandled, onSeriesChange, presentation, requestedExportRequest, series, selectedSeriesIds, title, xAxisLabel }: LiveChartSurfaceProps) {
-  const selected = new Set(selectedSeriesIds);
-  const panes = visibleLiveChartPanes(series, selectedSeriesIds);
+  // Pane inputs (series slices and surface identity) are memoized on the real
+  // inputs so InteractiveChartSurface rebuilds its render model, and calls
+  // setOption, only when data or chart configuration actually changed.
+  const panes = useMemo(
+    () => liveChartPaneModels({ descriptorId, selectedSeriesIds, series, title, xAxisLabel }),
+    [descriptorId, selectedSeriesIds, series, title, xAxisLabel],
+  );
   const exportRequest = requestedExportRequest ?? null;
   const completedPngPanes = useRef(new Set<string>());
   const pngRequestHandled = useRef<string | null>(null);
@@ -82,16 +88,13 @@ export function LiveChartSurface({ descriptorId, initialRange = null, exportErro
         <span>{series.length ? "Choose signals from the list to compare their evolution." : "Recorded scalar quantities will appear here as the simulation advances."}</span>
       </div>
     </ChartSection> : null}
-    {panes.map((pane) => {
-    const paneSeries = series.filter((item) => pane.seriesIds.includes(item.id));
-    const visible = paneSeries.filter((item) => selected.has(item.id));
-    const panelTitle = panes.length > 1 ? `${title} — ${pane.label}` : title;
+    {panes.map(({ pane, paneSeries, panelTitle, surface, visible }) => {
     const revision = paneSeries.find((item) => item.dataRevision != null)?.dataRevision ?? presentationRevision(presentation);
     const sampleCount = visible.reduce((count, item) => Math.max(count, item.points.length), 0);
     return <ChartSection key={pane.unit} title={panelTitle} subtitle={`${pane.label} · ${visible.length} ${visible.length === 1 ? "signal" : "signals"}`} status={{ presentation, primary: "Live", pointSummary: sampleCount ? `${sampleCount.toLocaleString()} samples shown` : undefined }}>
       <InteractiveChartSurface
         allSeries={paneSeries} dataExportModel={dataExportModel} fitRequest={fitRequest} initialRange={initialRange} presentation={presentation} requestedExportRequest={exportRequest?.format === "png" ? exportRequest : null} series={visible} xAxisLabel={xAxisLabel}
-        surface={{ ariaLabel: `${panelTitle} live chart`, chartId: `live-charts:${descriptorId ?? title}:${pane.unit}:${xAxisLabel ?? "x"}`, presentationCopy: { empty: "No live samples", error: "Live samples unavailable", hidden: "All selected series are hidden", loading: "Loading live samples" }, provenance: { dataRevision: paneSeries[0]?.dataRevision ?? null, decimation: "minmax_lttb", descriptorId: `live:${title.toLowerCase()}`, query: title, resourceKey: paneSeries[0]?.source.resourceKey ?? "data.table:default" } }}
+        surface={surface}
         onPointSelected={(seriesId, pointIndex) => { if (revision != null) onPointSelected(seriesId, pointIndex, revision); }} onRangeSelected={onRangeSelected} onRequestedExportFailed={() => {
           if (activePngRequestId === null || failedPngRequest.current === activePngRequestId) return;
           failedPngRequest.current = activePngRequestId;
@@ -99,7 +102,7 @@ export function LiveChartSurface({ descriptorId, initialRange = null, exportErro
         }} onRequestedExportHandled={() => {
           if (activePngRequestId === null || failedPngRequest.current === activePngRequestId) return;
           completedPngPanes.current.add(`${activePngRequestId}:${pane.unit}`);
-          if (pngRequestHandled.current !== activePngRequestId && panes.every((item) => completedPngPanes.current.has(`${activePngRequestId}:${item.unit}`))) {
+          if (pngRequestHandled.current !== activePngRequestId && panes.every((item) => completedPngPanes.current.has(`${activePngRequestId}:${item.pane.unit}`))) {
             pngRequestHandled.current = activePngRequestId;
             handleRequestedExportHandled();
           }
@@ -108,6 +111,62 @@ export function LiveChartSurface({ descriptorId, initialRange = null, exportErro
     </ChartSection>;
   })}</div></div>
   </>;
+}
+
+const LIVE_CHART_PRESENTATION_COPY: InteractiveChartSurfaceIdentity["presentationCopy"] = {
+  empty: "No live samples",
+  error: "Live samples unavailable",
+  hidden: "All selected series are hidden",
+  loading: "Loading live samples",
+};
+
+export interface LiveChartPaneModel {
+  pane: ReturnType<typeof visibleLiveChartPanes>[number];
+  paneSeries: LiveChartsViewProps["series"];
+  panelTitle: string;
+  surface: InteractiveChartSurfaceIdentity;
+  visible: LiveChartsViewProps["series"];
+}
+
+/** Pure per-pane slices and surface identity for the live chart workspace. */
+export function liveChartPaneModels({
+  descriptorId,
+  selectedSeriesIds,
+  series,
+  title,
+  xAxisLabel,
+}: {
+  descriptorId?: LiveChartsViewProps["descriptorId"];
+  selectedSeriesIds: LiveChartsViewProps["selectedSeriesIds"];
+  series: LiveChartsViewProps["series"];
+  title: string;
+  xAxisLabel?: string;
+}): LiveChartPaneModel[] {
+  const selected = new Set(selectedSeriesIds);
+  const panes = visibleLiveChartPanes(series, selectedSeriesIds);
+  return panes.map((pane) => {
+    const paneSeries = series.filter((item) => pane.seriesIds.includes(item.id));
+    const visible = paneSeries.filter((item) => selected.has(item.id));
+    const panelTitle = panes.length > 1 ? `${title} — ${pane.label}` : title;
+    return {
+      pane,
+      paneSeries,
+      panelTitle,
+      surface: {
+        ariaLabel: `${panelTitle} live chart`,
+        chartId: `live-charts:${descriptorId ?? title}:${pane.unit}:${xAxisLabel ?? "x"}`,
+        presentationCopy: LIVE_CHART_PRESENTATION_COPY,
+        provenance: {
+          dataRevision: paneSeries[0]?.dataRevision ?? null,
+          decimation: "minmax_lttb",
+          descriptorId: `live:${title.toLowerCase()}`,
+          query: title,
+          resourceKey: paneSeries[0]?.source.resourceKey ?? "data.table:default",
+        },
+      },
+      visible,
+    };
+  });
 }
 
 function acknowledgeExportFailure(
