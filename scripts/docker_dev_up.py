@@ -31,6 +31,8 @@ from docker_build_control import (
     canonical,
     compose_capture,
     docker_capture,
+    DEV_CUDA_TARGET_ENV,
+    receipt_dev_cuda_target,
     toolchain_configuration,
 )
 
@@ -816,7 +818,7 @@ def _image_input_manifest(
 
 def _toolchain_identity(group: RetainedGroup) -> Mapping[str, object]:
     try:
-        configured = toolchain_configuration(group.source_root, group.identity)
+        configured = toolchain_configuration(group.source_root, group.identity, direct_dev=True)
         service = configured["services"]["fem-gpu-toolchain"]
         build = service["build"]
         build_args = build["args"]
@@ -825,7 +827,7 @@ def _toolchain_identity(group: RetainedGroup) -> Mapping[str, object]:
             raise TypeError("toolchain build configuration is incomplete")
     except (BuildControlError, KeyError, TypeError, ValueError) as error:
         raise BuildInputUnknown(
-            "Selected toolchain configuration cannot be authenticated without a build"
+            f"Selected toolchain configuration cannot be authenticated without a build: {error}"
         ) from error
     return {
         "source_inputs": _dependency_input_manifest(group.source_root),
@@ -910,6 +912,10 @@ def _build_inputs_match(group: RetainedGroup) -> bool:
         # retained dev/backend receipts may still form a valid older chain.
         # That is an authenticated rebuild requirement, not an unknown receipt.
         changed.append("toolchain")
+    if retained_toolchain_image == toolchain_image:
+        target = receipt_dev_cuda_target(toolchain)
+        if target is not None and environment.get(DEV_CUDA_TARGET_ENV) != target:
+            raise BuildInputUnknown("Retained backend CUDA target differs from the toolchain receipt")
     current_toolchain = _toolchain_identity(group)
     if build_input_digest(current_toolchain) != toolchain["source_digest"]:
         if "toolchain" not in changed:

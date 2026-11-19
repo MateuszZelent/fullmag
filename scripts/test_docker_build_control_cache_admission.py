@@ -22,6 +22,12 @@ COMMIT = "c" * 40
 MANIFEST = {
     "schema": "fullmag.docker.fem-gpu-dependencies.v1",
     "build": {"phase": "runtime"},
+    "declared": {
+        "cuda": {"architectures": "86-real"},
+        "hypre": {"gpu_architectures": "86"},
+        "petsc": {"cuda_architectures": "86"},
+        "libceed": {"cuda_architecture": "86"},
+    },
     "actual": {"source_commits": {"mfem": "m"}},
 }
 
@@ -105,7 +111,13 @@ def _toolchain_config(repo):
                     "context": str(repo),
                     "dockerfile": "docker/fem-gpu/Dockerfile",
                     "target": "fem-gpu-dev",
-                    "args": {"FULLMAG_CUDA_BASE_IMAGE": HELPER},
+                    "args": {
+                        "FULLMAG_CUDA_BASE_IMAGE": HELPER,
+                        "FULLMAG_CUDA_ARCHITECTURES": "86-real",
+                        "FULLMAG_HYPRE_GPU_ARCHITECTURES": "86",
+                        "FULLMAG_PETSC_CUDA_ARCHITECTURES": "86",
+                        "FULLMAG_LIBCEED_CUDA_ARCHITECTURE": "86",
+                    },
                 },
                 "image": "fullmag/toolchain:inputs-test",
             }

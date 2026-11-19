@@ -127,13 +127,18 @@ indeksu Git, capture akceptuje go jako już obecny w `files` i nie dubluje go w
 Programowe przekazanie `[]` jawnie czyści listę; hostowa zmienna środowiskowa
 `FULLMAG_DEV_INCLUDE_UNTRACKED` nie ustala jej wartości.
 
-Build DEV kompiluje CUDA tylko dla GPU widocznych w kontenerze backendu (FEM
-i FDM, np. `89-real` dla RTX 40xx). Gdy sonda sterownika nie jest dostępna,
-build wraca do przenośnej macierzy obrazu. Wybrana lista jest zapisana
-w `build.cuda_architectures` receiptu. `backend_dev.py` rozumie też
-`FULLMAG_DEV_CUDA_ARCHITECTURES` (`auto`, `all` albo lista CMake), ale launcher
-nie przekazuje jeszcze tej zmiennej do usługi, więc DEV zawsze używa `auto`.
-Pakiet DEV nie jest artefaktem przenośnym ani wydaniem.
+Launcher Docker DEV odczytuje compute capability hosta przez `nvidia-smi`
+i wybiera jeden cel rzeczywisty, np. `86-real` dla RTX 3070. Używa go do
+budowania zależności CUDA, Hypre, PETSc i libCEED oraz kompilacji FEM i FDM w usłudze
+tej samej grupy. Cel jest zapisany w argumentach buildu obrazu zależności
+i w `build.cuda_architectures` receiptu backendu.
+
+Jeśli sonda hosta jest niedostępna, potwierdź compute capability i ustaw
+`FULLMAG_DEV_CUDA_ARCHITECTURES=86-real` z właściwą wartością w procesie
+lub głównym `.env`. Build odmawia kompilacji bez potwierdzonego celu,
+przy rozbieżności z wynikiem sondy lub przy różnych compute capabilities
+widocznych GPU. Dotyczy to również kontenera uruchamianego bez dostępu do
+GPU. Przenośna macierz CUDA pozostaje dostępna w receptach kwalifikacji i wydania.
 
 Restart backendu po zmianie wyłącznie `docs/`, frontendu lub plików testowych
 wykorzystuje istniejący pakiet: cache-hit porównuje `runtime_source_digest`

@@ -288,7 +288,13 @@ class RetainedDeviceLifecycleTests(unittest.TestCase):
                     mock.patch.object(runtime, 'assert_loopback_port_available'),
                     mock.patch.object(dev, '_operator_probe_record_from_fields', return_value={}),
                     mock.patch.object(dev, 'build_volume_toolchain', return_value={
-                        'inputs': {'build_args': {'FULLMAG_CUDA_BASE_IMAGE': 'image'}}}),
+                        'inputs': {'build_args': {
+                            'FULLMAG_CUDA_BASE_IMAGE': 'image',
+                            'FULLMAG_CUDA_ARCHITECTURES': '86-real',
+                            'FULLMAG_HYPRE_GPU_ARCHITECTURES': '86',
+                            'FULLMAG_PETSC_CUDA_ARCHITECTURES': '86',
+                            'FULLMAG_LIBCEED_CUDA_ARCHITECTURE': '86',
+                        }}}),
                     mock.patch.object(dev, 'BuildControl', return_value=control),
                     mock.patch.object(dev, 'build_volume_runtime_images', return_value={
                         'backend': {'image_id': 'image'}}),

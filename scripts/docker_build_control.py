@@ -272,12 +272,109 @@ def compose_capture(document, *args, timeout=90):
                           *args, data=canonical(document), timeout=timeout).stdout
 
 
-def toolchain_configuration(repo, identity):
+DEV_CUDA_TARGET_ENV = "FULLMAG_DEV_CUDA_ARCHITECTURES"
+_DEV_CUDA_TARGET_RE = re.compile(r"([1-9][0-9]{1,2})-real")
+
+
+def _host_cuda_targets():
+    executable = shutil.which("nvidia-smi")
+    if executable is None and sys.platform == "linux":
+        wsl_smi = Path("/usr/lib/wsl/lib/nvidia-smi")
+        if wsl_smi.is_file():
+            executable = wsl_smi.as_posix()
+    if executable is None:
+        return set()
+    try:
+        probe = subprocess.run(
+            [executable, "--query-gpu=compute_cap", "--format=csv,noheader"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return set()
+    if probe.returncode:
+        return set()
+    targets = set()
+    for line in probe.stdout.splitlines():
+        capability = re.fullmatch(r"([1-9][0-9]?)\.([0-9])", line.strip())
+        if capability is None:
+            return set()
+        targets.add("".join(capability.groups()) + "-real")
+    return targets
+
+
+def _selected_dev_cuda_target(environment):
+    explicit = environment.get(DEV_CUDA_TARGET_ENV)
+    if explicit and _DEV_CUDA_TARGET_RE.fullmatch(explicit) is None:
+        raise BuildControlError(f"{DEV_CUDA_TARGET_ENV} must be one real target, such as 86-real")
+    found = _host_cuda_targets()
+    if len(found) > 1:
+        raise BuildControlError("Docker DEV requires one host CUDA capability; found " +
+                                ", ".join(sorted(found)))
+    if found:
+        detected = next(iter(found))
+        if explicit and explicit != detected:
+            raise BuildControlError(f"{DEV_CUDA_TARGET_ENV}={explicit} differs from host CUDA target {detected}")
+        return detected
+    if explicit:
+        return explicit
+    raise BuildControlError("Could not verify a host CUDA target; confirm the GPU compute capability "
+                            f"and set {DEV_CUDA_TARGET_ENV} to one real target, such as 86-real")
+
+
+def _dev_cuda_build_args(target):
+    match = _DEV_CUDA_TARGET_RE.fullmatch(target)
+    if match is None:
+        raise BuildControlError(f"Invalid Docker DEV CUDA target: {target!r}")
+    capability = match.group(1)
+    return {
+        "FULLMAG_CUDA_ARCHITECTURES": target,
+        "FULLMAG_HYPRE_GPU_ARCHITECTURES": capability,
+        "FULLMAG_PETSC_CUDA_ARCHITECTURES": capability,
+        "FULLMAG_LIBCEED_CUDA_ARCHITECTURE": capability,
+    }
+
+
+def _require_cuda_build_args(args, expected):
+    for name, value in expected.items():
+        if args.get(name) != value:
+            raise BuildControlError(f"Toolchain {name} differs from the pinned DEV CUDA target: expected {value}")
+
+
+def receipt_dev_cuda_target(receipt, *, required=False):
+    inputs = receipt.get("inputs", {}) if isinstance(receipt, Mapping) else None
+    if not isinstance(inputs, Mapping):
+        raise BuildControlError("Toolchain CUDA receipt inputs are malformed")
+    args = inputs.get("build_args", {})
+    if not isinstance(args, Mapping):
+        raise BuildControlError("Toolchain CUDA build arguments are malformed")
+    target = args.get("FULLMAG_CUDA_ARCHITECTURES", "")
+    if (args.get("FULLMAG_LIBCEED_CUDA_ARCHITECTURE")
+            and isinstance(target, str) and _DEV_CUDA_TARGET_RE.fullmatch(target)):
+        _require_cuda_build_args(args, _dev_cuda_build_args(target))
+        return target
+    if required or args.get("FULLMAG_LIBCEED_CUDA_ARCHITECTURE"):
+        raise BuildControlError("Docker DEV toolchain receipt lacks a single verified CUDA target")
+    # Historical multi-target images remain inspectable during recovery.
+    return None
+
+
+def toolchain_configuration(repo, identity, *, direct_dev=False, cuda_target=None):
     from bootstrap_docker_toolchain import _compose_environment
     environment = {**os.environ, **_compose_environment(repo, identity["project_name"])}
-    return json.loads(docker_capture("compose", "--project-name", identity["project_name"],
+    if direct_dev:
+        cuda_target = _selected_dev_cuda_target(environment)
+        for name, value in _dev_cuda_build_args(cuda_target).items():
+            if environment.get(name) and environment[name] != value:
+                raise BuildControlError(f"{name} conflicts with DEV CUDA target {cuda_target}; "
+                                        f"use {DEV_CUDA_TARGET_ENV} to configure Docker DEV")
+    expected = _dev_cuda_build_args(cuda_target) if cuda_target is not None else {}
+    environment.update(expected)
+    document = json.loads(docker_capture("compose", "--project-name", identity["project_name"],
         "--project-directory", str(repo), "-f", str(Path(repo)/"compose.toolchain.yaml"),
         "--profile", "toolchain", "config", "--format", "json", env=environment).stdout)
+    if expected:
+        _require_cuda_build_args(document["services"]["fem-gpu-toolchain"]["build"]["args"], expected)
+    return document
 
 
 class BuildControl:
@@ -870,7 +967,7 @@ def build_volume_toolchain(repo):
     from docker_compose_identity import compose_source_identity
     identity = compose_source_identity(repo)
     local_volume(repo)
-    configured = toolchain_configuration(repo, identity)
+    configured = toolchain_configuration(repo, identity, direct_dev=True)
     service = configured["services"]["fem-gpu-toolchain"]
     build = service["build"]
     if (configured.get("name") != identity["project_name"]
@@ -911,6 +1008,7 @@ def build_volume_toolchain(repo):
         raise BuildControlError("Untracked dependency inputs require explicit Git staging before build")
     source_identity = {"source_inputs": manifest, "build_args": build.get("args", {}),
                        "target": build["target"]}
+    cuda_target = receipt_dev_cuda_target({"inputs": source_identity}, required=True)
     digest = build_input_digest(source_identity)
     service["image"] = "fullmag/fem-gpu-toolchain:inputs-" + digest[:24]
     with control.operation("toolchain", source_identity,
@@ -948,6 +1046,13 @@ def build_volume_toolchain(repo):
                 or installed.get("build", {}).get("phase") != "runtime"
                 or not installed.get("actual", {}).get("source_commits")):
             raise BuildControlError("Built dependency manifest is incomplete")
+        declared = installed.get("declared", {})
+        capability = cuda_target.removesuffix("-real")
+        if (declared.get("cuda", {}).get("architectures") != cuda_target
+                or declared.get("hypre", {}).get("gpu_architectures") != capability
+                or declared.get("petsc", {}).get("cuda_architectures") != capability
+                or declared.get("libceed", {}).get("cuda_architecture") != capability):
+            raise BuildControlError("Built dependency manifest does not attest the selected DEV CUDA target")
         control.write("toolchain/dependency-versions.json", installed)
         operation["receipt"].update(state="succeeded", image=service["image"], image_id=image[0]["Id"],
                                     installed_manifest_sha256=hashlib.sha256(installed_run.stdout).hexdigest(),

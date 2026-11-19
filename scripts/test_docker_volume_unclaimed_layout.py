@@ -420,7 +420,13 @@ class ResumeImagePinTests(unittest.TestCase):
         self.files = {}
         self.inspections = {}
         self.configuration = {'name': 'project', 'services': {'fem-gpu-toolchain': {'build': {
-            'args': {'FULLMAG_CUDA_BASE_IMAGE': self.helper}, 'target': 'development'}}}}
+            'args': {
+                'FULLMAG_CUDA_BASE_IMAGE': self.helper,
+                'FULLMAG_CUDA_ARCHITECTURES': '86-real',
+                'FULLMAG_HYPRE_GPU_ARCHITECTURES': '86',
+                'FULLMAG_PETSC_CUDA_ARCHITECTURES': '86',
+                'FULLMAG_LIBCEED_CUDA_ARCHITECTURE': '86',
+            }, 'target': 'development'}}}}
         build = self.configuration['services']['fem-gpu-toolchain']['build']
         toolchain_inputs = {'source_inputs': [{'path': 'dep', 'sha256': cancellation._sha256(b'dep')}],
                             'build_args': build['args'], 'target': 'development'}
@@ -460,7 +466,7 @@ class ResumeImagePinTests(unittest.TestCase):
         with ExitStack() as stack:
             def mock(obj, name, **kwargs):
                 return stack.enter_context(patch.object(obj, name, **kwargs))
-            mock(cancellation, 'toolchain_configuration', return_value=self.configuration)
+            configured = mock(cancellation, 'toolchain_configuration', return_value=self.configuration)
             mock(bootstrap, 'tracked_input_files', return_value=[Path('dep')])
             mock(bootstrap, 'input_files', return_value=[Path('dep')])
             mock(bootstrap, 'read_input', side_effect=lambda root, name: str(name).encode())
@@ -472,7 +478,9 @@ class ResumeImagePinTests(unittest.TestCase):
             build = mock(cancellation, 'build_volume_runtime_images')
             toolchain = mock(cancellation, 'build_volume_toolchain')
             try:
-                return cancellation._reuse_prepared_images(Path('/checkout'), self.control, self.helper, expected)
+                result = cancellation._reuse_prepared_images(Path('/checkout'), self.control, self.helper, expected)
+                configured.assert_called_once_with(Path('/checkout'), self.control.identity, cuda_target='86-real')
+                return result
             finally:
                 build.assert_not_called()
                 toolchain.assert_not_called()
