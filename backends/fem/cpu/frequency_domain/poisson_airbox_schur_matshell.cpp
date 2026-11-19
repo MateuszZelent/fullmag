@@ -284,14 +284,21 @@ BoundedKrylovDimensions bounded_krylov_dimensions(
     const std::uint64_t nev = std::min(dimension - 1u, requested_nev);
     // Window coverage requests retain extra Ritz pairs even in empty local
     // intervals. Reserve a larger basis for that solve, without changing nev,
-    // tolerances or the completeness certificate. Standalone shifts keep 2x.
-    // Bound before multiplication to avoid overflow near the u64 limit.
+    // tolerances or the completeness certificate. Bound before
+    // multiplication to avoid overflow near the u64 limit.
     const std::uint64_t basis_multiplier = frequency_window ? 4u : 2u;
     const std::uint64_t oversampled_nev =
         nev > dimension / basis_multiplier ? dimension : basis_multiplier * nev;
+    // Standalone shifts use the SLEPc default basis max(2 nev, nev + 15)
+    // (note 0830, "Wymiar bazy Krylova dla pojedynczego przesunięcia"): with
+    // ncv = 2 nev each Krylov-Schur restart keeps almost the whole basis, so
+    // the exact shift-invert needed ~30 restarts and ~50% more shifted solves.
+    const std::uint64_t slepc_default_floor = frequency_window
+        ? 0u
+        : nev + std::min<std::uint64_t>(15u, dimension - nev);
     const std::uint64_t ncv = std::min(
         dimension,
-        std::max(nev + 1u, oversampled_nev));
+        std::max({nev + 1u, oversampled_nev, slepc_default_floor}));
     return {nev, ncv, ncv > nev && ncv <= dimension};
 }
 
