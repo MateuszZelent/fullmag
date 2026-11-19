@@ -1,17 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
+import { createLivePhaseUniform, type LivePhaseUniform } from "./livePhaseUniform";
 import type { ModeCompositionLayer, ModeCompositionResource } from "./ModeCompositionController";
 
 const TWO_PI = Math.PI * 2;
 
 export interface ModeCompositionPhaseClockSnapshot {
-  readonly phaseByLayerId: ReadonlyMap<string, number>;
+  /**
+   * One stable live phase cell per layer. Animation frames update the cell
+   * values in place; this snapshot changes only when the layer set changes.
+   */
+  readonly phaseUniformByLayerId: ReadonlyMap<string, LivePhaseUniform>;
 }
 
 const EMPTY_SNAPSHOT: ModeCompositionPhaseClockSnapshot = {
-  phaseByLayerId: new Map(),
+  phaseUniformByLayerId: new Map(),
 };
 
 type Listener = () => void;
@@ -19,12 +24,14 @@ type Listener = () => void;
 /**
  * Owns the local display clock for already-loaded mode fields. It never mutates
  * the server composition; a frame is requested only while a modal layer is
- * explicitly animated.
+ * explicitly animated. React subscribers are notified when the layer set
+ * changes; frame subscribers (viewport invalidation) on every phase change.
  */
 export class ModeCompositionPhaseClock {
   private animationFrameId: number | null = null;
   private elapsedSeconds = 0;
   private lastFrameTimeMs: number | null = null;
+  private readonly frameListeners = new Set<Listener>();
   private readonly listeners = new Set<Listener>();
   private resource: ModeCompositionResource | null = null;
   private snapshot: ModeCompositionPhaseClockSnapshot = EMPTY_SNAPSHOT;
@@ -33,10 +40,21 @@ export class ModeCompositionPhaseClock {
     return this.snapshot;
   }
 
+  /** Current phase of one layer (diagnostics and tests). */
+  getPhaseRad(layerId: string): number | undefined {
+    return this.snapshot.phaseUniformByLayerId.get(layerId)?.value;
+  }
+
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+
+  /** Called after every phase change, including animation frames. */
+  readonly subscribeFrame = (listener: Listener): (() => void) => {
+    this.frameListeners.add(listener);
+    return () => this.frameListeners.delete(listener);
+  };
 
   setResource(resource: ModeCompositionResource | null | undefined): void {
     this.resource = resource ?? null;
@@ -78,25 +96,35 @@ export class ModeCompositionPhaseClock {
       if (this.snapshot !== EMPTY_SNAPSHOT) {
         this.snapshot = EMPTY_SNAPSHOT;
         this.notify();
+        this.notifyFrame();
       }
       return;
     }
-    const phaseByLayerId = new Map<string, number>();
+    const previous = this.snapshot.phaseUniformByLayerId;
+    let layerSetChanged = previous.size !== resource.layers.length;
+    const phaseUniformByLayerId = new Map<string, LivePhaseUniform>();
     for (const layer of resource.layers) {
       const rateHz = layer.enabled && layer.animation.enabled
         ? effectiveRateHz(resource, layer)
         : 0;
-      phaseByLayerId.set(
-        layer.layer_id,
-        wrapPhaseRad(
-          layer.phase_rad +
-            layer.animation.phase_offset_rad +
-            TWO_PI * rateHz * this.elapsedSeconds,
-        ),
+      const phaseRad = wrapPhaseRad(
+        layer.phase_rad +
+          layer.animation.phase_offset_rad +
+          TWO_PI * rateHz * this.elapsedSeconds,
       );
+      let uniform = previous.get(layer.layer_id);
+      if (!uniform) {
+        uniform = createLivePhaseUniform(phaseRad);
+        layerSetChanged = true;
+      }
+      uniform.value = phaseRad;
+      phaseUniformByLayerId.set(layer.layer_id, uniform);
     }
-    this.snapshot = { phaseByLayerId };
-    this.notify();
+    if (layerSetChanged) {
+      this.snapshot = { phaseUniformByLayerId };
+      this.notify();
+    }
+    this.notifyFrame();
   }
 
   private sync(): void {
@@ -125,11 +153,17 @@ export class ModeCompositionPhaseClock {
   private notify(): void {
     for (const listener of this.listeners) listener();
   }
+
+  private notifyFrame(): void {
+    for (const listener of this.frameListeners) listener();
+  }
 }
 
 export function useModeCompositionPhaseClock(
   resource: ModeCompositionResource | null | undefined,
-): ModeCompositionPhaseClockSnapshot {
+): ModeCompositionPhaseClockSnapshot & {
+  readonly subscribeFrame: ModeCompositionPhaseClock["subscribeFrame"];
+} {
   const [clock] = useState(() => new ModeCompositionPhaseClock());
   const subscribe = useCallback((listener: Listener) => clock.subscribe(listener), [clock]);
   const getSnapshot = useCallback(() => clock.getSnapshot(), [clock]);
@@ -140,7 +174,10 @@ export function useModeCompositionPhaseClock(
   }, [clock, resource]);
   useEffect(() => () => clock.stop(), [clock]);
 
-  return snapshot;
+  return useMemo(
+    () => ({ ...snapshot, subscribeFrame: clock.subscribeFrame }),
+    [clock, snapshot],
+  );
 }
 
 function effectiveRateHz(

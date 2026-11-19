@@ -74,7 +74,8 @@ import {
 } from "@/kernel/resources/sessionDiscretization";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResources";
-import { useObservationFrameListResource } from "@/kernel/resources/observationFrameResources";
+import { useObservationFrameListPages } from "@/kernel/resources/useObservationFrameListPages";
+import { Button } from "@/shared/ui/Button";
 import { useCurrentTransportsResource } from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { matchesAirboxTopologyIdentity } from "@/kernel/resources/meshTopologyIdentity";
@@ -420,6 +421,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const frozenSpins = useFrozenSpinsCollectionResource({ enabled: modelTabActive });
   const analysisFieldOverlayContext = useAnalysisFieldOverlayContext(
     kernel.analysisFieldOverlay,
+    { ignorePhase: true },
   );
   const activeAnalysisFieldOverlay = analysisFieldOverlayContext.overlay;
   const modeVisualizationResourceActive =
@@ -564,9 +566,12 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   });
   const resolvedResultContextRunId = reconciledResultContextRunId;
   const resultContextIsCurrent = resolvedResultContextRunId === currentRunId;
-  const observationFrames = useObservationFrameListResource({
+  const observationFrames = useObservationFrameListPages({
     enabled: resultsResourceActive && resultContextIsCurrent,
     runId: resultContextIsCurrent ? resolvedResultContextRunId : null,
+    selectedFrameId: selectedRef?.type === "observation-frame" && selectedRef.runId === resolvedResultContextRunId
+      ? selectedRef.frameId
+      : null,
   });
   const resultContextRun = useResultContextRunResource(
     resultContextIsCurrent ? null : resolvedResultContextRunId,
@@ -1198,6 +1203,27 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           sharedCommandResources={sharedCommandResources}
           tabId={activeTab}
         />
+        {activeTab === "results" && observationFrames.status !== "idle" ? (
+          <div className="flex flex-wrap items-center gap-2 px-2 py-1" role="group" aria-label="State snapshots" aria-busy={observationFrames.loading}>
+            {observationFrames.error || observationFrames.refreshError ? (
+              <p className="m-0 w-full break-words text-fm-help" role="alert">
+                {(observationFrames.error ?? observationFrames.refreshError)?.message}
+              </p>
+            ) : observationFrames.loading ? (
+              <p className="m-0 w-full text-fm-help" role="status">Loading state snapshots…</p>
+            ) : null}
+            <Button disabled={observationFrames.loading} onClick={observationFrames.refetch} size="sm" type="button">
+              Refresh snapshots
+            </Button>
+            {observationFrames.error || observationFrames.refreshError ? (
+              <Button onClick={observationFrames.retry} size="sm" type="button">Retry snapshots</Button>
+            ) : observationFrames.hasMore ? (
+              <Button disabled={observationFrames.loading} onClick={observationFrames.loadMore} size="sm" type="button">
+                Load more snapshots
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </section>
     </WorkspaceRenderProfiler>
   );

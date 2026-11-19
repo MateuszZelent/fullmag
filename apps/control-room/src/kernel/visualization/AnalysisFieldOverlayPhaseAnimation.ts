@@ -62,8 +62,7 @@ export function startAnalysisFieldOverlayPhaseAnimation(
       stopInterval();
       return;
     }
-    const phaseRad =
-      snapshot.visualizationPhaseRad ?? snapshot.query.phase_rad ?? 0;
+    const phaseRad = controller.getDisplayedPhaseRad();
     const animationRateHz =
       snapshot.animation.animationRateHz * (snapshot.animation.direction ?? 1);
     applyPhaseStep(
@@ -85,8 +84,7 @@ export function startAnalysisFieldOverlayPhaseAnimation(
         0.1,
         Math.max(0, timeMs - previousFrameTimeMs) / 1000,
       );
-      const phaseRad =
-        snapshot.visualizationPhaseRad ?? snapshot.query.phase_rad ?? 0;
+      const phaseRad = controller.getDisplayedPhaseRad();
       applyPhaseStep(
         controller,
         snapshot,
@@ -123,6 +121,8 @@ export function startAnalysisFieldOverlayPhaseAnimation(
       if (reducedMotion || pageHidden()) {
         pauseAnimation();
       }
+      // A stopped animation leaves its last frame as the committed phase.
+      controller.commitLivePhase();
       return;
     }
     if (browserFramesAvailable) {
@@ -148,6 +148,7 @@ export function startAnalysisFieldOverlayPhaseAnimation(
       stopped = true;
       stopInterval();
       stopFrame();
+      controller.commitLivePhase();
       unsubscribe();
       unsubscribeInstanceTab();
       if (documentAvailable) {
@@ -174,6 +175,10 @@ function wrapPhaseRad(phaseRad: number): number {
   return wrapped >= 0 ? wrapped : wrapped + TWO_PI;
 }
 
+/**
+ * Animation frames move only the phase clock. Overlay subscribers are
+ * notified once, when a non-looping cycle completes and stops.
+ */
 function applyPhaseStep(
   controller: AnalysisFieldOverlayController,
   snapshot: AnalysisFieldOverlayState & {
@@ -182,19 +187,20 @@ function applyPhaseStep(
   nextPhaseRad: number,
 ): void {
   if (snapshot.animation.loop ?? true) {
-    controller.update({ visualizationPhaseRad: wrapPhaseRad(nextPhaseRad) });
+    controller.phaseClock.setLivePhaseRad(wrapPhaseRad(nextPhaseRad));
     return;
   }
   const completed = nextPhaseRad < 0 || nextPhaseRad >= TWO_PI;
+  const clampedPhaseRad = Math.min(TWO_PI, Math.max(0, nextPhaseRad));
+  if (!completed) {
+    controller.phaseClock.setLivePhaseRad(clampedPhaseRad);
+    return;
+  }
+  controller.phaseClock.setLivePhaseRad(clampedPhaseRad);
   controller.update({
-    ...(completed
-      ? {
-          animation: {
-            ...snapshot.animation,
-            animatePhase: false,
-          },
-        }
-      : {}),
-    visualizationPhaseRad: Math.min(TWO_PI, Math.max(0, nextPhaseRad)),
+    animation: {
+      ...snapshot.animation,
+      animatePhase: false,
+    },
   });
 }

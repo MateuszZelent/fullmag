@@ -2944,8 +2944,12 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("const analysisPrimaryFieldDemandPlan = useMemo(() => {");
     expect(source).toContain("query: analysisOverlay.query,");
     expect(source).toContain("consumers: [\"primary-field-vector\"],");
-    expect(source).toContain("visualizationPhaseRad:");
-    expect(source).toContain("analysisOverlay?.visualizationPhaseRad ??");
+    // The phase reaches materials through the clock's shared uniform, never
+    // through React state or render options.
+    expect(source).toContain("complexPhaseUniform: analysisOverlayPhaseUniform,");
+    expect(source).toContain("analysisFieldOverlay.phaseClock.uniform");
+    expect(source).not.toContain("analysisOverlay?.visualizationPhaseRad");
+    expect(source).toContain("{ ignorePhase: true },");
     expect(source).toContain("resolveViewport3DAnalysisComplexFieldQuery");
     expect(source).toContain("asDecodedComplexFieldVector");
     expect(source).toContain("Boolean(analysisOverlay) ||");

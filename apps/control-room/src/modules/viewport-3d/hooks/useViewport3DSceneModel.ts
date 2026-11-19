@@ -147,6 +147,7 @@ import {
 import { isAnalysisResultFieldOverlayIntent } from "@/kernel/visualization/AnalysisResultFieldOverlayIntent";
 import { startAnalysisFieldOverlayPhaseAnimation } from "@/kernel/visualization/AnalysisFieldOverlayPhaseAnimation";
 import { useModeCompositionPhaseClock } from "@/kernel/visualization/ModeCompositionPhaseClock";
+import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { resolveVisualizationEffectiveRenderMode } from "@/kernel/visualization/useVisualizationClientAck";
 import { resolveCrossSectionQueryFromVisualizationState } from "@/shared/domain/mesh/crossSectionQuery";
@@ -475,6 +476,25 @@ type SceneRegionShape = components["schemas"]["SceneRegionShape"];
 
 const EMPTY_AIRBOX_FIELD_VECTOR_PARTS: readonly { id: string }[] = [];
 const EMPTY_VIEWPORT_3D_FIELD_QUANTITY_IDS: ReadonlySet<string> = new Set();
+const EMPTY_MODE_COMPOSITION_PHASE_UNIFORMS: ReadonlyMap<string, LivePhaseUniform> = new Map();
+
+type PhaseFrameSubscribe = (listener: () => void) => () => void;
+
+/** One subscription that fires on every frame of either phase clock. */
+function combinePhaseFrameSubscriptions(
+  first: PhaseFrameSubscribe,
+  second: PhaseFrameSubscribe,
+): PhaseFrameSubscribe {
+  return (listener) => {
+    const unsubscribeFirst = first(listener);
+    const unsubscribeSecond = second(listener);
+    return () => {
+      unsubscribeFirst();
+      unsubscribeSecond();
+    };
+  };
+}
+
 export function resolveViewport3DVectorScale(
   boundsSize: readonly number[],
   vectorLengthScale: number,
@@ -3246,9 +3266,22 @@ export function useViewport3DSceneModel({
     savedViewportResourceHasFreshData(savedViewportResources.field);
   const primitiveDraftOverlay = usePrimitiveDraftOverlay();
   const { analysisFieldOverlay, diagnosticRecorder } = useKernel();
-  const analysisOverlayContext = useAnalysisFieldOverlayContext(analysisFieldOverlay);
-  const analysisOverlaySnapshot =
-    useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
+  // The scene never reads the overlay phase from React state: materials bind
+  // analysisFieldOverlay.phaseClock.uniform, so phase edits and animation
+  // frames do not re-render or rebuild the scene model.
+  const analysisOverlayContext = useAnalysisFieldOverlayContext(
+    analysisFieldOverlay,
+    { ignorePhase: true },
+  );
+  const analysisOverlaySnapshot = useRenderableAnalysisFieldOverlay(
+    analysisFieldOverlay,
+    { ignorePhase: true },
+  );
+  // Stable cell: the overlay phase reaches materials through it, never
+  // through render options, so phase changes do not rebuild the field model.
+  const analysisOverlayPhaseUniform = analysisOverlaySnapshot
+    ? analysisFieldOverlay.phaseClock.uniform
+    : null;
   const analysisOverlay = useMemo(
     () =>
       analysisResultOverlayMatchesSelection(
@@ -3274,6 +3307,16 @@ export function useViewport3DSceneModel({
   const modeCompositionPhaseClock = useModeCompositionPhaseClock(
     modeCompositionController.controller.resource,
   );
+  const subscribeModeCompositionPhaseFrames = modeCompositionPhaseClock.subscribeFrame;
+  // Phase frames reach the canvas only as invalidations; uniforms carry the
+  // values, so no React state changes while either clock runs.
+  const subscribeComplexPhaseFrames = useMemo(() => {
+    const phaseClock = analysisFieldOverlay.phaseClock;
+    return combinePhaseFrameSubscriptions(
+      phaseClock.subscribe.bind(phaseClock),
+      subscribeModeCompositionPhaseFrames,
+    );
+  }, [analysisFieldOverlay, subscribeModeCompositionPhaseFrames]);
   useEffect(() => {
     const handle = startAnalysisFieldOverlayPhaseAnimation(analysisFieldOverlay);
     return () => {
@@ -4941,23 +4984,18 @@ export function useViewport3DSceneModel({
                 quantityId: primaryFieldQuantityId,
                 vectorDomain,
               }),
-              visualizationPhaseRad:
-                analysisOverlay?.visualizationPhaseRad ??
-                analysisOverlay?.query.phase_rad ??
-                null,
+              complexPhaseUniform: analysisOverlayPhaseUniform,
             },
             fieldCompatibleTopologyRenderModel,
             maxInteractiveVectorGlyphs,
           )
         : {
             ...fieldRenderOptions,
-            visualizationPhaseRad:
-              analysisOverlay?.visualizationPhaseRad ??
-              analysisOverlay?.query.phase_rad ??
-              null,
+            complexPhaseUniform: analysisOverlayPhaseUniform,
           },
     [
       analysisOverlay,
+      analysisOverlayPhaseUniform,
       fieldCompatibleTopologyRenderModel,
       fieldRenderOptions,
       getPartSettings,
@@ -7912,9 +7950,10 @@ export function useViewport3DSceneModel({
       savedSelectionActive
         ? null
         : modeCompositionController.controller.resource?.composition_id ?? null,
-    modeCompositionPhaseByLayerId: savedSelectionActive
-      ? new Map()
-      : modeCompositionPhaseClock.phaseByLayerId,
+    modeCompositionPhaseUniformByLayerId: savedSelectionActive
+      ? EMPTY_MODE_COMPOSITION_PHASE_UNIFORMS
+      : modeCompositionPhaseClock.phaseUniformByLayerId,
+    subscribeComplexPhaseFrames,
     primitiveModel: savedSelectionActive ? null : primitiveModel,
     sceneRefetch: savedSelectionActive ? () => undefined : scene.refetch,
     sceneRevision: savedSelectionActive ? null : primitiveModel.sceneRevision,

@@ -823,9 +823,13 @@ describe("MeshPartLayer", () => {
       "utf8",
     );
 
-    expect(source).toContain("buildModeCompositionVectorLayerInput");
-    expect(source.match(/identity: modal\.buffer\.identity,/g)).toHaveLength(2);
-    expect(source).toContain("modalVectorLayerInput?.segments ?? vectorLayerInput.segments");
+    // Modal glyphs are phase-independent GPU glyphs; the layer phase cell is
+    // bound into the glyph shader, never baked into segments.
+    expect(source).toContain("buildModeCompositionComplexGlyphInput");
+    expect(source).toContain("identity: modeRenderPlan.surfacePass.buffer.identity,");
+    expect(source).toContain("<ComplexVectorGlyphLayer");
+    expect(source).toContain("modeCompositionPhase ??");
+    expect(source).not.toContain("modeCompositionPhaseRad");
     expect(source).toContain("modalVectorsActive || renderPlan.vectors.visible");
   });
 
