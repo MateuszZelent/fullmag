@@ -6,6 +6,7 @@ import {
   ControlRoomApiError,
   MAX_ANTENNA_INSPECTION_BYTES,
   MAX_TOPOLOGY_BYTES,
+  parseTableSeriesIdentityHeader,
   parseFieldVectorResponseMetadata,
   transformFieldMetaForDisplay,
   transformFieldVectorForDisplay,
@@ -23,6 +24,7 @@ import type {
   LivePreparationMaterializationRequest,
   LivePreparationMaterializationResource,
   SimulationPreparationResource,
+  StudyStageResult,
   AnalysisResultPageQuery,
   OutputStorageSettings,
   ProjectBatchCasesQuery,
@@ -46,6 +48,7 @@ import {
   SESSIONS_PATH,
   SIMULATION_PREPARATION_MATERIALIZATION_PATH,
   SIMULATION_PREPARATION_PATH,
+  PROJECT_STUDY_RESULT_SCALARS_PATH,
 } from "./apiPaths";
 import type { DecodedFieldVector } from "./codecs";
 import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
@@ -581,6 +584,91 @@ describe("field vector response metadata", () => {
   });
 });
 
+describe("table row series response metadata", () => {
+  const identity = {
+    run_id: "run-1",
+    task_id: "task-b1",
+    step_id: "B1",
+    case_id: "default",
+    attempt_id: "attempt-b1",
+    ownership_epoch: 4,
+  };
+
+  it("parses the identity attached to the exact binary rows response", () => {
+    const encoded = btoa(JSON.stringify(identity)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    expect(parseTableSeriesIdentityHeader(`v1.${encoded}`)).toEqual(identity);
+    expect(parseTableSeriesIdentityHeader("none")).toBeNull();
+    expect(parseTableSeriesIdentityHeader(null)).toBeUndefined();
+    expect(() => parseTableSeriesIdentityHeader("v2.invalid")).toThrow(/invalid series identity/);
+  });
+
+  it("keeps a legacy rows.bin response without the optional identity header readable", async () => {
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () => binaryResponse(
+        makeTableRowsBuffer([1, 0.1], { columnCount: 2, rowCount: 1 }),
+        { headers: { "content-type": "application/vnd.fullmag.table-rows.v1+octet-stream" } },
+      ),
+    });
+    const rows = await api.data.tables.rowsBinary("default", { columns: ["step", "mx"], limit: 1 });
+    expect(rows.status).toBe("ready");
+    if (rows.status === "ready") expect(rows.responseMetadata).toBeUndefined();
+  });
+});
+
+describe("bounded Study scalar history reads", () => {
+  it("forwards a bounded final-page request through the existing Study result facade", async () => {
+    const series = {
+      run_id: "run-1",
+      task_id: "task-b1",
+      step_id: "B1",
+      case_id: "default",
+      attempt_id: "attempt-b1",
+      ownership_epoch: 4,
+    };
+    const result: StudyStageResult = {
+      project_id: "project-1",
+      study_id: "study-1",
+      source: series,
+      authored_stage_id: "B1",
+      artifact_id: "final-state-b1",
+      artifact_sha256: "a".repeat(64),
+      codec_id: "test-codec",
+      codec_version: "1",
+      accepted_at: "2026-11-19T00:00:00Z",
+      authored_relation: "matching_authored_input",
+      supports_magnetization_input: true,
+    };
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return jsonResponse({
+          series,
+          artifact_id: "scalar-index-b1",
+          content_sha256: "b".repeat(64),
+          coverage: "solver_series",
+          total_rows: 100_001,
+          next_start: null,
+          columns: ["step", "time", "mx"],
+          rows: [[99_999, 9.9999e-8, 0.1], [100_000, 1e-7, 0.2]],
+        });
+      },
+    });
+
+    const window = await api.persistence.projects.studyResultScalars(result, 99_999, { limit: 2_048 });
+    const url = new URL(observedUrl);
+    expect(url.pathname).toBe(PROJECT_STUDY_RESULT_SCALARS_PATH
+      .replace("{project_id}", "project-1")
+      .replace("{run_id}", "run-1")
+      .replace("{artifact_id}", "final-state-b1"));
+    expect(url.searchParams.get("start")).toBe("99999");
+    expect(url.searchParams.get("limit")).toBe("2048");
+    expect(window.rows).toHaveLength(2);
+  });
+});
+
 const resourceRevisions: LiveStatusResource["resources"] = {
   artifact_revision: 0,
   artifacts_revision: 0,
@@ -720,7 +808,10 @@ function parseRequestJsonBody(body: unknown): unknown {
   return JSON.parse(String(body));
 }
 
-function makeTableRowsBuffer(values: readonly number[]): ArrayBuffer {
+function makeTableRowsBuffer(
+  values: readonly number[],
+  { rowCount = 2, columnCount = 3 }: { rowCount?: number; columnCount?: number } = {},
+): ArrayBuffer {
   const buffer = new ArrayBuffer(60 + values.length * Float64Array.BYTES_PER_ELEMENT);
   const bytes = new Uint8Array(buffer);
   bytes.set([70, 77, 84, 66], 0);
@@ -732,8 +823,8 @@ function makeTableRowsBuffer(values: readonly number[]): ArrayBuffer {
   view.setBigUint64(24, BigInt(11), true);
   view.setBigUint64(32, BigInt(12), true);
   view.setBigUint64(40, BigInt(12), true);
-  view.setBigUint64(48, BigInt(2), true);
-  view.setUint32(56, 3, true);
+  view.setBigUint64(48, BigInt(rowCount), true);
+  view.setUint32(56, columnCount, true);
   for (let i = 0; i < values.length; i++) {
     view.setFloat64(60 + i * 8, values[i], true);
   }
@@ -3283,9 +3374,18 @@ describe("ControlRoomApi", () => {
         ]);
       }
       if (requestUrl.includes("/rows.bin?")) {
+        const series = btoa(JSON.stringify({
+          run_id: "run-1",
+          task_id: "task-b1",
+          step_id: "B1",
+          case_id: "default",
+          attempt_id: "attempt-b1",
+          ownership_epoch: 4,
+        })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
         return binaryResponse(makeTableRowsBuffer([11, 1.1e-12, 7.1, 12, 1.2e-12, 7.2]), {
           headers: {
             "content-type": "application/vnd.fullmag.table-rows.v1+octet-stream",
+            "x-fullmag-table-series": `v1.${series}`,
           },
         });
       }
@@ -3318,6 +3418,14 @@ describe("ControlRoomApi", () => {
     }
     expect(binary.data.rowCount).toBe(2);
     expect(binary.data.columnCount).toBe(3);
+    expect(binary.responseMetadata).toEqual({
+      run_id: "run-1",
+      task_id: "task-b1",
+      step_id: "B1",
+      case_id: "default",
+      attempt_id: "attempt-b1",
+      ownership_epoch: 4,
+    });
     expect(Array.from(binary.data.values)).toEqual([
       11,
       1.1e-12,

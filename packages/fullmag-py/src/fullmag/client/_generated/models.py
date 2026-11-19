@@ -2817,6 +2817,7 @@ TableRowsResource = TypedDict(
         'revision': 'int',
         'rows': 'List[List[float]]',
         'schema_revision': 'int',
+        'series': 'Optional[ScalarSeriesIdentity]',
         'table_id': 'str',
         'total_rows': 'int',
     },

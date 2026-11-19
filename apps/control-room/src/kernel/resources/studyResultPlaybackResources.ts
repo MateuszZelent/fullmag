@@ -40,14 +40,20 @@ export function useStudyResultPlaybackResources(result: StudyStageResult) {
   return { state, geometry, magnetization };
 }
 
-export function useStudyResultScalarsResource(result: StudyStageResult | null, start: number) {
+export function useStudyResultScalarsResource(
+  result: StudyStageResult | null,
+  start: number,
+  limit = 50,
+  { pauseLoad = false }: { pauseLoad?: boolean } = {},
+) {
   const { api } = useKernel();
   const load = useCallback(({ signal }: { signal: AbortSignal }) => {
     if (!result) throw new Error("Select a saved Study result.");
-    return api.persistence.projects.studyResultScalars(result, start, { signal });
-  }, [api, result, start]);
+    return api.persistence.projects.studyResultScalars(result, start, { signal, limit });
+  }, [api, limit, result, start]);
   return useResource({
-    resourceKey: `project:study-result:${result ? studyResultCacheKey(result) : "none"}:scalars:${start}`,
+    resourceKey: `project:study-result:${result ? studyResultCacheKey(result) : "none"}:scalars:${start}:${limit}`,
     enabled: result !== null, load, abortStaleInflight: true, retryPolicy: null, notifyOnError: false,
+    pauseLoad,
   });
 }

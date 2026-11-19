@@ -16,6 +16,7 @@ import { buildScalarChartSeries } from "@/shared/domain/analysis/scalarTableChar
 
 import { useLiveEnergyData } from "./hooks/useLiveEnergyData";
 import { useLiveTableData } from "./hooks/useLiveTableData";
+import { useLiveChartArchivedTable } from "./hooks/useLiveChartArchivedTable";
 import {
   isLiveChartServerXAxisId,
   liveChartDescriptorDefaults,
@@ -133,6 +134,41 @@ export function useLiveChartsController(selection: SelectionController) {
   const commandFitRequest = useSyncExternalStore(liveChartsCommandRequests.subscribe, liveChartsCommandRequests.getFitRequestSnapshot, liveChartsCommandRequests.getFitRequestSnapshot);
   const paused = descriptor.liveMode === "paused";
   const tableData = useLiveTableData({ active: descriptorId !== "energy", paused, range: descriptor.range, targetPoints: descriptor.targetPoints, xAxisId: descriptor.xAxisId });
+  const archivedTable = useLiveChartArchivedTable({
+    active: descriptorId !== "energy",
+    columns: tableData.columns.data,
+    currentSeries: tableData.currentSeriesIdentity,
+    paused,
+    range: tableData.range,
+  });
+  const liveTableView = useMemo<LiveChartTableView>(() => ({
+    archived: archivedTable !== null,
+    columns: tableData.columns.data,
+    descriptorId,
+    error: tableData.rows.error,
+    range: tableData.range,
+    revision: tableData.rows.revision,
+    scope: tableData.sessionScopeKey,
+    status: tableData.rows.status,
+    table: archivedTable ?? tableData.table,
+    unsupportedReason: tableData.unsupportedReason,
+    xAxisId: tableData.xAxisId,
+  }), [
+    archivedTable, descriptorId, tableData.columns.data, tableData.range, tableData.rows.error,
+    tableData.rows.revision, tableData.rows.status, tableData.sessionScopeKey, tableData.table,
+    tableData.unsupportedReason, tableData.xAxisId,
+  ]);
+  const [lastTableView, setLastTableView] = useState<LiveChartTableView | null>(null);
+  const sameScope = lastTableView !== null && liveTableView.scope !== null &&
+    lastTableView.scope === liveTableView.scope && lastTableView.descriptorId === descriptorId;
+  if (lastTableView && !sameScope) {
+    setLastTableView(null);
+  } else if (!paused && liveTableView.scope && lastTableView !== liveTableView) {
+    setLastTableView(liveTableView);
+  }
+  const tableView = paused ? (sameScope ? lastTableView : null) : liveTableView;
+  const chartTable = tableView?.table ?? null;
+  const effectiveTableXAxisId = tableView?.xAxisId ?? descriptor.xAxisId;
   const energyData = useLiveEnergyData({ active: true, descriptorId, paused });
   const [localFitRequest, setLocalFitRequest] = useState(0);
   const [localExportState, setLocalExportState] = useState<LiveChartsLocalExportState>({ errorFormat: null, request: null });
@@ -159,7 +195,7 @@ export function useLiveChartsController(selection: SelectionController) {
     liveChartPreferencesStore.updateDescriptor(descriptorId, () => defaults);
   }, [defaults, descriptorId, preferences.descriptor, preferences.isHydrated]);
   useEffect(() => {
-    if (!preferences.isHydrated || descriptorId === "energy") return;
+    if (!preferences.isHydrated || descriptorId === "energy" || paused || !tableData.columns.data) return;
     const axisChanged = tableData.xAxisId !== descriptor.xAxisId;
     const rangeChanged = !liveChartRangesEqual(tableData.range, descriptor.range);
     if (!axisChanged && !rangeChanged) return;
@@ -168,18 +204,17 @@ export function useLiveChartsController(selection: SelectionController) {
       range: tableData.range,
       xAxisId: tableData.xAxisId,
     }));
-  }, [descriptor.range, descriptor.xAxisId, descriptorId, preferences.isHydrated, tableData.range, tableData.xAxisId]);
+  }, [descriptor.range, descriptor.xAxisId, descriptorId, paused, preferences.isHydrated, tableData.columns.data, tableData.range, tableData.xAxisId]);
   useEffect(() => {
     if (!commandAction) return;
-    applyLiveChartsCommand({ action: commandAction, descriptorId, preferences, setLocalExportState, tableXAxisId: tableData.xAxisId });
-  }, [commandAction, descriptorId, preferences, tableData.xAxisId]);
-  const effectiveTableXAxisId = tableData.xAxisId;
+    applyLiveChartsCommand({ action: commandAction, descriptorId, preferences, setLocalExportState, tableXAxisId: effectiveTableXAxisId });
+  }, [commandAction, descriptorId, effectiveTableXAxisId, preferences]);
   // Series depend only on whether the rows resource failed, not on every
   // loading/ready transition of a background refresh that keeps the same table.
-  const tableRowsFailed = tableData.rows.status === "error";
+  const tableRowsFailed = !tableView?.archived && tableView?.status === "error";
   const tableSeries = useMemo(
-    () => buildLiveChartsTableSeries(tableData.table, tableRowsFailed, effectiveTableXAxisId),
-    [effectiveTableXAxisId, tableData.table, tableRowsFailed],
+    () => buildLiveChartsTableSeries(chartTable, tableRowsFailed, effectiveTableXAxisId),
+    [chartTable, effectiveTableXAxisId, tableRowsFailed],
   );
   const allSeries = resolveLiveChartsSeries(descriptorId, energyData.series, tableSeries);
   const persistedSelectedSeriesIds = descriptor.selectedSeriesIds;
@@ -194,7 +229,9 @@ export function useLiveChartsController(selection: SelectionController) {
   );
   const series = allSeries;
   const selectionHandlers = createLiveChartSelectionHandlers({ descriptorId, selection });
-  const presentationSnapshot = liveChartsPresentationSnapshot({ descriptorId, energyData, tableData });
+  const presentationSnapshot = liveChartsPresentationSnapshot({
+    descriptorId, energyData, tableView,
+  });
   const {
     error: presentationError,
     hasData: presentationHasData,
@@ -229,7 +266,11 @@ export function useLiveChartsController(selection: SelectionController) {
     ],
   );
   const effectiveXAxisId = resolveLiveChartsXAxisId(descriptorId, effectiveTableXAxisId);
-  const viewMetadata = deriveLiveChartsViewMetadata({ descriptor, descriptorId, effectiveXAxisId, tableData });
+  const viewMetadata = deriveLiveChartsViewMetadata({
+    descriptor, descriptorId, effectiveXAxisId,
+    tableRange: tableView?.range ?? descriptor.range,
+    tableColumns: tableView?.columns ?? null,
+  });
   const viewActions = createLiveChartsViewActions({
     commandExportRequest,
     descriptorId,
@@ -273,7 +314,7 @@ function buildLiveChartsTableSeries(
 ): ChartSeries[] {
   if (!table) return [];
   return buildScalarChartSeries({ ...table, valueAt: (rowIndex, columnIndex) => table.values[rowIndex * table.columnCount + columnIndex] }, {
-    dataRevision: table.revision,
+    dataRevision: table.seriesRevision ?? table.revision,
     status: rowsFailed ? "error" : "ready",
     tableId: "default",
     unitLayout: "split-panes",
@@ -293,6 +334,20 @@ function resolveLiveChartsSeries(
   return descriptorId === "energy" ? energySeries : tableSeries;
 }
 
+interface LiveChartTableView {
+  archived: boolean;
+  columns: ReturnType<typeof useLiveTableData>["columns"]["data"];
+  descriptorId: LiveChartPresetId;
+  error: Error | null;
+  range: ReturnType<typeof useLiveTableData>["range"];
+  revision: string | number | null;
+  scope: string | null;
+  status: ReturnType<typeof useLiveTableData>["rows"]["status"];
+  table: ReturnType<typeof useLiveTableData>["table"];
+  unsupportedReason: string | null;
+  xAxisId: string;
+}
+
 interface LiveChartsPresentationSnapshot {
   error: Error | null;
   hasData: boolean;
@@ -306,28 +361,36 @@ interface LiveChartsPresentationSnapshot {
 function liveChartsPresentationSnapshot({
   descriptorId,
   energyData,
-  tableData,
+  tableView,
 }: {
   descriptorId: LiveChartPresetId;
   energyData: ReturnType<typeof useLiveEnergyData>;
-  tableData: ReturnType<typeof useLiveTableData>;
+  tableView: LiveChartTableView | null;
 }): LiveChartsPresentationSnapshot {
-  const resource = descriptorId === "energy" ? energyData.resource : tableData.rows;
-  const isEmpty = descriptorId === "energy"
-    ? energyData.resource.data?.rows.length === 0
-    : tableData.table?.rowCount === 0;
-  const data = descriptorId === "energy" ? energyData.resource.data : tableData.table;
-  const visibleRevision = descriptorId === "energy"
-    ? energyData.resource.data?.revision ?? null
-    : tableData.table?.revision ?? null;
+  if (descriptorId === "energy") {
+    const { data, error, revision, status } = energyData.resource;
+    return {
+      error, hasData: data !== null, isEmpty: data?.rows.length === 0,
+      requestedRevision: revision, status, unsupportedReason: null,
+      visibleRevision: data?.revision ?? null,
+    };
+  }
+  if (tableView?.archived && tableView.table) {
+    const revision = tableView.table.seriesRevision ?? tableView.table.revision;
+    return {
+      error: null, hasData: true, isEmpty: tableView.table.rowCount === 0,
+      requestedRevision: revision, status: "ready", unsupportedReason: null, visibleRevision: revision,
+    };
+  }
+
   return {
-    error: resource.error,
-    hasData: data !== null,
-    isEmpty,
-    requestedRevision: resource.revision,
-    status: tableData.unsupportedReason ? "unsupported" : resource.status,
-    unsupportedReason: tableData.unsupportedReason ?? null,
-    visibleRevision,
+    error: tableView?.error ?? null,
+    hasData: Boolean(tableView?.table),
+    isEmpty: tableView?.table?.rowCount === 0,
+    requestedRevision: tableView?.revision ?? null,
+    status: tableView?.unsupportedReason ? "unsupported" : tableView?.status ?? "idle",
+    unsupportedReason: tableView?.unsupportedReason ?? null,
+    visibleRevision: tableView?.table?.revision ?? null,
   };
 }
 
@@ -355,21 +418,23 @@ function deriveLiveChartsViewMetadata({
   descriptor,
   descriptorId,
   effectiveXAxisId,
-  tableData,
+  tableRange,
+  tableColumns,
 }: {
   descriptor: ReturnType<typeof liveChartDescriptorDefaults>;
   descriptorId: LiveChartPresetId;
   effectiveXAxisId: string;
-  tableData: ReturnType<typeof useLiveTableData>;
+  tableRange: LiveChartTableView["range"];
+  tableColumns: LiveChartTableView["columns"];
 }) {
   return {
-    range: descriptorId === "energy" ? descriptor.range : tableData.range,
+    range: descriptorId === "energy" ? descriptor.range : tableRange,
     title: liveChartPreset(descriptorId).title,
     xAxisId: effectiveXAxisId,
     xAxisLabel: liveChartsXAxisLabel(effectiveXAxisId),
     xAxisOptions: descriptorId === "energy"
       ? [{ id: "t", label: "Time (s)" }]
-      : liveChartXAxisOptions(tableData.columns.data ?? []),
+      : liveChartXAxisOptions(tableColumns ?? []),
   };
 }
 
