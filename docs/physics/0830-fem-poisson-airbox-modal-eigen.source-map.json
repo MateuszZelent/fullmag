@@ -445,6 +445,89 @@
         "source-floquet-augmented-shift",
         "source-augmented-shift-solver"
       ]
+    },
+    {
+      "id": "eq-open-airbox-k0-robin",
+      "symbols": [
+        "robin_beta",
+        "robin_factor",
+        "robin_radius"
+      ],
+      "sources": [
+        "source-open-airbox-k0-native"
+      ]
+    },
+    {
+      "id": "eq-open-airbox-k0-identity-classes",
+      "symbols": [
+        "identity_classes"
+      ],
+      "sources": [
+        "source-open-airbox-k0-runner",
+        "source-open-airbox-k0-native"
+      ]
+    },
+    {
+      "id": "eq-open-airbox-k0-sphere-kittel",
+      "symbols": [
+        "sphere_frequency"
+      ],
+      "sources": [
+        "source-open-airbox-k0-ir",
+        "source-open-airbox-k0-plan"
+      ]
+    },
+    {
+      "id": "eq-k0-film-neumann",
+      "symbols": [
+        "P"
+      ],
+      "sources": [
+        "source-k0-film-neumann-runner"
+      ]
+    },
+    {
+      "id": "eq-k0-film-robin-defect",
+      "symbols": [
+        "film_thickness",
+        "air_layer",
+        "robin_beta",
+        "robin_film_demag"
+      ],
+      "sources": [
+        "source-k0-film-neumann-runner"
+      ]
+    },
+    {
+      "id": "eq-k0-static-dynamic-mismatch",
+      "symbols": [
+        "sphere_frequency"
+      ],
+      "sources": [
+        "source-k0-consistent-static-demag"
+      ]
+    },
+    {
+      "id": "eq-k0-consistent-static-demag",
+      "symbols": [
+        "P",
+        "static_potential_p1",
+        "static_source",
+        "static_demag_p1"
+      ],
+      "sources": [
+        "source-k0-consistent-static-demag"
+      ]
+    },
+    {
+      "id": "eq-k0-consistent-h-parallel",
+      "symbols": [
+        "static_demag_p1",
+        "static_demag_producer"
+      ],
+      "sources": [
+        "source-k0-consistent-static-demag"
+      ]
     }
   ],
   "symbols": [
@@ -1029,6 +1112,78 @@
       "latex": "$b$",
       "meaning": "prawa strona kroku shift-invert",
       "si_unit": "$1$"
+    },
+    {
+      "id": "robin_beta",
+      "latex": "$\\beta$",
+      "meaning": "współczynnik Robina na brzegu zewnętrznym",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "robin_factor",
+      "latex": "$c_\\beta$",
+      "meaning": "bezwymiarowy współczynnik Robina",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "robin_radius",
+      "latex": "$R_\\ast$",
+      "meaning": "promień odniesienia Robina",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "identity_classes",
+      "latex": "$\\kappa_\\phi,\\kappa_m$",
+      "meaning": "tożsamościowe klasy węzłów trybu otwartego",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "sphere_frequency",
+      "latex": "$f_{\\mathrm{sph}}$",
+      "meaning": "częstotliwość modu jednorodnego kuli",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "film_thickness",
+      "latex": "$t$",
+      "meaning": "grubość filmu",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "air_layer",
+      "latex": "$d$",
+      "meaning": "grubość warstwy powietrza",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "robin_film_demag",
+      "latex": "$N_{zz}^{\\mathrm{Robin}}$",
+      "meaning": "współczynnik odmagnesowania filmu z brzegiem Robina",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "static_potential_p1",
+      "latex": "$\\phi_0^{\\mathrm{P1}}$",
+      "meaning": "statyczny potencjał P1 dla m0",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "static_source",
+      "latex": "$\\mathbf b$",
+      "meaning": "źródło ładunków magnetycznych",
+      "si_unit": "$\\mathrm{A\\,m}$"
+    },
+    {
+      "id": "static_demag_p1",
+      "latex": "$\\mathbf H^{\\mathrm{P1}}_{d,0}$",
+      "meaning": "węzłowe statyczne pole demag P1",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "static_demag_producer",
+      "latex": "$\\mathbf H^{\\mathrm{prod}}_{d,0}$",
+      "meaning": "pole demag producenta równowagi",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
     }
   ],
   "sources": [
@@ -1683,6 +1838,48 @@
       "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
       "symbol": "create_native_floquet_augmented_shift_solver",
       "responsibility": "Assemble the phase-rotated Floquet augmented (q, phi) shift matrix from the normalized shell blocks, factor it with MUMPS and install it as the inner shifted-KSP preconditioner.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-open-airbox-k0-ir",
+      "path": "crates/fullmag-ir/src/execution.rs",
+      "symbol": "MagnetostaticBoundaryConditionIR",
+      "responsibility": "Serialize the open_airbox_k0 magnetostatic boundary token in ProblemIR.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-open-airbox-k0-plan",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "open_airbox_k0_execution_requested",
+      "responsibility": "Resolve the CPU execution of open_airbox_k0 and reject GPU without fallback.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-open-airbox-k0-runner",
+      "path": "crates/fullmag-runner/src/fem/eigen_policy.rs",
+      "symbol": "shared_domain_k0_modal_requested",
+      "responsibility": "Route an open_airbox_k0 plan through the shared-domain K0 modal lane.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-open-airbox-k0-native",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "assemble_poisson_airbox_shared_domain_payload",
+      "responsibility": "Validate identity classes and the Robin outer boundary without periodic pairs.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-k0-film-neumann-runner",
+      "path": "crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs",
+      "symbol": "shared_domain_modal_outer_boundary",
+      "responsibility": "Select pure Neumann with the mean-zero gauge for K0 films periodic along two axes.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-k0-consistent-static-demag",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "recompute_shared_domain_static_demag_p1",
+      "responsibility": "Solve the static P1 demag of m0 with the dynamic block's operator and replace the restoring parallel field before A_qq assembly.",
       "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
     }
   ],

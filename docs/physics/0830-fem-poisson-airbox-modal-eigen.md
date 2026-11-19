@@ -2546,8 +2546,12 @@ klasami, zerowymi licznikami par i schematem `open_airbox_identity.v1`, a
 ## Brzeg zewnętrzny filmu periodycznego k=0 (korekta 2026-11-19)
 
 Status: korekta ścieżki shared-domain K0 dla siatek periodycznych w dwóch
-osiach. Źródło: patrz tabela niżej. Runtime: **NOT VERIFIED** do czasu
-pomiaru sondą demag opisanego niżej.
+osiach. Źródło: patrz tabela niżej. Runtime headless CPU w Docker DEV
+(2026-11-19, `examples/fem_eigen_k0_poisson_airbox_production.py` z
+`grading="geometric"`): sonda $N_{zz}=1.0000000000000058$, $N_{yy}\approx0$,
+$f=6.4324\,\mathrm{GHz}$ wobec Kittla filmu
+$\gamma_0\sqrt{H_b(H_b+M_s)}/2\pi=6.438\,\mathrm{GHz}$ (przed korektą
+6.010 GHz). Qualification i run przez API DEV: **NOT VERIFIED**.
 
 Dla filmu periodycznego w $x$ i $y$ składowa $\mathbf G=0$ potencjału zależy
 tylko od $z$. Na zewnątrz filmu $\partial_z^2\phi_0=0$, a fizyczne
@@ -2599,8 +2603,14 @@ modalny K0 używa `pure_neumann` z $\beta=0$. Jawne `dirichlet` lub
 
 ## Spójne pole statyczne w linearyzacji K0 (korekta 2026-11-19)
 
-Status: korekta źródła; runtime **NOT VERIFIED** do czasu ponownego testu
-kuli {eq}`eq-open-airbox-k0-sphere-kittel`.
+Status: runtime headless CPU w Docker DEV (2026-11-19,
+`examples/fem_eigen_k0_open_airbox_sphere.py`, siatka 4/25 nm): średnie
+przesunięcie $h_\parallel$ $+11.27\,\mathrm{kA/m}$ na 625 węzłach,
+$f=2.80352\,\mathrm{GHz}$ wobec {eq}`eq-open-airbox-k0-sphere-kittel`
+$2.80250\,\mathrm{GHz}$ (błąd $0.04\,\%$; przed korektą 2.402 GHz),
+certyfikowane residuum. Dla filmu periodycznego przesunięcie jest na poziomie
+zaokrągleń ($\le10^{-10}\,\mathrm{A/m}$). Qualification i run przez API DEV:
+**NOT VERIFIED**.
 
 Część dynamiczna operatora K0 jest P1:
 $\mathbf h_d(\mathbf q)=-A_{q\phi}P^{-1}A_{\phi q}\mathbf q$. Człon
