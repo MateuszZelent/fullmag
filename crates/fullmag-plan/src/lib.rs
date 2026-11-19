@@ -28,6 +28,7 @@ mod fdm;
 mod fem;
 mod geometry;
 mod magnetization_textures;
+mod mask_field;
 mod magnetization_textures_v2;
 mod material;
 mod material_transition;
@@ -65,6 +66,8 @@ pub use antenna_validity::{
     antenna_waveform_bandwidth_notes, classify_antenna_waveform_bandwidth,
 };
 pub use error::PlanError;
+pub use fem::damping_on_geometry_mesh;
+pub use material::validate_absorbing_region_boundary;
 pub use fdm::{
     checked_multilayer_aggregate_memory_bytes, checked_multilayer_pair_kernel_footprint,
     fdm_multilayer_cuda_aligned_embedding_eligible, fdm_multilayer_cuda_aligned_embedding_error,
@@ -371,7 +374,7 @@ fn has_active_finite_k_source(problem: &ProblemIR) -> bool {
         drive.peak_current_a.is_finite()
             && drive.peak_current_a != 0.0
             && util::drive_activation_is_active(&drive.activation, problem)
-    })
+    }) || !mask_field::active_mask_field_drives(problem).is_empty()
 }
 
 #[cfg(test)]

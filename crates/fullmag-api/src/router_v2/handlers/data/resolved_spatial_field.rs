@@ -696,6 +696,9 @@ pub(crate) fn resolve_fdm_multilayer_native_layer_field(
         )
         .map(Some);
     }
+    if quantity_id == "mat_alpha" && crate::live_authored_damping::publication_revision(snapshot).is_some() {
+        return Err(ApiError::not_found("edited damping awaits a qualified native layer layout"));
+    }
     let Some(layout) = metadata.get("artifact_layout").filter(|layout| {
         layout.get("backend").and_then(serde_json::Value::as_str) == Some("fdm_multilayer")
     }) else {
@@ -1758,25 +1761,22 @@ fn resolve_planned_native_layer_field(
             )));
         }
     };
-    let material = layer.get("material").ok_or_else(|| {
-        ApiError::conflict(format!(
-            "layer '{}' has no material contract",
-            membership.layer_id
-        ))
-    })?;
-    if material.get(material_key).is_none() {
-        return Err(ApiError::not_found(format!(
-            "quantity_not_materialized: field '{quantity_id}' has no native array for layer '{}'",
-            membership.layer_id
-        )));
-    }
-    let values = strict_finite_values(
-        material,
-        material_key,
-        membership.membership.cell_membership.len(),
-        quantity_id,
-    )?;
-    cross_check_planned_material(snapshot, &membership, quantity_id, spec.unit, &values)?;
+    let count = membership.membership.cell_membership.len();
+    let values = if quantity_id == "mat_alpha" && crate::live_authored_damping::publication_revision(snapshot).is_some() {
+        crate::live_authored_damping::native_layer_values(snapshot, &membership.layer_id, count)?
+    } else {
+        let material = layer.get("material").ok_or_else(|| ApiError::conflict(format!(
+            "layer '{}' has no material contract", membership.layer_id)))?;
+        if material.get(material_key).is_none() {
+            return Err(ApiError::not_found(format!(
+                "quantity_not_materialized: field '{quantity_id}' has no native array for layer '{}'",
+                membership.layer_id)));
+        }
+        let values = strict_finite_values(material, material_key, count, quantity_id)?;
+        cross_check_planned_material(snapshot, &membership, quantity_id, spec.unit, &values)?;
+        values
+    };
+
     let value_hash = hash_f64_values(&values);
     let field_generation = format!(
         "sha256:{:x}",
@@ -2509,7 +2509,11 @@ fn resolve_spatial_field_metadata<'a>(
             ApiError::conflict(format!("field '{quantity_id}' has no FEM topology carrier"))
         })?;
         let topology_fingerprint = mesh.topology_fingerprint().to_owned();
-        match spec.location {
+        let location = if matches!(source_kind, SpatialFieldSourceKind::Materialized)
+            && super::field_resolution::current_fem_damping_uses_nodes(snapshot, quantity_id) {
+            QuantityLocation::Node
+        } else { spec.location };
+        match location {
             QuantityLocation::Cell
                 if matches!(source_kind, SpatialFieldSourceKind::Materialized | SpatialFieldSourceKind::Preview)
                     && point_count == mesh.nodes.len()

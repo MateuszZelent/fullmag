@@ -1,6 +1,15 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// For PATCH fields, omission preserves the old value and explicit null clears it.
+pub(super) fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct AcceptedStateRefResource {
     pub id: AcceptedStateIdResource,

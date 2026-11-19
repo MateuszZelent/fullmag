@@ -5,6 +5,12 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from fullmag.runtime.material_assets import (
+    canonical_material_assets,
+    material_assets_from_scene,
+    reconcile_material_assets,
+    restore_inactive_material_dmi,
+)
 from fullmag.runtime.thermal_noise_authoring import canonical_thermal_noise
 from fullmag.runtime.imported_geometry_assets import imported_geometry_source_asset_fields
 from fullmag.model.geometry import RigidTransform
@@ -1693,6 +1699,15 @@ def _validated_rotated_dmi_object_ids(
     return list(term.object_ids or ())
 
 
+def _scene_field_drives(builder: Mapping[str, object]) -> dict[str, object]:
+    """Regional drives and mask antennas of the builder (mask list omitted when empty)."""
+    state: dict[str, object] = {"drives": copy.deepcopy(builder.get("field_drives") or [])}
+    mask_drives = builder.get("mask_field_drives") or []
+    if mask_drives:
+        state["mask_drives"] = copy.deepcopy(mask_drives)
+    return state
+
+
 def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]:
     geometries = builder.get("geometries") or []
     rotated_dmi_object_ids = _validated_rotated_dmi_object_ids(
@@ -1701,12 +1716,21 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         geometries,
     )
     objects: list[dict[str, Any]] = []
-    materials: list[dict[str, Any]] = []
+    material_metadata = None
+    if builder.get("material_assets") is not None:
+        metadata = canonical_material_assets(builder["material_assets"])
+        if metadata.get("inactive_dmi"):
+            geometries = copy.deepcopy(geometries)
+            restore_inactive_material_dmi(metadata, geometries)
+        material_metadata = reconcile_material_assets(metadata, geometries)
+    materials: list[dict[str, Any]] = material_metadata["materials"] if material_metadata is not None else []
+    material_assignments = material_metadata["assignments"] if material_metadata is not None else {}
+    object_ids = material_metadata["object_ids"] if material_metadata is not None else {}
     magnetization_assets: list[dict[str, Any]] = []
 
     for geometry in geometries:
         name = str(geometry.get("name", "object"))
-        object_id = str(geometry.get("object_id") or name)
+        object_id = str(geometry.get("object_id") or object_ids.get(name) or name)
         geometry_params = dict(geometry.get("geometry_params") or {})
         translation = geometry_params.pop("translation", geometry_params.pop("translate", [0, 0, 0]))
         role = str(geometry.get("role") or "magnet")
@@ -1750,7 +1774,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
                     "scale": _one_vec3(),
                     "pivot": _zero_vec3(),
                 },
-                "material_ref": "" if is_auxiliary else _material_id(name),
+                "material_ref": "" if is_auxiliary else material_assignments.get(object_id, _material_id(name)),
                 "region_name": geometry.get("region_name"),
                 "magnetization_ref": None if is_auxiliary else _magnetization_id(name),
                 "physics_stack": [] if is_auxiliary else physics_stack,
@@ -1768,13 +1792,14 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         )
         if is_auxiliary:
             continue
-        materials.append(
-            {
-                "id": _material_id(name),
-                "name": f"{name} material",
-                "properties": material_properties,
-            }
-        )
+        if material_metadata is None:
+            materials.append(
+                {
+                    "id": _material_id(name),
+                    "name": f"{name} material",
+                    "properties": material_properties,
+                }
+            )
         magnetization_assets.append(
             {
                 "id": _magnetization_id(name),
@@ -1860,7 +1885,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         },
         "current_transports": _canonical_current_transports(current_transport_entries),
         "couplings": builder.get("couplings") or [],
-        "field_drives": {"drives": copy.deepcopy(builder.get("field_drives") or [])},
+        "field_drives": _scene_field_drives(builder),
         "monitors": {"planar": copy.deepcopy(builder.get("planar_monitors") or [])},
         "study": {
             "backend": builder.get("backend"),
@@ -2111,7 +2136,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             "visualization_hint": obj.get("visualization_hint") or {},
         }
         if not is_auxiliary:
-            entry["material"] = material_properties
+            # Per-object DSL edits may fork a shared scene material.
+            entry["material"] = dict(material_properties)
             entry["magnetization"] = magnetization
             entry["physics_stack"] = physics_stack
         geometries.append(entry)
@@ -2271,6 +2297,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "output_storage": study.get("output_storage"),
         "initial_state": study.get("initial_state"),
         "geometries": geometries,
+        "material_assets": material_assets_from_scene(scene),
         "couplings": scene.get("couplings") or [],
         "current_modules": [*antenna_modules, *transports],
         "excitation_analysis": excitation_analysis,
@@ -2296,7 +2323,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         field_drives = scene["field_drives"]
         if not isinstance(field_drives, Mapping):
             raise ValueError("SceneDocument.field_drives must be an object")
-        unknown_field_drive_fields = set(field_drives) - {"drives"}
+        unknown_field_drive_fields = set(field_drives) - {"drives", "mask_drives"}
         if unknown_field_drive_fields:
             names = ", ".join(
                 sorted(str(name) for name in unknown_field_drive_fields)
@@ -2314,6 +2341,12 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
                     f"{index}] must be an object"
                 )
         builder["field_drives"] = copy.deepcopy(drives)
+        mask_drives = field_drives.get("mask_drives", [])
+        if not isinstance(mask_drives, list) or any(
+            not isinstance(drive, Mapping) for drive in mask_drives
+        ):
+            raise ValueError("SceneDocument.field_drives.mask_drives must be a list of objects")
+        builder["mask_field_drives"] = copy.deepcopy(mask_drives)
     if "monitors" in scene:
         monitors = scene["monitors"]
         if not isinstance(monitors, Mapping):
@@ -2640,8 +2673,10 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "output_storage": builder.get("output_storage"),
         "initial_state": builder.get("initial_state"),
         "geometries": builder.get("geometries") or [],
+        "material_assets": builder.get("material_assets"),
         "couplings": builder.get("couplings") or [],
         "field_drives": builder.get("field_drives") or [],
+        "mask_field_drives": builder.get("mask_field_drives") or [],
         "planar_monitors": builder.get("planar_monitors") or [],
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
@@ -2687,6 +2722,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
     _copy_present_collection(builder, overrides, "spin_transports")
     _copy_present_collection(builder, overrides, "oersted_terms")
     _copy_present_collection(builder, overrides, "field_drives")
+    _copy_present_collection(builder, overrides, "mask_field_drives")
     _copy_present_collection(builder, overrides, "antenna_port_modes")
     _copy_present_collection(builder, overrides, "antenna_field_solve_stages")
     _copy_present_collection(builder, overrides, "antenna_target_projections")

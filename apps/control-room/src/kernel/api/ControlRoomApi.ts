@@ -1,3 +1,9 @@
+import type { MaterialLibraryResource, MaterialLibraryMutationResource, MaterialLibraryWriteRequest, MaterialLibraryUpdateRequest, MaterialLibraryDeleteRequest, MaterialLibraryDeleteResource, SceneMaterialSource } from "./apiTypes";
+import type { MaterialVersionMutationResource, MaterialVersionPublishRequest, MaterialVersionUpdateRequest } from "./apiTypes";
+import {
+  WORKSPACE_MATERIAL_LIBRARY_PATH, WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH,
+  WORKSPACE_MATERIAL_LIBRARY_VERSIONS_PATH, WORKSPACE_MATERIAL_LIBRARY_VERSION_PATH,
+} from "./apiPaths";
 import { MODEL_OBJECT_SOURCE_SURFACE_PATH, MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH } from "./apiPaths";
 import type { ImportedSourceSurfaceResource, ImportedSourceSurfaceQuery } from "./apiTypes";
 import { WORKSPACE_ITEM_PLAYBACK_PATH, WORKSPACE_ITEM_PLAYBACK_FRAME_PATH, WORKSPACE_ITEM_PLAYBACK_GEOMETRY_PATH } from "./apiPaths";
@@ -159,6 +165,10 @@ import {
   MODEL_CURRENT_TRANSPORTS_PATH,
   MODEL_FIELD_DRIVE_PATH,
   MODEL_FIELD_DRIVES_PATH,
+  MODEL_MASK_FIELD_DRIVE_PATH,
+  MODEL_MASK_FIELD_DRIVES_PATH,
+  MODEL_READY_ANTENNA_TERMS_PATH,
+  MODEL_READY_ANTENNAS_PATH,
   MODEL_SPIN_TRANSPORT_PATH,
   MODEL_SPIN_TRANSPORTS_PATH,
   MODEL_SPIN_INTERFACES_PATH,
@@ -335,6 +345,12 @@ import type {
   FieldDriveDeleteRequest,
   FieldDriveListResource,
   FieldDriveReplaceRequest,
+  MaskFieldDriveCreateRequest,
+  MaskFieldDriveListResource,
+  MaskFieldDriveReplaceRequest,
+  ReadyAntennaListResource,
+  ReadyAntennaTermsRequest,
+  ReadyAntennaTermsResource,
   SpinWaveGammaResource,
   CpuTelemetryResource,
   CrossSectionImageQuery,
@@ -1187,6 +1203,22 @@ export class ControlRoomApi {
    * them (modules/start/model/workspaceApiTypes.ts) until generated types exist.
    */
   readonly workspace = {
+    listMaterials: (options?: RequestOptions) =>
+      this.requestJson<MaterialLibraryResource>(WORKSPACE_MATERIAL_LIBRARY_PATH, options),
+    publishMaterialVersion: (input: MaterialVersionPublishRequest, options?: RequestOptions) =>
+      this.postJson<MaterialVersionMutationResource, MaterialVersionPublishRequest>(
+        WORKSPACE_MATERIAL_LIBRARY_VERSIONS_PATH, input, options,
+      ),
+    updateMaterialVersion: (family: string, version: string, input: MaterialVersionUpdateRequest, options?: RequestOptions) =>
+      this.patchJson<MaterialVersionMutationResource, MaterialVersionUpdateRequest>(
+        WORKSPACE_MATERIAL_LIBRARY_VERSION_PATH, input, options, { path: { family, version } },
+      ),
+    createMaterial: (input: MaterialLibraryWriteRequest, options?: RequestOptions) =>
+      this.postJson<MaterialLibraryMutationResource, MaterialLibraryWriteRequest>(WORKSPACE_MATERIAL_LIBRARY_PATH, input, options),
+    updateMaterial: (id: string, input: MaterialLibraryUpdateRequest, options?: RequestOptions) =>
+      this.putJson<MaterialLibraryMutationResource, MaterialLibraryUpdateRequest>(WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH, input, options, { path: { id } }),
+    deleteMaterial: (id: string, input: MaterialLibraryDeleteRequest, options?: RequestOptions) =>
+      this.deleteJsonWithBody<MaterialLibraryDeleteResource, MaterialLibraryDeleteRequest>(WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH, input, options, { path: { id } }),
     playback: (id: string, options?: RequestOptions) =>
       this.requestJson<SavedPlaybackResource>(WORKSPACE_ITEM_PLAYBACK_PATH, options, {path: {id}}),
     playbackGeometry: (id: string, revision: string, part: "topology"|"support", options?: BinaryRequestOptions) =>
@@ -3000,11 +3032,14 @@ export class ControlRoomApi {
       properties: MaterialPropertiesResource,
       references: MaterialReferenceResource[] = [],
       options?: AuthoringWriteOptions,
+      asset?: { source?: SceneMaterialSource | null; assignToObjectId?: string },
     ) =>
       this.model.commitTransaction(
         {
           ...baseRevisionPayload(options),
           kind: "create_material",
+          ...(asset?.source ? { source: asset.source } : {}),
+          ...(asset?.assignToObjectId ? { assign_to_object_id: asset.assignToObjectId } : {}),
           material_id: materialId,
           name,
           properties,
@@ -3114,6 +3149,53 @@ export class ControlRoomApi {
         request,
         options,
         { path: { drive_id: driveId } },
+      ),
+    maskFieldDrives: (options?: RequestOptions) =>
+      this.requestJson<MaskFieldDriveListResource>(
+        MODEL_MASK_FIELD_DRIVES_PATH,
+        options,
+      ),
+    createMaskFieldDrive: (
+      request: MaskFieldDriveCreateRequest,
+      options?: RequestOptions,
+    ) =>
+      this.postJson<AuthoringTransactionResponse, MaskFieldDriveCreateRequest>(
+        MODEL_MASK_FIELD_DRIVES_PATH,
+        request,
+        options,
+      ),
+    replaceMaskFieldDrive: (
+      driveId: string,
+      request: MaskFieldDriveReplaceRequest,
+      options?: RequestOptions,
+    ) =>
+      this.putJson<AuthoringTransactionResponse, MaskFieldDriveReplaceRequest>(
+        MODEL_MASK_FIELD_DRIVE_PATH,
+        request,
+        options,
+        { path: { drive_id: driveId } },
+      ),
+    deleteMaskFieldDrive: (
+      driveId: string,
+      request: FieldDriveDeleteRequest,
+      options?: RequestOptions,
+    ) =>
+      this.deleteJsonWithBody<AuthoringTransactionResponse, FieldDriveDeleteRequest>(
+        MODEL_MASK_FIELD_DRIVE_PATH,
+        request,
+        options,
+        { path: { drive_id: driveId } },
+      ),
+    readyAntennas: (options?: RequestOptions) =>
+      this.requestJson<ReadyAntennaListResource>(MODEL_READY_ANTENNAS_PATH, options),
+    readyAntennaTerms: (
+      request: ReadyAntennaTermsRequest,
+      options?: RequestOptions,
+    ) =>
+      this.postJson<ReadyAntennaTermsResource, ReadyAntennaTermsRequest>(
+        MODEL_READY_ANTENNA_TERMS_PATH,
+        request,
+        options,
       ),
     createObjectRegion: (
       objectId: string,

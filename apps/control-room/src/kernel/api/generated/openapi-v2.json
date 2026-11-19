@@ -14,6 +14,111 @@
       }
     },
     "schemas": {
+      "AbsorbingBoundaryDirectionIR": {
+        "enum": [
+          "outward",
+          "inward"
+        ],
+        "type": "string"
+      },
+      "AbsorbingBoundaryFaceIR": {
+        "enum": [
+          "x+",
+          "x-",
+          "y+",
+          "y-",
+          "z+",
+          "z-"
+        ],
+        "type": "string"
+      },
+      "AbsorbingBoundaryFrameIR": {
+        "enum": [
+          "object",
+          "universe"
+        ],
+        "type": "string"
+      },
+      "AbsorbingBoundaryIR": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AbsorbingBoundaryLayerIR"
+          },
+          {
+            "$ref": "#/components/schemas/AbsorbingBoundaryLayersIR"
+          }
+        ]
+      },
+      "AbsorbingBoundaryLayerIR": {
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/AbsorbingBoundaryFaceIR"
+            },
+            "type": "array"
+          },
+          "frame": {
+            "$ref": "#/components/schemas/AbsorbingBoundaryFrameIR"
+          },
+          "max_damping": {
+            "format": "double",
+            "type": "number"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/AbsorbingBoundaryProfileIR"
+          },
+          "ramp_width_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "total_width_m": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "total_width_m",
+          "ramp_width_m",
+          "max_damping",
+          "faces",
+          "profile",
+          "frame"
+        ],
+        "type": "object"
+      },
+      "AbsorbingBoundaryLayersIR": {
+        "additionalProperties": false,
+        "properties": {
+          "layers": {
+            "items": {
+              "$ref": "#/components/schemas/SpatialAbsorbingLayerIR"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "layers"
+        ],
+        "type": "object"
+      },
+      "AbsorbingBoundaryProfileIR": {
+        "enum": [
+          "linear",
+          "quadratic",
+          "smootherstep",
+          "logarithmic",
+          "tanh",
+          "custom"
+        ],
+        "type": "string"
+      },
       "AcceptedAntennaInspectionCatalogResource": {
         "properties": {
           "entries": {
@@ -5311,6 +5416,12 @@
           },
           {
             "properties": {
+              "assign_to_object_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "base_revision": {
                 "format": "int64",
                 "minimum": 0,
@@ -5339,6 +5450,16 @@
                   "$ref": "#/components/schemas/MaterialReferenceResource"
                 },
                 "type": "array"
+              },
+              "source": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneMaterialSource"
+                  }
+                ]
               }
             },
             "required": [
@@ -11701,6 +11822,13 @@
           "drives": {
             "items": {
               "$ref": "#/components/schemas/RegionalFieldDriveResource"
+            },
+            "type": "array"
+          },
+          "mask_drives": {
+            "description": "Hand-written mask antennas (`mask_field_drive.v1`, ADR 0081).",
+            "items": {
+              "$ref": "#/components/schemas/MaskFieldDriveResource"
             },
             "type": "array"
           }
@@ -21083,6 +21211,668 @@
           }
         ]
       },
+      "MaskFieldDriveCreateRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "drive": {
+            "$ref": "#/components/schemas/MaskFieldDriveResource"
+          }
+        },
+        "required": [
+          "drive"
+        ],
+        "type": "object"
+      },
+      "MaskFieldDriveListResource": {
+        "properties": {
+          "drives": {
+            "items": {
+              "$ref": "#/components/schemas/MaskFieldDriveResource"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "drives"
+        ],
+        "type": "object"
+      },
+      "MaskFieldDriveReplaceRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "drive": {
+            "$ref": "#/components/schemas/MaskFieldDriveResource"
+          }
+        },
+        "required": [
+          "drive"
+        ],
+        "type": "object"
+      },
+      "MaskFieldDriveResource": {
+        "additionalProperties": false,
+        "description": "A hand-written mask antenna (`mask_field_drive.v1`, ADR 0081).",
+        "properties": {
+          "activation": {
+            "$ref": "#/components/schemas/DriveActivationResource"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "frame": {
+            "$ref": "#/components/schemas/MaskFrameResource"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "position_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "shape": {
+            "$ref": "#/components/schemas/MaskShapeResource"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          },
+          "terms": {
+            "items": {
+              "$ref": "#/components/schemas/MaskTermResource"
+            },
+            "type": "array"
+          },
+          "time_origin": {
+            "$ref": "#/components/schemas/FieldTimeOriginResource"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "name",
+          "target",
+          "shape",
+          "position_m",
+          "frame",
+          "terms",
+          "time_origin",
+          "activation"
+        ],
+        "type": "object"
+      },
+      "MaskFrameResource": {
+        "description": "Frame of a mask antenna's position and of its mask coordinates.",
+        "enum": [
+          "world",
+          "local"
+        ],
+        "type": "string"
+      },
+      "MaskFunctionLocalResource": {
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "description": "`field_expr.v1` text.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "expression"
+        ],
+        "type": "object"
+      },
+      "MaskFunctionParameterResource": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "description": "Authored text of the value, for display only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "type": "object"
+      },
+      "MaskFunctionResource": {
+        "additionalProperties": false,
+        "description": "A mask function of `x, y, z` (three outputs, tesla) or a time function of\n`t` (one output), as `field_expr.v1` equations.",
+        "properties": {
+          "expression_version": {
+            "type": "string"
+          },
+          "locals": {
+            "items": {
+              "$ref": "#/components/schemas/MaskFunctionLocalResource"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outputs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "parameters": {
+            "items": {
+              "$ref": "#/components/schemas/MaskFunctionParameterResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "expression_version",
+          "outputs"
+        ],
+        "type": "object"
+      },
+      "MaskLibraryCallResource": {
+        "additionalProperties": false,
+        "description": "The ready-antenna call (`fullmag.antennas`) that produced a term.",
+        "properties": {
+          "arguments": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "call_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "function": {
+            "type": "string"
+          },
+          "output_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "function",
+          "arguments",
+          "call_index",
+          "output_index"
+        ],
+        "type": "object"
+      },
+      "MaskShapeResource": {
+        "description": "Support shape of a mask antenna (`mask_field_drive.v1` has no CSG shapes).",
+        "oneOf": [
+          {
+            "properties": {
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "box"
+                ],
+                "type": "string"
+              },
+              "size": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "size",
+              "center",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "height": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "cylinder"
+                ],
+                "type": "string"
+              },
+              "radius": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "radius",
+              "height",
+              "center",
+              "axis",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "sphere"
+                ],
+                "type": "string"
+              },
+              "radius": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "radius",
+              "center",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MaskSourceResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "function": {
+                "$ref": "#/components/schemas/MaskFunctionResource"
+              },
+              "kind": {
+                "enum": [
+                  "function"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "function",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "An array mask written by a loop: float32 3-vectors in tesla.",
+            "properties": {
+              "cell_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "data": {
+                "type": "string"
+              },
+              "encoding": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "sampled"
+                ],
+                "type": "string"
+              },
+              "origin_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "size": {
+                "items": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "encoding",
+              "data",
+              "sha256",
+              "size",
+              "cell_m",
+              "origin_m",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MaskTermResource": {
+        "additionalProperties": false,
+        "properties": {
+          "mask": {
+            "$ref": "#/components/schemas/MaskSourceResource"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MaskLibraryCallResource"
+              }
+            ]
+          },
+          "time": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MaskFunctionResource",
+                "description": "Absent: a static term."
+              }
+            ]
+          }
+        },
+        "required": [
+          "mask"
+        ],
+        "type": "object"
+      },
+      "MaterialLibraryDeleteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "base_revision": {
+            "description": "Revision of the entry being deleted.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "base_revision"
+        ],
+        "type": "object"
+      },
+      "MaterialLibraryDeleteResource": {
+        "properties": {
+          "revision": {
+            "description": "Catalog revision after deletion.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
+      },
+      "MaterialLibraryEntryResource": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SceneMaterialSourceKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/MaterialPropertiesResource"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialReferenceResource"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
+          },
+          "source_project": {
+            "description": "Name of the project from which the draft was copied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "name",
+          "kind",
+          "properties",
+          "references"
+        ],
+        "type": "object"
+      },
+      "MaterialLibraryMutationResource": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MaterialLibraryEntryResource"
+          },
+          {
+            "properties": {
+              "catalog_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "catalog_revision"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "The entry clock protects edits; the catalog clock invalidates shared readers."
+      },
+      "MaterialLibraryResource": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialLibraryEntryResource"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/PublishedMaterialVersion"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "revision",
+          "entries",
+          "versions"
+        ],
+        "type": "object"
+      },
+      "MaterialLibraryUpdateRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MaterialLibraryWriteRequest"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "description": "Revision of the entry being replaced, not the catalog revision.",
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "base_revision"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MaterialLibraryWriteRequest": {
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/MaterialPropertiesResource"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialReferenceResource"
+            },
+            "type": "array"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
+          },
+          "source_project": {
+            "description": "Name of the project from which the draft was copied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "properties"
+        ],
+        "type": "object"
+      },
       "MaterialParameterFieldDataListResource": {
         "properties": {
           "fields": {
@@ -21636,6 +22426,16 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
           }
         },
         "required": [
@@ -21643,6 +22443,83 @@
           "id",
           "name",
           "properties"
+        ],
+        "type": "object"
+      },
+      "MaterialVersionMutationResource": {
+        "properties": {
+          "catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "published": {
+            "$ref": "#/components/schemas/PublishedMaterialVersion"
+          }
+        },
+        "required": [
+          "catalog_revision",
+          "published"
+        ],
+        "type": "object"
+      },
+      "MaterialVersionPublishRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "base_revision": {
+            "description": "Revision of the source entry.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "family": {
+            "type": "string"
+          },
+          "material_id": {
+            "type": "string"
+          },
+          "source_project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "material_id",
+          "base_revision",
+          "family",
+          "version",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "MaterialVersionUpdateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "base_revision": {
+            "description": "Revision of the published version's metadata.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "display_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_revision",
+          "display_name",
+          "archived"
         ],
         "type": "object"
       },
@@ -27024,9 +27901,13 @@
       "ObjectPatchRequest": {
         "properties": {
           "absorbing_boundary": {
-            "type": [
-              "object",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AbsorbingBoundaryIR"
+              }
             ]
           },
           "base_revision": {
@@ -32776,6 +33657,41 @@
         ],
         "type": "object"
       },
+      "PublishedMaterialVersion": {
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "original": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SceneMaterialSource"
+          }
+        },
+        "required": [
+          "source",
+          "display_name",
+          "archived",
+          "revision"
+        ],
+        "type": "object"
+      },
       "QuantityCatalogEntry": {
         "properties": {
           "capability_state": {
@@ -33156,6 +34072,113 @@
           "window_step_count",
           "window_wall_time_ns",
           "source_revision"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaArgumentResource": {
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "description": "Absent: the argument is required, or its default follows another argument.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "doc": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "unit": {
+            "description": "SI unit of the value.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "unit",
+          "doc"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaListResource": {
+        "additionalProperties": false,
+        "properties": {
+          "antennas": {
+            "items": {
+              "$ref": "#/components/schemas/ReadyAntennaResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "antennas"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaResource": {
+        "additionalProperties": false,
+        "description": "A ready antenna of `fullmag.antennas`: a function that returns mask terms.",
+        "properties": {
+          "arguments": {
+            "items": {
+              "$ref": "#/components/schemas/ReadyAntennaArgumentResource"
+            },
+            "type": "array"
+          },
+          "function": {
+            "description": "Qualified name, the `function` of a term's origin.",
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "function",
+          "summary",
+          "arguments"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaTermsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "function": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "function",
+          "arguments"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaTermsResource": {
+        "description": "The terms one ready-antenna call returns, each with its origin.",
+        "properties": {
+          "terms": {
+            "items": {
+              "$ref": "#/components/schemas/MaskTermResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "terms"
         ],
         "type": "object"
       },
@@ -36964,6 +37987,29 @@
           }
         ]
       },
+      "SceneMaterialReference": {
+        "properties": {
+          "citation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "SceneMaterialResource": {
         "properties": {
           "id": {
@@ -36981,12 +38027,115 @@
               "$ref": "#/components/schemas/MaterialReferenceResource"
             },
             "type": "array"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
           }
         },
         "required": [
           "id",
           "name",
           "properties"
+        ],
+        "type": "object"
+      },
+      "SceneMaterialSource": {
+        "properties": {
+          "catalog_id": {
+            "type": "string"
+          },
+          "catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SceneMaterialSourceKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/SceneMaterialSourceProperties"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/SceneMaterialReference"
+            },
+            "type": "array"
+          },
+          "version": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialVersionSource"
+              }
+            ]
+          }
+        },
+        "required": [
+          "catalog_id",
+          "catalog_revision",
+          "name",
+          "kind",
+          "properties"
+        ],
+        "type": "object"
+      },
+      "SceneMaterialSourceKind": {
+        "enum": [
+          "builtin",
+          "custom",
+          "modified"
+        ],
+        "type": "string"
+      },
+      "SceneMaterialSourceProperties": {
+        "properties": {
+          "Aex": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "Dbulk": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "Dind": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "Ms": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "alpha": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "alpha"
         ],
         "type": "object"
       },
@@ -37060,6 +38209,35 @@
           "outside"
         ],
         "type": "string"
+      },
+      "SceneMaterialVersionSource": {
+        "additionalProperties": false,
+        "description": "A stable published material key and the provenance recorded at publication.",
+        "properties": {
+          "copied_from_family": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "family": {
+            "type": "string"
+          },
+          "source_project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "family",
+          "version"
+        ],
+        "type": "object"
       },
       "SceneMetadataResource": {
         "properties": {
@@ -37253,9 +38431,13 @@
       "SceneObjectResource": {
         "properties": {
           "absorbing_boundary": {
-            "type": [
-              "object",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AbsorbingBoundaryIR"
+              }
             ]
           },
           "allocated_region_ids": {
@@ -39098,13 +40280,15 @@
       },
       "ScratchSessionDevice": {
         "enum": [
-          "cpu"
+          "cpu",
+          "gpu"
         ],
         "type": "string"
       },
       "ScratchSessionPrecision": {
         "enum": [
-          "double"
+          "double",
+          "single"
         ],
         "type": "string"
       },
@@ -43751,6 +44935,226 @@
           "kind",
           "duration_ns",
           "clock_domain"
+        ],
+        "type": "object"
+      },
+      "SpatialAbsorbingGeometryIR": {
+        "oneOf": [
+          {
+            "properties": {
+              "faces": {
+                "items": {
+                  "$ref": "#/components/schemas/AbsorbingBoundaryFaceIR"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "faces"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "faces",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "plane"
+                ],
+                "type": "string"
+              },
+              "normal": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "origin": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "origin",
+              "normal",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "direction": {
+                "$ref": "#/components/schemas/AbsorbingBoundaryDirectionIR"
+              },
+              "kind": {
+                "enum": [
+                  "cylinder"
+                ],
+                "type": "string"
+              },
+              "radius_m": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "center",
+              "axis",
+              "radius_m",
+              "direction",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "direction": {
+                "$ref": "#/components/schemas/AbsorbingBoundaryDirectionIR"
+              },
+              "kind": {
+                "enum": [
+                  "sphere"
+                ],
+                "type": "string"
+              },
+              "radius_m": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "center",
+              "radius_m",
+              "direction",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "region_boundary"
+                ],
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "region_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expression": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "expression"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "expression",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SpatialAbsorbingLayerIR": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "expression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "frame": {
+            "$ref": "#/components/schemas/AbsorbingBoundaryFrameIR"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/SpatialAbsorbingGeometryIR"
+          },
+          "layer_id": {
+            "type": "string"
+          },
+          "max_damping": {
+            "format": "double",
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/AbsorbingBoundaryProfileIR"
+          },
+          "ramp_width_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "region_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_width_m": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "layer_id",
+          "name",
+          "enabled",
+          "frame",
+          "total_width_m",
+          "ramp_width_m",
+          "max_damping",
+          "profile",
+          "geometry"
         ],
         "type": "object"
       },
@@ -69591,6 +70995,174 @@
         ]
       }
     },
+    "/v2/sessions/current/model/mask-field-drives": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_mask_field_drives",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaskFieldDriveListResource"
+                }
+              }
+            },
+            "description": "Hand-written mask antennas"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "post": {
+        "operationId": "model_post_sessions_current_model_mask_field_drives",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaskFieldDriveCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Created a mask antenna"
+          },
+          "400": {
+            "description": "Invalid mask antenna"
+          },
+          "409": {
+            "description": "Revision conflict or duplicate field drive"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/mask-field-drives/{drive_id}": {
+      "delete": {
+        "operationId": "model_delete_sessions_current_model_mask_field_drives_drive_id",
+        "parameters": [
+          {
+            "description": "Stable mask antenna id",
+            "in": "path",
+            "name": "drive_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FieldDriveDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Deleted a mask antenna"
+          },
+          "404": {
+            "description": "Mask antenna not found"
+          },
+          "409": {
+            "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "put": {
+        "operationId": "model_put_sessions_current_model_mask_field_drives_drive_id",
+        "parameters": [
+          {
+            "description": "Stable mask antenna id",
+            "in": "path",
+            "name": "drive_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaskFieldDriveReplaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Replaced a mask antenna"
+          },
+          "400": {
+            "description": "Invalid mask antenna"
+          },
+          "404": {
+            "description": "Mask antenna not found"
+          },
+          "409": {
+            "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/material-fields": {
       "get": {
         "operationId": "model_get_sessions_current_model_material_fields",
@@ -70811,6 +72383,69 @@
           },
           "404": {
             "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/ready-antennas": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_ready_antennas",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyAntennaListResource"
+                }
+              }
+            },
+            "description": "Ready antennas of fullmag.antennas"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/ready-antennas/terms": {
+      "post": {
+        "operationId": "model_post_sessions_current_model_ready_antennas_terms",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadyAntennaTermsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyAntennaTermsResource"
+                }
+              }
+            },
+            "description": "Mask terms returned by one ready-antenna call"
+          },
+          "400": {
+            "description": "Unknown antenna or invalid arguments"
           }
         },
         "tags": [
@@ -74445,6 +76080,414 @@
         ]
       }
     },
+    "/v2/workspace/material-library": {
+      "get": {
+        "operationId": "workspace_get_workspace_material_library",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialLibraryResource"
+                }
+              }
+            },
+            "description": "Built-in entries, user drafts and published versions with catalog revision"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      },
+      "post": {
+        "operationId": "workspace_post_workspace_material_library",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialLibraryWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialLibraryMutationResource"
+                }
+              }
+            },
+            "description": "User material created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid material document"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material identity already exists or is read-only"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/v2/workspace/material-library/versions": {
+      "post": {
+        "operationId": "workspace_post_workspace_material_library_versions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialVersionPublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialVersionMutationResource"
+                }
+              }
+            },
+            "description": "Immutable material version published"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid version key or incomplete material"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Source material does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source revision or version already exists"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/v2/workspace/material-library/versions/{family}/{version}": {
+      "patch": {
+        "operationId": "workspace_patch_workspace_material_library_versions_family_version",
+        "parameters": [
+          {
+            "description": "Stable material family key",
+            "in": "path",
+            "name": "family",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable published version key",
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialVersionUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialVersionMutationResource"
+                }
+              }
+            },
+            "description": "Published version metadata updated"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid version key or metadata"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Published version does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale version metadata revision"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/v2/workspace/material-library/{id}": {
+      "delete": {
+        "operationId": "workspace_delete_workspace_material_library_id",
+        "parameters": [
+          {
+            "description": "Stable custom material identity",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialLibraryDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialLibraryDeleteResource"
+                }
+              }
+            },
+            "description": "Material deleted and catalog revision advanced"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid material identity or revision"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale revision or read-only built-in material"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      },
+      "put": {
+        "operationId": "workspace_put_workspace_material_library_id",
+        "parameters": [
+          {
+            "description": "Stable custom material identity",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialLibraryUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialLibraryMutationResource"
+                }
+              }
+            },
+            "description": "User material replaced"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid material or revision"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale revision or read-only built-in material"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
     "/v2/workspace/roots": {
       "get": {
         "operationId": "workspace_items_get_workspace_roots",
@@ -74684,6 +76727,8 @@
     "antenna_field_solve",
     "change_device",
     "add_field_drive",
+    "add_mask_field_drive",
+    "update_mask_field_drive",
     "remove_field_drive",
     "table_autosave",
     "autosave",

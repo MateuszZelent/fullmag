@@ -54,6 +54,7 @@ use super::build_v2_router;
 
 fn sample_scene_document() -> fullmag_authoring::SceneDocument {
     let builder = fullmag_authoring::ScriptBuilderState {
+        material_assets: None,
         compute_resources: None,
         execution_profile: None,
         execution_layers: vec![],
@@ -178,6 +179,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         }],
         mesh_interfaces: Vec::new(),
         field_drives: Vec::new(),
+        mask_field_drives: Vec::new(),
         planar_monitors: Vec::new(),
         current_modules: Vec::new(),
         current_transports: Vec::new(),
@@ -1744,6 +1746,61 @@ async fn scratch_session_status_and_domain_meta_follow_resolved_lane_before_mesh
     assert_eq!(fdm_domain["discretization"], "fdm");
     assert_eq!(fdm_domain["counts"]["cells"], 0);
     assert_eq!(fdm_domain["grid"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn create_scratch_session_preserves_fdm_gpu_precision_without_runtime_claims() {
+    for precision in ["single", "double"] {
+        let state = test_app_state();
+        let app = build_v2_router().with_state(state.clone());
+        let response = app.oneshot(Request::builder()
+            .method("POST")
+            .uri("/v2/sessions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::json!({
+                "name": "Scratch GPU", "backend": "fdm", "device": "gpu",
+                "precision": precision,
+            }).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = body_json(response).await;
+        assert_eq!(body["status"]["requested_execution"]["device"], "gpu");
+        assert_eq!(body["status"]["requested_execution"]["precision"], precision);
+        assert!(body["status"]["fallback"].is_null());
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard.as_ref().unwrap();
+        assert_eq!(snapshot.session.requested_precision, precision);
+        assert_eq!(snapshot.session.authored_requested_device, "gpu");
+        assert!(snapshot.session.resolved_runtime_family.is_none());
+        assert!(snapshot.session.resolved_engine_id.is_none());
+        assert!(snapshot.session.resolved_fallback.is_none());
+        assert_eq!(snapshot.capabilities.as_ref().unwrap().engine_id.as_str(), "fdm_cuda");
+        let study = &snapshot.scene_document.as_ref().unwrap().study;
+        assert_eq!(study.requested_device, "gpu");
+        assert_eq!(study.requested_precision, precision);
+        assert_eq!(study.requested_mode, "strict");
+    }
+}
+
+#[tokio::test]
+async fn create_scratch_session_rejects_unsupported_precision_lanes_without_state() {
+    for (backend, device, precision) in [
+        ("fdm", "cpu", "single"), ("fem", "cpu", "single"),
+        ("fem", "gpu", "single"), ("fem", "gpu", "double"),
+        ("fdm", "gpu", "mixed"), ("fdm", "auto", "single"),
+    ] {
+        let state = test_app_state();
+        let app = build_v2_router().with_state(state.clone());
+        let response = app.oneshot(Request::builder()
+            .method("POST")
+            .uri("/v2/sessions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::json!({
+                "name": "Unsupported", "backend": backend,
+                "device": device, "precision": precision,
+            }).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(state.current_live_state.read().await.is_none());
+    }
 }
 
 #[tokio::test]
@@ -22755,6 +22812,247 @@ study.run(1e-12)
     }
 }
 
+pub(crate) async fn assert_fem_absorber_field_endpoints(snapshot: &SessionStateResponse, expected: &[f64]) {
+    use crate::router_v2::handlers::data::resolved_spatial_field::{
+        resolve_current_spatial_field_metadata, SpatialFieldCarrier,
+    };
+    let resolved = resolve_current_spatial_field_metadata(snapshot, "mat_alpha", 1).unwrap().unwrap();
+    assert!(matches!(resolved.carrier, SpatialFieldCarrier::FemNodes { .. }));
+    let state = test_app_state_with_live_session().await;
+    *state.current_live_state.write().await = Some(snapshot.clone());
+    let app = build_v2_router().with_state(state);
+    let get = |uri| Request::builder().uri(uri).body(Body::empty()).unwrap();
+    let catalog = app.clone().oneshot(get("/v2/sessions/current/data/fields")).await.unwrap();
+    assert_eq!(catalog.status(), StatusCode::OK);
+    let catalog = body_json(catalog).await;
+    let descriptor = catalog["quantities"].as_array().unwrap().iter().find(|q| q["quantity_id"] == "mat_alpha").unwrap();
+    assert_eq!(descriptor["location"], "node", "{descriptor:#}");
+    assert_eq!(descriptor["available"], true, "prepared FEM damping descriptor: {descriptor:#}");
+    assert_eq!(descriptor["resolved_capability"]["reason_code"], "prepared_damping_read_only", "{descriptor:#}");
+    assert_eq!(descriptor["resolved_capability"]["carriers"][0]["indexing"], "node", "{descriptor:#}");
+    let quantities = app.clone().oneshot(get("/v2/sessions/current/data/quantities")).await.unwrap();
+    assert_eq!(quantities.status(), StatusCode::OK);
+    let quantities = body_json(quantities).await;
+    let damping = quantities["quantities"].as_array().unwrap().iter().find(|q| q["id"] == "mat_alpha").unwrap();
+    assert_eq!(damping["requestable"], true, "{damping:#}");
+    assert_eq!(damping["materializable"], false, "{damping:#}");
+    assert_eq!(damping["solver_capability"], "unsupported", "{damping:#}");
+    let effective = quantities["quantities"].as_array().unwrap().iter().find(|q| q["id"] == "H_eff").unwrap();
+    assert_eq!(effective["capability_state"], "unknown", "{effective:#}");
+    let meta = app.clone().oneshot(get("/v2/sessions/current/data/fields/mat_alpha/meta")).await.unwrap();
+    assert_eq!(meta.status(), StatusCode::OK);
+    assert_eq!(body_json(meta).await["location"], "node");
+    let samples = app.oneshot(get("/v2/sessions/current/data/fields/mat_alpha/samples/vector?component=magnitude&format=bin"))
+        .await.unwrap();
+    assert_eq!(samples.status(), StatusCode::OK);
+    let bytes = body_bytes(samples).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize, expected.len());
+    assert_eq!(decode_fmvp_payload_f64(&bytes), expected);
+
+    // A stale same-sized array must not acquire the validated read provider.
+    let mut stale = snapshot.clone();
+    stale.capabilities = Some(resolved_compute_fields_capabilities(&[]));
+    let capability = |current: &SessionStateResponse| {
+        crate::router_v2::handlers::data::quantities::resolved_quantity_capability_for_snapshot(
+            current, fullmag_quantities::quantity_spec("mat_alpha").unwrap(),
+            fullmag_runner::QuantityMaterializationCapability::Unmaterialized, vec![], "full")
+    };
+    assert_eq!(capability(&stale).reason_code.as_deref(), Some("prepared_damping_read_only"));
+    let mut altered = stale.latest_fields.get("mat_alpha").unwrap().clone();
+    altered["values"][0] = serde_json::json!(expected[0] + 1.0);
+    stale.latest_fields.insert("mat_alpha".into(), altered);
+    assert_eq!(capability(&stale).provider, fullmag_runner::QuantityProviderCapability::Unavailable);
+}
+
+async fn prepared_absorber_fixture(region: &str) -> (Arc<AppState>, tempfile::TempDir, PathBuf, String, String, u64) {
+    let state = test_app_state_with_live_session().await;
+    let workspace = tempfile::tempdir().unwrap();
+    let source = workspace.path().join("absorber.py");
+    fs::write(&source, r#"import fullmag as fm
+study = fm.study("absorber")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.cell(5e-9, 5e-9, 5e-9)
+film = study.geometry(fm.Box(40e-9, 5e-9, 5e-9), name="film")
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.05
+film.m = fm.texture.uniform(1, 0, 0)
+# test region
+study.stages.add_run(stage_id="run", until=1e-12)
+"#.replace("# test region", region)).unwrap();
+    let mut scene = crate::script::load_scene_document_state(&state.repo_root, workspace.path(), &source).unwrap();
+    scene.revision = 5;
+    let object_id = scene.objects[0].id.clone();
+    let execution = fullmag_application::RequestedExecution {
+        backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
+        mode: "strict".into(), minimum_resources: None,
+    };
+    let problem = crate::script::scene_document_to_problem_ir(&state.repo_root, workspace.path(), &scene, &execution).unwrap();
+    let plan = fullmag_plan::plan(&problem).unwrap();
+    // Use the same compact metadata as the CLI's real Build Grid publication.
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = &plan.backend_plan else { panic!("expected FDM fixture") };
+    let layout = fullmag_runner::live_fdm_grid_layout(fdm);
+    let (scope, mesh_revision) = {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current.as_mut().unwrap();
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.session.status = "awaiting_command".into();
+        crate::session::apply_current_live_metadata(snapshot, serde_json::json!({
+            "execution_plan": plan, "artifact_layout": layout,
+        }));
+        (crate::current_live_publisher_scope_header(&state, snapshot), snapshot.mesh_revision)
+    };
+    (state, workspace, source, object_id, scope, mesh_revision)
+}
+
+#[tokio::test]
+async fn absorbing_boundary_patch_moves_and_clears_live_alpha_without_rebuilding_grid() {
+    let (state, _workspace, _source, object_id, scope, mesh_revision) = prepared_absorber_fixture("").await;
+    let app = build_v2_router().with_state(state.clone());
+    let mut previous_etag: Option<axum::http::HeaderValue> = None;
+    for (index, face) in [Some("x+"), Some("x-"), None].into_iter().enumerate() {
+        let layer = face.map(|face| serde_json::json!({
+            "profile": "custom", "expression": "u**3", "frame": "object",
+            "faces": [face], "max_damping": 0.5, "total_width_m": 15e-9, "ramp_width_m": 10e-9,
+        }));
+        let response = app.clone().oneshot(Request::builder().method("PATCH")
+            .uri(format!("/v2/sessions/current/model/objects/{object_id}"))
+            .header("content-type", "application/json").header("x-fullmag-session-scope", scope.as_str())
+            .body(Body::from(serde_json::json!({"base_revision":5 + index, "absorbing_boundary": layer}).to_string())).unwrap()).await.unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["revision"], 6 + index);
+        let mut request = Request::builder()
+            .uri("/v2/sessions/current/data/fields/mat_alpha/samples/vector?component=magnitude&format=bin")
+            .header("x-fullmag-session-scope", scope.as_str());
+        if let Some(etag) = previous_etag.take() { request = request.header("if-none-match", etag); }
+        let samples = app.clone().oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(samples.status(), StatusCode::OK, "changed samples must have a new ETag");
+        previous_etag = Some(samples.headers().get("etag").expect("alpha field ETag").clone());
+        let bytes = body_bytes(samples).await;
+        let values = bytes[48..].chunks_exact(8)
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap())).collect::<Vec<_>>();
+        assert_eq!(values.len(), 8);
+        let (left, right) = match face {
+            Some("x+") => (0.05, 0.55), Some("x-") => (0.55, 0.05), _ => (0.05, 0.05),
+        };
+        assert!((values[0] - left).abs() < 1e-12 && (values[7] - right).abs() < 1e-12, "{values:?}");
+        if face.is_none() { assert!(values.iter().all(|alpha| (*alpha - 0.05).abs() < 1e-12)); }
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        assert_eq!(snapshot.mesh_revision, mesh_revision);
+        assert_eq!(snapshot.scene_document.as_ref().unwrap().objects[0].absorbing_boundary.is_some(), face.is_some());
+    }
+}
+
+#[tokio::test]
+async fn absorbing_boundary_rejects_a_different_published_grid_with_the_same_cell_count() {
+    let (state, _workspace, _source, _, _, _) = prepared_absorber_fixture("").await;
+    let mut scene = {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current.as_mut().unwrap();
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["origin_m"] =
+            serde_json::json!([1.0, 0.0, 0.0]);
+        snapshot.scene_document.clone().unwrap()
+    };
+    scene.objects[0].absorbing_boundary = Some(serde_json::from_value(serde_json::json!({
+        "profile": "linear", "frame": "object", "faces": ["x+"], "max_damping": 0.5,
+        "total_width_m": 15e-9, "ramp_width_m": 10e-9
+    })).unwrap());
+    crate::commit_current_live_scene_document(&state, scene).await.unwrap();
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().unwrap();
+    assert_eq!(snapshot.metadata.as_ref().unwrap()["authored_damping"]["pending_reason"],
+        "domain_layout_not_qualified");
+    assert!(crate::session::resolved_current_field_source(snapshot, "mat_alpha", 1).is_none());
+}
+
+#[tokio::test]
+async fn absorbing_boundary_move_before_first_layer_remains_pending_until_domain_preparation() {
+    let (state, _workspace, _source, object_id, scope, _) = prepared_absorber_fixture("").await;
+    let app = build_v2_router().with_state(state.clone());
+    let mut transform = state.current_live_state.read().await.as_ref().unwrap()
+        .scene_document.as_ref().unwrap().objects[0].transform.clone();
+    transform.translation[0] += 10e-9;
+    let mut layer = serde_json::json!({"profile": "linear", "frame": "object", "faces": ["x+"],
+        "max_damping": 0.5, "total_width_m": 15e-9, "ramp_width_m": 10e-9});
+    let first_layer = layer.clone();
+    layer["max_damping"] = serde_json::json!(0.6);
+    let mutations = [
+        serde_json::json!({"base_revision": 5, "transform": transform}),
+        serde_json::json!({"base_revision": 6, "absorbing_boundary": first_layer}),
+        serde_json::json!({"base_revision": 7, "absorbing_boundary": layer}),
+    ];
+    for patch in mutations {
+        let response = app.clone().oneshot(Request::builder().method("PATCH")
+            .uri(format!("/v2/sessions/current/model/objects/{object_id}"))
+            .header("content-type", "application/json").header("x-fullmag-session-scope", scope.as_str())
+            .body(Body::from(patch.to_string())).unwrap()).await.unwrap();
+        let status = response.status();
+        assert_eq!(status, StatusCode::OK, "{}", body_json(response).await);
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        assert_eq!(snapshot.metadata.as_ref().unwrap()["authored_damping"]["requires_domain_rebuild"], true);
+        assert!(crate::session::resolved_current_field_source(snapshot, "mat_alpha", 1).is_none());
+    }
+}
+
+#[tokio::test]
+async fn absorbing_boundary_membership_edit_before_first_layer_invalidates_the_published_domain() {
+    let (state, _workspace, _source, _object, _scope, _) = prepared_absorber_fixture(
+        r#"core = film.add_region("core", fm.Box(10e-9, 5e-9, 5e-9), region_id="core")"#,
+    ).await;
+    let before = state.current_live_state.read().await.as_ref().unwrap().scene_document.clone().unwrap();
+    let mut edited = before.clone();
+    edited.objects[0].regions[0].enabled = false;
+    let impact = fullmag_authoring::classify_region_realization_impact(&before, &edited);
+    assert!(impact.membership && !impact.topology);
+    let mut edited = crate::commit_current_live_scene_document(&state, edited).await.unwrap();
+    edited.objects[0].absorbing_boundary = Some(serde_json::from_value(serde_json::json!({
+        "profile": "linear", "frame": "object", "faces": ["x+"], "max_damping": 0.5,
+        "total_width_m": 15e-9, "ramp_width_m": 10e-9
+    })).unwrap());
+    crate::commit_current_live_scene_document(&state, edited).await.unwrap();
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().unwrap();
+    assert_eq!(snapshot.metadata.as_ref().unwrap()["authored_damping"]["requires_domain_rebuild"], true);
+    assert!(crate::session::resolved_current_field_source(snapshot, "mat_alpha", 1).is_none());
+}
+
+#[tokio::test]
+async fn absorbing_boundary_replace_scene_keeps_the_applied_magnetization_plan() {
+    let (state, workspace, source, object_id, scope, _) = prepared_absorber_fixture("").await;
+    let script = fs::read_to_string(&source).unwrap().replace("uniform(1, 0, 0)", "uniform(0, 1, 0)");
+    fs::write(&source, script).unwrap();
+    let mut scene = crate::script::load_scene_document_state(&state.repo_root, workspace.path(), &source).unwrap();
+    scene.revision = 5;
+    scene.objects[0].absorbing_boundary = Some(serde_json::from_value(serde_json::json!({
+        "profile": "linear", "frame": "object", "faces": ["x+"], "max_damping": 0.5,
+        "total_width_m": 15e-9, "ramp_width_m": 10e-9
+    })).unwrap());
+    let key = "dbef0372bc5247478858ed654dcd540b";
+    let payload = serde_json::json!({"kind": "replace_scene", "base_revision": 5, "scene": scene,
+        "magnetization_apply": {"operation_id": key, "scopes": [{"object_id": object_id}]}});
+    let response = build_v2_router().with_state(state.clone()).oneshot(Request::builder().method("POST")
+        .uri("/v2/sessions/current/model/transactions")
+        .header("content-type", "application/json").header("x-fullmag-session-scope", scope.as_str())
+        .header("idempotency-key", key).body(Body::from(payload.to_string())).unwrap()).await.unwrap();
+    let status = response.status();
+    let receipt = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    assert_eq!(receipt["magnetization_apply"]["status"], "initial_state_ready");
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().unwrap();
+    let plan = &snapshot.metadata.as_ref().unwrap()["execution_plan"]["backend_plan"];
+    assert_eq!(plan["initial_magnetization"][0], serde_json::json!([0.0, 1.0, 0.0]));
+    let alpha = &snapshot.latest_fields.get("mat_alpha").unwrap()["values"];
+    assert!(alpha[7].as_f64().unwrap() > alpha[0].as_f64().unwrap());
+}
+
 #[tokio::test]
 async fn scoped_magnetization_apply_publishes_only_the_selected_fdm_region() {
     let state = test_app_state_with_live_session().await;
@@ -23155,6 +23453,35 @@ async fn authoring_magnetization_asset_patch_upserts_new_asset() {
     assert_eq!(status, StatusCode::OK, "{json:#}");
     assert_eq!(json["scene_revision"], 27);
     assert_eq!(json["asset"]["id"], "mag:ribbon");
+}
+
+#[tokio::test]
+async fn absorbing_boundary_patch_distinguishes_omission_and_removal() {
+    let app = test_router_with_scene_document().await;
+    let boundary = serde_json::json!({
+        "total_width_m": 4e-7, "ramp_width_m": 2e-7, "max_damping": 0.5,
+        "faces": ["x+"], "frame": "object", "profile": "custom", "expression": "u**3"
+    });
+    for (patch, expected) in [
+        (serde_json::json!({ "absorbing_boundary": boundary }), Some(&boundary)),
+        (serde_json::json!({ "notes": "keep the boundary" }), Some(&boundary)),
+        (serde_json::json!({ "absorbing_boundary": null }), None),
+    ] {
+        let response = app.clone().oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/objects/body")
+                .header("content-type", "application/json")
+                .body(Body::from(patch.to_string()))
+                .unwrap(),
+        ).await.unwrap();
+        let status = response.status();
+        let scene = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{scene:#}");
+        let object = scene["objects"].as_array().unwrap().iter()
+            .find(|object| object["id"] == "body").unwrap();
+        assert_eq!(object.get("absorbing_boundary").filter(|v| !v.is_null()), expected);
+    }
 }
 
 #[tokio::test]
@@ -48178,11 +48505,11 @@ fn openapi_session_creation_declares_typed_request_and_outcomes() {
     );
     assert_eq!(
         schemas["ScratchSessionDevice"]["enum"],
-        serde_json::json!(["cpu"])
+        serde_json::json!(["cpu", "gpu"])
     );
     assert_eq!(
         schemas["ScratchSessionPrecision"]["enum"],
-        serde_json::json!(["double"])
+        serde_json::json!(["double", "single"])
     );
 
     let scene_document = &schemas["ScratchSceneDocumentResource"];

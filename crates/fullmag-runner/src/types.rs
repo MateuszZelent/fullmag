@@ -2735,6 +2735,19 @@ fn digest_hex(bytes: &[u8]) -> String {
     out
 }
 
+/// Identity of a Build Mesh domain in the normalized Live viewport format.
+pub fn geometry_only_mesh_topology_fingerprint(mesh: &fullmag_ir::MeshIR) -> Result<String, String> {
+    fullmag_ir::fem_mesh_topology_fingerprint_v3(
+        &mesh.nodes,
+        &mesh.cells,
+        &normalized_payload_element_markers(&mesh.element_markers, None),
+        &mesh.facets,
+        &mesh.boundary_markers,
+        &mesh.periodic_boundary_pairs,
+        &mesh.periodic_node_pairs,
+    )
+}
+
 fn normalized_payload_element_markers(
     element_markers: &[u32],
     magnetic_markers: Option<&BTreeSet<u32>>,
@@ -5150,8 +5163,9 @@ pub struct AuxiliaryArtifact {
 
 pub(crate) struct LiveStepConsumer<'a> {
     pub grid: [u32; 3],
-    /// Cadence for heavier live payloads such as full magnetization snapshots.
-    pub field_every_n: u64,
+    /// Step and wall-clock cadence for heavy live payloads: the magnetization
+    /// copy and, at a stride of one step, the full observation catalog.
+    pub field_cadence: crate::LiveFieldCadence,
     /// Whether this consumer needs a full step-0 physics snapshot before
     /// the first accepted step.
     pub initial_snapshot: bool,
@@ -5421,6 +5435,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
             charge_transport_plans: Vec::new(),

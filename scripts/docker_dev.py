@@ -2806,6 +2806,15 @@ def _parser() -> argparse.ArgumentParser:
         "--previous-recovery-sha256",
         help="explicitly rotate the exact archived prior recovery (SHA-256 of its raw current bytes)",
     )
+    preowner_probe = subparsers.add_parser(
+        'stop-preowner-probe-volume',
+        help='preview or gracefully stop an empty API after a pre-owner GPU probe failure',
+    )
+    for option in ('attempt', 'resume-attempt', 'config-sha256', 'source-root', 'image-id'):
+        preowner_probe.add_argument('--' + option, required=True)
+    preowner_probe.add_argument('--port', type=int, required=True)
+    preowner_probe.add_argument('--apply', action='store_true')
+    preowner_probe.add_argument('--expected-plan-sha256')
     preowner_policy = subparsers.add_parser(
         "stop-preowner-policy-volume",
         help="preview or gracefully stop the exact startup-only diagnostic group after a refused budget",
@@ -3191,6 +3200,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             from docker_volume_stop_diagnostic import stop_diagnostic
             result = stop_diagnostic(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == 'stop-preowner-probe-volume':
+            from docker_volume_preowner_probe_stop import stop
+            stop(args)
         elif args.action == "stop-preowner-policy-volume":
             if bool(args.proof_path) != bool(args.proof_sha256):
                 raise _fail("Terminal observation successor requires paired proof path and digest")
