@@ -72,7 +72,8 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
       const depth = 35 - Math.hypot(x - 8, y);
       const left = 0.3 * weight(100 + x, 25, 20, 1);
       const right = 0.6 * weight(100 - x, 40, 24, 2);
-      const ring = y >= -1e-9 ? amplitude * weight(depth, 15, 12, 3) : 0;
+      const insideUpperHalf = Math.abs(y - 25) <= 25 * (1 + 1e-12);
+      const ring = insideUpperHalf ? amplitude * weight(depth, 15, 12, 3) : 0;
       const expected = 0.01 + Math.max(left, right, ring);
       maxError = Math.max(maxError, Math.abs(field.values[i] - expected));
       if (left > 0.1) hits.left++;

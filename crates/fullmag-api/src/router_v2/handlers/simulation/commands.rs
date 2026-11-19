@@ -1960,7 +1960,7 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
         });
         magnets.push(MagnetIR {
             object_id: Some(object.id.clone()),
-            absorbing_boundary: None,
+            absorbing_boundary: object.absorbing_boundary.clone(),
             initial_magnetization: Some(initial_magnetization_for_object(scene, object)),
             material: material_name,
             name: object.id.clone(),

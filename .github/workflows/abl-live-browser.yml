@@ -11,6 +11,10 @@ on:
       - "crates/fullmag-plan/src/spatial_absorber.rs"
       - "crates/fullmag-api/src/live_authored_damping*"
       - "crates/fullmag-api/src/live_authored_damping/**"
+      - "crates/fullmag-api/src/session.rs"
+      - "crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs"
+      - "crates/fullmag-cli/src/live_workspace.rs"
+      - "crates/fullmag-cli/src/orchestrator.rs"
       - "crates/fullmag-cli/src/scratch_runtime.rs"
       - "crates/fullmag-cli/src/python_bridge.rs"
       - "crates/fullmag-cli/src/orchestrator/manual_remesh.rs"
@@ -74,6 +78,9 @@ jobs:
           pnpm --dir apps/control-room exec playwright install --with-deps chromium
       - name: Build the API and CLI for the pinned CI checkout
         run: cargo build --locked -p fullmag-api --bin fullmag-api -p fullmag-cli --bin fullmag
+      - name: Verify region-scoped layers in the remesh command
+        if: matrix.backend == 'fem'
+        run: cargo test --locked -p fullmag-api --bin fullmag-api mesh_build_command_preserves_absorbing_layer_and_region_damping
       - name: Verify the single-object remesh response
         if: matrix.backend == 'fem'
         run: cargo test --locked -p fullmag-cli --bin fullmag parse_remesh_cli_response_preserves_fresh_object_region_markers
