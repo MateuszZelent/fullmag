@@ -157,7 +157,10 @@ export function ComplexVectorGlyphLayer({
   useEffect(() => {
     if (!adoptionRegistry || !carrierId) return;
     const byteLength =
-      glyphs.anchors.byteLength + glyphs.complexReal.byteLength + glyphs.complexImag.byteLength;
+      glyphs.anchors.byteLength +
+      (glyphs.phasePositions === glyphs.anchors ? 0 : glyphs.phasePositions.byteLength) +
+      glyphs.complexReal.byteLength +
+      glyphs.complexImag.byteLength;
     const adoption = recordVectorFieldAdoption({
       buildKey: glyphs.buildKey,
       byteLength,
