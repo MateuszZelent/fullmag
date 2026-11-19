@@ -475,6 +475,24 @@ type SceneRegionShape = components["schemas"]["SceneRegionShape"];
 const EMPTY_AIRBOX_FIELD_VECTOR_PARTS: readonly { id: string }[] = [];
 const EMPTY_VIEWPORT_3D_FIELD_QUANTITY_IDS: ReadonlySet<string> = new Set();
 const EMPTY_MODE_COMPOSITION_PHASE_UNIFORMS: ReadonlyMap<string, LivePhaseUniform> = new Map();
+
+type PhaseFrameSubscribe = (listener: () => void) => () => void;
+
+/** One subscription that fires on every frame of either phase clock. */
+function combinePhaseFrameSubscriptions(
+  first: PhaseFrameSubscribe,
+  second: PhaseFrameSubscribe,
+): PhaseFrameSubscribe {
+  return (listener) => {
+    const unsubscribeFirst = first(listener);
+    const unsubscribeSecond = second(listener);
+    return () => {
+      unsubscribeFirst();
+      unsubscribeSecond();
+    };
+  };
+}
+
 export function resolveViewport3DVectorScale(
   boundsSize: readonly number[],
   vectorLengthScale: number,
@@ -3281,17 +3299,13 @@ export function useViewport3DSceneModel({
   const subscribeModeCompositionPhaseFrames = modeCompositionPhaseClock.subscribeFrame;
   // Phase frames reach the canvas only as invalidations; uniforms carry the
   // values, so no React state changes while either clock runs.
-  const subscribeComplexPhaseFrames = useCallback(
-    (listener: () => void) => {
-      const unsubscribeOverlay = analysisFieldOverlay.phaseClock.subscribe(listener);
-      const unsubscribeModes = subscribeModeCompositionPhaseFrames(listener);
-      return () => {
-        unsubscribeOverlay();
-        unsubscribeModes();
-      };
-    },
-    [analysisFieldOverlay, subscribeModeCompositionPhaseFrames],
-  );
+  const subscribeComplexPhaseFrames = useMemo(() => {
+    const phaseClock = analysisFieldOverlay.phaseClock;
+    return combinePhaseFrameSubscriptions(
+      phaseClock.subscribe.bind(phaseClock),
+      subscribeModeCompositionPhaseFrames,
+    );
+  }, [analysisFieldOverlay, subscribeModeCompositionPhaseFrames]);
   useEffect(() => {
     const handle = startAnalysisFieldOverlayPhaseAnimation(analysisFieldOverlay);
     return () => {
