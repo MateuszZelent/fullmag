@@ -2314,7 +2314,7 @@ fn push_output(
 }
 
 #[cfg(test)]
-mod tests {
+mod output_publication_tests {
     use super::*;
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};

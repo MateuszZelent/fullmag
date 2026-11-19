@@ -20,7 +20,7 @@ use fullmag_runner::{
 use fullmag_runtime_control::{AcceptedStudySnapshot, AcceptedWorkerStep, StudyOutputPayload};
 use fullmag_session::SessionStore;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Frozen before the durable started receipt. The common worker owns lifecycle
@@ -32,14 +32,10 @@ pub(crate) struct PreparedFrequencyResponse {
     pub(crate) stage_mesh: StageFemMeshAsset,
     pub(crate) bundle_identity: FrequencyResponseBundleIdentity,
     pub(crate) artifact_identity: fullmag_runner::eigen::FrequencyDomainArtifactIdentity,
-    pub(crate) preparation_plan_fingerprint: String,
-    pub(crate) plan_digest: String,
     pub(crate) output_storage_budget: u64,
     pub(crate) required_free_storage_bytes: u64,
     pub(crate) memory_budget: u64,
     pub(crate) artifact_limits: AcceptedFrequencyResponseArtifactLimits,
-    pub(crate) resolved_device: String,
-    pub(crate) gpu_uuid: Option<String>,
 }
 
 impl PreparedFrequencyResponse {
@@ -55,11 +51,23 @@ pub(crate) enum FrequencyResponseOutcome {
     Completed {
         outputs: Vec<StudyOutputPayload>,
         completed_frequency_count: usize,
-        published_root: PathBuf,
     },
     Cancelled {
         completed_frequency_count: usize,
     },
+}
+
+pub(crate) fn validate_requested_execution(
+    request: &fullmag_application::RequestedExecution,
+) -> Result<()> {
+    if request.backend != "fem"
+        || request.device != "cpu"
+        || request.precision != "double"
+        || request.mode != "strict"
+    {
+        bail!("accepted driven response requires an explicit fem/cpu/double/strict request");
+    }
+    Ok(())
 }
 
 fn validate_request(
@@ -67,19 +75,11 @@ fn validate_request(
     resolved_device: &str,
     gpu_uuid: Option<&str>,
 ) -> Result<()> {
-    if request.backend != "fem"
-        || request.precision != "double"
-        || request.mode != "strict"
-        || !matches!(request.device.as_str(), "cpu" | "gpu" | "auto")
-        || (request.device != "auto" && request.device != resolved_device)
-    {
-        bail!("driven response requires the exact fem/<device>/double/strict accepted request");
+    validate_requested_execution(request)?;
+    if resolved_device != "cpu" || gpu_uuid.is_some() {
+        bail!("accepted driven response requires a CPU runtime and no GPU lease");
     }
-    match (resolved_device, gpu_uuid) {
-        ("cpu", None) => Ok(()),
-        ("gpu", Some(uuid)) if !uuid.trim().is_empty() => Ok(()),
-        _ => bail!("driven response runtime device and authoritative lease UUID differ"),
-    }
+    Ok(())
 }
 
 fn validate_terminal_frequency_count(
@@ -205,7 +205,7 @@ pub(crate) fn prepare(
         attempt_id: step.claim.attempt_id.as_str().to_owned(),
         ownership_epoch: step.claim.ownership_epoch.value(),
         case_id: case_id.to_owned(),
-        plan_fingerprint: plan_digest.clone(),
+        plan_fingerprint: plan_digest,
         topology_fingerprint: descriptor.topology_fingerprint,
         equilibrium_sha256: descriptor.equilibrium_sha256,
         equilibrium_verified: false,
@@ -228,34 +228,7 @@ pub(crate) fn prepare(
         "runtime_device_override".into(),
         serde_json::json!({"device": runtime.resolved_device, "source": "managed_launcher"}),
     );
-    let preflight = fullmag_runner::resolve_session_runtime_for_plan_and_preview(
-        &problem,
-        &execution_plan,
-        u64::MAX,
-    )
-    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-    let expected_engine = if runtime.resolved_device == "gpu" {
-        RuntimeEngineId::FemNativeGpu
-    } else {
-        RuntimeEngineId::FemFrequencyResponseProductionCpu
-    };
-    if preflight.resolved_backend != "fem"
-        || preflight.resolved_device != runtime.resolved_device
-        || preflight.resolved_precision != "double"
-        || preflight.resolved_engine_id.as_deref() != Some(expected_engine.as_str())
-        || preflight.resolved_fallback.is_some()
-    {
-        bail!(
-            "accepted driven-response preflight expected FEM/{}/double engine {}; resolved {}/{}/{} engine {:?}, fallback {:?}",
-            runtime.resolved_device,
-            expected_engine.as_str(),
-            preflight.resolved_backend,
-            preflight.resolved_device,
-            preflight.resolved_precision,
-            preflight.resolved_engine_id,
-            preflight.resolved_fallback,
-        );
-    }
+    validate_native_runtime(&problem, &execution_plan)?;
     Ok(PreparedFrequencyResponse {
         case_id: case_id.to_owned(),
         problem,
@@ -263,14 +236,10 @@ pub(crate) fn prepare(
         stage_mesh,
         bundle_identity,
         artifact_identity: artifact_identity.clone(),
-        preparation_plan_fingerprint: preparation.plan_fingerprint,
-        plan_digest,
         output_storage_budget,
         required_free_storage_bytes,
         memory_budget,
         artifact_limits,
-        resolved_device: runtime.resolved_device.clone(),
-        gpu_uuid: runtime.gpu_uuid.clone(),
     })
 }
 
@@ -280,6 +249,33 @@ pub(crate) fn storage_reservation_bytes(
     estimate.native_output_bytes_upper_bound.checked_mul(2)?
         .checked_add(estimate.publisher_output_bytes_upper_bound.checked_mul(4)?)?
         .checked_add(estimate.scratch_bytes_upper_bound)
+}
+
+pub(crate) fn validate_native_runtime(
+    problem: &fullmag_ir::ProblemIR,
+    execution_plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<()> {
+    let preflight = fullmag_runner::resolve_session_runtime_for_plan_and_preview(
+        problem, execution_plan, u64::MAX,
+    )
+    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let expected_engine = RuntimeEngineId::FemFrequencyResponseProductionCpu.as_str();
+    if preflight.resolved_backend != "fem"
+        || preflight.resolved_device != "cpu"
+        || preflight.resolved_precision != "double"
+        || preflight.resolved_engine_id.as_deref() != Some(expected_engine)
+        || preflight.resolved_fallback.is_some()
+    {
+        bail!(
+            "accepted driven response expected native FEM/cpu/double engine {expected_engine}; resolved {}/{}/{} engine {:?}, fallback {:?}",
+            preflight.resolved_backend,
+            preflight.resolved_device,
+            preflight.resolved_precision,
+            preflight.resolved_engine_id,
+            preflight.resolved_fallback,
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_plan_scope(
@@ -314,28 +310,14 @@ pub(crate) fn validate_plan_scope(
     {
         bail!("accepted driven response supports only provided H1/P1 double/strict free Gamma k=0");
     }
-    if !matches!(requested_device, "cpu" | "gpu") {
-        bail!("accepted driven response requires an explicit CPU or GPU request");
+    if requested_device != "cpu" || plan.requested_device != fullmag_ir::ExecutionDevice::Cpu {
+        bail!("accepted driven response requires an explicit CPU request and CPU plan");
     }
-    let requested = match plan.requested_device {
-        fullmag_ir::ExecutionDevice::Cpu => "cpu",
-        fullmag_ir::ExecutionDevice::Gpu => "gpu",
-        fullmag_ir::ExecutionDevice::Auto => "auto",
-    };
-    if requested != requested_device {
-        bail!("driven-response plan device differs from preserved requested intent");
-    }
-    let method = plan.solver_policy.as_ref().and_then(|p| p.method);
-    if (requested_device == "gpu"
-        && (requested != "gpu"
-            || method != Some(fullmag_ir::FrequencyResponseSolverMethodIR::GpuOperatorHostKrylov)))
-        || (requested_device == "cpu"
-            && !matches!(
-                method,
-                None | Some(fullmag_ir::FrequencyResponseSolverMethodIR::Auto)
-            ))
-    {
-        bail!("accepted driven response requires native CPU Auto or explicit GPU operator/host Krylov");
+    if !matches!(
+        plan.solver_policy.as_ref().and_then(|policy| policy.method),
+        None | Some(fullmag_ir::FrequencyResponseSolverMethodIR::Auto)
+    ) {
+        bail!("accepted driven response requires the native CPU Auto solver");
     }
     Ok(())
 }
@@ -373,7 +355,6 @@ pub(crate) fn validate_native_output_path(root: &Path, frequency_count: usize) -
 
 pub(crate) fn execute(
     prepared: &PreparedFrequencyResponse,
-    _step: &AcceptedWorkerStep,
     native_root: &Path,
     autosave_root: &Path,
     interrupt: Option<&AtomicBool>,
@@ -417,7 +398,7 @@ pub(crate) fn execute(
     )?;
     // final_magnetization is the input M0 in this native workflow, not an output state.
     drop(result);
-    if cancelled {
+    if cancelled || interrupt.is_some_and(|flag| flag.load(Ordering::Acquire)) {
         return Ok(FrequencyResponseOutcome::Cancelled {
             completed_frequency_count: count,
         });
@@ -436,9 +417,9 @@ pub(crate) fn execute(
     }
     let metadata = serde_json::json!({
         "requested_device": prepared.frequency_plan().requested_device,
-        "resolved_device": prepared.resolved_device,
-        "executed_realization": if prepared.resolved_device == "gpu" { "gpu_operator_host_krylov" } else { "production_cpu_host_gmres" },
-        "lease_gpu_uuid": prepared.gpu_uuid,
+        "resolved_device": "cpu",
+        "executed_realization": "production_cpu_host_gmres",
+        "lease_gpu_uuid": null,
         "native_execution_uuid_verified": false,
         "alpha": plan.material.damping, "gamma0_m_per_a_s": plan.gyromagnetic_ratio,
         "bias_a_per_m": plan.external_field, "excitation": plan.excitation,
@@ -530,7 +511,6 @@ pub(crate) fn execute(
     Ok(FrequencyResponseOutcome::Completed {
         outputs,
         completed_frequency_count: count,
-        published_root,
     })
 }
 
@@ -783,22 +763,29 @@ mod tests {
     }
 
     #[test]
-    fn response_request_rejects_wrong_device_and_missing_uuid_without_fallback() {
+    fn response_request_requires_explicit_strict_double_fem_cpu_without_gpu_lease() {
         let mut request = fullmag_application::RequestedExecution {
             backend: "fem".into(),
-            device: "gpu".into(),
+            device: "cpu".into(),
             precision: "double".into(),
             mode: "strict".into(),
             minimum_resources: None,
         };
-        assert!(validate_request(&request, "gpu", Some("GPU-exact")).is_ok());
-        assert!(validate_request(&request, "cpu", None).is_err());
-        assert!(validate_request(&request, "gpu", None).is_err());
-        assert!(validate_request(&request, "gpu", Some("")).is_err());
-        request.device = "auto".into();
-        assert!(validate_request(&request, "gpu", Some("GPU-exact")).is_ok());
         assert!(validate_request(&request, "cpu", None).is_ok());
         assert!(validate_request(&request, "cpu", Some("GPU-exact")).is_err());
+        assert!(validate_request(&request, "gpu", Some("GPU-exact")).is_err());
+        for unsupported in ["auto", "gpu"] {
+            request.device = unsupported.into();
+            assert!(validate_request(&request, "cpu", None).is_err());
+            assert!(validate_request(&request, "gpu", Some("GPU-exact")).is_err());
+        }
+        request.device = "cpu".into();
+        request.precision = "single".into();
+        assert!(validate_request(&request, "cpu", None).is_err());
+        request.precision = "double".into();
+        request.mode = "fallback".into();
+        assert!(validate_request(&request, "cpu", None).is_err());
+        request.mode = "strict".into();
         request.backend = "fdm".into();
         assert!(validate_request(&request, "cpu", None).is_err());
     }
@@ -817,9 +804,9 @@ mod tests {
     fn response_native_output_path_checks_bytes_and_largest_frequency_index() {
         let suffix = "response/field_payloads.zarr/frequency_0000/vector_tangent_complex/.zarray";
         let root_length = 254 - suffix.len() - 1;
-        let at_limit = PathBuf::from(format!("/{}", "x".repeat(root_length - 1)));
+        let at_limit = std::path::PathBuf::from(format!("/{}", "x".repeat(root_length - 1)));
         assert!(validate_native_output_path(&at_limit, 1).is_ok());
-        let too_long = PathBuf::from(format!("/{}", "x".repeat(root_length)));
+        let too_long = std::path::PathBuf::from(format!("/{}", "x".repeat(root_length)));
         assert!(validate_native_output_path(&too_long, 1).is_err());
         assert!(validate_native_output_path(&at_limit, 100_001).is_err());
         assert!(

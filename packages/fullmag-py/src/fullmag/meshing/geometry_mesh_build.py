@@ -144,17 +144,35 @@ def build_geometry_only_mesh(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {"schema": GEOMETRY_MESH_BUILD_SCHEMA, "mesh": mesh, **result}
 
 
+# Unset fields carried across the Rust SceneDocument boundary by the per-object
+# mesh form. Keep this list explicit: a new mesh option must qualify separately.
+_UNSET_INHERITED_MESH_TEXT = frozenset({
+    "hmax", "hmin", "maximum_element_size", "minimum_element_size",
+    "curvature_factor", "growth_rate", "maximum_element_growth_rate",
+    "narrow_region_resolution", "interface_hmax", "interface_thickness",
+    "transition_distance", "edge_maximum_element_size", "edge_thickness",
+    "edge_transition_distance", "corner_maximum_element_size", "corner_extent",
+    "corner_transition_distance", "resolved_growth_rate",
+})
+
+
+def _inherits_mesh_options(entry: object) -> bool:
+    if not isinstance(entry, Mapping) or entry.get("mode") != "inherit":
+        return False
+    return all(
+        key in {"geometry", "geometry_name", "object_id", "mode"}
+        or (key in _UNSET_INHERITED_MESH_TEXT and value == "")
+        or (key == "build_requested" and value is False)
+        for key, value in entry.items()
+    )
+
+
 def _ordinary_shared_workflow(workflow: Mapping[str, Any]) -> bool:
     if workflow.get("domain_mesh_mode") not in (None, "generated_shared_domain_mesh"):
         return False
     if workflow.get("operations") or workflow.get("domain_mesh_source"):
         return False
-    return all(
-        isinstance(entry, Mapping)
-        and entry.get("mode") == "inherit"
-        and set(entry) <= {"geometry", "geometry_name", "object_id", "mode"}
-        for entry in workflow.get("per_geometry", ())
-    )
+    return all(_inherits_mesh_options(entry) for entry in workflow.get("per_geometry", ()))
 
 
 def _geometry_shapes(entries, owner_ids):

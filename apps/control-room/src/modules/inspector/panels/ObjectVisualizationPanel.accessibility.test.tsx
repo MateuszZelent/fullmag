@@ -9,14 +9,17 @@ import {
 import {
   NumberField,
   VisualizationDisplayPassesSection,
+  VisualizationWireframeGeometryScopeSection,
   VisualizationOverridesSection,
   VisualizationRenderModeSection,
 } from "./ObjectVisualizationTargetSection";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   DEFAULT_AIRBOX_VISUALIZATION,
+  DEFAULT_OBJECT_VISUALIZATION,
   DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
   FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
+  resolveEffectiveVisualizationSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   nextVisualizationRadioValue,
@@ -152,6 +155,26 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
     expect(html).toContain('aria-checked="true"');
   });
 
+  it("renders the FEM wireframe mesh choices as an accessible Surface/Full radio group", () => {
+    const html = renderToStaticMarkup(
+      <VisualizationWireframeGeometryScopeSection
+        passControlsDisabled={false}
+        isFieldPending={() => false}
+        patch={vi.fn().mockResolvedValue(undefined)}
+        settings={DEFAULT_OBJECT_VISUALIZATION}
+      />,
+    );
+
+    expect(html).toContain("Wireframe mesh");
+    expect(html).toContain("Surface mesh");
+    expect(html).toContain("Full volume mesh");
+    expect(html).toContain("lighter surface preview");
+    expect(html).toContain("selected edge set returns");
+    expect(html).toContain('role="radiogroup"');
+    expect(html).toContain('aria-label="Wireframe mesh"');
+    expect(html).toContain('aria-checked="true"');
+  });
+
   it("moves radio selection with horizontal arrow keys", () => {
     const values = ["surface", "surface+edges", "wireframe"] as const;
 
@@ -172,6 +195,7 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
   it("renders render modes with a roving keyboard tab stop", () => {
     const html = renderToStaticMarkup(
       <VisualizationRenderModeSection
+        settings={DEFAULT_AIRBOX_VISUALIZATION}
         displaySettings={DEFAULT_AIRBOX_VISUALIZATION}
         passControlsDisabled={false}
         isFieldPending={() => false}
@@ -184,6 +208,31 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
     expect(html).toContain('role="radio"');
     expect(html).toContain('tabindex="0"');
     expect(html).toContain('tabindex="-1"');
+  });
+
+  it("keeps Shaded selected while its surface is waiting for a quantity", () => {
+    const settings = {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      activeQuantityId: "",
+      pointsVisible: false,
+      shaderVisible: true,
+      surfaceColorSource: "colormap" as const,
+      wireframeVisible: false,
+    };
+    const effective = resolveEffectiveVisualizationSettings(settings);
+    expect(effective.shaderVisible).toBe(false);
+    const html = renderToStaticMarkup(
+      <VisualizationRenderModeSection
+        settings={settings}
+        displaySettings={effective}
+        isFieldPending={() => false}
+        passControlsDisabled={false}
+        patch={vi.fn()}
+        target={{ kind: "object", id: "film" }}
+      />,
+    );
+    expect(html).toContain('aria-checked="true" aria-label="Shaded"');
+    expect(html).toContain('aria-checked="false" aria-label="Off"');
   });
 
   it("gives color picker and text input distinct accessible names", () => {

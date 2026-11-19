@@ -12,15 +12,23 @@ describe("presentation preferences and scientific protection", () => {
     expect(appearance).toMatchObject({ renderMode: "presentation", materialRoughness: 0.05, materialMetalness: 1, exportScale: 2 });
     expect(applyViewport3DAppearancePatch(appearance, { renderMode: "bad", exportScale: 4 })).toMatchObject({ renderMode: "presentation", exportScale: 4 });
   });
-  it("keeps scientific colors invariant across all qualities while enabling PBR only on request", () => {
+  it("keeps scientific colors exact across qualities and enables PBR field shading only in Presentation", () => {
     for (const id of ["interactive-lite", "interactive", "balanced", "figure", "capture"] as const) {
       const profile = getViewport3DVisualProfile(id);
       const scientific = resolveViewport3DMaterialProfile(profile);
       const presentation = resolveViewport3DMaterialProfile(profile, { ...DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES, renderMode: "presentation" });
       expect(scientific.uniformGeometry.pbr).toBe(false);
       expect(presentation.uniformGeometry.pbr).toBe(true);
-      expect(presentation.magneticSurface).toEqual(scientific.magneticSurface);
-      expect(presentation.magneticSurface).toEqual({ shadeStrength: 0, toneMapped: false });
+      expect(scientific.magneticSurface).toEqual({ presentation: null, shadeStrength: 0, toneMapped: false });
+      expect(presentation.magneticSurface).toMatchObject({
+        presentation: {
+          metalness: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.materialMetalness,
+          roughness: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.materialRoughness,
+          shadows: id !== "interactive-lite",
+        },
+        shadeStrength: 1,
+        toneMapped: true,
+      });
       expect(presentation.glyphs.toneMapped).toBe(false);
     }
   });

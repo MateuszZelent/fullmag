@@ -3713,13 +3713,94 @@ fn fdm_cuda_absorbing_boundary_plans_cellwise_damping() {
         faces: vec![fullmag_ir::AbsorbingBoundaryFaceIR::XPlus],
         profile: fullmag_ir::AbsorbingBoundaryProfileIR::Smootherstep,
         frame: fullmag_ir::AbsorbingBoundaryFrameIR::Object,
-    });
+        expression: None,
+    }.into());
 
     let plan = plan(&ir).expect("single-grid CUDA consumes cellwise damping");
     let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
         panic!("expected FDM plan");
     };
     assert!(fdm.material.alpha_field.is_some());
+}
+
+#[test]
+fn fdm_absorbing_boundary_uses_magnetic_support() {
+    use fullmag_ir::{AbsorbingBoundaryFaceIR, AbsorbingBoundaryFrameIR, AbsorbingBoundaryProfileIR};
+
+    for multilayer in [false, true] {
+        let mut ir = if multilayer {
+            stacked_two_body_multilayer_problem()
+        } else {
+            ProblemIR::bootstrap_example()
+        };
+        // Both rows have right padding. The last kept column has one magnetic
+        // cell and one hole, including after the multilayer grid is cropped.
+        let mask = [
+            true, true, true, true, false, false, false, false,
+            true, true, true, false, false, false, false, false,
+        ];
+        ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+            fdm_grid_assets: ir.regions.iter().enumerate().map(|(index, region)| {
+                fullmag_ir::FdmGridAssetIR {
+                    geometry_name: region.geometry.clone(),
+                    cells: [8, 2, 1],
+                    cell_size: [2e-9; 3],
+                    origin: [0.0, 0.0, index as f64 * 4e-9],
+                    active_mask: mask.to_vec(),
+                }
+            }).collect(),
+            fem_mesh_assets: vec![],
+            fem_domain_mesh_asset: None,
+        });
+
+        for (frame, explicit_universe) in [
+            (AbsorbingBoundaryFrameIR::Object, false),
+            (AbsorbingBoundaryFrameIR::Universe, false),
+            (AbsorbingBoundaryFrameIR::Universe, true),
+        ] {
+            ir.magnets[0].absorbing_boundary = Some(fullmag_ir::AbsorbingBoundaryLayerIR {
+                total_width_m: 4e-9,
+                ramp_width_m: 4e-9,
+                max_damping: 0.5,
+                faces: vec![AbsorbingBoundaryFaceIR::XPlus],
+                profile: AbsorbingBoundaryProfileIR::Custom,
+                frame,
+                expression: Some("u**3".into()),
+            }.into());
+            if explicit_universe {
+                // x+ is 2 nm beyond the rightmost magnetic cell centre.
+                ir.problem_meta.runtime_metadata.insert(
+                    "study_universe".into(),
+                    serde_json::json!({"center": [0.0, 0.0, 0.0], "size": [18e-9, 40e-9, 40e-9]}),
+                );
+            } else {
+                ir.problem_meta.runtime_metadata.remove("study_universe");
+            }
+            let planned = plan(&ir).expect("masked ABL should plan");
+            let (material, row_width) = match planned.backend_plan {
+                BackendPlanIR::Fdm(grid) => (grid.material, grid.grid.cells[0] as usize),
+                BackendPlanIR::FdmMultilayer(stack) => {
+                    let mut layers = stack.layers.into_iter();
+                    let film = layers.next().expect("magnetic layer");
+                    assert!(layers.next().unwrap().material.alpha_field.is_none());
+                    (film.material, film.native_grid[0] as usize)
+                }
+                _ => panic!("expected FDM plan"),
+            };
+            let alpha = material.alpha_field.expect("cellwise ABL");
+            let base = material.damping;
+            let max_face = if explicit_universe { 9e-9 } else { 7e-9 };
+            for (index, value) in alpha.iter().enumerate() {
+                let x = index % row_width;
+                let y = index / row_width;
+                let center = (x as f64 + 0.5) * 2e-9;
+                let u = (1.0_f64 - (max_face - center) / 4e-9).clamp(0.0, 1.0);
+                let expected = if mask[y * 8 + x] { base + 0.5 * u.powi(3) } else { base };
+                assert!((value - expected).abs() < 1e-12,
+                    "multilayer={multilayer} frame={frame:?} universe={explicit_universe} cell={index}: {value} vs {expected}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -8060,6 +8141,7 @@ fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() {
                 epsilon_prime: 0.0,
                 free_layer_thickness_m: Some(1e-9),
                 fixed_layer_position: Some("top".to_string()),
+                time_expression: None,
                 realization: None,
             },
             "slonczewski",

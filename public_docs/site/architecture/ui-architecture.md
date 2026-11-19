@@ -131,17 +131,7 @@ User Input ──> Draft Store ──(Apply Draft)──> Session API ──> We
 | State | Controllers / resource hooks / `useSyncExternalStore` | `apps/control-room/src/kernel/resources/`, `selection/`, `layout/` |
 | Transport | OpenAPI v2 (`openapi-fetch`), HTTP resources and WebSocket events | `apps/control-room/src/kernel/api/` |
 | Styling | CSS Custom Properties (`--fm-*`), Tailwind | `apps/control-room/src/design/styles/` |
-## Control Room crosswalk
 
-This architecture page has no direct authoring screen. Use the object, material, physics, mesh, or stage editor named by the relevant terminal API page; architecture concepts are currently `inspection-only` unless a concrete UI owner is listed. `TODO: frontend support` applies to architecture capabilities without a corresponding control. See {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-This page documents architecture rather than a standalone Python callable. Exact constructors, arguments, validation, and examples belong to the linked Python API pages; do not infer a public function from an internal architecture term.
-
-## Physics and bibliography scope
-
-No independent physical model is introduced here. Scientific equations are owned by the applicable physics or numerical-methods page. Bibliography: not applicable to this architecture overview; implementation ownership is recorded in the source-code references on the terminal page.
 ## Source-code index
 
 | Claim | Repository path | Stable symbol |
@@ -153,6 +143,3 @@ No independent physical model is introduced here. Scientific equations are owned
 | Event-to-resource invalidation | `apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge.ts` | `RealtimeInvalidationBridge` |
 | Resource revision ownership | `apps/control-room/src/kernel/resources/ResourceInvalidationController.ts` | `ResourceInvalidationController` |
 | FP64 field decoding | `apps/control-room/src/kernel/api/codecs/fieldVectorCodec.ts` | `decodeFieldVector` |
-
-These are source-level implementation references. This documentation review does not establish
-browser/WebGL execution or solver qualification.

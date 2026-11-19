@@ -958,23 +958,26 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
         if starts.len() != 1 {
             bail!("host-bound worker requires exactly one durable Start for its claim");
         }
-        let run_intent = retry_store_writer_busy(|| store.read_run_intent(run_id))
-            .context("read accepted RunIntent for worker CPU environment")?
-            .context("host-bound worker requires its accepted RunIntent")?;
-        let specification: fullmag_application::RunSpecification =
-            serde_json::from_value(run_intent.specification)
-                .context("accepted worker RunSpec is invalid")?;
-        if specification.run_id != claim.run_id {
-            bail!("accepted worker RunSpec belongs to another run");
-        }
-        let accepted_step = retry_store_writer_busy(|| {
+        let accepted_step = (|| {
+            let run_intent = retry_store_writer_busy(|| store.read_run_intent(run_id))
+                .context("read accepted RunIntent for worker CPU environment")?
+                .context("host-bound worker requires its accepted RunIntent")?;
+            let specification: fullmag_application::RunSpecification =
+                serde_json::from_value(run_intent.specification)
+                    .context("accepted worker RunSpec is invalid")?;
+            if specification.run_id != claim.run_id {
+                bail!("accepted worker RunSpec belongs to another run");
+            }
             fullmag_runtime_control::load_accepted_worker_step_for_start(
                 store,
                 &specification.snapshot.project_id,
                 starts[0],
             )
-        })
-        .context("load exact accepted worker step for CPU environment")?;
+        })();
+        let accepted_step = match accepted_step.context("load exact accepted worker step for CPU environment") {
+            Ok(step) => step,
+            Err(error) => return Err(defer_pre_spawn_worker_validation_error(slot, error)),
+        };
         worker_thread_environment(
             &accepted_step.problem,
             &accepted_step.execution_plan,
@@ -1314,11 +1317,29 @@ fn defer_pre_spawn_worker_launch_error(
     error: anyhow::Error,
 ) -> anyhow::Error {
     // These call sites are all before launch authorization and child creation.
-    // Only typed host contention/inventory failures may free the slot for the
-    // scheduler to resume this same claim, Start, and lease.
-    if !is_retryable_pre_spawn_host_error(&error) {
+    // An unused permit fenced by an exact Stop goes to scheduler cancellation
+    // reconciliation. It is never retried by the launch authorization loop.
+    if !is_retryable_pre_spawn_host_error(&error)
+        && error.downcast_ref::<fullmag_session::host_resource_ledger::WorkerLaunchFencedByStop>().is_none()
+    {
         return error;
     }
+    release_slot_for_deferred_launch(slot, error)
+}
+
+fn defer_pre_spawn_worker_validation_error(
+    slot: SupervisorSlot,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    // This call site only loads the accepted input before launch authorization.
+    // Keep generic I/O errors out of the one-shot authorization retry path.
+    if fullmag_runtime_control::is_transient_store_io(&error) {
+        return release_slot_for_deferred_launch(slot, error);
+    }
+    defer_pre_spawn_worker_launch_error(slot, error)
+}
+
+fn release_slot_for_deferred_launch(slot: SupervisorSlot, error: anyhow::Error) -> anyhow::Error {
     match slot.release() {
         Ok(()) => error.context(WorkerLaunchDeferred),
         Err(release_error) => release_error.context(format!(
@@ -3326,6 +3347,19 @@ fn is_coordinator_watermark_conflict(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
 
+    #[test]
+    fn transient_pre_spawn_read_releases_slot_without_retrying_launch_authorization() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let slot = SupervisorSlot::acquire(&store, "run-read", "task-read", "gpu-read", 1, false)
+            .unwrap();
+        let slot_path = slot.path.clone();
+        let error = anyhow::Error::new(std::io::Error::from_raw_os_error(12));
+        assert!(!is_retryable_pre_spawn_host_error(&error));
+        let deferred = defer_pre_spawn_worker_validation_error(slot, error);
+        assert!(deferred.downcast_ref::<WorkerLaunchDeferred>().is_some());
+        assert!(!slot_path.exists());
+    }
 
     /// Exercise the real journal, inbox, artifact catalog and release replay.
     /// No child, solver, host admission or test-only production bypass is used.

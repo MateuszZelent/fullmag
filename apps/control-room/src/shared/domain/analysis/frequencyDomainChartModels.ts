@@ -334,7 +334,7 @@ const FREQUENCY_DOMAIN_RESPONSE_SWEEP_RESOURCE_KEY =
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH;
 
 export interface FrequencyDomainChartBuildResult<TPoint> {
-  dataSourceVersion: "unknown" | "response.v1" | "response.v2" | "response.v3";
+  dataSourceVersion: "unknown" | "response.v1" | "response.v2";
   diagnostics: string[];
   droppedPointCount: number;
   points: TPoint[];
@@ -345,19 +345,7 @@ export function frequencyResponseSeriesUnit(
   model: Pick<FrequencyDomainChartBuildResult<unknown>, "series">,
   quantity: string,
 ): string {
-  const units = new Set(model.series.filter((series) => series.quantity === quantity).map((series) => series.unit));
-  return units.size === 1 ? [...units][0]! : NOT_PUBLISHED_UNIT;
-}
-
-export function frequencyResponseSeriesForPoint(
-  model: FrequencyDomainChartBuildResult<FrequencyResponsePoint>,
-  quantity: string,
-  point: FrequencyResponsePoint | null | undefined,
-): FrequencyDomainChartSeries | null {
-  if (!point) return null;
-  const rowIndex = model.points.indexOf(point);
-  return model.series.find((series) => series.quantity === quantity &&
-    series.points.some((entry) => entry.rowIndex === rowIndex)) ?? null;
+  return model.series.find((series) => series.quantity === quantity)?.unit ?? NOT_PUBLISHED_UNIT;
 }
 
 export interface FrequencyDomainChartPoint {
@@ -981,7 +969,100 @@ export function readEigenSpectrumPayload(
   return { modes };
 }
 
+// Builders below are called from many inspector, explorer and summary hooks
+// for the same resource revision (19 spectrum, 7 dispersion and 8 branch call
+// sites). Results are cached per resource object and reused only while every
+// own field of that resource still holds the same reference, so an in-place
+// mutation of a resource invalidates its entry. Cached results are shared and
+// must be treated as read-only by callers.
+interface ResourceMemoEntry<T> {
+  snapshot: readonly (readonly [string, unknown])[];
+  value: T;
+}
+
+const NULL_MEMO_KEY: object = Object.freeze({});
+
+function resourceSnapshot(resource: object): (readonly [string, unknown])[] {
+  return Object.keys(resource).map(
+    (key) => [key, (resource as Record<string, unknown>)[key]] as const,
+  );
+}
+
+function resourceSnapshotMatches(
+  resource: object,
+  snapshot: readonly (readonly [string, unknown])[],
+): boolean {
+  if (Object.keys(resource).length !== snapshot.length) return false;
+  return snapshot.every(
+    ([key, value]) =>
+      Object.is((resource as Record<string, unknown>)[key], value),
+  );
+}
+
+function memoizeByResource<R extends object, T>(
+  cache: WeakMap<object, ResourceMemoEntry<T>>,
+  resource: R,
+  compute: () => T,
+): T {
+  const cached = cache.get(resource);
+  if (cached && resourceSnapshotMatches(resource, cached.snapshot)) {
+    return cached.value;
+  }
+  const value = compute();
+  cache.set(resource, { snapshot: resourceSnapshot(resource), value });
+  return value;
+}
+
+interface ResourcePairMemoEntry<T> extends ResourceMemoEntry<T> {
+  secondarySnapshot: readonly (readonly [string, unknown])[] | null;
+}
+
+function memoizeByResourcePair<A extends object, B extends object, T>(
+  cache: WeakMap<object, WeakMap<object, ResourcePairMemoEntry<T>>>,
+  primary: A,
+  secondary: B | null | undefined,
+  compute: () => T,
+): T {
+  let inner = cache.get(primary);
+  if (!inner) {
+    inner = new WeakMap();
+    cache.set(primary, inner);
+  }
+  const secondaryKey = secondary ?? NULL_MEMO_KEY;
+  const cached = inner.get(secondaryKey);
+  if (
+    cached &&
+    resourceSnapshotMatches(primary, cached.snapshot) &&
+    (secondary == null ||
+      (cached.secondarySnapshot != null &&
+        resourceSnapshotMatches(secondary, cached.secondarySnapshot)))
+  ) {
+    return cached.value;
+  }
+  const value = compute();
+  inner.set(secondaryKey, {
+    snapshot: resourceSnapshot(primary),
+    secondarySnapshot: secondary != null ? resourceSnapshot(secondary) : null,
+    value,
+  });
+  return value;
+}
+
+const eigenSpectrumChartModelCache = new WeakMap<
+  object,
+  ResourceMemoEntry<FrequencyDomainChartBuildResult<EigenSpectrumPoint>>
+>();
+
 export function buildEigenSpectrumChartModel(
+  resource: FrequencyDomainJsonArtifactLike | null | undefined,
+): FrequencyDomainChartBuildResult<EigenSpectrumPoint> {
+  if (resource == null) return computeEigenSpectrumChartModel(resource);
+  return memoizeByResource(eigenSpectrumChartModelCache, resource, () =>
+    computeEigenSpectrumChartModel(resource),
+  );
+}
+
+function computeEigenSpectrumChartModel(
   resource: FrequencyDomainJsonArtifactLike | null | undefined,
 ): FrequencyDomainChartBuildResult<EigenSpectrumPoint> {
   const payload = readEigenSpectrumPayload(resource?.payload);
@@ -1083,7 +1164,27 @@ export function buildEigenModeSelectionRef(
   });
 }
 
+const eigenDispersionChartModelCache = new WeakMap<
+  object,
+  WeakMap<object, ResourcePairMemoEntry<FrequencyDomainChartBuildResult<EigenDispersionPoint>>>
+>();
+
 export function buildEigenDispersionChartModel(
+  resource: FrequencyDomainTextArtifactLike | null | undefined,
+  branchesModel?: EigenBranchesModel | null,
+): FrequencyDomainChartBuildResult<EigenDispersionPoint> {
+  if (resource == null) {
+    return computeEigenDispersionChartModel(resource, branchesModel);
+  }
+  return memoizeByResourcePair(
+    eigenDispersionChartModelCache,
+    resource,
+    branchesModel,
+    () => computeEigenDispersionChartModel(resource, branchesModel),
+  );
+}
+
+function computeEigenDispersionChartModel(
   resource: FrequencyDomainTextArtifactLike | null | undefined,
   branchesModel?: EigenBranchesModel | null,
 ): FrequencyDomainChartBuildResult<EigenDispersionPoint> {
@@ -1365,7 +1466,27 @@ function eigenArtifactsShareOwnership(
   return true;
 }
 
+const eigenBranchesModelCache = new WeakMap<
+  object,
+  WeakMap<object, ResourcePairMemoEntry<EigenBranchesModel>>
+>();
+
 export function buildEigenBranchesModel(
+  resource: FrequencyDomainJsonArtifactLike | null | undefined,
+  dispersionResource?: FrequencyDomainTextArtifactLike | null,
+): EigenBranchesModel {
+  if (resource == null) {
+    return computeEigenBranchesModel(resource, dispersionResource);
+  }
+  return memoizeByResourcePair(
+    eigenBranchesModelCache,
+    resource,
+    dispersionResource,
+    () => computeEigenBranchesModel(resource, dispersionResource),
+  );
+}
+
+function computeEigenBranchesModel(
   resource: FrequencyDomainJsonArtifactLike | null | undefined,
   dispersionResource?: FrequencyDomainTextArtifactLike | null,
 ): EigenBranchesModel {
@@ -1531,12 +1652,10 @@ export function buildFrequencyResponseChartModel(
   );
   const rows = responseRows(resource?.payload);
   const points: FrequencyResponsePoint[] = [];
-  const absorptionProvenance = new Map<FrequencyResponsePoint, unknown>();
-  const susceptibilityProvenance = new Map<FrequencyResponsePoint, unknown>();
   let droppedPointCount = 0;
 
-  if ((dataSourceVersion === "response.v2" || dataSourceVersion === "response.v3") && resource?.payload && rows.length === 0) {
-    diagnostics.push(`${dataSourceVersion} artifact is present but contains no readable points`);
+  if (dataSourceVersion === "response.v2" && resource?.payload && rows.length === 0) {
+    diagnostics.push("response.v2 artifact is present but contains no readable points");
   }
 
   rows.forEach((row, rowIndex) => {
@@ -1558,7 +1677,7 @@ export function buildFrequencyResponseChartModel(
     const residualRelativeL2 = nonnegativeFiniteNumber(
       item?.relative_residual_l2_norm ?? item?.residualRelativeL2,
     );
-    const point: FrequencyResponsePoint = {
+    points.push({
       absorbedPowerDensity: finiteNumber(
         item?.absorbed_power_density ?? item?.absorbedPowerDensity,
       ),
@@ -1579,10 +1698,7 @@ export function buildFrequencyResponseChartModel(
       ...(residualRelativeL2 != null ? { residualRelativeL2 } : {}),
       susceptibility: susceptibility.length ? susceptibility : null,
       overlap: finiteNumber(item?.overlap_score ?? item?.overlapScore ?? item?.overlap),
-    };
-    points.push(point);
-    absorptionProvenance.set(point, item?.absorbed_power_density_provenance);
-    susceptibilityProvenance.set(point, item?.susceptibility_tensor_provenance);
+    });
   });
 
   const frequencyScale = frequencyChartScale(
@@ -1597,15 +1713,21 @@ export function buildFrequencyResponseChartModel(
     (point) => point.amplitude,
     diagnostics,
   );
-  const absorptionSeries = responseObservableSeries(
-    points, absorptionProvenance, resource, frequencyScale, manifestPayload,
-    "absorbed-power-density", "Absorbed power density", ["absorbed_power"],
-    "absorbed power density", (point) => point.absorbedPowerDensity, diagnostics,
+  const absorbedPowerDensityUnit = responseObservableUnit(
+    points,
+    manifestPayload,
+    ["absorbed_power"],
+    "absorbed power density",
+    (point) => point.absorbedPowerDensity,
+    diagnostics,
   );
-  const susceptibilitySeries = responseObservableSeries(
-    points, susceptibilityProvenance, resource, frequencyScale, manifestPayload,
-    "susceptibility-max-abs", "Max |susceptibility|", ["susceptibility"],
-    "susceptibility", (point) => maxAbsSusceptibility(point.susceptibility), diagnostics,
+  const susceptibilityUnit = responseObservableUnit(
+    points,
+    manifestPayload,
+    ["susceptibility"],
+    "susceptibility",
+    (point) => maxAbsSusceptibility(point.susceptibility),
+    diagnostics,
   );
 
   return {
@@ -1632,8 +1754,24 @@ export function buildFrequencyResponseChartModel(
         "rad",
         (point) => point.phaseRad,
       ),
-      ...absorptionSeries,
-      ...susceptibilitySeries,
+      responseSeries(
+        points,
+        resource,
+        frequencyScale,
+        "absorbed-power-density",
+        "Absorbed power density",
+        absorbedPowerDensityUnit,
+        (point) => point.absorbedPowerDensity,
+      ),
+      responseSeries(
+        points,
+        resource,
+        frequencyScale,
+        "susceptibility-max-abs",
+        "Max |susceptibility|",
+        susceptibilityUnit,
+        (point) => maxAbsSusceptibility(point.susceptibility),
+      ),
     ].filter((series) => series.points.length > 0),
   };
 }
@@ -1643,85 +1781,6 @@ type ResponseObservableKind =
   | "drive_projected_response"
   | "response_amplitude"
   | "susceptibility";
-
-interface ResponseObservableSeriesEvidence {
-  key: string;
-  label: string;
-  unit: string | null;
-}
-
-function responseObservableSeries(
-  points: readonly FrequencyResponsePoint[],
-  provenanceByPoint: ReadonlyMap<FrequencyResponsePoint, unknown>,
-  resource: FrequencyDomainJsonArtifactLike | null | undefined,
-  frequencyScale: FrequencyChartScale,
-  manifestPayload: unknown,
-  quantity: string,
-  legacyLabel: string,
-  observableKinds: readonly ResponseObservableKind[],
-  diagnosticLabel: string,
-  selector: (point: FrequencyResponsePoint) => number | null,
-  diagnostics: string[],
-): FrequencyDomainChartSeries[] {
-  const evidence = new Map<FrequencyResponsePoint, ResponseObservableSeriesEvidence>();
-  let incompleteProvenance = false;
-  for (const point of points) {
-    if (selector(point) == null) continue;
-    const raw = provenanceByPoint.get(point);
-    if (raw == null) {
-      evidence.set(point, { key: "legacy", label: legacyLabel, unit: null });
-      continue;
-    }
-    const provenance = record(raw);
-    let label: string | null = null;
-    let unit: string | null = null;
-    if (quantity === "absorbed-power-density") {
-      if (provenance?.kind === "drive_projected_absorption_proxy" &&
-        provenance.physical_power_density === false) {
-        label = "Drive-projected absorption proxy";
-      } else if (provenance?.physical_power_density === true) {
-        label = legacyLabel;
-      }
-      unit = stringValue(provenance?.units);
-    } else {
-      if (provenance?.full_tensor === false &&
-        provenance.kind === "drive_projected_si_susceptibility") {
-        label = "|Drive-projected susceptibility|";
-      } else if (provenance?.full_tensor === false &&
-        provenance.kind === "drive_projected_scalar") {
-        label = "|Drive-projected response|";
-      } else if (provenance?.full_tensor === true) {
-        label = legacyLabel;
-      }
-      unit = stringValue(provenance?.response_units);
-    }
-    if (!provenance || label == null || unit == null) {
-      incompleteProvenance = true;
-      continue;
-    }
-    // Native provenance is a flat metadata record. Sort its entries without
-    // mutating it so equivalent key order does not create another series.
-    const key = JSON.stringify(Object.entries(provenance).toSorted(([a], [b]) => a.localeCompare(b)));
-    evidence.set(point, { key, label, unit });
-  }
-  if (incompleteProvenance) {
-    diagnostics.push(`${diagnosticLabel} provenance is incomplete or unsupported`);
-  }
-  const groups = Map.groupBy(points, (point) => evidence.get(point)?.key ?? null);
-  const validGroups = [...groups].filter(([key]) => key !== null);
-  return validGroups.map(([, members], groupIndex) => {
-    const metadata = evidence.get(members[0]!)!;
-    const included = new Set(members);
-    const unit = metadata.unit ?? responseObservableUnit(
-      members, manifestPayload, observableKinds, diagnosticLabel, selector, diagnostics,
-    );
-    const series = responseSeries(points, resource, frequencyScale, quantity, metadata.label,
-      unit, (point) => included.has(point) ? selector(point) : null);
-    return validGroups.length === 1 ? series : {
-      ...series, id: `${series.id}:provenance-${groupIndex}`,
-    };
-  });
-}
 
 function responseObservableUnit(
   points: readonly FrequencyResponsePoint[],
@@ -2070,13 +2129,10 @@ function responseRows(payload: unknown): unknown[] {
 
 function responseDataSourceVersion(
   resource: FrequencyDomainJsonArtifactLike | null | undefined,
-): "unknown" | "response.v1" | "response.v2" | "response.v3" {
+): "unknown" | "response.v1" | "response.v2" {
   const root = record(resource?.payload);
   const schema = stringValue(root?.schema_version);
   const artifactPath = resource?.artifact_path ?? "";
-  if (schema === "magnetic_response_sweep.v3" || artifactPath.endsWith(".v3.json")) {
-    return "response.v3";
-  }
   if (schema === "magnetic_response_sweep.v2" || artifactPath.endsWith(".v2.json")) {
     return "response.v2";
   }
@@ -2212,7 +2268,34 @@ function finiteCsvNumber(value: string | undefined): number | null {
   return value == null || value.trim() === "" ? null : finiteNumber(value);
 }
 
-function parseDispersionCsv(csv: string): {
+type ParsedDispersionCsv = {
+  droppedPointCount: number;
+  points: EigenDispersionPoint[];
+};
+
+// The same dispersion text is parsed by the branch model and the dispersion
+// chart model; keep a few recent parses keyed by the text itself. Consumers
+// copy or map the returned points and never mutate them in place.
+const DISPERSION_CSV_CACHE_LIMIT = 4;
+const dispersionCsvCache = new Map<string, ParsedDispersionCsv>();
+
+function parseDispersionCsv(csv: string): ParsedDispersionCsv {
+  const cached = dispersionCsvCache.get(csv);
+  if (cached) {
+    dispersionCsvCache.delete(csv);
+    dispersionCsvCache.set(csv, cached);
+    return cached;
+  }
+  const parsed = parseDispersionCsvUncached(csv);
+  dispersionCsvCache.set(csv, parsed);
+  if (dispersionCsvCache.size > DISPERSION_CSV_CACHE_LIMIT) {
+    const oldest = dispersionCsvCache.keys().next().value;
+    if (oldest !== undefined) dispersionCsvCache.delete(oldest);
+  }
+  return parsed;
+}
+
+function parseDispersionCsvUncached(csv: string): {
   droppedPointCount: number;
   points: EigenDispersionPoint[];
 } {

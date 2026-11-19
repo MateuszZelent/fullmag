@@ -113,7 +113,6 @@ impl LiveFixture {
             sequence: 0,
             magnetization_sequence: 1,
             last_scalar_write: None,
-            last_field_write: None,
             current_magnetization: Some(reference),
             recent_clock: VecDeque::new(),
             reported_failure: false,

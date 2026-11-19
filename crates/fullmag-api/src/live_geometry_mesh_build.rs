@@ -307,6 +307,15 @@ pub(crate) fn can_qualify_live_geometry_reuse(
     scene: &SceneDocument,
     asset: &FemDomainMeshAssetIR,
 ) -> bool {
+    is_supported_geometry_only_p1_domain(scene, asset)
+        && scene.objects.iter().all(|object| object.regions.is_empty())
+        && asset.object_region_markers.is_empty()
+}
+
+pub(crate) fn is_supported_geometry_only_p1_domain(
+    scene: &SceneDocument,
+    asset: &FemDomainMeshAssetIR,
+) -> bool {
     scene.study.requested_backend.eq_ignore_ascii_case("fem")
         && scene
             .study
@@ -327,8 +336,6 @@ pub(crate) fn can_qualify_live_geometry_reuse(
         && scene.antenna_field_solve_stages.is_empty()
         && scene.antenna_target_projections.is_empty()
         && scene.solved_antenna_drives.is_empty()
-        && scene.objects.iter().all(|object| object.regions.is_empty())
-        && asset.object_region_markers.is_empty()
         && asset.mesh.as_ref().is_some_and(|mesh| {
             !mesh.cells.types.is_empty()
                 && mesh
@@ -760,7 +767,7 @@ pub(crate) async fn build_and_publish_geometry_mesh(
     .await
     .map_err(|error| ApiError::internal(format!("geometry mesh build task failed: {error}")))??;
 
-    {
+    let damping_snapshot = {
         let _transition = state.current_live_session_transition.lock().await;
         if !state
             .current_command_ledger
@@ -839,7 +846,14 @@ pub(crate) async fn build_and_publish_geometry_mesh(
             &mut published,
             validated_scene_revision,
         );
+        let refresh = crate::live_authored_damping::geometry::invalidate_for_build(
+            &mut published, validated_scene_revision,
+        );
         *snapshot = published;
+        refresh.then(|| snapshot.clone())
+    };
+    if let Some(snapshot) = damping_snapshot {
+        crate::live_authored_damping::geometry::refresh_after_build(state, context, snapshot).await;
     }
     if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
         let display_revision = state.current_display_selection.read().await.revision;

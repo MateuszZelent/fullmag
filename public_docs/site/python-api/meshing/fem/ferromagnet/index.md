@@ -103,7 +103,7 @@ Every mode has its own command, required companion fields, and capability
 boundary; disallowed combinations end in validation errors, never in silent
 replacement.
 
-ProblemIR mapping: the object recipe (`PerObjectMeshRecipe`) is the canonical
+`ProblemIR` mapping: the object recipe (`PerObjectMeshRecipe`) is the canonical
 representation; the study supplies only lowest-precedence defaults.
 
 ## 5. How to set it in Control Room
@@ -165,7 +165,3 @@ swept-hex
 boundary-layers
 imported-mesh
 ```
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

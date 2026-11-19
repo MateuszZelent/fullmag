@@ -197,7 +197,6 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
             "host_certificate": certificate_path,
             "owner_marker": owner_path,
             "receipt": {"image_id": fixture.image},
-            "compose_storage_bytes": None,
             "operator_probe_environment_record": {},
         }
 

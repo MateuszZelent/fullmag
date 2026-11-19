@@ -124,6 +124,17 @@ Przed startem launcher może też przez BuildKit przygotować brakujący zgodny
 obraz development-base/helper; nie zastępuje to buildu aplikacji w `backend`.
 Nie uruchamiaj usługi `fem-gpu-toolchain` przez `compose up` jako backendu.
 
+**Architektura CUDA w DEV.** Przed budowaniem kodu CUDA w Docker DEV ustal
+compute capability GPU wybranego na hoście i użyj wyłącznie odpowiadającego
+celu, np. `86-real`. Przekaż potwierdzony cel do CMake przez launcher i
+zapisz go w receipcie buildu. Gdy kontener nie widzi sterownika (również w
+profilu wykonawczym CPU), użyj zweryfikowanego wyniku z hosta albo zakończ
+próbę przed kompilacją z komunikatem, jak podać potwierdzony cel. W DEV
+wyklucz `all` oraz fallback do pełnej macierzy obrazu po błędzie wykrywania.
+Macierz wielu architektur pozostaje częścią jawnie wybranej recepty wydania
+lub kwalifikacji. Bieżący fallback launchera do macierzy obrazu wymaga
+dostosowania do tej reguły.
+
 Oba etapy muszą wskazywać ten sam checkout/projekt. Recepta
 `docker-dev-toolchain` wybiera checkout z `repo_root` bieżącego `justfile`, nie
 z późniejszego argumentu `docker-dev`. Dlatego przed oboma poleceniami przejdź

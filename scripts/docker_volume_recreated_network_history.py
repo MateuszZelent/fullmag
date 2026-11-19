@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 import math
 import re
-import stat
 
 from docker_build_control import BuildControlError, canonical
 from docker_volume_reconcile import digest, read_raw, require
@@ -175,90 +174,6 @@ def _validate_provenance(provenance: Mapping, process: Mapping) -> dict[str, obj
     }
 
 
-def _runtime_parent_identity(path: PurePosixPath) -> tuple[int, int]:
-    directory = Path(path)
-    try:
-        resolved = directory.resolve(strict=True)
-        info = directory.stat()
-    except (OSError, RuntimeError) as error:
-        raise BuildControlError("Runtime parent identity cannot be read") from error
-    require(resolved == directory, "Runtime parent traverses a symbolic link")
-    require(stat.S_ISDIR(info.st_mode), "Runtime parent is not a directory")
-    return info.st_dev, info.st_ino
-
-
-def _validate_prior_attempts(control, attempts, old_attempt, failed_attempt, old_finished, retained):
-    require(isinstance(attempts, list) and 2 <= len(attempts) <= MAX_RETAINED_RECORDS
-            and all(isinstance(item, tuple) and len(item) == 2
-                    and isinstance(item[0], str) and TOKEN.fullmatch(item[0]) and item[1] == "d"
-                    for item in attempts), "Retirement development attempt inventory is malformed")
-    identifiers = {attempt for attempt, _ in attempts}
-    require(len(identifiers) == len(attempts) and {old_attempt, failed_attempt} <= identifiers,
-            "Retirement development attempt inventory does not bind the old and failed attempts")
-    for attempt in sorted(identifiers - {old_attempt, failed_attempt}):
-        _, terminal = _read_record(control, "development/attempts/" + attempt + "/terminal.json", retained)
-        require(terminal.get("schema") == RECREATION_SCHEMA and terminal.get("phase") == "development"
-                and terminal.get("attempt") == attempt and terminal.get("state") in {"succeeded", "failed-confirmed"},
-                "Retirement development history includes an unconfirmed earlier attempt")
-        _group(terminal, control, "Earlier development terminal")
-        _identity_inputs(terminal.get("inputs"), control.identity, "Earlier development terminal")
-        require(_time(terminal.get("started_at"), "Earlier development start")
-                <= _time(terminal.get("finished_at"), "Earlier development finish") <= old_finished,
-                "Earlier development terminal is newer than the retired owner")
-
-
-def _validate_retirement_process(control, recreation, rec_root, current, old_containers, retained):
-    from docker_volume_dev import _require_retirement_stopped_pair
-    from docker_volume_prelaunch_failure_stop import _identity
-
-    config_sha256 = _sha(current.get("config_sha256"), "Retired owner Compose SHA-256")
-    require(recreation["inputs"].get("config_sha256") == config_sha256
-            and "prelaunch_failure_stop" not in recreation["inputs"]
-            and "prelaunch_failure_fresh_archive" not in recreation,
-            "Group retirement does not bind the exact previous Compose configuration")
-    _, pair = _read_record(control, rec_root + "/retained-containers.json", retained)
-    _require_retirement_stopped_pair(pair)
-    _validate_quiescence_services({"services": pair}, control.identity, old_containers)
-    require(all(row["Config"]["Labels"].get("com.docker.compose.service") == name
-                for name, row in pair.items()), "Retirement retained service labels differ")
-    drain_raw, process = _read_record(control, rec_root + "/retirement-native-drain.json", retained)
-    ready, terminal = process.get("service_owner"), process.get("terminal_service_owner")
-    require(digest(drain_raw) == recreation.get("retirement_native_drain_sha256")
-            and process.get("schema") == "fullmag.docker-process-tree.v1"
-            and process.get("state") == "drained"
-            and process.get("accepted_store") == "/state/runs/docker-all/session-store"
-            and isinstance(ready, dict) and isinstance(terminal, dict)
-            and ready.get("state") == "ready" and terminal.get("state") == "drained",
-            "Retirement native drain does not bind the previous owner transition")
-    for owner, status in ((ready, "running"), (terminal, "exited_success")):
-        children = owner.get("children")
-        require(isinstance(children, list) and len(children) == 2
-                and all(isinstance(child, dict) and child.get("status") == status for child in children),
-                "Retirement native scheduler children did not drain successfully")
-    require(_identity(ready) == _identity(terminal), "Retirement native drain owner identity changed")
-    return process
-
-
-def _validate_retired_ledger(control, archive, archive_intent, archive_path, recreation_attempt, retained):
-    ledger_volume = archive.get("preserved_group_ledger_volume")
-    require(isinstance(ledger_volume, str) and ledger_volume
-            and archive_intent.get("preserved_group_ledger_volume") == ledger_volume,
-            "Retirement archive does not bind the preserved group ledger")
-    _, generation = _read_record(control, "group-ledger-generation.json", retained)
-    expected = {
-        "schema": "fullmag.docker-group-ledger-generation.v1", "compose_project": control.project,
-        "generation": recreation_attempt, "archive_terminal_path": archive_path,
-        "archive_terminal_sha256": digest(canonical(archive)), "preserved_volume": ledger_volume,
-    }
-    if "preserved_group_ledger_subpath" in archive:
-        subpath = "/".join(part for part in (getattr(control, "namespace", ""), "private/ledger") if part)
-        require(ledger_volume == control.volume and archive["preserved_group_ledger_subpath"] == subpath
-                and archive_intent.get("preserved_group_ledger_subpath") == subpath,
-                "Retirement private ledger subpath differs from the selected control namespace")
-        expected.update(preserved_subpath=subpath, archived_group_ledger_path=archive["mapping"]["archived_group_ledger"])
-    require(generation == expected, "Retirement ledger generation does not bind the exact archive terminal")
-
-
 def validate_recreated_history(
     control,
     *,
@@ -333,6 +248,11 @@ def validate_recreated_history(
     old_state = _absolute_state_root(current.get("state_root"), "Old state root")
     require(old_state.name == old_attempt, "Old state root does not belong to its development attempt")
 
+    require(isinstance(attempts, list)
+            and all(isinstance(item, tuple) and len(item) == 2 for item in attempts)
+            and sorted(attempts) == sorted([(old_attempt, "d"), (failed_attempt, "d")]),
+            "Development attempt inventory is not exactly the old and failed attempts")
+
     failed_raw = read_raw(control, target_root + "/receipt.json")
     require(isinstance(failed_raw, bytes) and _json(failed_raw, "Failed development receipt") == original,
             "Failed target receipt differs from the supplied original")
@@ -345,7 +265,8 @@ def validate_recreated_history(
     _group(original, control, "Failed development receipt")
     _identity_inputs(original.get("inputs"), identity, "Failed development receipt")
     new_state = _absolute_state_root(original.get("state_root"), "Fresh failed state root")
-    require(new_state.name == failed_attempt and new_state != old_state,
+    require(new_state.parent == old_state.parent and new_state.name == failed_attempt
+            and new_state != old_state,
             "Failed attempt does not use its exact fresh state path under the old runtime root")
 
     old_finished = _time(current.get("finished_at"), "Old development finish time")
@@ -384,105 +305,84 @@ def validate_recreated_history(
             and recreation.get("removed_containers") == old_containers,
             "Recreation removed-container list differs from the old development owner")
 
-    retired = recreation.get("retire_only") is True
-    history_binding = {}
-    if retired:
-        _validate_prior_attempts(control, attempts, old_attempt, failed_attempt, old_finished, retained)
-        if new_state.parent != old_state.parent:
-            parent_identity = _runtime_parent_identity(old_state.parent)
-            require(_runtime_parent_identity(new_state.parent) == parent_identity,
-                    "Fresh runtime parent is not an alias of the retired runtime parent")
-            history_binding["runtime_parent_device_inode"] = list(parent_identity)
-        process = _validate_retirement_process(control, recreation, rec_root, current, old_containers, retained)
-        mode = "retired-drained-runtime-archive"
-        history_binding["retirement_native_drain_sha256"] = recreation["retirement_native_drain_sha256"]
-    else:
-        require(new_state.parent == old_state.parent,
-                "Failed attempt does not use its exact fresh state path under the old runtime root")
-        require(isinstance(attempts, list)
-                and all(isinstance(item, tuple) and len(item) == 2 for item in attempts)
-                and sorted(attempts) == sorted([(old_attempt, "d"), (failed_attempt, "d")]),
-                "Development attempt inventory is not exactly the old and failed attempts")
-        stop_pin = rec_inputs.get("prelaunch_failure_stop")
-        require(isinstance(stop_pin, Mapping) and set(stop_pin) == {"attempt", "terminal_sha256"},
-                "Fresh recreation has no exact prelaunch stop pin")
-        stop_attempt = _token(stop_pin.get("attempt"), "Prelaunch stop attempt")
-        stop_sha256 = _sha(stop_pin.get("terminal_sha256"), "Prelaunch stop terminal SHA-256")
-        stop_root = "iteration/attempts/" + stop_attempt
-        stop_terminal_path = stop_root + "/terminal.json"
-        stop_raw, stop = _read_record(control, stop_terminal_path, retained)
-        require(digest(stop_raw) == stop_sha256,
-                "Prelaunch stop terminal differs from the recreation pin")
-        stop_receipt_raw, stop_receipt = _read_record(control, stop_root + "/receipt.json", retained)
-        require(stop_receipt_raw == stop_raw and stop_receipt == stop,
-                "Prelaunch stop receipt differs from its immutable terminal")
-        require(stop.get("schema") == RECREATION_SCHEMA
-                and stop.get("phase") == "iteration" and stop.get("state") == "succeeded"
-                and stop.get("attempt") == stop_attempt and stop.get("idle_backend_stopped") is True,
-                "Pinned prelaunch stop is not a successful stop-only operation")
-        _group(stop, control, "Prelaunch stop terminal")
-        stop_inputs = stop.get("inputs")
-        _stop_source_root(stop_inputs, identity)
-        require(isinstance(stop_inputs, Mapping)
-                and stop_inputs.get("attempt") == old_attempt
-                and stop_inputs.get("capture_prelaunch_failure") is True
-                and stop_inputs.get("quiesce_api") is True
-                and stop.get("backend_container") == old_containers[0]
-                and stop.get("frontend_container") == old_containers[1],
-                "Prelaunch stop does not bind the old development owner and stop-only mode")
-        require(stop.get("config_sha256") == rec_inputs.get("config_sha256"),
-                "Prelaunch stop and recreation use different Compose configurations")
-        stop_started = _time(stop.get("started_at"), "Prelaunch stop start time")
-        stop_finished = _time(stop.get("finished_at"), "Prelaunch stop finish time")
-        require(old_finished <= stop_started <= stop_finished < rec_started,
-                "Prelaunch stop did not complete between the old development and recreation")
+    stop_pin = rec_inputs.get("prelaunch_failure_stop")
+    require(isinstance(stop_pin, Mapping) and set(stop_pin) == {"attempt", "terminal_sha256"},
+            "Fresh recreation has no exact prelaunch stop pin")
+    stop_attempt = _token(stop_pin.get("attempt"), "Prelaunch stop attempt")
+    stop_sha256 = _sha(stop_pin.get("terminal_sha256"), "Prelaunch stop terminal SHA-256")
+    stop_root = "iteration/attempts/" + stop_attempt
+    stop_terminal_path = stop_root + "/terminal.json"
+    stop_raw, stop = _read_record(control, stop_terminal_path, retained)
+    require(digest(stop_raw) == stop_sha256,
+            "Prelaunch stop terminal differs from the recreation pin")
+    stop_receipt_raw, stop_receipt = _read_record(control, stop_root + "/receipt.json", retained)
+    require(stop_receipt_raw == stop_raw and stop_receipt == stop,
+            "Prelaunch stop receipt differs from its immutable terminal")
+    require(stop.get("schema") == RECREATION_SCHEMA
+            and stop.get("phase") == "iteration" and stop.get("state") == "succeeded"
+            and stop.get("attempt") == stop_attempt and stop.get("idle_backend_stopped") is True,
+            "Pinned prelaunch stop is not a successful stop-only operation")
+    _group(stop, control, "Prelaunch stop terminal")
+    stop_inputs = stop.get("inputs")
+    _stop_source_root(stop_inputs, identity)
+    require(isinstance(stop_inputs, Mapping)
+            and stop_inputs.get("attempt") == old_attempt
+            and stop_inputs.get("capture_prelaunch_failure") is True
+            and stop_inputs.get("quiesce_api") is True
+            and stop.get("backend_container") == old_containers[0]
+            and stop.get("frontend_container") == old_containers[1],
+            "Prelaunch stop does not bind the old development owner and stop-only mode")
+    require(stop.get("config_sha256") == rec_inputs.get("config_sha256"),
+            "Prelaunch stop and recreation use different Compose configurations")
+    stop_started = _time(stop.get("started_at"), "Prelaunch stop start time")
+    stop_finished = _time(stop.get("finished_at"), "Prelaunch stop finish time")
+    require(old_finished <= stop_started <= stop_finished < rec_started,
+            "Prelaunch stop did not complete between the old development and recreation")
 
-        capture_path = stop_root + "/prelaunch-failure-stop.json"
-        capture_raw, captured = _read_record(control, capture_path, retained)
-        require(digest(capture_raw) == stop.get("prelaunch_failure_capture_sha256"),
-                "Prelaunch capture differs from the successful stop receipt")
-        intent_path = stop_root + "/prelaunch-failure-quiescence-intent.json"
-        intent_raw, intent = _read_record(control, intent_path, retained)
-        require(digest(intent_raw) == stop.get("api_quiescence_intent_sha256")
-                and intent.get("schema") == QUIESCE_INTENT_SCHEMA,
-                "Durable API-quiescence intent differs from the stop receipt")
-        source_binding = validate_source_binding_chain(stop_inputs, intent, captured)
-        _validate_quiescence_services(intent, identity, old_containers)
-        validate_capture(captured)
+    capture_path = stop_root + "/prelaunch-failure-stop.json"
+    capture_raw, captured = _read_record(control, capture_path, retained)
+    require(digest(capture_raw) == stop.get("prelaunch_failure_capture_sha256"),
+            "Prelaunch capture differs from the successful stop receipt")
+    intent_path = stop_root + "/prelaunch-failure-quiescence-intent.json"
+    intent_raw, intent = _read_record(control, intent_path, retained)
+    require(digest(intent_raw) == stop.get("api_quiescence_intent_sha256")
+            and intent.get("schema") == QUIESCE_INTENT_SCHEMA,
+            "Durable API-quiescence intent differs from the stop receipt")
+    source_binding = validate_source_binding_chain(stop_inputs, intent, captured)
+    _validate_quiescence_services(intent, identity, old_containers)
+    validate_capture(captured)
 
-        drain_path = stop_root + "/backend-drain.json"
-        drain_raw, drain = _read_record(control, drain_path, retained)
-        process = drain.get("process_receipt")
-        require(drain.get("schema") == "fullmag.docker-idle-restart-drain.v1"
-                and drain.get("backend_container_id") == old_containers[0]
-                and isinstance(process, dict)
-                and drain.get("process_receipt_sha256") == digest(canonical(process) + b"\n"),
-                "Prelaunch stop native drain receipt is not pinned")
-        validate_drain(captured, process)
-        postdrain_path = stop_root + "/prelaunch-failure-postdrain-lock.json"
-        postdrain_raw, postdrain = _read_record(control, postdrain_path, retained)
-        store_binding = captured["store_binding"]
-        require(digest(postdrain_raw) == stop.get("prelaunch_failure_postdrain_sha256")
-                and postdrain.get("schema") == POSTDRAIN_SCHEMA
-                and postdrain.get("run_id") == store_binding.get("run_id")
-                and postdrain.get("store_id") == store_binding.get("store_id")
-                and postdrain.get("store_binding_sha256") == _store_binding_hash(store_binding)
-                and postdrain.get("locked_evidence_sha256") == captured.get("locked_evidence_sha256"),
-                "Post-drain lock witness differs from the captured failed run")
+    drain_path = stop_root + "/backend-drain.json"
+    drain_raw, drain = _read_record(control, drain_path, retained)
+    process = drain.get("process_receipt")
+    require(drain.get("schema") == "fullmag.docker-idle-restart-drain.v1"
+            and drain.get("backend_container_id") == old_containers[0]
+            and isinstance(process, dict)
+            and drain.get("process_receipt_sha256") == digest(canonical(process) + b"\n"),
+            "Prelaunch stop native drain receipt is not pinned")
+    validate_drain(captured, process)
+    postdrain_path = stop_root + "/prelaunch-failure-postdrain-lock.json"
+    postdrain_raw, postdrain = _read_record(control, postdrain_path, retained)
+    store_binding = captured["store_binding"]
+    require(digest(postdrain_raw) == stop.get("prelaunch_failure_postdrain_sha256")
+            and postdrain.get("schema") == POSTDRAIN_SCHEMA
+            and postdrain.get("run_id") == store_binding.get("run_id")
+            and postdrain.get("store_id") == store_binding.get("store_id")
+            and postdrain.get("store_binding_sha256") == _store_binding_hash(store_binding)
+            and postdrain.get("locked_evidence_sha256") == captured.get("locked_evidence_sha256"),
+            "Post-drain lock witness differs from the captured failed run")
 
-        witness = recreation.get("prelaunch_failure_fresh_archive")
-        expected_witness = {
-            "schema": PRELAUNCH_FRESH_SCHEMA,
-            "stop_attempt": stop_attempt,
-            "stop_sha256": stop_sha256,
-            "capture_sha256": digest(capture_raw),
-            "source_binding_sha256": digest(canonical(source_binding)),
-            "store_binding_sha256": _store_binding_hash(store_binding),
-        }
-        require(witness == expected_witness,
-                "Fresh recreation lacks the exact completed prelaunch-preservation witness")
-        mode = "fresh-state-prelaunch-failure-archive"
-        history_binding.update(prelaunch_stop_attempt=stop_attempt, prelaunch_stop_sha256=stop_sha256)
+    witness = recreation.get("prelaunch_failure_fresh_archive")
+    expected_witness = {
+        "schema": PRELAUNCH_FRESH_SCHEMA,
+        "stop_attempt": stop_attempt,
+        "stop_sha256": stop_sha256,
+        "capture_sha256": digest(capture_raw),
+        "source_binding_sha256": digest(canonical(source_binding)),
+        "store_binding_sha256": _store_binding_hash(store_binding),
+    }
+    require(witness == expected_witness,
+            "Fresh recreation lacks the exact completed prelaunch-preservation witness")
 
     archive_path = rec_root + "/runtime-control-archive-terminal.json"
     archive_raw, archive = _read_record(control, archive_path, retained)
@@ -516,15 +416,12 @@ def validate_recreated_history(
             and archive_intent.get("mapping") == expected_mapping,
             "Archive intent does not bind the old runtime, source and removed services")
 
-    if retired:
-        _validate_retired_ledger(control, archive, archive_intent, archive_path, recreation_attempt, retained)
-
     archived_root = "runtime-archives/" + recreation_attempt + "/runtime-service"
     archived_config_path = archived_root + "/docker-all.json"
     archived_config_raw = read_raw(control, archived_config_path)
-    require(isinstance(archived_config_raw, bytes) and bool(archived_config_raw)
-            and (retired or digest(archived_config_raw) == captured.get("native_config_sha256")),
-            "Archived native runtime configuration is absent or differs from the prelaunch stop capture")
+    require(isinstance(archived_config_raw, bytes)
+            and digest(archived_config_raw) == captured.get("native_config_sha256"),
+            "Archived native runtime configuration differs from the prelaunch stop capture")
     retained[archived_config_path] = digest(archived_config_raw)
     archived_process_path = archived_root + "/process-tree.json"
     archived_process_raw, archived_process = _read_record(
@@ -543,12 +440,13 @@ def validate_recreated_history(
             "Recreated-history proof exceeds its retained-record bound")
     return {
         "schema": "fullmag.docker-development-network-recreated-history.v1",
-        "mode": mode,
+        "mode": "fresh-state-prelaunch-failure-archive",
         "recreation_attempt": recreation_attempt,
         "recreation_sha256": recreation_sha256,
         "failed_attempt": failed_attempt,
         "previous_development_attempt": old_attempt,
-        **history_binding,
+        "prelaunch_stop_attempt": stop_attempt,
+        "prelaunch_stop_sha256": stop_sha256,
         "old_state_root": str(old_state),
         "fresh_state_root": str(new_state),
         "source_identity": {

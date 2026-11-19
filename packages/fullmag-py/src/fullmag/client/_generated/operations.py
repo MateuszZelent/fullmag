@@ -32,6 +32,16 @@ OPERATIONS: Dict[str, Operation] = {
         request_schema=None,
         responses={'200': (('application/json', 'HealthResponse'), )},
     ),
+    'workspace_get_workspace_material_library': Operation(
+        operation_id='workspace_get_workspace_material_library',
+        method='GET',
+        path='/v2/workspace/material-library',
+        path_params=(),
+        query_params=(),
+        header_params=(),
+        request_schema=None,
+        responses={'200': (('application/json', 'MaterialLibraryResource'), ), '500': (('application/json', 'ApiErrorResponse'), )},
+    ),
     'sessions_get_sessions': Operation(
         operation_id='sessions_get_sessions',
         method='GET',

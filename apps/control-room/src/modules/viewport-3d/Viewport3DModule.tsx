@@ -30,7 +30,6 @@ import {
   type ComponentProps,
   type CSSProperties,
   type FocusEvent as ReactFocusEvent,
-  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
@@ -156,6 +155,8 @@ import {
 import { Viewport3DCameraDialog } from "./components/Viewport3DCameraDialog";
 import { Viewport3DSettingsContent } from "./components/Viewport3DSettingsContent";
 import { Viewport3DToolbar } from "./components/Viewport3DToolbar";
+import { Viewport3DExportMenu, Viewport3DExportOutlet } from "./export/Viewport3DExportSurface";
+import type { ViewportModelSource } from "./export/Viewport3DExportDialog";
 import { useViewport3DInspectorDestination, setViewport3DInspectorSection } from "./viewport3dInspectorState";
 import { Viewport3DAppearanceHud } from "./components/Viewport3DAppearanceHud";
 import { Viewport3DCanvas } from "./Viewport3DCanvas";
@@ -1465,6 +1466,7 @@ interface Viewport3DFrameProps
     | "orbitDebugCommitRevision"
     | "orbitDebugRevision"
   > {
+  getExportSource: () => Promise<ViewportModelSource>;
   artifactInspectionDefinitions: ReadonlyArray<{ id?: string; source_object_id?: string }>;
   artifactPresentationTarget: VisualizationTargetRef | null;
   cameraOwnerKey: string;
@@ -1910,6 +1912,17 @@ function LiveViewport3DModule({
         <Viewport3DFrame
       {...sceneModel}
       primitiveModel={primitiveModelWithPlacementDraft ?? null}
+      getExportSource={async () => {
+        const { extractViewport3DExportSource } = await import("./export/extractViewport3DExportSource");
+        return extractViewport3DExportSource({
+          ...sceneModel,
+          domainId,
+          topology: sceneModel.topology ?? null,
+          primitiveModel: primitiveModelWithPlacementDraft ?? null,
+          airboxSettings: sceneModel.savedViewportActive ? null : sceneModel.airboxSettings,
+          includeHiddenAirbox: !sceneModel.savedViewportActive,
+        });
+      }}
       clientReady={clientReady}
       colors={colors}
       colorsUnavailable={colorsUnavailable}
@@ -2141,6 +2154,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   hysteresisReplayGlyphModel,
   hysteresisReplayTarget,
   inspectRevision,
+  getExportSource,
   kernel,
   meshQualityMetric,
   meshQualityRange,
@@ -2734,12 +2748,6 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     },
     [visualProfile],
   );
-  const handleCanvasContextMenu = useCallback(
-    (event: ReactMouseEvent<HTMLDivElement>) => {
-      event.preventDefault();
-    },
-    [],
-  );
   const handleCanvasPointerMissed = useCallback(() => {
     clearInspectHover();
     onClearSelection();
@@ -2882,7 +2890,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         <Viewport3DToolbar
           onCommand={onViewCommand}
           projection={sceneProps.cameraProjection}
-          qualityProfileId={sceneProps.visualProfileId}
+          qualityProfileId={canvasContextProfileId}
           settingsOpen={inspectorDestination.context === "view"}
           inspectEnabled={sceneProps.inspectEnabled}
           layersContent={<div className="fm-viewport-3d__layers">
@@ -3105,6 +3113,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         </div>
       </div>
       {clientReady && colors ? (
+        <Viewport3DExportMenu onCommand={onViewCommand}>
         <Viewport3DCanvas
           // Keyboard users reach the scene, hear a text summary and open the
           // camera controls with Enter; Tab always moves on (no focus trap).
@@ -3126,7 +3135,6 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           gl={canvasGlOptions}
           key={canvasContextKey}
           onCreated={handleCanvasCreated}
-          onContextMenu={handleCanvasContextMenu}
           onPointerMissed={handleCanvasPointerMissed}
         >
           <Viewport3DRendererProfile visualProfile={visualProfile} />
@@ -3172,6 +3180,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             visualProfileId={visualProfile.id}
           />
         </Viewport3DCanvas>
+        </Viewport3DExportMenu>
       ) : (
         <div className="fm-viewport-3d__placeholder" role="status">
           {colorsUnavailable
@@ -3232,6 +3241,12 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         />,
         inspectorDestination.host,
       ) : null}
+      <Viewport3DExportOutlet key={cameraOwnerKey} getSource={async () => {
+        if (artifactField.historical || antennaFieldOverlay) {
+          throw new Error("3D export is unavailable for this field inspection view.");
+        }
+        return getExportSource();
+      }} />
       <Viewport3DResourceIssueDialog
         issue={fieldDataIssue}
         open={Boolean(fieldDataIssue && resourceIssueOpen)}

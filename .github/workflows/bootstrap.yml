@@ -111,12 +111,34 @@ jobs:
                   f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
               )
           PY
+      - name: Run absorbing boundary scene validation
+        run: |
+          cargo test --locked -p fullmag-authoring --lib scene_validation_rejects_invalid_absorbing_boundary
+          cargo test --locked -p fullmag-authoring --lib adding_editing_and_removing_an_absorber
+          RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_
+          cargo test --locked -p fullmag-ir --lib absorbing_boundary::tests
+          cargo test --locked -p fullmag-plan --lib spatial_
+          cargo test --locked -p fullmag-authoring --lib spatial_absorbers_reference_owned_regions_by_stable_id
+          RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api overlapping_csg_boundary_is_rejected_before_mesh_build
+
+      - name: Run material provenance and authoring roundtrip contracts
+        run: cargo test --locked -p fullmag-authoring --lib material_library_roundtrip
+
+      - name: Verify interleaved Zarr sample indexes after writer drain
+        shell: bash
+        run: |
+          cargo test --locked -p fullmag-runner --lib artifact_pipeline::tests::zarr_field_sample_indexes_survive_interleaved_buffer_flushes -- --exact | tee "$RUNNER_TEMP/zarr-sample-index-test.log"
+          grep -F "test result: ok. 1 passed" "$RUNNER_TEMP/zarr-sample-index-test.log"
+
       - name: Check FEM CPU runner contracts
         # Type-check the CPU native lane independently of fem-gpu, including
         # its tests. This does not link or qualify the MFEM runtime.
         run: |
           cargo test --locked -p fullmag-runner --lib native_fem::object_average::tests
           FULLMAG_FEM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-runner --features fem-native --tests
+
+      - name: Type-check the native FEM frequency-response adapter
+        run: FULLMAG_FEM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-api --features fem-gpu --bins
 
       - name: Check FDM CUDA runner contracts
         # cargo check type-checks the CUDA Rust path without linking a native
@@ -132,6 +154,12 @@ jobs:
           cargo test -p fullmag-plan --lib antenna_current_source::tests::closed_loop_volume_budget_
           cargo test -p fullmag-plan --lib antenna_current_source::tests::external_lead_does_not_inherit_closed_loop_volume_budget
           cargo test -p fullmag-runner --lib antenna_field_solution::direct_quadrature
+
+      - name: Run material library and scene assignment contracts
+        run: |
+          cargo test --locked -p fullmag-api --bin fullmag-api material_library
+          cargo test --locked -p fullmag-workspace --lib material_catalog
+          cargo test --locked -p fullmag-application --lib script_source_capture
 
       - name: Run shared accepted-inspection read contracts
         run: |
@@ -184,6 +212,11 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api session::tests::authored_initial_state_retires_finished_run_but_not_another_run -- --exact
           cargo test -p fullmag-api --bin fullmag-api session::tests::pending_user_magnetization_apply_still_supersedes_its_run -- --exact
           cargo test -p fullmag-api --bin fullmag-api live_accepted_execution::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::response_source_map::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_compact_response_versions_remain_truthful_in_public_payloads
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_compact_sweep_does_not_read_redundant_dense_v2
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_response_reader_tests_compact_sweep_projects_native_amplitude
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::frequency_response_receipt_tests::response_receipt_reopens_typed_cas_outputs_without_an_accepted_state -- --exact
           FULLMAG_FDM_EXECUTION=cpu cargo test --locked -p fullmag-runtime-control --lib study::tests::relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_reset -- --exact
           cargo test --locked -p fullmag-api --bin fullmag-api openapi_v2::tests::openapi_exposes_interactive_study_commands_and_exact_result_reads -- --exact
           cargo test -p fullmag-api --bin fullmag-api live_execution_binding::tests
@@ -281,6 +314,9 @@ jobs:
       - name: Run CPU periodic Newell kernel cache regressions
         run: cargo test -p fullmag-engine periodic_newell_kernel_cache_tests --lib
 
+      - name: Run field_expr.v1 mask function and time bytecode contracts
+        run: cargo test --locked -p fullmag-expr
+
       - name: Run periodic XY multilayer PG-BB contracts
         run: |
           cargo test --locked -p fullmag-fdm-demag --test periodic_xy_kernel
@@ -308,7 +344,7 @@ jobs:
           cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::dmi_decoupled_
           cargo test --locked -p fullmag-plan --lib fdm_region_
           cargo test --locked -p fullmag-plan --lib fdm_cuda_region_material_fields
-          cargo test --locked -p fullmag-plan --lib fdm_cuda_absorbing_boundary_plans_cellwise_damping
+          cargo test --locked -p fullmag-plan --lib absorbing_boundary_
           cargo test --locked -p fullmag-plan --lib intra_object_region_exchange_defaults_harmonic_mean
           cargo test --locked -p fullmag-plan --lib exchange_scale_zero_disables_interface_exchange
           cargo test --locked -p fullmag-plan --lib pure_inherited_region_preserves_parent_material_and_continuous_exchange
@@ -357,7 +393,9 @@ jobs:
           cargo test -p fullmag-runner eigen_diagnostics_ --lib
 
       - name: Run sample-scoped eigen artifact contracts
-        run: cargo test -p fullmag-runner output_publication_tests --lib
+        run: |
+          cargo test -p fullmag-runner output_publication_tests --lib
+          cargo test --locked -p fullmag-runner --lib project_storage::private_scratch_tests::long_run_identity_does_not_expand_native_scratch_path -- --exact
 
       - name: Run selected-only path potential publication contracts
         run: |
@@ -671,6 +709,8 @@ jobs:
             apps/control-room/src/kernel/api/generated/openapi-v2.json
             apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
             apps/control-room/src/kernel/api/generated/openapi-v2-client.ts
+            apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts
+            packages/fullmag-py/src/fullmag/client/_generated/*.py
           if-no-files-found: error
 
   api-hygiene-rg13:
@@ -763,7 +803,8 @@ jobs:
 
   browser-fixture-smoke:
     if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'native-receipt' && inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'floquet-source-moments' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
-    runs-on: ubuntu-latest
+    # Keep Chromium dependencies on Ubuntu 24.04 across runner image migrations.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -782,6 +823,13 @@ jobs:
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Verify absorbing boundary inspector editing
+        run: >-
+          pnpm --dir apps/control-room exec vitest run
+          src/modules/viewport-3d/model/viewport3DTargetFieldBuffer.test.ts
+          src/modules/inspector/panels/ObjectAbsorbingBoundaryPanelModel.test.ts
+          src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.dom.test.tsx
 
       - name: Install Chromium for browser fixture smoke
         run: pnpm --dir apps/control-room exec playwright install --with-deps chromium
@@ -889,7 +937,8 @@ jobs:
           if-no-files-found: error
 
   inspector-actions-browser-smoke:
-    runs-on: ubuntu-latest
+    # Keep Chromium dependencies on Ubuntu 24.04 across runner image migrations.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1003,6 +1052,8 @@ jobs:
           python -B scripts/test_fullmag_docker_runtime.py -v
           python -B scripts/test_fem_cpu_hypre_host_policy.py -v
           python -B scripts/test_docker_backend_dev.py -v
+          python -B scripts/test_docker_diagnostic_source_checks.py -v
+          python -B scripts/test_docker_volume_preowner_probe_stop.py -v
           python -B scripts/test_backend_native_contracts.py -v
           python -B scripts/test_docker_native_contract_integration.py -v
           python -B -m unittest scripts.test_analyze_accepted_cuda_trace -v
@@ -1209,6 +1260,10 @@ jobs:
       - name: Verify managed Make native contract ordering
         run: python -B -m pytest -q scripts/test_backend_dev_build_policy.py
 
+      - name: Run canonical material library script roundtrip contracts
+        run: |
+          python -m pytest -q packages/fullmag-py/tests/test_material_assets_roundtrip.py packages/fullmag-py/tests/test_accepted_source_capture.py
+
       - name: Run real Gmsh exact-layer airbox grading regressions
         run: |
           python -c "import gmsh"
@@ -1226,10 +1281,14 @@ jobs:
           python -m pytest -q
           packages/fullmag-py/tests/test_eigen_scene_merge_contract.py
           packages/fullmag-py/tests/test_scene_document_problem_ir.py
+          packages/fullmag-py/tests/test_absorbing_boundary.py
           packages/fullmag-py/tests/test_mesh_stl_fallback_owner_binding.py
           packages/fullmag-py/tests/test_execution_profile_authoring_roundtrip.py
           packages/fullmag-py/tests/test_scene_execution_config.py
           packages/fullmag-py/tests/test_runtime_source_snapshot.py
+
+      - name: Verify absorbing layer reflection inputs and amplitude analysis
+        run: python -m unittest discover -s tests/standard_problems/absorbing_boundary -p test_reflection.py
 
       - name: Run FEM tested/runtime library identity contracts
         run: |

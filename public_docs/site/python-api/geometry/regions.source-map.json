@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-object_region",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_object_region"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_object_region",
@@ -63,7 +46,7 @@
         "python": "Region.name",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "region name",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -73,7 +56,7 @@
         "python": "Region.geometry",
         "type": "Geometry",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "typed geometry",
         "meaning": "region shape",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -83,7 +66,7 @@
         "python": "ObjectRegion.owner_object",
         "type": "str or object",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "owner-scoped",
         "meaning": "owning object",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -93,7 +76,7 @@
         "python": "ObjectRegion.name",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "region name",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -103,7 +86,7 @@
         "python": "ObjectRegion.region_id",
         "type": "str or None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "stable when supplied",
         "meaning": "region identifier",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -113,7 +96,7 @@
         "python": "ObjectRegion.frame",
         "type": "str",
         "default": "object",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "supported frame",
         "meaning": "coordinate frame",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -123,7 +106,7 @@
         "python": "ObjectRegion.enabled",
         "type": "bool",
         "default": "True",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "boolean",
         "meaning": "activation flag",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -133,7 +116,7 @@
         "python": "ObjectRegion.priority",
         "type": "int",
         "default": "0",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "integer",
         "meaning": "overlap precedence",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -143,7 +126,7 @@
         "python": "ObjectRegion.realization_policy",
         "type": "str",
         "default": "inherit",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "supported policy",
         "meaning": "mesh/realization inheritance",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",

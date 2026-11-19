@@ -38,7 +38,7 @@ summarizes.
 ## Frozen-spins qualification
 
 `frozen_spins` constraints are implemented via the typed `FrozenSpins` contract in API and planner
-inputs, and they are governed by `docs/validation/frozen-spins-v1-scope.yaml`
+inputs and governed by the `frozen_spins.v1` qualification scope
 (`scope_revision: 1`, `product_version: frozen_spins.v1`).
 
 Feature coverage is tracked in a separate lane-agnostic gate path with dedicated scopes and test sets, including:
@@ -52,7 +52,7 @@ Operationally this is exercised through dedicated commands (for example
 `just verify-frozen-spins-qualification` and scope/gate companions) rather than by inference from
 the relaxation matrix.
 
-## Frozen-spins qualification — unified entry (code + Python + bibliography)
+## Frozen-spins authoring and contract details
 
 ### 1) Introduction
 
@@ -162,18 +162,4 @@ table above to claim an interaction is validated outside relaxation. Start from:
   frozen-spins gates and are not implied by this relaxation table.
 
 These remain open until their dedicated gates pass with recorded artifacts.
-## Control Room crosswalk
-
-Validation pages are `inspection-only` in Control Room. The UI may expose runtime metadata, fields, tables, or reports for inspection, but it does not create a qualification claim. `TODO: frontend support` applies to validation workflow authoring and report publication unless a specific control is named. See {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-Validation is not a standalone Python constructor unless the linked case page names one. Reproduce the exact case, inputs, device, precision, and receipt described by the page; use the referenced API pages for callable signatures.
-
-## Physics and bibliography scope
-
-The page either states the governing benchmark model or delegates it to the linked physics/numerical-methods page. Any missing derivation is a documented boundary, not an implicit equation. Bibliography and source evidence remain the authoritative references listed by the validation case.
-## Source-code index
-
-- No standalone implementation function is introduced by this validation page. Source evidence is the exact API, managed recipe, runtime manifest, and receipt named by the validation case.
 

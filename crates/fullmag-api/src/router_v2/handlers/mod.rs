@@ -1,6 +1,7 @@
 pub mod analysis;
 pub mod data;
 pub mod diagnostics;
+pub mod material_library;
 pub mod meshing;
 pub mod model;
 pub mod persistence;

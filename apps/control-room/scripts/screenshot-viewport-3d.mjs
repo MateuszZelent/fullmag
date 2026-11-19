@@ -1205,9 +1205,10 @@ async function clickFreshAction(page, selector, label) {
 }
 
 function profileLabel(profile) {
+  if (profile === "balanced") return "Detailed";
   if (profile === "figure") return "Figure";
-  if (profile === "interactive") return "Interactive";
-  if (profile === "interactive-lite") return "Interactive Lite";
+  if (profile === "interactive") return "Standard";
+  if (profile === "interactive-lite") return "Fast";
   return profile;
 }
 

@@ -54,6 +54,7 @@ import {
   quantityCatalogPickerItem,
 } from "@/kernel/api/quantityIds";
 import { RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND } from "./ribbonCommands";
+import { VIEWPORT_3D_QUALITY_PROFILE_LABELS } from "@/shared/viewport3dQualityLabels";
 
 import type {
   FieldCatalogResource,
@@ -370,22 +371,22 @@ export const viewTab: RibbonTabContent = {
               items: [
                 {
                   commandId: "viewport-3d.profile-interactive-lite",
-                  label: "Interactive Lite",
+                  label: VIEWPORT_3D_QUALITY_PROFILE_LABELS["interactive-lite"],
                   value: "interactive-lite",
                 },
                 {
                   commandId: "viewport-3d.profile-interactive",
-                  label: "Interactive",
+                  label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.interactive,
                   value: "interactive",
                 },
                 {
                   commandId: "viewport-3d.profile-balanced",
-                  label: "Balanced",
+                  label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.balanced,
                   value: "balanced",
                 },
                 {
                   commandId: "viewport-3d.profile-figure",
-                  label: "Figure",
+                  label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.figure,
                   value: "figure",
                 },
                 {

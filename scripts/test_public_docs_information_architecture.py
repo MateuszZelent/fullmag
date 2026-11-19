@@ -33,6 +33,7 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
                 "backend/index.md",
                 "python-api/index.md",
                 "validation/index.md",
+                "acknowledgements/index.md",
             ),
         )
         self.assertGreaterEqual(root.navigation_maxdepth, 4)

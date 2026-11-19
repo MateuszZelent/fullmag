@@ -337,7 +337,6 @@ pub(crate) fn execute(
         };
         let outcome = adapter::execute(
             &prepared,
-            step,
             native_root,
             native_root,
             interrupt,

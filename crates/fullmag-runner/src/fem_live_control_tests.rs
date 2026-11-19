@@ -1,5 +1,6 @@
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 fn accepted_update(step: u64) -> StepUpdate {
     StepUpdate {
@@ -26,6 +27,7 @@ fn accepted_update(step: u64) -> StepUpdate {
 fn pending_stop_reaches_fem_executor_after_publishing_accepted_update() {
     for observer_action in [StepAction::Continue, StepAction::Pause] {
         let stop = AtomicBool::new(true);
+        let field_interval = Duration::from_millis(250);
         let mut published = Vec::new();
         let display = DisplaySelectionState::default;
         let mut observer = |update: StepUpdate| {
@@ -33,11 +35,14 @@ fn pending_stop_reaches_fem_executor_after_publishing_accepted_update() {
             observer_action
         };
         let action = with_interruptible_fem_live_consumer(types::LiveStepConsumer {
-            grid: [0, 0, 0], field_every_n: 7, initial_snapshot: false,
+            grid: [0, 0, 0],
+            field_cadence: LiveFieldCadence::new(7, field_interval),
+            initial_snapshot: false,
             display_selection: Some(&display), interrupt_requested: Some(&stop),
             on_step: &mut observer,
         }, |consumer| {
-            assert_eq!(consumer.field_every_n, 7);
+            assert_eq!(consumer.field_cadence.every_n(), 7);
+            assert_eq!(consumer.field_cadence.min_interval(), field_interval);
             assert!(!consumer.initial_snapshot);
             assert!(consumer.display_selection.is_some());
             assert!(std::ptr::eq(consumer.interrupt_requested.unwrap(), &stop));
@@ -58,7 +63,9 @@ fn stop_requested_by_fem_observer_is_effective_at_same_accepted_boundary() {
         StepAction::Continue
     };
     let action = with_interruptible_fem_live_consumer(types::LiveStepConsumer {
-        grid: [0, 0, 0], field_every_n: 1, initial_snapshot: true,
+        grid: [0, 0, 0],
+        field_cadence: LiveFieldCadence::every_n_steps(1),
+        initial_snapshot: true,
         display_selection: None, interrupt_requested: Some(&stop), on_step: &mut observer,
     }, |consumer| (consumer.on_step)(accepted_update(1)));
     assert_eq!(action, StepAction::Stop);
@@ -73,7 +80,9 @@ fn no_pending_fem_stop_preserves_observer_actions() {
             let mut published = 0;
             let mut observer = |_: StepUpdate| { published += 1; expected };
             let action = with_interruptible_fem_live_consumer(types::LiveStepConsumer {
-                grid: [0, 0, 0], field_every_n: 1, initial_snapshot: false,
+                grid: [0, 0, 0],
+                field_cadence: LiveFieldCadence::every_n_steps(1),
+                initial_snapshot: false,
                 display_selection: None, interrupt_requested: signal, on_step: &mut observer,
             }, |consumer| (consumer.on_step)(accepted_update(4)));
             assert_eq!(action, expected);

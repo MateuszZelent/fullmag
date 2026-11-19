@@ -96,6 +96,15 @@ $K$ is assembled from the volume stiffness integrator and $B_{\Gamma_a}$ is asse
 boundary mass integrator on the selected marker only. The Robin surface contribution is therefore
 an operator contribution, not an additional post-processing energy term.
 
+```{figure} /_static/diagrams/demag-fem-poisson-airbox-closures.svg
+:alt: Two-panel FEM Poisson airbox diagram: (a) conforming geometrically graded tetrahedral domain Omega_m subset Omega_a with outer marker Gamma_a and comparison of Robin versus Dirichlet closures; (b) analytical sphere dipole potential u(r)/(M_s a) for open 1/r^2 decay compared with Dirichlet u=0 truncation error and first-order Robin closures for c=1 and c=2 at R_box = 2.4 a.
+:width: 100%
+:name: fig-demag-boundary-airbox-closures
+:figclass: fm-physics-figure
+
+Shared-domain conforming mesh topology ($\Omega_m \subset \Omega_a$) with outer marker $\Gamma_a$ and analytical potential decay comparing open $1/r^2$ asymptotics against Dirichlet ($u=0$) and first-order Robin ($\partial_n u + \beta u = 0$, $\beta=c/R_\star$) closures (Fredkin & Koehler 1990; Abert *et al.* 2013).
+```
+
 (demag-boundary-robin-scaling)=
 ## 3. Robin coefficient and resolved geometry
 
@@ -351,6 +360,10 @@ The boundary operator ownership is:
 4. the linear-solver module consumes the conditioned operator;
 5. recovery and energy modules consume only the solved potential/field.
 
+### Control Room support
+
+When `PhysicsInteractionPanel` (`apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx`) exposes demagnetization boundary controls under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: parameters without a UI control must be configured in Python or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+
 (demag-boundary-validation)=
 ## 12. Validation and qualification
 
@@ -380,10 +393,16 @@ executed-device evidence.
 (demag-boundary-scientific-bibliography)=
 ## 14. Scientific bibliography
 
-1. Fredkin, D. R. and Koehler, T. R., “A finite element method for computing demagnetizing fields
-   in ferromagnetic materials,” *IEEE Transactions on Magnetics* 26 (1990).
-2. Brown, W. F., *Micromagnetics*, Wiley, 1963.
-3. FullMag internal reference: `docs/physics/0520-fem-robin-airbox-demag-bootstrap-reference.md`.
+1. D. R. Fredkin and T. R. Koehler, “Hybrid method for computing demagnetizing fields,” *IEEE
+   Transactions on Magnetics* **26**(2), 415–417 (1990),
+   [doi:10.1109/20.106342](https://doi.org/10.1109/20.106342).
+2. C. Abert, L. Exl, F. Bruckner, A. Drews, and D. Suess, “magnum.fe: A micromagnetic
+   finite-element simulation code based on FEniCS,” *Journal of Magnetism and Magnetic Materials*
+   **345**, 29–35 (2013),
+   [doi:10.1016/j.jmmm.2013.05.051](https://doi.org/10.1016/j.jmmm.2013.05.051), Open Access
+   preprint: [arXiv:1301.3061](https://arxiv.org/abs/1301.3061).
+3. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963.
+   [WorldCat record](https://search.worldcat.org/title/536451).
 
 (demag-boundary-source-code-index)=
 ## 15. Source-code index
@@ -398,18 +417,4 @@ executed-device evidence.
 | `backends/fem/gpu/cuda/demag_poisson/operators.cpp` | `upload_demag_poisson_operators` | Device CSR operator upload and boundary-policy transfer. | FEM GPU |
 | `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `compute_newell_kernel_spectra` | FDM open/periodic convolution realization. | FDM CPU |
 | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_upload_demag_kernel_spectra` | FDM device convolution state; no FEM boundary matrix. | FDM GPU |
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-## Source-code index
-
-- Public Python and lowering sources are linked by the applicable terminal API page. Runtime realization is in the relevant `backends/fdm` or `backends/fem` lane; frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` where a live control exists.
 

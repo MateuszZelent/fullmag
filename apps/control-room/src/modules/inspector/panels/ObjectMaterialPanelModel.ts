@@ -2,10 +2,20 @@ import type {
   AuthoringTransactionResponse,
   MaterialPatchRequest,
   MaterialPropertiesResource,
+  MaterialReferenceResource,
+  SceneMaterialSource,
   MaterialResource,
   ObjectPatchRequest,
   SceneResource,
 } from "@/kernel/api/apiTypes";
+
+import { authoringWriteOptions } from "@/kernel/authoring/authoringHistoryMutation";
+import {
+  copyMaterialSource,
+  materialCatalogSelectionSnapshot,
+  materialPropertiesFromDraft,
+  type MaterialCatalogSelection,
+} from "@/shared/domain/material/materialLibrary";
 
 export interface CreateMaterialDraft {
   aex: string;
@@ -30,8 +40,9 @@ interface MaterialCreateAssignApi {
       materialId: string,
       name: string,
       properties: MaterialPropertiesResource,
-      references: [],
-      options: { baseRevision: number; sessionScopeKey?: string },
+      references: MaterialReferenceResource[],
+      options?: { baseRevision?: number; sessionScopeKey?: string },
+      asset?: { source?: SceneMaterialSource | null; assignToObjectId?: string },
     ): Promise<AuthoringTransactionResponse>;
     patchObject(
       objectId: string,
@@ -111,15 +122,12 @@ export function buildCreateMaterialDraft(
   if (!materialId) return { error: "Material id must not be empty." };
   const name = draft.name.trim();
   if (!name) return { error: "Material name must not be empty." };
-  const ms = Number(draft.ms.trim());
-  if (!Number.isFinite(ms)) return { error: "Ms must be a finite SI value." };
-  if (ms <= 0) return { error: "Ms must be greater than 0 A/m." };
-  const aex = Number(draft.aex.trim());
-  if (!Number.isFinite(aex)) return { error: "A must be a finite SI value." };
-  if (aex <= 0) return { error: "A must be greater than 0 J/m." };
-  const alpha = Number(draft.alpha.trim());
-  if (!Number.isFinite(alpha)) return { error: "alpha must be a finite SI value." };
-  if (alpha < 0) return { error: "alpha must be greater than or equal to 0." };
+  if (!draft.ms.trim()) return { error: "Ms is required." };
+  if (!draft.aex.trim()) return { error: "Aex is required." };
+  const parsed = materialPropertiesFromDraft({
+    Ms: draft.ms, Aex: draft.aex, alpha: draft.alpha, Dind: "", Dbulk: "",
+  });
+  if ("error" in parsed) return { error: parsed.error.replace("finite decimal SI", "finite SI") };
   const anisotropy = buildUniaxialAnisotropyPatch(draft.ku1, draft.anisotropyAxis);
   if ("error" in anisotropy) return anisotropy;
   return {
@@ -127,14 +135,94 @@ export function buildCreateMaterialDraft(
       anisotropy: anisotropy.value,
       materialId,
       name,
-      properties: {
-        Aex: aex,
-        Dbulk: null,
-        Dind: null,
-        Ms: ms,
-        alpha,
-      },
+      properties: parsed.properties,
     },
+  };
+}
+
+export interface MaterialAssetAssignment {
+  materialId: string;
+  name: string;
+  properties: MaterialPropertiesResource;
+  references: MaterialReferenceResource[];
+  source: SceneMaterialSource | null;
+}
+
+function copySource(source: SceneMaterialSource | null | undefined): SceneMaterialSource | null {
+  return source ? copyMaterialSource(source) : null;
+}
+
+export function materialAssetFromLibraryEntry(entry: MaterialCatalogSelection): MaterialAssetAssignment {
+  const { name, source } = materialCatalogSelectionSnapshot(entry);
+  return {
+    materialId: `mat:${crypto.randomUUID()}`,
+    name,
+    properties: { ...source.properties },
+    references: (source.references ?? []).map((reference) => ({ ...reference })),
+    source,
+  };
+}
+
+export function independentMaterialAsset(material: MaterialResource): MaterialAssetAssignment {
+  return {
+    materialId: `mat:${crypto.randomUUID()}`,
+    name: `${material.name} copy`,
+    properties: { ...material.properties },
+    references: (material.references ?? []).map((reference) => ({ ...reference })),
+    source: copySource(material.source),
+  };
+}
+
+export function buildMaterialAssetAssignment(
+  asset: MaterialAssetAssignment,
+): { error: string } | { value: MaterialAssetAssignment } {
+  if (!asset.materialId.trim()) return { error: "Material id must not be empty." };
+  if (!asset.name.trim()) return { error: "Material name must not be empty." };
+  const text = (value: number | null | undefined): string => value == null ? "" : String(value);
+  const parsed = materialPropertiesFromDraft({
+    Ms: text(asset.properties.Ms), Aex: text(asset.properties.Aex),
+    alpha: text(asset.properties.alpha), Dind: text(asset.properties.Dind), Dbulk: text(asset.properties.Dbulk),
+  });
+  if ("error" in parsed) return { error: parsed.error };
+  // Null Ms/Aex are valid authoring values. The model's readiness gate owns
+  // whether this incomplete material can be used for a computation.
+  return { value: {
+    materialId: asset.materialId,
+    name: asset.name.trim(),
+    properties: parsed.properties,
+    references: asset.references.map((reference) => ({ ...reference })),
+    source: copySource(asset.source),
+  } };
+}
+
+/** One server transaction creates an independent asset and assigns it. */
+export async function createMaterialAssetThenAssign(
+  api: MaterialCreateAssignApi,
+  objectId: string,
+  asset: MaterialAssetAssignment,
+  baseRevision: number,
+  shouldContinue: () => boolean,
+  sessionScopeKey?: string | null,
+): Promise<{
+  assigned: SceneResource;
+  created: AuthoringTransactionResponse;
+  deferredAnisotropy: null;
+  materialId: string;
+}> {
+  const validated = buildMaterialAssetAssignment(asset);
+  if ("error" in validated) throw new Error(validated.error);
+  if (!shouldContinue()) throw new Error("Material assignment scope is no longer active.");
+  const input = validated.value;
+  const created = await api.model.createMaterial(
+    input.materialId, input.name, input.properties, input.references,
+    authoringWriteOptions(baseRevision, sessionScopeKey),
+    { source: input.source, assignToObjectId: objectId },
+  );
+  return {
+    assigned: created.committed_scene,
+    created,
+    deferredAnisotropy: null,
+    materialId: input.materialId,
   };
 }
 
@@ -387,6 +475,8 @@ export function magneticParameterMaterialResourceFromSceneResource(
       Ms: ms ?? null,
       alpha,
     },
+    references: (material.references ?? []).map((reference) => ({ ...reference })),
+    source: copySource(material.source),
     scene_revision: scene.scene_revision ?? scene.revision ?? 0,
   };
   return resource;
@@ -463,28 +553,16 @@ function numericTextDirty(value: string, baseValue: string): boolean {
 export function buildMaterialParametersPatch(
   draft: MagneticParametersDraft,
 ): { error: string } | { patch: MaterialPatchRequest } {
-  const ms = parseOptionalNumber(draft.ms, "Ms");
-  if ("error" in ms) return ms;
-  const aex = parseOptionalNumber(draft.aex, "Aex");
-  if ("error" in aex) return aex;
-  const alpha = parseRequiredNumber(draft.alpha, "alpha");
-  if ("error" in alpha) return alpha;
-  const dind = parseOptionalNumber(draft.dind, "Dind");
-  if ("error" in dind) return dind;
-  const dbulk = parseOptionalNumber(draft.dbulk, "Dbulk");
-  if ("error" in dbulk) return dbulk;
+  const parsed = materialPropertiesFromDraft({
+    Ms: draft.ms, Aex: draft.aex, alpha: draft.alpha, Dind: draft.dind, Dbulk: draft.dbulk,
+  });
+  if ("error" in parsed) return { error: parsed.error.replace("finite decimal SI", "finite SI") };
 
   const name = draft.materialName.trim();
   return {
     patch: {
       name: name || null,
-      properties: {
-        Aex: aex.value,
-        Dind: dind.value,
-        Dbulk: dbulk.value,
-        Ms: ms.value,
-        alpha: alpha.value,
-      },
+      properties: parsed.properties,
     },
   };
 }
@@ -500,28 +578,4 @@ function formatRequiredNumber(
   return typeof value === "number" && Number.isFinite(value)
     ? String(value)
     : String(fallback);
-}
-
-function parseOptionalNumber(
-  value: string,
-  label: string,
-): { error: string } | { value: number | null } {
-  const trimmed = value.trim();
-  if (!trimmed) return { value: null };
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed)) {
-    return { error: `${label} must be a finite SI value.` };
-  }
-  return { value: parsed };
-}
-
-function parseRequiredNumber(
-  value: string,
-  label: string,
-): { error: string } | { value: number } {
-  const parsed = Number(value.trim());
-  if (!Number.isFinite(parsed)) {
-    return { error: `${label} must be a finite SI value.` };
-  }
-  return { value: parsed };
 }

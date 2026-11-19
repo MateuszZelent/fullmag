@@ -73,15 +73,17 @@ type MeshPartSurfaceMaterialProfile = Pick<
 
 export type MeshPartSurfaceMaterialPlan =
   | {
-      castShadow: false;
+      castShadow: boolean;
       kind: "scalar-shader";
-      receiveShadow: false;
+      receiveShadow: boolean;
+      vertexColors: false;
     }
   | {
       castShadow: false;
       kind: "basic" | "lambert";
       receiveShadow: false;
       toneMapped: boolean;
+      vertexColors: boolean;
     }
   | {
       castShadow: boolean;
@@ -90,6 +92,7 @@ export type MeshPartSurfaceMaterialPlan =
       receiveShadow: boolean;
       roughness: number;
       toneMapped: boolean;
+      vertexColors: boolean;
     };
 
 export function resolveMeshPartSurfaceMaterialPlan({
@@ -102,15 +105,35 @@ export function resolveMeshPartSurfaceMaterialPlan({
   materialProfile: MeshPartSurfaceMaterialProfile;
 }): MeshPartSurfaceMaterialPlan {
   if (hasScalarShaderMaterial) {
-    return { castShadow: false, kind: "scalar-shader", receiveShadow: false };
+    const shadows = materialProfile.magneticSurface.presentation?.shadows ?? false;
+    return {
+      castShadow: shadows,
+      kind: "scalar-shader",
+      receiveShadow: shadows,
+      vertexColors: false,
+    };
   }
 
   if (hasUploadedVertexScalarColors) {
+    const presentation = materialProfile.magneticSurface.presentation;
+    if (presentation) {
+      return {
+        castShadow: presentation.shadows,
+        kind: "standard",
+        metalness: presentation.metalness,
+        receiveShadow: presentation.shadows,
+        roughness: presentation.roughness,
+        toneMapped: materialProfile.magneticSurface.toneMapped,
+        vertexColors: true,
+      };
+    }
+
     return {
       castShadow: false,
       kind: "basic",
       receiveShadow: false,
       toneMapped: materialProfile.magneticSurface.toneMapped,
+      vertexColors: true,
     };
   }
 
@@ -123,6 +146,7 @@ export function resolveMeshPartSurfaceMaterialPlan({
       receiveShadow: shadows,
       roughness: materialProfile.uniformGeometry.roughness,
       toneMapped: materialProfile.uniformGeometry.toneMapped,
+      vertexColors: false,
     };
   }
 
@@ -132,6 +156,7 @@ export function resolveMeshPartSurfaceMaterialPlan({
       kind: "lambert",
       receiveShadow: false,
       toneMapped: materialProfile.magneticSurface.toneMapped,
+      vertexColors: false,
     };
   }
 
@@ -140,6 +165,7 @@ export function resolveMeshPartSurfaceMaterialPlan({
     kind: "basic",
     receiveShadow: false,
     toneMapped: materialProfile.magneticSurface.toneMapped,
+    vertexColors: false,
   };
 }
 
@@ -163,7 +189,7 @@ export type FdmCuboidSurfaceMaterialPlan =
       receiveShadow: boolean;
       roughness: number;
       toneMapped: boolean;
-      vertexColors: false;
+      vertexColors: boolean;
     };
 
 export function resolveFdmCuboidSurfaceMaterialPlan(
@@ -171,6 +197,19 @@ export function resolveFdmCuboidSurfaceMaterialPlan(
   usesInstanceColors: boolean,
 ): FdmCuboidSurfaceMaterialPlan {
   if (usesInstanceColors) {
+    const presentation = materialProfile.magneticSurface.presentation;
+    if (presentation) {
+      return {
+        castShadow: presentation.shadows,
+        kind: "standard",
+        metalness: presentation.metalness,
+        receiveShadow: presentation.shadows,
+        roughness: presentation.roughness,
+        toneMapped: materialProfile.magneticSurface.toneMapped,
+        vertexColors: true,
+      };
+    }
+
     return {
       castShadow: false,
       kind: "basic",

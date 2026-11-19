@@ -29,41 +29,12 @@ pub fn load_saved_inspection(
 ) -> Result<(serde_json::Value, fullmag_runner::LoadedAntennaClosedLoopInspection)> {
     // HTTP callers already run in the admitted blocking reader lane. Keep
     // synchronous export verification above immediate; never sleep its Tokio thread.
-    let transaction = acquire_inspection_read_transaction(store, std::time::Duration::from_secs(5))
+    let transaction = crate::acquire_store_read_transaction(store, std::time::Duration::from_secs(5))
         .context("inspection cold-load requires a valid shared store snapshot")?;
     read_saved_inspection(store, &transaction, project, run, task_id, attempt_id, epoch,
         expected_object, true, |evidence, loaded| {
             Ok((evidence, loaded.context("verified completion did not retain its inspection reader")?))
         })
-}
-
-/// Retry only acquisition, before any catalog, journal or payload has been read.
-/// Preserve the native error chain so the facade can still report store contention.
-fn acquire_inspection_read_transaction(store: &SessionStore, wait: std::time::Duration) -> Result<ReadTransaction> {
-    use std::hash::{Hash, Hasher};
-    use std::time::{Duration, Instant};
-
-    let deadline = Instant::now() + wait;
-    let mut attempt = 0_u64;
-    loop {
-        match store.read_transaction() {
-            Ok(transaction) => return Ok(transaction),
-            Err(error) if error.chain().any(|cause| matches!(
-                cause.downcast_ref::<std::fs::TryLockError>(), Some(std::fs::TryLockError::WouldBlock)
-            )) && Instant::now() < deadline => {
-                // Match the existing store-writer backoff without changing its error classification.
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                std::process::id().hash(&mut hasher);
-                std::thread::current().id().hash(&mut hasher);
-                attempt.hash(&mut hasher);
-                attempt = attempt.saturating_add(1);
-                let delay = Duration::from_millis(5 + hasher.finish() % 36);
-                std::thread::sleep(delay.min(deadline.saturating_duration_since(Instant::now())));
-                if Instant::now() >= deadline { return Err(error); }
-            }
-            Err(error) => return Err(error),
-        }
-    }
 }
 
 fn read_saved_inspection<T>(
@@ -325,7 +296,7 @@ mod tests {
         let reader = std::thread::spawn(move || {
             let store = SessionStore::open_existing(root).unwrap();
             ready_tx.send(()).unwrap();
-            let transaction = acquire_inspection_read_transaction(&store, Duration::from_secs(2)).unwrap();
+            let transaction = crate::acquire_store_read_transaction(&store, Duration::from_secs(2)).unwrap();
             let owner = std::fs::read(store.root().join("WRITER.owner.json")).unwrap();
             result_tx.send(owner.clone()).unwrap();
             release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -359,7 +330,7 @@ mod tests {
         let owner = std::fs::read(store.root().join("WRITER.owner.json")).unwrap();
         let wait = Duration::from_millis(20);
         let start = std::time::Instant::now();
-        let error = acquire_inspection_read_transaction(&store, wait).err().unwrap();
+        let error = crate::acquire_store_read_transaction(&store, wait).err().unwrap();
         assert!(start.elapsed() >= wait, "persistent contention must wait through the acquisition deadline");
         assert!(start.elapsed() < Duration::from_secs(2), "the short test deadline must not become the five-second production wait");
         assert!(error.chain().any(|cause| matches!(cause.downcast_ref::<std::fs::TryLockError>(), Some(std::fs::TryLockError::WouldBlock))));
@@ -374,7 +345,7 @@ mod tests {
         std::fs::write(store.root().join("WRITER.lock"), b"invalid").unwrap();
         let owner = std::fs::read(store.root().join("WRITER.owner.json")).unwrap();
         let start = Instant::now();
-        let error = acquire_inspection_read_transaction(&store, Duration::from_secs(5)).err().unwrap();
+        let error = crate::acquire_store_read_transaction(&store, Duration::from_secs(5)).err().unwrap();
         assert!(error.to_string().contains("corrupt session read lock descriptor"));
         assert!(start.elapsed() < Duration::from_secs(1), "non-contention errors must bypass the five-second wait");
         assert_eq!(std::fs::read(store.root().join("WRITER.owner.json")).unwrap(), owner);

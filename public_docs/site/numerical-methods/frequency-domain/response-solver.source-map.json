@@ -2,7 +2,7 @@
   "document": {
     "path": "public_docs/site/numerical-methods/frequency-domain/response-solver.md",
     "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
-    "source_of_truth": "docs/physics/0700-frequency-domain-linearized-llg.md"
+    "source_of_truth": "/physics/foundations/llg-equation, /physics/foundations/observables"
   },
   "backend_matrix": [
     {
@@ -49,12 +49,12 @@
     {
       "id": "eq-numerical-frequency-response-physical-susceptibility",
       "symbols": ["chiM", "Mhat", "hext", "Ms", "mhat"],
-      "sources": ["si_observable_contract"]
+      "sources": ["artifact_point", "artifact_units"]
     },
     {
       "id": "eq-numerical-frequency-response-reduced-susceptibility",
       "symbols": ["chim", "mhat", "hext"],
-      "sources": ["si_observable_contract"]
+      "sources": ["artifact_point", "artifact_units"]
     },
     {
       "id": "eq-numerical-frequency-response-v1-susceptibility",
@@ -64,7 +64,7 @@
     {
       "id": "eq-numerical-frequency-response-absorbed-power",
       "symbols": ["pabs", "mu0", "omega", "hext", "Mhat"],
-      "sources": ["si_observable_contract"]
+      "sources": ["artifact_point", "artifact_units"]
     },
     {
       "id": "eq-numerical-frequency-response-residual",
@@ -116,10 +116,8 @@
     {"id": "native_validate", "path": "backends/fem/src/frequency_domain/operator_contract.cpp", "symbol": "validate_driven_frequency_response_request", "responsibility": "Native operator and boundary legality checks."},
     {"id": "native_decl", "path": "backends/fem/include/frequency_domain/driven_response_solver.hpp", "symbol": "solve_driven_frequency_response", "responsibility": "Production driven-response ABI declaration."},
     {"id": "native_impl", "path": "backends/fem/src/frequency_domain/driven_response_solver.cpp", "symbol": "solve_driven_frequency_response", "responsibility": "Production validation, lane dispatch, solve, residual, and artifact entry point."},
-    {"id": "si_observable_contract", "path": "public_docs/site/numerical-methods/frequency-domain/response-solver.md", "symbol": "DOC-ANCHOR:numerical-methods-frequency-response-si-observable-reference", "responsibility": "Literature-backed target definitions for full-SI susceptibility and magnetic work; not implementation evidence.", "evidence_status": "planned_contract"},
-    {"id": "planner_struct", "path": "public_docs/site/numerical-methods/frequency-domain/response-solver.md", "symbol": "DOC-ANCHOR:numerical-methods-frequency-response-planner-struct-source", "responsibility": "Validated documentation identity for backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp declaration struct FrequencySolvePlan.", "evidence_status": "planned_contract", "implementation_path": "backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp", "declaration": "struct FrequencySolvePlan"},
-    {"id": "planner_input_overload", "path": "public_docs/site/numerical-methods/frequency-domain/response-solver.md", "symbol": "DOC-ANCHOR:numerical-methods-frequency-response-planner-input-overload-source", "responsibility": "Validated documentation identity for the FrequencySolvePlannerInput overload in frequency_solve_planner.hpp.", "evidence_status": "planned_contract", "implementation_path": "backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp", "declaration": "plan_frequency_response(const FrequencySolvePlannerInput&)"},
-    {"id": "planner_capability_overload", "path": "public_docs/site/numerical-methods/frequency-domain/response-solver.md", "symbol": "DOC-ANCHOR:numerical-methods-frequency-response-planner-capability-overload-source", "responsibility": "Validated documentation identity for the FrequencyBackendCapabilities and FrequencySolverPolicy overload in frequency_solve_planner.hpp.", "evidence_status": "planned_contract", "implementation_path": "backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp", "declaration": "plan_frequency_response(const FrequencyBackendCapabilities&, const FrequencySolverPolicy&)"},
+    {"id": "planner_fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem_frequency_response", "responsibility": "Resolves driven frequency-response lane, periodic constraint sets, and planner policy."},
+    {"id": "planner_schur_cert", "path": "backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp", "symbol": "schur_certification_passes", "responsibility": "Checks Schur complement residual and breakdown gates in FrequencySolvePlan."},
     {"id": "runtime_gate", "path": "crates/fullmag-runner/src/frequency_response.rs", "symbol": "frequency_response_solver_method_rejection_reason", "responsibility": "Current runtime availability boundary for explicit solver methods."},
     {"id": "runtime_resolver", "path": "crates/fullmag-runner/src/frequency_response.rs", "symbol": "resolved_frequency_response_solver_method_name", "responsibility": "Resolved runtime method identity."},
     {"id": "block_solve", "path": "crates/fullmag-runner/src/eigen/response_block_real.rs", "symbol": "solve_block_real_harmonic_response", "responsibility": "Dense block-real validation solve."},

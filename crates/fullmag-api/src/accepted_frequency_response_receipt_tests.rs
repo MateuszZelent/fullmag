@@ -80,12 +80,12 @@ fn response_receipt_reopens_typed_cas_outputs_without_an_accepted_state() {
     let claim = task
         .claim(
             ResourceLease::new(
-                "gpu-fr",
-                ResourceKind::Gpu,
+                "cpu-fr",
+                ResourceKind::Cpu,
                 ResourceBudget {
                     cpu_millis: 1000,
                     memory_bytes: 1 << 20,
-                    gpu_memory_bytes: 1 << 20,
+                    gpu_memory_bytes: 0,
                     storage_bytes: 1 << 20,
                 },
             )

@@ -5,9 +5,9 @@ use crate::{
     EquilibriumSourceIR, ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision,
     FdmDemagPeriodicityIR, FdmMultilayerPlanIR, FdmPeriodicityIR, FdmPrecisionPolicyIR,
     FdmProjectionPolicyIR, FemConnectivityIR, FemDomainMeshAssetIR, FemLinearSolverPolicy,
-    FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, FieldTargetIR, FrequencyExcitationIR,
-    FrequencyResponseNormalizationIR, FrequencySweepIR, GeometryEntryIR, IntegratorChoice,
-    KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
+    FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, FieldTargetIR, FieldTimeOriginIR,
+    FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR, GeometryEntryIR,
+    IntegratorChoice, KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
     ModeTrackingIR, OerstedRealization, OutputIR, PrescribedSotV1DriveIR, RegionRefIR,
     RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR, ResolvedChargeTransportPlanIR,
@@ -729,6 +729,26 @@ pub struct ResolvedRegionalFieldDriveBasisIR {
     pub projection_signature: String,
 }
 
+/// One term of a mask field drive (`mask_field_drive.v1`, physics note 0922)
+/// resolved on a lane: the mask in A/m per FDM cell or per FEM mesh node, and
+/// the time function as `fullmag_time_expr.v1` bytecode.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedMaskFieldTermBasisIR {
+    pub drive_id: String,
+    pub term_index: u32,
+    pub time_origin: FieldTimeOriginIR,
+    /// Canonical text of the time function with locals substituted; `1.0` for
+    /// a static term. Provenance only; the solver reads `time_program`.
+    pub time_expression: String,
+    pub time_program: Vec<f64>,
+    /// `true` when the time function reads `t`.
+    pub time_dependent: bool,
+    /// Immutable basis `B_i / mu0` in A/m, zero outside the support: one value
+    /// per cell of the FDM grid, or per node of the FEM mesh.
+    pub field_xyz: Vec<[f64; 3]>,
+    pub projection_signature: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedSolvedAntennaDriveBasisIR {
     pub drive: SolvedAntennaDriveIR,
@@ -812,6 +832,8 @@ pub struct FdmPlanIR {
     pub field_drives: Vec<RegionalFieldDriveIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regional_field_drive_bases: Vec<ResolvedRegionalFieldDriveBasisIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_field_term_bases: Vec<ResolvedMaskFieldTermBasisIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub solved_antenna_drive_bases: Vec<ResolvedSolvedAntennaDriveBasisIR>,
     #[serde(default)]
@@ -920,6 +942,8 @@ pub struct FdmPlanIR {
     /// Resolved FDM cells selected by the canonical target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slonczewski_active_mask: Option<Vec<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slonczewski_time_expression: Option<crate::TimeExpressionIR>,
 
     // ── Spin-Orbit Torque (SOT) ────────────────────────
     /// Prescribed-SOT source current density [A/m²]: signed for v1, raw legacy scalar for v0.
@@ -1474,6 +1498,10 @@ pub struct FemPlanIR {
     pub field_drives: Vec<RegionalFieldDriveIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub solved_antenna_drive_bases: Vec<ResolvedSolvedAntennaDriveBasisIR>,
+    /// Hand-written mask terms resolved at the mesh nodes (physics note 0922,
+    /// section 8.3); native FEM takes them as pre-projected nodal bases.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_field_term_bases: Vec<ResolvedMaskFieldTermBasisIR>,
     /// Closed geometry trees referenced by regional-drive geometry masks.
     /// Native FEM consumes these descriptors and owns spatial projection.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1641,6 +1669,7 @@ impl Default for FemPlanIR {
             field_drives: Vec::new(),
             solved_antenna_drive_bases: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: TimeStageContextIR::default(),
             current_modules: Vec::new(),
             charge_transport_plans: Vec::new(),

@@ -58,6 +58,32 @@ Needs a Fullmag runtime (the Docker Compose DEV group in the repository):
 - the Control Room UI and Docker DEV script runner (`just docker-dev`, `just docker-dev-script`,
   `just fullmag-dev-container`).
 
+## Published material versions
+
+Use a published catalog key to copy a material into a geometry:
+
+```python
+import fullmag as fm
+
+disc = fm.geometry(fm.Box(100e-9, 100e-9, 10e-9), name="disc")
+disc.material = fm.materials.yig.kuswik
+```
+
+The key must exist in the selected Fullmag instance. Managed script execution
+supplies a catalog snapshot. In standalone Python, bind a snapshot explicitly
+while authoring or loading the script:
+
+```python
+from fullmag.client import Client
+
+with Client("http://127.0.0.1:3197") as client, client.bind_material_catalog():
+    loaded = fm.load_problem_from_script("disc.py")
+```
+
+Archived versions resolve by key. Assigning a version preserves the geometry's
+DMI activation and leaves its coefficients editable. Canonical export embeds
+the effective coefficients and source snapshot for offline replay.
+
 ## Interactive Live Python (`fm.connect()`)
 
 Start a Fullmag Docker Compose DEV group from a repository checkout (see
@@ -165,3 +191,22 @@ with fm.ExecutionContext():
 
 `ExecutionContext` owns the mutable flat authoring state and restores the previous binding on exit,
 including exception paths. Entering a context does not build a mesh or start a solver.
+
+## Acknowledgements, EU Funding &amp; Scientific Heritage
+
+Mateusz Zelent acknowledges funding from the European Union's Horizon Europe programme under
+**HORIZON-MSCA-2024-PF-01**, Marie Skłodowska-Curie Grant Agreement No. **101208951 (CNMA)**
+(hosted at Fachbereich Physik and Landesforschungszentrum OPTIMAS, RPTU Kaiserslautern-Landau).
+
+FullMag's workflow, numerical abstractions, and cross-validation benchmarks draw inspiration from
+the open-source micromagnetics community, including **MuMax3** ([doi:10.1063/1.4899186](https://doi.org/10.1063/1.4899186)),
+**Amumax** (<https://github.com/MathieuMoalic/amumax>),
+**mumax⁺** ([doi:10.1038/s41524-025-01893-y](https://doi.org/10.1038/s41524-025-01893-y)),
+**Boris Computational Spintronics** (*J. Appl. Phys.* **128**, 243902, 2020),
+**OOMMF** (NISTIR 6376, 1999),
+**TetraX** ([doi:10.1063/5.0054169](https://doi.org/10.1063/5.0054169); [doi:10.14278/rodare.1418](https://doi.org/10.14278/rodare.1418)),
+**Tetmag** (<https://github.com/R-Hertel/tetmag>), and
+**NeuralMag** ([doi:10.1038/s41524-025-01688-1](https://doi.org/10.1038/s41524-025-01688-1)).
+
+For full institutional attributions, literature references, and citation instructions, see the
+[Acknowledgements &amp; EU Grant page](https://fullmag.mzelent.pl/acknowledgements/index.html).

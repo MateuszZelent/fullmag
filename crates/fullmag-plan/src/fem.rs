@@ -3580,6 +3580,50 @@ fn resolve_interfacial_dmi_normal(
     normalize_nonzero_vector3(raw_normal, "InterfacialDmi.interface_normal").map(Some)
 }
 
+/// Resolve the same nodal Gilbert coefficient as a FEM plan, on an already
+/// packed Build Mesh domain whose segments carry immutable scene object IDs.
+pub fn damping_on_geometry_mesh(
+    problem: &ProblemIR,
+    mesh: &fullmag_ir::MeshIR,
+    built_segments: &[fullmag_ir::FemObjectSegmentIR],
+) -> Result<Vec<f64>, PlanError> {
+    let invalid = |reason: &str| PlanError { reasons: vec![reason.to_owned()] };
+    let mut owners = BTreeMap::new();
+    let mut materials = BTreeMap::new();
+    let mut base = None;
+    for magnet in &problem.magnets {
+        let owner = magnet.object_id.as_deref().ok_or_else(|| invalid("missing FEM object ID"))?;
+        let material = problem.materials.iter().find(|m| m.name == magnet.material)
+            .ok_or_else(|| invalid("missing FEM magnet material"))?;
+        if owners.insert(owner, magnet.name.as_str()).is_some()
+            || materials.insert(magnet.name.clone(), material.clone()).is_some()
+        {
+            return Err(invalid("ambiguous FEM material owner"));
+        }
+        if base.is_none_or(|previous| should_promote_fem_material_template(previous, material)) {
+            base = Some(material);
+        }
+    }
+
+    let mut segments = built_segments.to_vec();
+    let mut matched = BTreeSet::new();
+    for segment in &mut segments {
+        if segment.object_id == AIR_OBJECT_SEGMENT_ID {
+            continue;
+        }
+        let name = *owners.get(segment.object_id.as_str())
+            .ok_or_else(|| invalid("unknown FEM mesh material owner"))?;
+        matched.insert(name);
+        segment.object_id = name.to_owned();
+    }
+    if matched.len() != owners.len() {
+        return Err(invalid("FEM magnet has no mesh segment"));
+    }
+    let base = base.ok_or_else(|| invalid("missing FEM base material"))?;
+    let (resolved, _) = build_region_material_fields(problem, base, mesh, &segments, &materials)?;
+    Ok(resolved.alpha_field.unwrap_or_else(|| vec![resolved.damping; mesh.nodes.len()]))
+}
+
 fn build_region_material_fields(
     problem: &ProblemIR,
     base_material: &fullmag_ir::MaterialIR,
@@ -3663,7 +3707,7 @@ fn build_region_material_fields(
             fullmag_ir::MaterialParameterNameIR::Ms,
             region_material.saturation_magnetisation,
             &points,
-            crate::material::MaterialSampleSpacing::PerPoint(&point_spacings),
+            crate::material::MaterialSampling::Nodes { spacings: &point_spacings },
             object_translation,
             &sharp_conformal_ms_regions,
         )
@@ -3675,7 +3719,7 @@ fn build_region_material_fields(
             fullmag_ir::MaterialParameterNameIR::Aex,
             region_material.exchange_stiffness,
             &points,
-            crate::material::MaterialSampleSpacing::PerPoint(&point_spacings),
+            crate::material::MaterialSampling::Nodes { spacings: &point_spacings },
             object_translation,
             &sharp_conformal_aex_regions,
         )
@@ -3687,7 +3731,7 @@ fn build_region_material_fields(
             fullmag_ir::MaterialParameterNameIR::Alpha,
             region_material.damping,
             &points,
-            crate::material::MaterialSampleSpacing::PerPoint(&point_spacings),
+            crate::material::MaterialSampling::Nodes { spacings: &point_spacings },
             object_translation,
         )
         .map_err(|e| PlanError { reasons: vec![e] })?;
@@ -4482,6 +4526,7 @@ pub(crate) fn plan_fem(
             .any(|term| matches!(term, fullmag_ir::EnergyTermIR::ThermalNoise { .. })),
         has_mqs_antenna_field_source(problem) || has_prescribed_zeeman_mask_source(problem),
         problem.field_drives.iter().any(|drive| crate::util::field_drive_is_active(drive, problem))
+            || !crate::mask_field::active_mask_field_drives(problem).is_empty()
             || problem.solved_antenna_drives.iter().any(|drive| {
                 drive.peak_current_a.is_finite()
                     && drive.peak_current_a != 0.0
@@ -5093,6 +5138,7 @@ pub(crate) fn plan_fem(
         antenna_zeeman_masks,
         field_drives: active_field_drives,
         solved_antenna_drive_bases: Vec::new(),
+        mask_field_term_bases: Vec::new(),
         field_drive_geometry_masks,
         time_stage: crate::util::time_stage_context(problem),
         current_modules: problem.current_modules.clone(),
@@ -5149,6 +5195,10 @@ pub(crate) fn plan_fem(
             None
         },
     };
+
+    // Hand-written mask terms at the mesh nodes (physics note 0922, section 8.3).
+    fem_plan.mask_field_term_bases =
+        crate::mask_field::resolve_fem_mask_field_terms(problem, &fem_plan)?;
 
     // ── Extract Oersted realizations from energy terms ──
     for (term_index, term) in problem.energy_terms.iter().enumerate() {

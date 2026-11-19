@@ -1775,8 +1775,8 @@ fn attach_geometry_realization_to_mesh_request(
     // The Docker mesh build reads the scene directly and must not lower
     // physics (ADR 0074); the legacy journal and FDM refresh still need the
     // ProblemIR patch.
-    let geometry_only_mesh_build = crate::live_accepted_execution::docker_api_only_runtime()
-        && matches!(req, StructuredCommandRequest::MeshBuild { .. });
+    let mesh_build = matches!(req, StructuredCommandRequest::MeshBuild { .. });
+    let geometry_only_mesh_build = mesh_build && crate::live_accepted_execution::docker_api_only_runtime();
     let (intent, mesh_options) = match req {
         StructuredCommandRequest::MeshBuild {
             intent,
@@ -1820,6 +1820,12 @@ fn attach_geometry_realization_to_mesh_request(
         }
     }
     if !geometry_only_mesh_build {
+        if mesh_build && realization.backend_target == GeometryBackendTarget::Fem {
+            options_object.insert(
+                "authored_mesh_input_sha256".to_string(),
+                fullmag_session::canonical_json_sha256(&crate::scene_mesh_signature(scene)).into(),
+            );
+        }
         options_object.insert(
             "scene_problem_patch".to_string(),
             scene_problem_patch_for_mesh(scene)?,
@@ -1960,7 +1966,7 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
         });
         magnets.push(MagnetIR {
             object_id: Some(object.id.clone()),
-            absorbing_boundary: None,
+            absorbing_boundary: object.absorbing_boundary.clone(),
             initial_magnetization: Some(initial_magnetization_for_object(scene, object)),
             material: material_name,
             name: object.id.clone(),

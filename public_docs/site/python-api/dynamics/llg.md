@@ -10,13 +10,11 @@ owner: fullmag-public-docs
 # `LLG` Dynamics Contract
 
 (python-api-dynamics-llg-problem-statement)=
-<!-- (problem-statement)= -->
 ## 1. Physical problem and overview
 
 `fm.LLG` is the public Python DSL contract that parameterizes the Landau–Lifshitz–Gilbert (LLG) equation of motion for time-domain evolution and overdamped LLG relaxation (`algorithm="llg_overdamped"`). It binds the H-field gyromagnetic ratio $\gamma_0$, the requested time-integration scheme (`integrator`), the mutually exclusive fixed (`fixed_timestep`) or embedded adaptive (`adaptive_timestep`) step-size controller, and the optional demagnetization refresh cadence (`field_refresh`).
 
 (python-api-dynamics-llg-governing-equations)=
-<!-- (governing-equations)= -->
 ## 2. Governing equations
 
 On active magnetic degrees of freedom $i \in \mathcal{A}$ ($M_{s,i} > 0$), `LLG` specifies the explicit normalized Landau–Lifshitz–Gilbert right-hand side:
@@ -38,7 +36,6 @@ s_{\mathrm{prec}}\,\mathbf{m}_i \times \mathbf{H}_{\mathrm{eff},i}(\mathbf{m}, t
 ```
 
 (python-api-dynamics-llg-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## 3. Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -52,7 +49,6 @@ s_{\mathrm{prec}}\,\mathbf{m}_i \times \mathbf{H}_{\mathrm{eff},i}(\mathbf{m}, t
 | $t$ | Physical simulation time | $\mathrm{s}$ |
 
 (python-api-dynamics-llg-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## 4. Assumptions and limits of validity
 
 - **H-field gyromagnetic convention**: `LLG.gamma` is expressed in $\mathrm{m\,A^{-1}\,s^{-1}}$ (default $2.211\times 10^5\,\mathrm{m\,A^{-1}\,s^{-1}} \approx \mu_0 |\gamma_e|$) so that $\gamma_0 \mathbf{H}_{\mathrm{eff}}$ has units of $\mathrm{s^{-1}}$.
@@ -60,7 +56,6 @@ s_{\mathrm{prec}}\,\mathbf{m}_i \times \mathbf{H}_{\mathrm{eff},i}(\mathbf{m}, t
 - **Alias normalization**: Passing `"euler"` normalizes to `"heun"`, and passing `"dopri5"` normalizes to `"rk45"`.
 
 (python-api-dynamics-llg-python-api)=
-<!-- (python-api)= -->
 ## 5. Python API and parameter contract
 
 ### Constructor signature
@@ -135,7 +130,6 @@ assert ir["study"]["dynamics"]["integrator"] == "rk45"
 ```
 
 (python-api-dynamics-llg-problem-ir)=
-<!-- (problem-ir)= -->
 ## 6. `ProblemIR` and canonical script representation
 
 ```json
@@ -166,7 +160,6 @@ assert ir["study"]["dynamics"]["integrator"] == "rk45"
 ```
 
 (python-api-dynamics-llg-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## 7. Round-trip, provenance, and failure semantics
 
 - **Requested intent vs. resolved execution**: `LLG.to_dict()` preserves `integrator="auto"` in `ProblemIR` (`requested intent`) while the planner and execution receipt record the concrete resolved integrator and device lane (`resolved execution`).
@@ -174,14 +167,12 @@ assert ir["study"]["dynamics"]["integrator"] == "rk45"
 - **Unsupported combinations**: Attaching `fixed_timestep` to `rk23`/`rk45`, attaching `adaptive_timestep` to `heun`/`rk4`/`abm3`/`coupled_imex_ark2`, or requesting FDM-only integrators (`abm3`, `coupled_imex_ark2`) on `target="fem"` is rejected as an unsupported combination.
 
 (python-api-dynamics-llg-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## 8. Discrete realization and numerical operators
 
 - **FEM CPU & GPU**: Evaluates nodewise LLG torques (`llg_rhs_aos` on CPU and `fullmag_cuda_llg_rhs_fused` on GPU) and advances the state via explicit Runge–Kutta tableaus (`heun`, `rk4`, `rk23`, `rk45`).
 - **FDM CPU & GPU**: Evaluates cell-centered SoA/AoS LLG torques across active magnetic cells and advances via explicit RK, `abm3` multistep, or `coupled_imex_ark2`.
 
 (python-api-dynamics-llg-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## 9. Backend and device implementation mapping
 
 | Solver | Device | Status | Notes |
@@ -192,25 +183,21 @@ assert ir["study"]["dynamics"]["integrator"] == "rk45"
 | FDM | GPU | `documented` | CUDA LLG and adaptive reduction kernels. |
 
 (python-api-dynamics-llg-validation)=
-<!-- (validation)= -->
 ## 10. Validation and benchmark gates
 
 - Validated in `packages/fullmag-py/tests/test_llg_solver_contract.py` and `packages/fullmag-py/tests/test_problem_ir.py`.
 
 (python-api-dynamics-llg-limitations)=
-<!-- (limitations)= -->
 ## 11. Known limitations and operational constraints
 
 - Direct energy minimizers (`projected_gradient_bb`, `nonlinear_cg`, `tangent_plane_implicit`) do not use an `LLG` dynamics payload; passing `dynamics` to a direct-minimizer `Relaxation` study raises a `ValueError`.
 
 (python-api-dynamics-llg-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## 12. Scientific bibliography
 
 1. T. L. Gilbert, *A phenomenological theory of damping in ferromagnetic materials*, IEEE Trans. Magn. **40**, 3443 (2004).
 
 (python-api-dynamics-llg-source-code-index)=
-<!-- (source-code-index)= -->
 ## 13. Source-code index
 
 | Layer | File | Symbol / entrypoint | Responsibility |

@@ -182,18 +182,9 @@ surface quadrature or physical open-boundary convergence.
 | FDM | GPU | not applicable | use FDM convolution CUDA |
 
 (numerical-methods-demag-bem-implementation-mapping)=
-## Where this is implemented
+## Implementation mapping
 
-| Claim | Repository path | Stable symbol | Responsibility | Lane |
-|---|---|---|---|---|
-| BEM RHS/gauge | [`backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.cpp#L18) | [`prepare_demag_fem_bem_neumann_rhs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.cpp#L18) | Neumann RHS and gauge pin | FEM CPU |
-| Dense operator | [`backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.cpp#L363) | [`DenseDemagBemOperator::build`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.cpp#L363) | surface map and solid angles | FEM CPU |
-| Sparse solve | [`backends/fem/cpu/mfem/interactions/demag_fem_bem_linear_solve.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_fem_bem_linear_solve.cpp#L184) | [`solve_demag_fem_bem_sparse_system`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_fem_bem_linear_solve.cpp#L184) | policy-controlled solves | FEM CPU |
-| Boundary values | [`backends/fem/cpu/mfem/interactions/demag_fem_bem_boundary_values.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_fem_bem_boundary_values.cpp#L39) | [`prepare_demag_fem_bem_dirichlet_rhs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_fem_bem_boundary_values.cpp#L39) | injects $g_2$ | FEM CPU |
-| Orchestration | [`backends/fem/cpu/mfem/interactions/demag_fem_bem_solve.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_fem_bem_solve.cpp#L30) | [`context_compute_demag_fem_bem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_fem_bem_solve.cpp#L30) | full sequence and telemetry | FEM CPU |
-| Potential | `backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.cpp` | `combine_demag_fem_bem_total_potential` | forms $u_1+u_2$ | FEM CPU |
-| Field recovery | [`backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp#L130) | [`recover_demag_poisson_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp#L130) | recovers $\mathbf H_{\mathrm d}$ from the total potential | FEM CPU |
-| Energy reduction | [`backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp#L24) | [`demag_poisson_energy_from_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp#L24) | reduces $E_{\mathrm d}$ from $\mathbf M$ and $\mathbf H_{\mathrm d}$ | FEM CPU |
+Public `Demag` policy lowering and the MFEM CPU Fredkin–Koehler sequence—gauge-pinned Neumann RHS, dense boundary operator construction, sparse interior solves, Dirichlet boundary injection, potential recombination, field recovery, and energy reduction—are indexed in {ref}`numerical-methods-demag-bem-source-code-index`.
 
 (numerical-methods-demag-bem-validation)=
 ## Validation
@@ -215,11 +206,6 @@ page does not claim equivalence with an airbox truncation or universal geometry 
 - Canonical physics owner: {doc}`../../physics/interactions/demagnetization/fem-bem`.
 
 (numerical-methods-demag-bem-source-code-index)=
-
-## Control Room workflow
-
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
-
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence |

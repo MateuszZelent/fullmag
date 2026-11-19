@@ -77,16 +77,6 @@ wirtualnej Docker oraz porty loopback frontendu.
    zwolnienie zasobów” na podstawie zmierzonej wolnej pamięci urządzenia
    (osobne zadanie; do czasu wdrożenia brak VRAM kończy run błędem CUDA, bez
    cichego przejścia na CPU).
-   Domyślny limit rezerwacji danych obliczeń w ledgerze DEV to 50 GB
-   (50 000 000 000 bajtów). Operator może jawnie zaakceptować wyższy limit
-   ustawiając `FULLMAG_DEV_BACKEND_STORAGE_GIB` dla wybranej grupy. Launcher
-   przekazuje limit do natywnego profilu compute/preparation i sprawdza
-   wolne miejsce przy jawnym zwiększeniu. Limit nie rezerwuje miejsca na
-   dysku. Przed startem FMR worker sprawdza miejsce na zapis konkretnego
-   zadania. Zmiana w istniejącej grupie wymaga jej
-   zatrzymania i zarządzanej recreacji `--fresh-state`, która archiwizuje
-   poprzednie runtime-control i ledger, zachowując dane użytkownika i port.
-   Odtworzenie sceny jest jawne. Stary run ani polecenie Solve nie są ponawiane.
 3. **Port frontendu.** Bez jawnego portu skonfigurowany port jest preferencją
    nowej grupy; zajęty port zastępuje pierwszy wolny w stałej dla projektu
    rotacji kolejnych portów. Porty przypięte przez zatrzymane grupy są

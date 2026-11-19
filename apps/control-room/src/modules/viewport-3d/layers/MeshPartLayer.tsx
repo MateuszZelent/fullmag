@@ -8,7 +8,6 @@ import {
   type MeshBasicMaterial,
   type MeshLambertMaterial,
   type MeshStandardMaterial,
-  type ShaderMaterial,
 } from "three";
 import {
   RENDER_POLICIES,
@@ -42,6 +41,7 @@ import {
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
 import { useViewport3DGeometryUpload } from "../hooks/useViewport3DGeometryUpload";
+import { Viewport3DInteractionWireframe } from "./Viewport3DInteractionWireframe";
 import {
   type Viewport3DScalarColorUploadResult,
   useViewport3DScalarColorUpload,
@@ -56,9 +56,11 @@ import { createViewport3DIndexedPointGeometry } from "../viewport3dPointGeometry
 import { attachViewport3DSharedTopologyPosition } from "../viewport3dSharedTopologyPositions";
 import {
   canApplyScalarShaderColorBuffer,
+  applyScalarSurfaceMaterialPolicy,
   createScalarSurfaceShaderMaterial,
   scalarSurfaceShaderVariantKey,
   updateScalarSurfaceShaderMaterial,
+  type Viewport3DScalarSurfaceMaterial,
 } from "../viewport3dScalarSurfaceShader";
 import type {
   Viewport3DFieldRenderModel,
@@ -522,14 +524,15 @@ export function createMeshPartScalarShaderMaterials({
 }: {
   buffer: ScalarColorBuffer | null | undefined;
   enabled: boolean;
-  materialProfile: Pick<Viewport3DMaterialProfile["magneticSurface"], "toneMapped" | "shadeStrength">;
+  materialProfile: Pick<Viewport3DMaterialProfile["magneticSurface"], "toneMapped" | "shadeStrength"> &
+    Partial<Pick<Viewport3DMaterialProfile["magneticSurface"], "presentation">>;
   surfaceOpacity?: number;
   surfacePolicy?: ReturnType<typeof surfaceMaterialPolicyProps>;
   surfacePolicyFront?: ReturnType<typeof surfaceMaterialPolicyPropsFront> | null;
   tracker: Pick<Viewport3DResourceTracker, "track" | "release">;
 }): {
-  back: ShaderMaterial | null;
-  front: ShaderMaterial | null;
+  back: Viewport3DScalarSurfaceMaterial | null;
+  front: Viewport3DScalarSurfaceMaterial | null;
 } {
   if (!enabled || !buffer) {
     return { back: null, front: null };
@@ -541,6 +544,7 @@ export function createMeshPartScalarShaderMaterials({
       opacity: surfaceOpacity,
       shadeStrength: materialProfile.shadeStrength,
       toneMapped: materialProfile.toneMapped,
+      presentation: materialProfile.presentation,
     }),
   );
   const front = surfacePolicyFront
@@ -551,6 +555,7 @@ export function createMeshPartScalarShaderMaterials({
           opacity: surfaceOpacity,
           shadeStrength: materialProfile.shadeStrength,
           toneMapped: materialProfile.toneMapped,
+          presentation: materialProfile.presentation,
         }),
       )
     : null;
@@ -670,7 +675,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   });
 
   const edgeIndices = resolveMeshPartWireframeEdgeIndices(
-    renderSettings.geometryScope,
+    renderSettings.wireframeGeometryScope ?? "surface",
     partModel,
     renderSettings.wireframeVisible,
   );
@@ -689,7 +694,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       (topologyModel?.positions.byteLength ?? 0) + (edgeIndices?.byteLength ?? 0),
     invalidate,
     itemCount: edgeIndices?.length ?? 0,
-    key: `mesh-part-wireframe:${part.id}:scope=${renderSettings.geometryScope}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${edgeIndices?.byteLength ?? 0}`,
+    key: `mesh-part-wireframe:${part.id}:scope=${renderSettings.wireframeGeometryScope ?? "surface"}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${edgeIndices?.byteLength ?? 0}`,
     lane: "topology-index",
     targetRevision: topologyRevision === null ? null : String(topologyRevision),
     tracker,
@@ -1020,6 +1025,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const scalarShaderVariantKey = scalarShaderBuffer
     ? scalarSurfaceShaderVariantKey(scalarShaderBuffer)
     : null;
+  const fieldPresentationEnabled = Boolean(materialProfile.magneticSurface.presentation);
 
   const scalarShaderMaterials = useMemo(
     () =>
@@ -1038,6 +1044,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     [
       committedScalarColorState.pipeline,
       fieldColorLayersEnabled,
+      fieldPresentationEnabled,
       meshQualityColors,
       modalSurfaceActive,
       scalarShaderVariantKey,
@@ -1095,8 +1102,9 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         committedScalarColorState.buffer,
         surfaceOpacity,
         materialProfile.magneticSurface.shadeStrength,
+        materialProfile.magneticSurface.presentation,
       );
-      Object.assign(scalarShaderMaterial, surfacePolicy);
+      applyScalarSurfaceMaterialPolicy(scalarShaderMaterial, surfacePolicy);
       scalarShaderMaterial.toneMapped =
         materialProfile.magneticSurface.toneMapped ?? false;
     }
@@ -1106,9 +1114,10 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         committedScalarColorState.buffer,
         surfaceOpacity,
         materialProfile.magneticSurface.shadeStrength,
+        materialProfile.magneticSurface.presentation,
       );
       if (surfacePolicyFront) {
-        Object.assign(scalarShaderMaterialFront, surfacePolicyFront);
+        applyScalarSurfaceMaterialPolicy(scalarShaderMaterialFront, surfacePolicyFront);
       }
       scalarShaderMaterialFront.toneMapped =
         materialProfile.magneticSurface.toneMapped ?? false;
@@ -1122,6 +1131,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     invalidate,
     materialProfile.magneticSurface.shadeStrength,
     materialProfile.magneticSurface.toneMapped,
+    materialProfile.magneticSurface.presentation,
     scalarShaderMaterial,
     scalarShaderMaterialFront,
     surfaceOpacity,
@@ -1267,7 +1277,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
                 opacity={surfaceOpacity}
                 roughness={surfaceMaterialPlan.roughness}
                 toneMapped={surfaceMaterialPlan.toneMapped}
-                vertexColors={false}
+                vertexColors={hasUploadedVertexScalarColors}
                 {...surfacePolicy}
               />
             ) : surfaceMaterialPlan.kind === "lambert" ? (
@@ -1311,7 +1321,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
                   opacity={surfaceOpacity}
                   roughness={surfaceMaterialPlan.roughness}
                   toneMapped={surfaceMaterialPlan.toneMapped}
-                  vertexColors={false}
+                  vertexColors={hasUploadedVertexScalarColors}
                   {...surfacePolicyFront}
                 />
               ) : surfaceMaterialPlan.kind === "lambert" ? (
@@ -1338,16 +1348,18 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         </>
       ) : null}
       {renderPlan.wireframe.visible && edgeGeometry ? (
-        <lineSegments
+        <Viewport3DInteractionWireframe
           geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
+          surfaceIndices={partModel.edgeIndices}
+          tracker={tracker}
         >
           <lineBasicMaterial
             color={wireframeColorFromSettings(renderSettings, colors.wire)}
             opacity={renderPlan.wireframe.opacity}
             {...materialPolicyProps("featureEdges")}
           />
-        </lineSegments>
+        </Viewport3DInteractionWireframe>
       ) : null}
       {renderPlan.bounds.visible ? (
         <BoundsBox

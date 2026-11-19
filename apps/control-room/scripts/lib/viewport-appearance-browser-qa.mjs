@@ -31,7 +31,7 @@ const SETTING_SECTIONS_BY_LABEL = Object.freeze({
   "Visualization mode": "Appearance",
   "Grid and axes": "View",
   "Scale coordinates": "View",
-  "Requested quality": "Quality",
+  "Quality profile": "Quality",
 });
 const RANGE_SECTIONS_BY_ID = Object.freeze({
   "fm-view-background-strength": "Appearance",
@@ -349,17 +349,29 @@ async function readControls(page, settings, timeout) {
     lightingMode, lightingIntensity };
 }
 
-async function readChoice(page, label, timeout = 15_000) {
+export async function readChoice(page, label, timeout = 15_000) {
   const section = SETTING_SECTIONS_BY_LABEL[label];
   if (!section) throw new Error(`No 3D View Settings section is registered for ${label}`);
   const settings = await ensureSettingsOpen(page, section, timeout);
+  if (label === "Visualization mode") {
+    return normalizeText(await settings.getByRole("radiogroup", { name: label, exact: true })
+      .getByRole("radio", { checked: true }).innerText({ timeout }));
+  }
   return normalizeText(await settings.getByRole("combobox", { name: label, exact: true }).innerText({ timeout }));
 }
 
-async function choose(page, label, option, id, timeout) {
+export async function choose(page, label, option, id, timeout) {
   const section = SETTING_SECTIONS_BY_LABEL[label];
   if (!section) throw new Error(`No 3D View Settings section is registered for ${label}`);
   const settings = await ensureSettingsOpen(page, section, timeout);
+  if (label === "Visualization mode") {
+    const radio = settings.getByRole("radiogroup", { name: label, exact: true })
+      .getByRole("radio", { name: option, exact: true });
+    if (!await radio.isChecked({ timeout })) await radio.click({ timeout });
+    await settings.getByRole("radio", { name: option, exact: true, checked: true })
+      .waitFor({ state: "visible", timeout });
+    return;
+  }
   const trigger = settings.getByRole("combobox", { name: label, exact: true });
   await trigger.scrollIntoViewIfNeeded();
   await trigger.click({ timeout });
@@ -744,23 +756,22 @@ async function checkPresentationRendering(page, settings, { assertCanvas, pngDec
   const originalMode = await readChoice(page, "Visualization mode", timeout);
   const originalLighting = await readChoice(page, "Geometry appearance", timeout);
   await ensureSettingsOpen(page, "Quality", timeout);
-  const originalQuality = await readChoice(page, "Requested quality", timeout);
+  const originalQuality = await readChoice(page, "Quality profile", timeout);
   const originalAo = await settings.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked();
+  const originalShadows = await settings.getByRole("switch", { name: "Soft shadows", exact: true }).isChecked();
   let originalRoughness;
   let originalMetalness;
-  let originalShadows;
   let difference = null;
   let presentationPng = null;
-  const profiles = ["Interactive Lite", "Interactive", "Balanced", "Figure"];
+  const profiles = ["Fast", "Standard", "Detailed", "Figure"];
   const isolatedQaBox = new Set(lightingAudit?.litPrimitiveObjectIds ?? []).has("qa-studio-box");
   let renderingError = null;
   try {
-    await choose(page, "Visualization mode", "Presentation", "fm-view-render-mode", timeout);
+    await choose(page, "Visualization mode", "Presentation", undefined, timeout);
     await choose(page, "Geometry appearance", "Studio", "fm-view-lighting", timeout);
     originalRoughness = await readRangeValue(settings, "fm-view-roughness");
     originalMetalness = await readRangeValue(settings, "fm-view-metalness");
     await setSwitch(page, "Ambient occlusion", false, timeout);
-    originalShadows = await settings.getByRole("switch", { name: "Soft shadows", exact: true }).isChecked();
     await setSwitch(page, "Soft shadows", false, timeout);
     await setRangeValue(page, "#fm-view-metalness", 1);
     await setRangeValue(page, "#fm-view-roughness", 0.1);
@@ -783,7 +794,7 @@ async function checkPresentationRendering(page, settings, { assertCanvas, pngDec
     await setSwitch(page, "Soft shadows", true, timeout);
     const qualityPixels = [];
     for (const [index, profile] of profiles.entries()) {
-      await choose(page, "Requested quality", profile, "fm-view-quality", timeout);
+      await choose(page, "Quality profile", profile, "fm-view-quality", timeout);
       await waitForRenderedFrame(page);
       await assertCanvas("presentation quality " + profile);
       const snapshotName = `presentation-quality-${index}`;
@@ -805,7 +816,7 @@ async function checkPresentationRendering(page, settings, { assertCanvas, pngDec
       }
       qualityPixels.push({ profile, blackened_pixels: blackenedPixels });
     }
-    await choose(page, "Requested quality", "Interactive", "fm-view-quality", timeout);
+    await choose(page, "Quality profile", "Standard", "fm-view-quality", timeout);
     const exportProof = await runViewportExportBrowserQa(page, {
       assertCanvas, pngDecoder, timeout, expectedCaptureDpr: 1,
     });
@@ -825,14 +836,15 @@ async function checkPresentationRendering(page, settings, { assertCanvas, pngDec
   } finally {
     try {
       if (originalRoughness !== undefined || originalMetalness !== undefined || originalShadows !== undefined) {
-        await choose(page, "Visualization mode", "Presentation", "fm-view-render-mode", timeout);
+        await choose(page, "Visualization mode", "Presentation", undefined, timeout);
       }
+      // Figure selection applies its preset, so restore quality before manual effect choices.
+      await choose(page, "Quality profile", originalQuality, "fm-view-quality", timeout);
       if (originalShadows !== undefined) await setSwitch(page, "Soft shadows", originalShadows, timeout);
       if (originalRoughness !== undefined) await setRangeValue(page, "#fm-view-roughness", originalRoughness);
       if (originalMetalness !== undefined) await setRangeValue(page, "#fm-view-metalness", originalMetalness);
-      await choose(page, "Requested quality", originalQuality, "fm-view-quality", timeout);
       await choose(page, "Geometry appearance", originalLighting, "fm-view-lighting", timeout);
-      await choose(page, "Visualization mode", originalMode, "fm-view-render-mode", timeout);
+      await choose(page, "Visualization mode", originalMode, undefined, timeout);
       await setSwitch(page, "Ambient occlusion", originalAo, timeout);
       clearPixelSnapshots(pixelSnapshots, ["presentation-polished", "presentation-rough", ...profiles.map((_, index) => `presentation-quality-${index}`)]);
     } catch (restoreError) {

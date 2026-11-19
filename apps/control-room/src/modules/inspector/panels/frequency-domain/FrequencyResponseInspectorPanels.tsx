@@ -99,7 +99,7 @@ export function FrequencyResponsePointInspectorPanel(
         <FieldRow label="Response amplitude" value={summary.amplitude} />
         <FieldRow label="Response phase" value={summary.phase} />
         <FieldRow
-          label={summary.absorbedPowerDensityLabel}
+          label="Absorbed power density"
           value={summary.absorbedPowerDensity}
         />
         <FrequencyResponsePointResidualFields residuals={summary.residuals} />
@@ -534,12 +534,12 @@ export function FrequencyResponseSweepInspectorPanel(props: InspectorPanelProps)
         />
         <FieldRow label="Phase coverage" value={summary.phaseCoverage} />
         <FieldRow
-          label="Absorption coverage"
+          label="Absorbed-power coverage"
           value={summary.absorbedPowerCoverage}
         />
         <FieldRow label="Peak response" value={summary.peakResponse} />
         <FieldRow
-          label={summary.maxAbsorbedPowerDensityLabel}
+          label="Max absorbed power density"
           value={summary.maxAbsorbedPowerDensity}
         />
         <FieldRow label="Field payloads" value={summary.fieldOverlayStatus} />

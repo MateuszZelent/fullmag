@@ -73,7 +73,7 @@ surface attached sessions directly inside **Active simulations** on `/home`.
 
 ## Versioned Binary HTTP Codecs
 
-To keep JSON payloads thin (`docs` specification: binary data plane), `apps/control-room/src/kernel/api/codecs/`
+To keep JSON payloads thin, `apps/control-room/src/kernel/api/codecs/`
 decodes zero-copy `ArrayBuffer` responses identified by 4-byte magic headers:
 
 | Magic | Codec module | Payload semantics |
@@ -88,21 +88,11 @@ decodes zero-copy `ArrayBuffer` responses identified by 4-byte magic headers:
 | `FMPP` | `periodicPairsCodec.ts` | Bloch-periodic master/slave boundary facet pairing data |
 | `FMTB` | `tableRowsCodec.ts` | Decimated scalar/time-series table rows for charts and exports |
 
-Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
+## Capability scope and Python interoperability
 
-## Control Room crosswalk
-
-- **Status classification**: `partial` — command infrastructure, optimistic `scene_revision` drafts, WebSocket invalidation, and all nine binary decoders above are `implemented`; live two-way Python script buffer diff/sync in the hidden Ribbon `Automation` tab remains `TODO: frontend support`.
-- **Routes**: Command Palette (`Ctrl+Shift+P`), Inspector **Apply** (`Ctrl+Shift+Enter`) / **Reset**, Footer **Logs** (HTTP/WS/Command audit), and Start Screen **Active simulations**.
-
-## Python/API crosswalk
-
-- `fullmag.live` (`fm.connect()`, `LiveSession`) drives HTTP resource endpoints compatible with the same OpenAPI v2 schema consumed by `ControlRoomApi`.
-- Client binary decoders match backend serializers used by `fullmag.client` (`fmvp`, `fmtb`, etc.).
-
-## Physics and bibliography scope
-
-This page describes browser state synchronization, transport codecs, and concurrency safety; it introduces no independent physical equations.
+- **Browser authoring scope**: Command infrastructure, optimistic `scene_revision` drafts, WebSocket invalidation, and all nine binary decoders above are implemented; live two-way Python script buffer diff/sync in the hidden Ribbon `Automation` tab remains `Python-only`.
+- **Primary surfaces**: Command Palette (`Ctrl+Shift+P`), Inspector **Apply** (`Ctrl+Shift+Enter`) / **Reset**, Footer **Logs** (HTTP/WS/Command audit), and Start Screen **Active simulations**.
+- **Shared OpenAPI v2 & binary codecs**: `fullmag.live` (`fm.connect()`, `LiveSession`) drives HTTP resource endpoints compatible with the same OpenAPI v2 schema consumed by `ControlRoomApi`, and client binary decoders match the backend serializers used by `fullmag.client` (`fmvp`, `fmtb`).
 
 ## Source-code index
 

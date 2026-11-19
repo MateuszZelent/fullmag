@@ -865,51 +865,6 @@ impl PreparationMaterialization {
         native: &NativeFemMeshSpaceEvidence,
     ) -> Result<Self, PreparationPlanError> {
         source.validate()?;
-        Self::from_fem_frequency_response_execution_plan_with_identity(
-            problem_fingerprint,
-            PreparationPlanIdentity::AcceptedRun(source),
-            requested_backend,
-            execution_plan,
-            geometry_fingerprint,
-            display_fingerprint,
-            native,
-        )
-    }
-
-    /// Materialize native FEM mesh/space preparation for a live scene's exact
-    /// provided equilibrium mesh. This binds the receipt to the live scene
-    /// revision and does not imply that M0 is a verified equilibrium.
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_fem_frequency_response_execution_plan(
-        problem_fingerprint: impl Into<String>,
-        scene_revision: u64,
-        requested_backend: BackendTarget,
-        execution_plan: &ExecutionPlanIR,
-        geometry_fingerprint: impl Into<String>,
-        display_fingerprint: impl Into<String>,
-        native: &NativeFemMeshSpaceEvidence,
-    ) -> Result<Self, PreparationPlanError> {
-        Self::from_fem_frequency_response_execution_plan_with_identity(
-            problem_fingerprint,
-            PreparationPlanIdentity::LiveScene { scene_revision },
-            requested_backend,
-            execution_plan,
-            geometry_fingerprint,
-            display_fingerprint,
-            native,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn from_fem_frequency_response_execution_plan_with_identity(
-        problem_fingerprint: impl Into<String>,
-        identity: PreparationPlanIdentity,
-        requested_backend: BackendTarget,
-        execution_plan: &ExecutionPlanIR,
-        geometry_fingerprint: impl Into<String>,
-        display_fingerprint: impl Into<String>,
-        native: &NativeFemMeshSpaceEvidence,
-    ) -> Result<Self, PreparationPlanError> {
         if execution_plan.common.requested_backend != requested_backend {
             return Err(PreparationPlanError::Contract(
                 "preparation requested backend does not match the execution plan".into(),
@@ -932,12 +887,12 @@ impl PreparationMaterialization {
             &fullmag_ir::EquilibriumSourceIR::Provided
         ) {
             return Err(PreparationPlanError::Contract(
-                "FEM frequency-response preparation currently requires an explicit provided equilibrium M0".into(),
+                "accepted FEM frequency-response preparation currently requires an explicit provided equilibrium M0".into(),
             ));
         }
         Self::from_native_fem_mesh_with_identity(
             problem_fingerprint,
-            identity,
+            PreparationPlanIdentity::AcceptedRun(source),
             requested_backend,
             geometry_fingerprint,
             display_fingerprint,
@@ -2869,54 +2824,6 @@ mod tests {
         }
     }
 
-    fn fem_frequency_response_execution_plan_fixture(
-        mesh: MeshIR,
-        fe_order: u32,
-        equilibrium: fullmag_ir::EquilibriumSourceIR,
-    ) -> ExecutionPlanIR {
-        let node_count = mesh.nodes.len();
-        let mesh_name = mesh.mesh_name.clone();
-        let mut fem = fullmag_ir::FemPlanIR::default();
-        fem.mesh_name = mesh_name.clone();
-        fem.mesh = mesh.clone();
-        fem.fe_order = fe_order;
-        let response: fullmag_ir::FemFrequencyResponsePlanIR =
-            serde_json::from_value(serde_json::json!({
-                "mesh_name": mesh_name,
-                "mesh": mesh,
-                "fe_order": fe_order,
-                "hmax": 1.0e-9,
-                "equilibrium_magnetization": vec![[1.0, 0.0, 0.0]; node_count],
-                "material": fem.material,
-                "operator": {"kind": "linearized_llg", "include_demag": false},
-                "equilibrium": serde_json::to_value(equilibrium).unwrap(),
-                "normalization": "unit_l2",
-                "damping_policy": "include",
-                "excitation": {"field_au_per_m": [1.0, 0.0, 0.0], "phase_rad": 0.0},
-                "frequencies_hz": {"values_hz": [1.0e9]},
-                "enable_exchange": true,
-                "enable_demag": false,
-                "gyromagnetic_ratio": 2.211e5,
-                "precision": "double",
-                "exchange_bc": "neumann"
-            }))
-            .expect("valid FEM frequency-response fixture");
-        ExecutionPlanIR {
-            common: fullmag_ir::CommonPlanMeta {
-                ir_version: fullmag_ir::IR_VERSION.into(),
-                requested_backend: BackendTarget::Auto,
-                resolved_backend: BackendTarget::Fem,
-                execution_mode: fullmag_ir::ExecutionMode::Strict,
-                material_field_plans: Vec::new(),
-            },
-            backend_plan: BackendPlanIR::FemFrequencyResponse(response),
-            output_plan: fullmag_ir::OutputPlanIR {
-                outputs: Vec::new(),
-            },
-            provenance: fullmag_ir::ProvenancePlanIR::default(),
-        }
-    }
-
     fn native_fem_mesh_space_evidence(mesh: &MeshIR, fe_order: u32) -> NativeFemMeshSpaceEvidence {
         NativeFemMeshSpaceEvidence {
             abi_version: NATIVE_FEM_MESH_SPACE_ABI_VERSION,
@@ -3088,101 +2995,6 @@ mod tests {
         assert_eq!(space.local_dof_count, Some(4));
         assert_eq!(space.true_dof_count, Some(4));
         assert_eq!(space.dof_count, 4);
-    }
-
-    #[test]
-    fn fem_frequency_response_live_materialization_is_scene_and_native_mesh_bound() {
-        let mesh = fem_mesh_fixture();
-        let execution_plan = fem_frequency_response_execution_plan_fixture(
-            mesh.clone(),
-            1,
-            fullmag_ir::EquilibriumSourceIR::Provided,
-        );
-        let native = native_fem_mesh_space_evidence(&mesh, 1);
-        let materialized = PreparationMaterialization::from_fem_frequency_response_execution_plan(
-            fingerprint('a'),
-            17,
-            BackendTarget::Auto,
-            &execution_plan,
-            fingerprint('c'),
-            fingerprint('d'),
-            &native,
-        )
-        .expect("provided-M0 FR plan should materialize against matching native evidence");
-
-        assert_eq!(materialized.plan.scene_revision, Some(17));
-        assert!(materialized.plan.source.is_none());
-        assert_eq!(materialized.plan.requested_backend, BackendTarget::Auto);
-        assert_eq!(materialized.plan.resolved_backend, BackendTarget::Fem);
-        assert_eq!(
-            materialized.plan.mesh.output_fingerprint,
-            native.topology_fingerprint
-        );
-        assert_eq!(
-            materialized.plan.space.output_fingerprint,
-            native.space_fingerprint
-        );
-        assert_eq!(materialized.certificates.len(), 5);
-        assert!(
-            materialized
-                .certificates
-                .iter()
-                .all(|certificate| certificate.validate_for(&materialized.plan).is_ok())
-        );
-
-        let mut rebound = native.clone();
-        rebound.canonical_mesh_fingerprint = fingerprint('f');
-        let error = PreparationMaterialization::from_fem_frequency_response_execution_plan(
-            fingerprint('a'),
-            17,
-            BackendTarget::Auto,
-            &execution_plan,
-            fingerprint('c'),
-            fingerprint('d'),
-            &rebound,
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("different canonical mesh"));
-
-        let error = PreparationMaterialization::from_fem_execution_plan(
-            fingerprint('a'),
-            17,
-            BackendTarget::Auto,
-            &execution_plan,
-            fingerprint('c'),
-            fingerprint('d'),
-            &native,
-        )
-        .expect_err("the time-domain FEM constructor must stay closed to FR plans");
-        assert!(error.to_string().contains("time-domain FEM execution plan"));
-    }
-
-    #[test]
-    fn fem_frequency_response_live_materialization_rejects_unprovided_equilibrium() {
-        let mesh = fem_mesh_fixture();
-        let execution_plan = fem_frequency_response_execution_plan_fixture(
-            mesh.clone(),
-            1,
-            fullmag_ir::EquilibriumSourceIR::Artifact {
-                path: "equilibrium.json".into(),
-            },
-        );
-        let native = native_fem_mesh_space_evidence(&mesh, 1);
-        let error = PreparationMaterialization::from_fem_frequency_response_execution_plan(
-            fingerprint('a'),
-            17,
-            BackendTarget::Auto,
-            &execution_plan,
-            fingerprint('c'),
-            fingerprint('d'),
-            &native,
-        )
-        .expect_err("artifact-backed FR M0 must not be treated as authored input");
-        assert!(
-            error
-                .to_string()
-                .contains("explicit provided equilibrium M0")
-        );
     }
 
     #[test]

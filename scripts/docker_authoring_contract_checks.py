@@ -36,7 +36,10 @@ sys.exit(result)
 
 def _source_hashes(selected: Path) -> dict[str, str]:
     paths = [selected / name for name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml',
-                                         'scripts/docker_authoring_contract_checks.py')]
+                                         'scripts/docker_authoring_contract_checks.py',
+                                         'scripts/docker_diagnostic_source_checks.py',
+                                         'scripts/docker_volume_checks.py',
+                                         'scripts/just_storage_shell.sh')]
     for directory in ('crates', '.cargo'):
         paths.extend(path for path in (selected / directory).rglob('*')
                      if path.is_file() and path.suffix in ('.rs', '.toml'))
@@ -48,7 +51,61 @@ def _source_hashes(selected: Path) -> dict[str, str]:
 
 def run(control, selected: Path, identity, *, scope="authoring-contracts") -> int:
     commands = {
-        "authoring-contracts": (COMMAND,),
+        "authoring-contracts": (
+            COMMAND,
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-application', '--lib', 'script_imported_run'),
+        ),
+        "time-expression-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-expr', '--test', 'expr_tests'),
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-ir', '--lib', 'time_expression'),
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-plan', '--lib', 'time_expression'),
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-engine', '--lib', 'time_expression_tests'),
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-runner', '--lib', 'time_expression_events_remain_absolute_and_are_not_coalesced'),
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-worker', 'accepted_fdm_precision_tests'),
+            ('/usr/bin/env', 'PYTHONPATH=/opt/fullmag/source/packages/fullmag-py/src',
+             '/usr/local/bin/python3', '-B', '-m', 'unittest', 'discover',
+             '-s', '/opt/fullmag/source/packages/fullmag-py/tests',
+             '-p', 'test_stno_spin_torque.py', '-v'),
+            ('/usr/bin/env', 'PYTHONPATH=/opt/fullmag/source/packages/fullmag-py/src',
+             '/usr/local/bin/python3', '-B', '-m', 'unittest', 'discover',
+             '-s', '/opt/fullmag/source/packages/fullmag-py/tests',
+             '-p', 'test_spin_transport_runtime_roundtrip.py', '-v'),
+            ('/usr/bin/env', 'PYTHONPATH=/opt/fullmag/source/packages/fullmag-py/src',
+             '/usr/local/bin/python3', '-B', '-m', 'unittest', 'discover',
+             '-s', '/opt/fullmag/source/packages/fullmag-py/tests',
+             '-p', 'test_fdm_ui_roundtrip.py', '-k',
+             'scene_ui_round_trip_keeps_exchange_only_time_dependent_stt', '-v'),
+        ),
+        "gpu-temperature-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-runtime-control', '--lib', 'gpu_temperature'),
+        ),
+        "material-library-python-contracts": (
+            ('/usr/bin/env', 'PYTHONPATH=/opt/fullmag/source/packages/fullmag-py/src',
+             '/usr/local/bin/python3', '-B', '-m', 'unittest', 'discover',
+             '-s', '/opt/fullmag/source/packages/fullmag-py/tests',
+             '-p', 'test_material_assets_roundtrip.py', '-v'),
+        ),
+        "material-library-contracts": (
+            ('/usr/bin/env', 'CARGO_BUILD_JOBS=1', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api', 'material_library'),
+        ),
         # Source-only tests keep native solver/runtime packages untouched.
         # Disable debug output and incremental duplication in this private target.
         "live-observation-contracts": (
@@ -57,40 +114,25 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
              '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
              '-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-worker',
              'accepted_live_layout_tests'),
-        ),
-        "fem-response-preview-contracts": (
-            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0',
+             'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
              '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
-             '-p', 'fullmag-api', '--bin', 'fullmag-api',
-             'live_scene_preparation::tests::prepared_fem_frequency_response'),
+             '-p', 'fullmag-api', '--bin', 'fullmag-api', 'live_view_continuity'),
         ),
-        "fem-response-preview-plan-contracts": (
-            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
-             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
-             '-p', 'fullmag-plan', '--lib', 'fem_frequency_response_live_materialization'),
-        ),
-        "fem-response-reader-contracts": tuple(
-            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
-             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
-             '-p', 'fullmag-api', '--bin', 'fullmag-api', name)
-            for name in ('response_source_map::tests', 'accepted_response_reader_tests',
-                         'analysis_field_vector_binary_uses_fmvp_v5_explicit_nodes_for_analysis_payload')
-        ),
-        "fem-response-receipt-contracts": (
-            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
-             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
-             '-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-worker',
-             'frequency_response_receipt_tests'),
-        ),
-        "fem-response-publisher-contracts": (
-            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
-             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
-             '-p', 'fullmag-runner', '--lib', 'accepted_artifacts::tests'),
-        ),
-        "fem-response-storage-contracts": (
-            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
-             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
-             '-p', 'fullmag-runner', '--lib', 'private_scratch_tests'),
+        "accepted-runtime-ownership-contracts": tuple(
+            # These tests allocate private native SessionStores under TMPDIR.
+            # The live service's /state mount profile belongs to user sessions.
+            ('/usr/bin/env', '-u', 'FULLMAG_SESSION_STORAGE_PROFILE', 'CARGO_INCREMENTAL=0',
+             'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev', *test)
+            for test in (
+                ('-p', 'fullmag-runtime-control', '--lib', 'store_retry_repeats_transient_enomem'),
+                ('-p', 'fullmag-runtime-control', '--lib', 'closes_portable_solution_after_transient'),
+                ('-p', 'fullmag-runtime-control', '--lib', 'missing_gpu_sample_does_not_change'),
+                ('-p', 'fullmag-session', '--lib', 'durable_prestart_stop_fences'),
+                ('-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-scheduler',
+                 'transient_pre_spawn_read_releases_slot'),
+            )
         ),
         "fem-response-worker-contracts": (
             ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
@@ -168,18 +210,13 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
                          'model::imported_surface::tests', 'stl', 'authoring_open_tests')
         ),
     }[scope]
-    if scope.startswith("fem-response-"):
-        # Source contracts need type checking and assertions, not optimized
-        # leaf binaries. Dependencies retain their existing profile and the
-        # installed native runtime package/target remains untouched.
-        options = ('--config', 'profile.backend-dev.package.fullmag-runner.opt-level=0',
-                   '--config', 'profile.backend-dev.package.fullmag-api.opt-level=0')
-        commands = tuple(command[:command.index('/root/.cargo/bin/cargo') + 2] + options
-                         + command[command.index('/root/.cargo/bin/cargo') + 2:]
-                         for command in commands)
     backend, document = codegen._running_service(control.project, 'backend', identity, selected)
+    diagnostic = None
     if document.get('State', {}).get('Health', {}).get('Status') != 'healthy':
-        raise BuildControlError('Authoring checks require a healthy selected backend')
+        if scope not in ('material-library-contracts', 'material-library-python-contracts', 'gpu-temperature-contracts'):
+            raise BuildControlError('Authoring checks require a healthy selected backend')
+        from docker_diagnostic_source_checks import admit_diagnostic_source_checks
+        diagnostic = admit_diagnostic_source_checks(backend, document, control.volume)
     mounts = {mount['Destination']: mount for mount in document.get('Mounts', [])}
     if any(mounts.get(destination, {}).get('Type') != 'volume'
            or mounts[destination].get('Name') != control.volume
@@ -188,41 +225,51 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
     before = _source_hashes(selected)
     inputs = {'scope': scope, 'container_id': backend,
               'image_id': document['Image'], 'source_hashes': before,
-              'commands': [list(command) for command in commands]}
+              'commands': [list(command) for command in commands],
+              'diagnostic_source_admission': diagnostic, 'runtime_qualification': 'NOT VERIFIED'}
     with control.operation('verification', inputs) as operation:
         root = operation['root']
         operation['receipt'].update(inputs, state='running', qualification='source tests only')
         control.write(root + '/receipt.json', operation['receipt'])
         outputs = []
         exit_code = 0
+        harness_error = None
         for command in commands:
             operation['daemon_pending'] = True
             result = docker_capture('exec', backend, '/usr/local/bin/python3', '-B', '-c',
                                     CHECK_SCRIPT, *command, allow_failure=True, timeout=1800)
             operation['daemon_pending'] = False
-            output = result.stdout.decode('utf-8', 'replace')
-            if (result.returncode == 0 and '/root/.cargo/bin/cargo' in command
-                    and ('test result: ok.' not in output or 'running 0 tests' in output)):
-                raise BuildControlError('Selected Rust test harness did not execute tests')
-            if result.returncode == 0 and 'unittest' in command:
-                diagnostic = result.stderr.decode('utf-8', 'replace')
-                if 'Ran ' not in diagnostic or 'Ran 0 tests' in diagnostic:
-                    raise BuildControlError('Selected Python test harness did not execute tests')
             outputs.append((result.stdout, result.stderr))
             if result.returncode:
                 exit_code = result.returncode
                 break
+            output = result.stdout.decode('utf-8', 'replace')
+            if ('/root/.cargo/bin/cargo' in command
+                    and ('test result: ok.' not in output or 'running 0 tests' in output)):
+                harness_error = 'Selected Rust test harness did not execute tests'
+                break
+            if 'unittest' in command:
+                test_diagnostic = result.stderr.decode('utf-8', 'replace')
+                if 'Ran ' not in test_diagnostic or 'Ran 0 tests' in test_diagnostic:
+                    harness_error = 'Selected Python test harness did not execute tests'
+                    break
         control.write_bytes(root + '/stdout.log', b'\n'.join(value[0] for value in outputs))
         control.write_bytes(root + '/stderr.log', b'\n'.join(value[1] for value in outputs))
         after_backend, after = codegen._running_service(control.project, 'backend', identity, selected)
         if after_backend != backend or after['State']['StartedAt'] != document['State']['StartedAt']:
             raise BuildControlError('Backend identity changed during authoring tests')
+        if diagnostic is not None and admit_diagnostic_source_checks(backend, after, control.volume) != diagnostic:
+            raise BuildControlError('Diagnostic source-check authority changed during tests')
         if _source_hashes(selected) != before:
             raise BuildControlError('Authoring inputs changed during tests')
-        operation['receipt'].update(state='succeeded' if exit_code == 0 else 'failed-confirmed',
-                                    exit_code=exit_code)
-        control.write(root + '/receipt.json', operation['receipt'])
         for stdout, stderr in outputs:
             print(stdout.decode('utf-8', 'replace')[-24000:] + stderr.decode('utf-8', 'replace')[-8000:])
         print('Source check receipt: ' + root + '/receipt.json')
+        if harness_error is not None:
+            print(harness_error)
+            exit_code = 1
+            operation['receipt']['error'] = harness_error
+        operation['receipt'].update(state='succeeded' if exit_code == 0 else 'failed-confirmed',
+                                    exit_code=exit_code)
+        control.write(root + '/receipt.json', operation['receipt'])
         return exit_code

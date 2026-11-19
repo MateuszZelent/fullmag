@@ -24,7 +24,6 @@ import {
   eigenModeFieldAvailable,
   readEigenSpectrumPayload,
   frequencyResponseSeriesUnit,
-  frequencyResponseSeriesForPoint,
   frequencyDomainChartRouteOverrideFromSelection,
   frequencyDomainChartRouteOverrideFromSubview,
   frequencyDomainManifestSupportsChartRoute,
@@ -72,6 +71,42 @@ function fieldVectorResourceKey(
     ? canonicalFieldVectorResourceKey(fieldId, { view: "phase_rotated_real", phase_rad: 0 })
     : `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?${query}`;
 }
+
+describe("frequencyDomainChartModels memoization", () => {
+  it("reuses the spectrum model for the same unchanged resource object", () => {
+    const resource = jsonResource({ modes: [{ frequency_hz: 1e9, raw_mode_index: 0 }] });
+
+    const first = buildEigenSpectrumChartModel(resource);
+
+    expect(buildEigenSpectrumChartModel(resource)).toBe(first);
+    expect(buildEigenSpectrumChartModel({ ...resource })).not.toBe(first);
+  });
+
+  it("recomputes the spectrum model after an in-place resource field change", () => {
+    const resource = jsonResource({ modes: [{ frequency_hz: 1e9, raw_mode_index: 0 }] });
+    const first = buildEigenSpectrumChartModel(resource);
+
+    resource.payload = { modes: [{ frequency_hz: 2e9, raw_mode_index: 0 }] };
+    const second = buildEigenSpectrumChartModel(resource);
+
+    expect(second).not.toBe(first);
+    expect(second.points[0]?.frequencyHz).toBe(2e9);
+  });
+
+  it("keys branch and dispersion models by both resources", () => {
+    const branches = jsonResource({ branches: [] });
+    const dispersionA = textResource("sample_index,frequency_hz\n0,1e9\n");
+    const dispersionB = textResource("sample_index,frequency_hz\n0,2e9\n");
+
+    const withA = buildEigenBranchesModel(branches, dispersionA);
+
+    expect(buildEigenBranchesModel(branches, dispersionA)).toBe(withA);
+    expect(buildEigenBranchesModel(branches, dispersionB)).not.toBe(withA);
+    expect(buildEigenBranchesModel(branches)).not.toBe(withA);
+    const dispersionModel = buildEigenDispersionChartModel(dispersionA, withA);
+    expect(buildEigenDispersionChartModel(dispersionA, withA)).toBe(dispersionModel);
+  });
+});
 
 describe("frequencyDomainChartModels", () => {
   it("maps eigen spectrum rows into finite Hz chart points with mode identity", () => {
@@ -1485,83 +1520,6 @@ describe("frequencyDomainChartModels", () => {
     ]);
     expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 9.5, y: 2 }]);
     expect(model.series[3]?.points).toEqual([{ rowIndex: 0, x: 9.5, y: 5 }]);
-  });
-
-  it("labels accepted v3 projected observables from their native provenance", () => {
-    const model = buildFrequencyResponseChartModel(jsonResource({
-      schema_version: "magnetic_response_sweep.v3",
-      points: [{
-        frequency_index: 0, frequency_hz: 1e9,
-        absorbed_power_density: -0.25,
-        absorbed_power_density_provenance: {
-          kind: "drive_projected_absorption_proxy", physical_power_density: false,
-          units: "drive_projected_proxy_not_W_per_m3", mu0_ms_factor_applied: true,
-          ms_source: "uniform", full_power_density: false,
-        },
-        susceptibility_tensor: [[3, 4]],
-        susceptibility_tensor_provenance: {
-          kind: "drive_projected_si_susceptibility", full_tensor: false,
-          response_units: "dimensionless", ms_source: "uniform",
-        },
-      }],
-    }), {
-      observables: [
-        { identity: "power", kind: "absorbed_power", unit: "W/m^3" },
-        { identity: "chi", kind: "susceptibility", unit: "m/A" },
-      ],
-    });
-    expect(model.dataSourceVersion).toBe("response.v3");
-    const absorption = model.series.find((series) => series.quantity === "absorbed-power-density")!;
-    expect(absorption.label).toBe("Drive-projected absorption proxy");
-    expect(absorption.unit).toBe("drive_projected_proxy_not_W_per_m3");
-    expect(absorption.points[0]?.y).toBe(-0.25);
-    const susceptibility = model.series.find((series) => series.quantity === "susceptibility-max-abs")!;
-    expect(susceptibility.label).toBe("|Drive-projected susceptibility|");
-    expect(susceptibility.unit).toBe("dimensionless");
-    expect(susceptibility.points[0]?.y).toBe(5);
-  });
-
-  it("keeps incompatible response provenance in separate series with original selection indices", () => {
-    const proxy = {
-      kind: "drive_projected_absorption_proxy", physical_power_density: false,
-      units: "proxy_not_W_per_m3", mu0_ms_factor_applied: false,
-    };
-    const model = buildFrequencyResponseChartModel(jsonResource({
-      schema_version: "magnetic_response_sweep.v3",
-      points: [
-        { frequency_hz: 1e9, absorbed_power_density: 1, absorbed_power_density_provenance: proxy },
-        { frequency_hz: 2e9, absorbed_power_density: 2, absorbed_power_density_provenance: {
-          kind: "physical_power_density", physical_power_density: true, units: "W/m^3",
-        } },
-        { frequency_hz: 3e9, absorbed_power_density: 3, absorbed_power_density_provenance: proxy },
-      ],
-    }));
-    const series = model.series.filter((entry) => entry.quantity === "absorbed-power-density");
-    expect(series).toHaveLength(2);
-    expect(new Set(series.map((entry) => entry.id)).size).toBe(2);
-    expect(series[0]?.points.map((point) => point.rowIndex)).toEqual([0, 2]);
-    expect(series[1]?.points.map((point) => point.rowIndex)).toEqual([1]);
-    expect(series.map((entry) => entry.label)).toEqual([
-      "Drive-projected absorption proxy", "Absorbed power density",
-    ]);
-    expect(frequencyResponseSeriesUnit(model, "absorbed-power-density")).toBe("not published");
-    expect(frequencyResponseSeriesForPoint(model, "absorbed-power-density", model.points[0])?.label)
-      .toBe("Drive-projected absorption proxy");
-    expect(frequencyResponseSeriesForPoint(model, "absorbed-power-density", model.points[1])?.unit)
-      .toBe("W/m^3");
-  });
-
-  it("requires explicit false before describing susceptibility as projected", () => {
-    const model = buildFrequencyResponseChartModel(jsonResource({
-      schema_version: "magnetic_response_sweep.v3",
-      points: [{ frequency_hz: 1e9, susceptibility_tensor: [[3, 4]],
-        susceptibility_tensor_provenance: {
-          kind: "drive_projected_si_susceptibility", response_units: "dimensionless",
-        },
-      }],
-    }));
-    expect(model.series.filter((series) => series.quantity === "susceptibility-max-abs")).toEqual([]);
-    expect(model.diagnostics.some((message) => message.includes("susceptibility provenance"))).toBe(true);
   });
 
   it("parses published response absolute and relative L2 as separate values", () => {

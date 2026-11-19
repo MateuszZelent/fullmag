@@ -1,5 +1,7 @@
 "use client";
 
+import { Viewport3DWireframeGestureContext } from "./Viewport3DInteractionWireframe";
+
 import type { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { PlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFramePreview";
@@ -1518,7 +1520,7 @@ function Viewport3DModelLayerStack({
               onInspectSample={onInspectSample}
               onSelectDomain={onSelectDomain}
               onSelectTarget={() => onSelectFdmTarget(view.target)}
-              onSelectFdmCell={onSelectFdmCell}
+              onSelectFdmCell={view.target.kind === "object" && !inspectEnabled ? undefined : onSelectFdmCell}
               onSelectRegion={onSelectRegion}
               regionOverlays={
                 authoredRegionOverlaysVisible
@@ -2051,7 +2053,7 @@ export function Viewport3DScene({
         if (!surfaceActive && !wireframeActive) continue;
         if (topologyIndexStatus === "ready") {
           const wireframeIndices =
-            partSettings.geometryScope === "full"
+            partSettings.wireframeGeometryScope === "full"
               ? partModel.volumeEdgeIndices
               : partModel.edgeIndices;
           const matchingIndexReady =
@@ -2336,6 +2338,7 @@ export function Viewport3DScene({
   );
 
   return (
+    <Viewport3DWireframeGestureContext.Provider value={cameraGestureRef}>
     <VectorGlyphDerivedBufferCacheProvider tracker={tracker}>
       <ArtifactFieldLayer adoptionRegistry={adoptionRegistry} model={artifactFieldOverlay ?? null} colors={colors} tracker={tracker} sessionIdentity={sessionIdentity ?? null} />
       <AntennaFieldLayer model={antennaFieldOverlay ?? null} colors={colors} tracker={tracker} sessionIdentity={sessionIdentity ?? null} />
@@ -2518,5 +2521,6 @@ export function Viewport3DScene({
         moveGestureActive={moveGestureActive}
       />
     </VectorGlyphDerivedBufferCacheProvider>
+    </Viewport3DWireframeGestureContext.Provider>
   );
 }

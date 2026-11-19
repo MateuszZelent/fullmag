@@ -334,7 +334,6 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
             mock.patch.object(docker_build_control, "toolchain_configuration", return_value=configuration),
             mock.patch.object(dev, "BuildControl", return_value=harness.control),
             mock.patch.object(dev, "_operator_probe_record_from_retained", return_value={}),
-            mock.patch.object(dev, "_configured_group_budget", return_value={}),
             mock.patch.object(dev, "compose_capture", side_effect=harness.compose_capture),
             mock.patch.object(dev, "docker_text", side_effect=harness.docker_text),
             mock.patch.object(dev, "docker_capture", side_effect=harness.docker_capture),

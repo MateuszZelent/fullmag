@@ -9,30 +9,30 @@ owner: fullmag-public-docs
 (public-docs-frontend-capability-register)=
 # Control Room capability register
 
-This register is the authoritative source tracking implemented browser capability boundaries for
-public documentation. It separates a backend Python/ProblemIR capability from an actually authored
-Control Room v2 path: a Python parameter is never described as UI-supported merely because the
-backend or OpenAPI schema can represent it.
+This register tracks which Control Room workflows are implemented for interactive browser authoring,
+which are read-only inspection views, and which remain Python-only. A capability supported in
+`packages/fullmag-py` or `ProblemIR` is listed as browser-authored only when a dedicated panel and
+commit transaction exist in `apps/control-room`.
 
 ## 1. How to read the status
 
-| Status | Meaning for documentation |
+| Status | Browser support |
 |---|---|
-| `implemented` | The named Control Room route, panel fields, and commit transaction exist in current source (`apps/control-room/src`). |
-| `partial` | A dedicated panel or editor exists, covering an explicitly enumerated subset of the Python/API surface; unexposed options remain `TODO: frontend support`. |
-| `inspection-only` | The UI renders resolved runtime, mesh, or result artifacts without mutating the underlying Python model. |
-| `TODO` | No supported authoring UI exists yet; document Python authoring first and mark UI support explicitly as `TODO: frontend support`. |
+| `implemented` | Implemented in Control Room: the route, panel fields, and commit transaction exist in `apps/control-room/src`. |
+| `partial` | A dedicated panel or editor covers an explicit subset of the Python/API surface; unexposed options remain `Python-only`. |
+| `inspection-only` | Read-only view: the UI renders resolved runtime, mesh, or result artifacts without mutating the underlying model. |
+| `Python-only` | Not exposed for interactive UI authoring; configure this capability in Python (`packages/fullmag-py`). |
 
 ## 2. Current Control Room v2 routes
 
 | Capability area | Control Room route / shell surface | Current status | Source owner |
 |---|---|---|---|
-| Start Screen, templates, import, recent scripts/results & sibling instances | `/home` (`StartScreen` rail sections: `Overview`, `Templates`, `Import`, `Learn`, `Docs`, `Settings`, `About`; `/instance/<port>`, `?port=`) | `implemented` (desktop `Open script…` gated on script host availability) | `StartScreen`, `LaunchTiles`, `OtherInstances`, `tabRoutes.ts` |
+| Start Screen, templates, import, recent scripts and results & sibling instances | `/home` (`StartScreen` rail sections: `Overview`, `Templates`, `Import`, `Learn`, `Docs`, `Settings`, `About`; `/instance/<port>`, `?port=`) | `implemented` (desktop `Open script…` gated on script host availability) | `StartScreen`, `LaunchTiles`, `OtherInstances`, `tabRoutes.ts` |
 | Workspace chrome, multi-instance tabs, Mocha/Latte themes & Command Palette | Top header (`AppMenuBar`, `InstanceTabStrip`, `ThemeSwitcher`, `Ctrl+Shift+P` Command search) | `implemented` (`Definitions` & `Automation` ribbon tabs remain hidden while preview-only) | `InstanceTabStrip`, `AppMenuBar`, `CommandPaletteModule`, `RibbonModule` |
 | Primitive geometry placement & metadata | `Model Explorer -> Objects -> <object> -> Geometry / Placement / General` & Ribbon `Move` (`W`) | `partial` (primitives + rigid translation implemented; CSG booleans are preview-stripped & rigid Rotate/Scale remain disabled) | `GeometryObjectPanel`, `ObjectPlacementPanel`, `ObjectGeneralPanel` |
-| Magnetic materials & absorbing boundary ramps | `Model Explorer -> Objects -> <object> -> Material` | `partial` (scalar $M_{\text{sat}}, A_{\text{ex}}, \alpha, K_{u1}$, axis, material library create/assign, absorbing faces/profile implemented; spatially varying functional material fields remain Python-only) | `ObjectMaterialPanel`, `ObjectAbsorbingBoundaryPanel` |
+| Magnetic materials & absorbing boundary ramps | `Model Explorer -> Objects -> <object> -> Material` | `partial` (scalar $M_{\text{sat}}, A_{\text{ex}}, \alpha, K_{u1}$, axis, material library create/assign, absorbing faces/profile implemented; spatially varying functional material fields remain `Python-only`) | `ObjectMaterialPanel`, `ObjectAbsorbingBoundaryPanel` |
 | Sub-object spatial regions & nested overrides | `Model Explorer -> Objects -> <object> -> Regions -> <region>` | `partial` (bounds-checked shapes, scalar material/mesh/texture overrides implemented across region sub-panels) | `ObjectRegionsPanel`, `RegionsListPanel` |
-| Initial magnetization textures & coordinate transforms | `Model Explorer -> Objects -> <object> -> Magnetization` (or region texture) | `implemented` for all 16 `MAGNETIZATION_TEXTURE_PRESETS` + transforms (`uniform`, `random`, `vortex`, `antivortex`, skyrmions, `bimeron`, domain walls, `helical`, `conical`, `hopfion*`); custom Python callable textures remain `TODO` | `ObjectMagneticTexturePanel`, `texturePresets.ts` |
+| Initial magnetization textures & coordinate transforms | `Model Explorer -> Objects -> <object> -> Magnetization` (or region texture) | `implemented` for all 16 `MAGNETIZATION_TEXTURE_PRESETS` + transforms (`uniform`, `random`, `vortex`, `antivortex`, skyrmions, `bimeron`, domain walls, `helical`, `conical`, `hopfion*`); custom Python callable textures remain `Python-only` | `ObjectMagneticTexturePanel`, `texturePresets.ts` |
 | Local & global magnetic interactions, field drives & couplings | `Model Explorer -> Objects -> <object> -> Physics`, `Couplings`, `Field Drives` | `partial` (lane-gated exchange/DMI/anisotropy/Zeeman/RKKY/demag, `sinc`/`sinusoidal`/`piecewise_linear` field drives, coupling enable/delete) | `PhysicsInteractionPanel`, `RegionalFieldDrivePanel`, `CouplingInspectorPanel` |
 | Frozen spins constraints | `Model Explorer -> Objects -> <object> -> Constraints` (`Frozen Spins`) | `implemented` for selection expressions, membership/reference policy, 3D preview & activation | `FrozenSpinsInspectorPanel` |
 | RF antennas, conductors, ports & EM basis preview | `Model Explorer -> Objects -> <object> -> Antennas` | `implemented` for canonical field drives (`sinc`, `sinusoidal`), conductor placement, port composition, piecewise tables & field-basis preview | `AntennaObjectPanel`, `antenna/*` |
@@ -46,47 +46,19 @@ backend or OpenAPI schema can represent it.
 | Saved SolutionSet browser & offline playback | `Explorer -> Results` (`SavedResultsBrowser`) & `SavedResultsPlaybackViewport` | `implemented` (`inspection-only` multi-run tables, materialized fields, playback timeline, comparison overlays) | `SavedResultsBrowser`, `SavedResultsPlaybackInspector` |
 | Runtime, provenance, logs, problems & diagnostic recording | `Model Explorer -> Runtime`, `Jobs`, `Diagnostics`, Footer Dock & `StatusBarModule` | `inspection-only` (displays requested vs. resolved backend/device, transport audit, command queue, preparation blockers) | `RuntimeResourceInspectorPanel`, `FooterModule`, `StatusBarModule` |
 
-## 3. Explicit frontend TODO boundaries
+## 3. Python-only and gated capabilities
 
-The following Python/API capabilities must remain explicitly documented as `TODO: frontend support`
-until an authoring control and committed transaction exist in `apps/control-room`:
+The following capabilities do not currently expose an authoring editor in `apps/control-room` and
+are authored through the Python DSL ({doc}`/python-api/index`):
 
-| Python / ProblemIR surface | Required documentation status |
+| Python / ProblemIR surface | Browser support |
 |---|---|
-| Direct standalone `fm.Problem` / raw `ProblemIR` JSON authoring | `TODO`: the Control Room authors session-backed studies, not arbitrary unattached IR documents. |
-| Interactive CSG Boolean geometry operations (`union`, `difference`, `intersection`) & Ribbon `Create` extras (`Ellipsoid`, `Ring`, `Waveguide`) | `TODO`: currently marked `preview: true` and stripped from Ribbon rendering; inspectable read-only when authored in Python. |
-| Rigid `Rotate` / `Scale` authoring in UI | `TODO`: disabled with `PROBLEM_IR_03_RIGID_TRANSFORM_REASON` in Geometry transform controls. |
-| Two-way in-UI Python script synchronization (`Automation` tab `Sync Script`) | `TODO`: `Automation` ribbon tab is hidden (`preview: true`); use `File -> Save canonical copy as…` or `fullmag.live` (`fm.connect()`). |
-| Arbitrary callable spatial material fields & custom Python stage closures | `TODO`: scalar/preset forms apply in UI; functional expressions stay Python-authoritative (`UnsupportedStageInspector`). |
-| `swept_hex` mesh strategy and unsupported exact layer counts | `TODO`: disabled in `ObjectMeshPolicyPanel` until backend & UI gating enable them. |
-
-## 4. Required per-page frontend crosswalk contract
-
-Every terminal documentation page must include `Control Room crosswalk` (or `How to set it in Control Room`) stating:
-
-1. exact Explorer tree, Ribbon tab, or shell route and inspector component;
-2. exposed field groups and parameter names;
-3. commit transaction (`Apply`, `Build`, `Compute Study`, or `executeStageAfterApply`) and invalidation behavior;
-4. supported subset when `partial`, and literal `TODO: frontend support` for unexposed options;
-5. reference back to this register and verified source owners.
-
-## Control Room crosswalk
-
-This page is the Control Room capability register itself. Statuses reflect verified inspection of
-`apps/control-room/src/**` and distinguish authoring (`implemented` / `partial`) from read-only
-surfaces (`inspection-only`) and Python-only routes (`TODO`). See {doc}`/frontend/control-room/index`
-and {doc}`/frontend/inspectors/index`.
-
-## Python/API crosswalk
-
-Python remains the authoritative authoring contract. Use {doc}`/python-api/index` for exact
-constructors, methods, SI arguments, validation rules, and runtime exceptions; never infer a Python
-signature from an internal Control Room draft field name.
-
-## Physics and bibliography scope
-
-This UI register introduces no independent physical equations. Scientific formulations belong to the
-linked physics and numerical-methods sections.
+| Direct standalone `fm.Problem` / raw `ProblemIR` JSON authoring | `Python-only`: the Control Room authors session-backed studies rather than standalone IR documents. |
+| Interactive CSG Boolean geometry operations (`union`, `difference`, `intersection`) & Ribbon `Create` extras (`Ellipsoid`, `Ring`, `Waveguide`) | `Python-only` (read-only when authored in Python): currently marked `preview: true` and stripped from Ribbon rendering. |
+| Rigid `Rotate` / `Scale` authoring in UI | `Python-only`: disabled with `PROBLEM_IR_03_RIGID_TRANSFORM_REASON` in Geometry transform controls. |
+| Two-way in-UI Python script synchronization (`Automation` tab `Sync Script`) | `Python-only`: the `Automation` ribbon tab is hidden (`preview: true`); use `File -> Save canonical copy as…` or `fullmag.live` (`fm.connect()`). |
+| Arbitrary callable spatial material fields & custom Python stage closures | `Python-only`: scalar and preset forms apply in the UI; functional expressions remain Python-authored (`UnsupportedStageInspector` read-only view). |
+| `swept_hex` mesh strategy and unsupported exact layer counts | `Python-only`: disabled in `ObjectMeshPolicyPanel` until backend and UI gating enable them. |
 
 ## Source-code index
 

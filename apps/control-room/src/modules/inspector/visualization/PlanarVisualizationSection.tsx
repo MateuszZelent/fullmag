@@ -80,6 +80,7 @@ import {
   type PlanarFieldQuantityOption,
 } from "./planarFieldLayers";
 import { defaultPlanarDisplayPatch, planarDisplayDiffersFromDefault } from "./planarDisplayDefaults";
+import { resourceHasDisplayableData } from "@/kernel/resources/resourceState";
 
 const currentFieldMapSectionGeometry = () => fieldMapSurfaceStore.get().sectionGeometry;
 const serverFieldMapSectionGeometry = () => null;
@@ -365,9 +366,9 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         }
       : null,
     discretization,
-    metaAvailable: meta.status === "ready" && meta.data !== null,
+    metaAvailable: resourceHasDisplayableData(meta),
     metaErrorCode: meta.error instanceof ControlRoomApiError ? meta.error.code : null,
-    occupancyAvailable: mask.status === "ready" && mask.data !== null,
+    occupancyAvailable: resourceHasDisplayableData(mask),
     component: quantityComponent,
     quantity: selectedDescriptor,
     tensor,

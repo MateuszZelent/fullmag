@@ -1368,6 +1368,16 @@ pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<
             &object_region_ids,
             &mut errors,
         );
+        if let Some(config) = &module.absorbing_boundary {
+            let path = format!("magnetization_modules[{index}].absorbing_boundary");
+            crate::validate_absorbing_boundary_config(&path, config, &mut errors);
+            let owner = module.target.object_id.as_str();
+            for region_id in config.referenced_regions() {
+                if !object_region_ids.contains(&(owner, region_id)) {
+                    errors.push(format!("{path} references missing region '{region_id}' on '{owner}'"));
+                }
+            }
+        }
         if !material_ids.contains(module.material_id.as_str()) {
             errors.push(format!(
                 "magnetization_modules[{index}] missing material '{}'",
@@ -3224,6 +3234,7 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                 free_layer_thickness_m,
                 fixed_layer_position,
                 realization,
+                time_expression,
                 ..
             } => {
                 validate_vector_binding(
@@ -3233,6 +3244,16 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                     current_source,
                     errors,
                 );
+                if let Some(expression) = time_expression {
+                    if formula_version != "slonczewski.fullmag.v2" || current_density.is_none()
+                        || !matches!(realization, Some(crate::SlonczewskiRealizationIR::ThinLayerHomogenized { .. }))
+                    {
+                        errors.push(format!("spin_torque_modules[{index}].time_expression requires canonical thin-layer prescribed current density"));
+                    }
+                    if let Err(error) = expression.compile() {
+                        errors.push(format!("spin_torque_modules[{index}].time_expression: {error}"));
+                    }
+                }
                 if !vector3_is_finite(spin_polarization) {
                     errors.push(format!(
                         "spin_torque_modules[{index}] slonczewski spin_polarization must contain finite values"

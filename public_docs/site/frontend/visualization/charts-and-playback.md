@@ -73,20 +73,11 @@ and trigger overlaid result comparisons across selected datasets.
 :width: 100%
 ```
 
-Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
-
-## Control Room crosswalk
+## Modules and artifact sources
 
 - **Modules**: `LiveChartsModule`, `AnalysisPlotsModule`, `dispersionAnalysisModule`, `hysteresisAnalysisModule`, `resonanceAnalysisModule`, and `ResultsNavigatorModule`.
-- **Binary & paged data**: Time/table traces stream over binary `FMTB` (`tableRowsCodec.ts`) rather than unbounded JSON arrays; decimated projections disclose bounding in UI status chrome.
-
-## Python/API crosswalk
-
-- Plotted traces correspond to stage `table_autosave`, `autosave`, `hysteresis`, `fft_response`, `eigenmodes`, and `frequency_response` artifacts in Python and saved `.zarr` / `SolutionSet` archives.
-
-## Physics and bibliography scope
-
-This page covers plotting surfaces, interactive peak/snapshot selection, and decimation indicators; mathematical definitions of $S(k,f)$, linear susceptibility, and hysteresis schedules are documented in the numerical-methods guide.
+- **Binary & paged data**: Time and table traces stream over binary `FMTB` (`tableRowsCodec.ts`) rather than unbounded JSON arrays; decimated projections disclose bounding in UI status chrome.
+- **Artifact sources**: Plotted traces correspond to stage `table_autosave`, `autosave`, `hysteresis`, `fft_response`, `eigenmodes`, and `frequency_response` artifacts in Python and saved `.zarr` / `SolutionSet` archives.
 
 ## Source-code index
 

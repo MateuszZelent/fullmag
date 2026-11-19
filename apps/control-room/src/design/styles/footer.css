@@ -47,6 +47,7 @@
   padding-inline: var(--fm-space-3);
   white-space: nowrap;
   scroll-margin-inline: var(--fm-space-2);
+  transition-property: border-color;
 }
 
 .fm-footer__tab:hover {
@@ -207,9 +208,24 @@
   text-align: center;
 }
 
+/* Telemetry header slots: run status (portal) beside the Overview/Antenna switch.
+ * The status yields width first, so the tab strip keeps its space. */
+.fm-footer__telemetry-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--fm-space-3);
+}
+.fm-footer__telemetry-header[hidden] { display: none; }
+.fm-footer__telemetry-status { display: flex; flex: 0 0 auto; max-width: 320px; }
+.fm-footer__telemetry-status:empty { display: none; }
 .fm-footer__telemetry-navigation { flex: 0 0 auto; min-width: 0; }
-.fm-footer__telemetry-navigation[hidden] { display: none; }
 .fm-footer__telemetry-navigation .fm-tabs-trigger { padding-inline: var(--fm-space-2); }
 @container footer (width < 760px) {
   .fm-footer__telemetry-navigation .fm-tabs-trigger { padding-inline: var(--fm-space-1); font-size: var(--fm-font-size-help); }
+  /* Narrow dock: the tab strip keeps the width; the dot and its title text remain. */
+  .fm-footer__telemetry-status :is(.fm-footer-telemetry__status-online, .fm-footer-telemetry__status-title) { display: none; }
+}
+@container footer (width < 1100px) {
+  .fm-footer__telemetry-status .fm-footer-telemetry__status-online { display: none; }
 }

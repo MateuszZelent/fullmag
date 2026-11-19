@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 
 import type {
   CurrentRunResource,
@@ -46,6 +47,7 @@ import {
 } from "@/kernel/runtime/runtimeStateDisplay";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { Progress } from "@/shared/ui/Progress";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/Tooltip";
 import { formatTorqueT } from "@/shared/domain/physics/torqueUnits";
 import { hasEmptyObjectMagneticModel } from "@/shared/domain/physics/objectMagneticModel";
 
@@ -56,6 +58,7 @@ import {
 } from "./antennaFieldEta";
 
 import { resolveFooterPerformanceStep } from "./footerPerformanceProgress";
+import { useBalancedMetricRows } from "./useBalancedMetricRows";
 
 // UI display locale only. Scientific values and exports keep their existing
 // invariant serialization and are not routed through this formatter.
@@ -103,11 +106,14 @@ export function FooterTelemetry({
   bus,
   status,
   stageExecution,
+  statusHost = null,
   view,
 }: {
   bus: EventBus<KernelEventMap>;
   status: FooterTelemetryStatus | null;
   stageExecution: Pick<ResourceResult<StageExecutionResource | null>, "data" | "status">;
+  /** Dock header slot for the run status; falls back to an in-panel strip. */
+  statusHost?: HTMLElement | null;
   view: "overview" | "antenna";
 }) {
   const solverStatus = useSolverStatusResource({ enabled: Boolean(status) && view === "overview" });
@@ -201,6 +207,7 @@ export function FooterTelemetry({
     else groups.push({ id, metrics: [metric] });
     return groups;
   }, []);
+  const metricsGridRef = useBalancedMetricRows(telemetry.metrics.length);
 
   if (view === "antenna" && !antennaStage) {
     return (
@@ -219,66 +226,100 @@ export function FooterTelemetry({
     );
   }
 
+  const statusSummary = (
+    <TelemetryStatusSummary
+      detail={telemetry.statusDetail}
+      online={telemetry.onlineTitle}
+      onlineDetail={telemetry.onlineDetail}
+      state={telemetry.statusState}
+      title={telemetry.statusTitle}
+    />
+  );
+  const progressStrip = telemetry.antennaProgress ? (
+    <AntennaFieldProgressStrip progress={telemetry.antennaProgress} eta={antennaEta} />
+  ) : telemetry.frequencyDomainProgress ? (
+    <FrequencyDomainProgressStrip progress={telemetry.frequencyDomainProgress} />
+  ) : telemetry.stageProgressNotice ? (
+    <span
+      className="fm-footer-telemetry__notice"
+      data-state="unpublished"
+      title="The runtime returned no stage execution projection (HTTP 204). Run status remains authoritative."
+    >
+      {telemetry.stageProgressNotice}
+    </span>
+  ) : null;
+
   return (
     <div className="fm-footer-telemetry" role="region" aria-label={view === "antenna" ? "Antenna telemetry" : "Simulation telemetry"}>
-      <div className="fm-footer-telemetry__strip">
-        <span
-          className="fm-footer-telemetry__strip-dot"
-          data-state={telemetry.statusState}
-          aria-hidden="true"
-        />
-        <span className="text-fm-xs font-medium text-fm-primary whitespace-nowrap truncate" title={telemetry.statusDetail}>
-          {telemetry.statusTitle}
-        </span>
-        <span className="text-fm-muted text-fm-2xs select-none flex-shrink-0" aria-hidden="true">·</span>
-        <span className="text-fm-xs text-fm-secondary whitespace-nowrap truncate" title={telemetry.onlineDetail}>
-          {telemetry.onlineTitle}
-        </span>
-        {telemetry.antennaProgress ? (
-          <AntennaFieldProgressStrip progress={telemetry.antennaProgress} eta={antennaEta} />
-        ) : telemetry.frequencyDomainProgress ? (
-          <>
-            <span className="w-px h-3 bg-fm-subtle flex-shrink-0 mx-fm-1" aria-hidden="true" />
-            <FrequencyDomainProgressStrip progress={telemetry.frequencyDomainProgress} />
-          </>
-        ) : telemetry.stageProgressNotice ? (
-          <>
-            <span className="w-px h-3 bg-fm-subtle flex-shrink-0 mx-fm-1" aria-hidden="true" />
-            <span
-              className="text-fm-2xs text-fm-muted whitespace-nowrap truncate"
-              data-state="unpublished"
-              title="The runtime returned no stage execution projection (HTTP 204). Run status above remains authoritative."
-            >
-              {telemetry.stageProgressNotice}
-            </span>
-          </>
-        ) : null}
-      </div>
+      {statusHost ? createPortal(statusSummary, statusHost) : null}
+      {!statusHost || progressStrip ? (
+        <div className="fm-footer-telemetry__strip">
+          {statusHost ? null : statusSummary}
+          {progressStrip}
+        </div>
+      ) : null}
 
-      <div className="fm-footer-telemetry__metrics">
-        <div role="group" className="fm-footer-telemetry__metrics-grid" aria-label="Simulation metrics">
-          {metricGroups.map(({ id, metrics }) => (
-            <div
-              className="fm-footer-telemetry__group"
-              data-group={id}
-              key={`${id}-${metrics[0].id}`}
-              role="group"
-              aria-label={`${FOOTER_TELEMETRY_GROUP_LABELS[id]} metrics`}
-            >
-              <h3 className="fm-footer-telemetry__group-title">
-                <span className="fm-footer-telemetry__group-marker" aria-hidden="true" />
-                {FOOTER_TELEMETRY_GROUP_LABELS[id]}
-              </h3>
-              <div className="fm-footer-telemetry__group-metrics">
+      <TooltipProvider delayDuration={250} skipDelayDuration={120}>
+        <div className="fm-footer-telemetry__metrics">
+          <div ref={metricsGridRef} role="group" className="fm-footer-telemetry__metrics-grid" aria-label="Simulation metrics">
+            {metricGroups.map(({ id, metrics }) => (
+              <div
+                className="fm-footer-telemetry__group"
+                data-group={id}
+                key={`${id}-${metrics[0].id}`}
+                role="group"
+                aria-label={`${FOOTER_TELEMETRY_GROUP_LABELS[id]} metrics`}
+              >
                 {metrics.map((metric) => (
-                  <TelemetryMetric key={metric.id} group={id} {...metric} />
+                  <TelemetryMetric
+                    key={metric.id}
+                    detail={metric.detail}
+                    group={id}
+                    label={metric.label}
+                    subdetail={metric.subdetail}
+                    unit={metric.unit}
+                    value={metric.value}
+                  />
                 ))}
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
+      </TooltipProvider>
     </div>
+  );
+}
+
+/** Status reads as plain words; the "System Status:" prefix only repeats the context. */
+function compactStatusTitle(title: string): string {
+  return title.replace(/^System Status:\s*/i, "");
+}
+
+function TelemetryStatusSummary({
+  detail,
+  online,
+  onlineDetail,
+  state,
+  title,
+}: {
+  detail: string;
+  online: string;
+  onlineDetail: string;
+  state: string;
+  title: string;
+}) {
+  const label = compactStatusTitle(title);
+  return (
+    <span
+      className="fm-footer-telemetry__status"
+      data-state={state}
+      role="status"
+      title={`${label}: ${detail}\n${online}: ${onlineDetail}`}
+    >
+      <span className="fm-footer-telemetry__strip-dot" data-state={state} aria-hidden="true" />
+      <span className="fm-footer-telemetry__status-title">{label}</span>
+      <span className="fm-footer-telemetry__status-online">{online}</span>
+    </span>
   );
 }
 
@@ -1733,44 +1774,59 @@ function metricGroup(id: string): FooterTelemetryGroup {
   return "runtime";
 }
 
+/**
+ * One readout: label and value only. Provenance and method notes live in a
+ * contextual tooltip (hover or keyboard focus) so the dock stays one or two
+ * rows tall instead of growing with expandable descriptions.
+ */
 function TelemetryMetric({
   detail,
   group,
-  icon,
   label,
   subdetail,
   unit,
   value,
 }: {
   detail: string;
-  group: "runtime" | "solver" | "magnetization" | "energy";
-  icon: ReactNode;
+  group: FooterTelemetryGroup;
   label: string;
   subdetail: string;
   unit?: string;
   value: string;
 }) {
-  const tooltip = `${label}: ${value}${unit ? ` ${unit}` : ""}\n${detail}\n${subdetail}`;
+  const reading = `${value}${unit ? ` ${unit}` : ""}`;
   return (
-    <details className="fm-footer-telemetry__metric" data-group={group} title={tooltip}>
-      <summary
-        className="fm-footer-telemetry__metric-summary"
-        aria-label={`${label}: ${value}${unit ? ` ${unit}` : ""}. Details`}
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div
+          className="fm-footer-telemetry__metric"
+          data-group={group}
+          role="group"
+          tabIndex={0}
+          aria-label={`${label}: ${reading}`}
+        >
+          <span className="fm-footer-telemetry__metric-label">{label}</span>
+          <span className="fm-footer-telemetry__metric-value">
+            <span className="fm-footer-telemetry__metric-number">{value}</span>
+            {unit ? <span className="fm-footer-telemetry__metric-unit">{unit}</span> : null}
+          </span>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent
+        className="fm-footer-telemetry__tooltip"
+        data-group={group}
+        side="top"
+        align="start"
       >
-        <span className="fm-footer-telemetry__metric-label">
-          {icon}
-          <span>{label}</span>
+        <span className="fm-footer-telemetry__tooltip-head">
+          <span className="fm-footer-telemetry__tooltip-label">{label}</span>
+          <span className="fm-footer-telemetry__tooltip-group">{FOOTER_TELEMETRY_GROUP_LABELS[group]}</span>
         </span>
-        <span className="fm-footer-telemetry__metric-value">
-          <span>{value}</span>
-          {unit ? <span className="fm-footer-telemetry__metric-unit">{unit}</span> : null}
-        </span>
-      </summary>
-      <div className="fm-footer-telemetry__metric-detail">
-        <span>{detail}</span>
-        <span>{subdetail}</span>
-      </div>
-    </details>
+        <span className="fm-footer-telemetry__tooltip-value">{reading}</span>
+        <span className="fm-footer-telemetry__tooltip-detail">{detail}</span>
+        {subdetail ? <span className="fm-footer-telemetry__tooltip-detail">{subdetail}</span> : null}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
