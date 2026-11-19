@@ -779,7 +779,7 @@ def _validate_archive_contents(
         _fail(b, "archived candidate receipt is not source-manifest-bound")
     toolchain = _candidate_toolchain(b, receipt)
     cargo_profile = marker.get("cargo_profile")
-    if not b._package_matches_fresh_live_manifest(
+    if not b._package_source_matches_fresh_live_manifest(
         receipt,
         source_path,
         toolchain,
@@ -1103,7 +1103,7 @@ def _validate_candidate_source_binding(
         _fail(b, "ready candidate Cargo profile identity differs")
     toolchain = _candidate_toolchain(b, spec.receipt)
     manifest_path = archive / "source" / "live-manifest.json"
-    if not b._package_matches_fresh_live_manifest(
+    if not b._package_source_matches_fresh_live_manifest(
         spec.receipt,
         manifest_path,
         toolchain,
@@ -1788,6 +1788,8 @@ def retire_candidate(
     toolchain: Mapping[str, Any],
     cargo_profile: str,
     current: tuple[dict[str, Any], bytes, dict[str, Any]] | None,
+    *,
+    required_native_contracts: tuple[str, ...] = (),
 ) -> RetirementResult:
     """Retire a stale/duplicate candidate or return it for normal rotation."""
 
@@ -1816,6 +1818,7 @@ def retire_candidate(
         _absolute(b, Path(fresh_manifest), "fresh live source manifest"),
         dict(toolchain),
         cargo_profile,
+        **({"required_native_contracts": required_native_contracts} if required_native_contracts else {}),
     )
     # A rerun can produce a different receipt (fresh capture id/timestamp)
     # while publishing byte-identical artifacts.  Treat the package inventory

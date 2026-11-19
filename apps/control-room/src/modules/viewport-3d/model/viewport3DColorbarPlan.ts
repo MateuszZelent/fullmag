@@ -11,6 +11,7 @@ import {
   Viewport3DTargetRenderPlan,
 } from "./viewport3DFieldDataPlan";
 import { resolveViewport3DTargetSurfaceLayerInput } from "../layers/viewport3DLayerPassInputs";
+import type { Viewport3DVisibleColorScale } from "./viewport3DVisibleColorScale";
 
 export type Viewport3DColorbarRangeStateKind =
   | "current"
@@ -52,6 +53,7 @@ export interface Viewport3DColorbarRangeFieldModel {
         scalarColorMode: string | null;
         scalarColors: ScalarColorBuffer | null;
       };
+      vectors?: { colorScale?: Viewport3DVisibleColorScale | null };
     }
   >;
 }
@@ -302,9 +304,13 @@ export function resolveViewport3DColorbarRangeStates({
     })
       ? candidate
       : null;
+    const vectorScale = plan.targetIds
+      .map((targetId) => fieldModel?.targetPasses?.get(targetId)?.vectors?.colorScale)
+      .find((scale) => scale && scale.colorMode === plan.colorMode &&
+        scale.colorPalette === plan.palette && sameRenderableFieldQuantityId(scale.quantityId, plan.quantityId));
     rangeStates.set(plan.groupKey, {
-      range: buffer?.range ?? null,
-      state: buffer ? "current" : "pending",
+      range: buffer?.range ?? vectorScale?.range ?? null,
+      state: buffer || vectorScale ? "current" : "pending",
     });
   }
   return rangeStates;

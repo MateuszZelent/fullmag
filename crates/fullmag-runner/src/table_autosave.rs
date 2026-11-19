@@ -655,6 +655,7 @@ mod tests {
             &[[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
             &[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
             None,
+            None,
         );
         let mut store = TableStore::new(config(1e-12));
 
@@ -696,6 +697,39 @@ mod tests {
                 .map(|row| row.values[0] as u64)
                 .collect::<Vec<_>>(),
             vec![0, 10, 20, 23],
+        );
+    }
+
+    #[test]
+    fn accepted_step_cadence_keeps_nondivisible_terminal_step_without_synthetic_rows() {
+        let config = TableAutosaveConfig::from_ir(&fullmag_ir::TableAutosaveIR {
+            kind: "table_autosave".to_string(),
+            table_id: DEFAULT_TABLE_ID.to_string(),
+            sample_period_s: None,
+            sample_period_policy: None,
+            resolved_sample_period_s: None,
+            every_steps: Some(100),
+            quantities: vec!["step".to_string(), "mx".to_string()],
+            expressions: Vec::new(),
+        })
+        .expect("accepted-step table config should resolve");
+        let mut store = TableStore::new(config);
+
+        assert!(store.append_if_due(&stats(0, 0.0)).unwrap());
+        assert!(store.append_final_if_needed(&stats(271, 0.0)).unwrap());
+        assert!(!store.append_final_if_needed(&stats(271, 0.0)).unwrap());
+
+        let rows = store.window_after(None, None).rows;
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.values[0] as u64)
+                .collect::<Vec<_>>(),
+            vec![0, 271],
+            "direct minimizers publish the initial and actual terminal states only"
+        );
+        assert_eq!(
+            rows[1].sample_policy.as_deref(),
+            Some("final_accepted_state")
         );
     }
 

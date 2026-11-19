@@ -58,6 +58,15 @@ pub(crate) struct DockerStartupRequest {
     pub request_id: String,
     pub source: DockerStartupSource,
     pub execution: DockerStartupExecution,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_profile: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_cuda_trace")]
+    pub cuda_trace: Option<Value>,
+}
+
+fn deserialize_cuda_trace<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    // A supplied null is an invalid request, not the absence of profiling.
+    Value::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -86,6 +95,10 @@ pub(crate) struct DockerStartupResponse {
     pub authorization: &'static str,
     pub request_id: String,
     pub source_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_profile_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cuda_trace_sha256: Option<String>,
     pub status: &'static str,
     pub execution: DockerStartupExecution,
     pub session_id: String,
@@ -137,6 +150,20 @@ pub(crate) async fn activate_current_live_startup(
     State(state): State<Arc<AppState>>,
     Json(request): Json<DockerStartupRequest>,
 ) -> Result<Json<DockerStartupResponse>, ApiError> {
+    activate_current_live_startup_with_loader(state, request, |state, request| async move {
+        load_startup_scene(&state, &request).await
+    })
+    .await
+}
+
+async fn activate_current_live_startup_with_loader<F>(
+    state: Arc<AppState>,
+    request: DockerStartupRequest,
+    load: impl FnOnce(Arc<AppState>, DockerStartupRequest) -> F,
+) -> Result<Json<DockerStartupResponse>, ApiError>
+where
+    F: std::future::Future<Output = Result<LoadedStartupScene, ApiError>>,
+{
     validate_request(&request)?;
     let transition = state.current_live_session_transition.lock().await;
 
@@ -145,7 +172,7 @@ pub(crate) async fn activate_current_live_startup(
         return replay_or_reject(&request, &source, &existing);
     }
 
-    let loaded = load_startup_scene(&state, &request).await?;
+    let loaded = load(Arc::clone(&state), request.clone()).await?;
     let source_root = loaded
         .source
         .path
@@ -156,6 +183,12 @@ pub(crate) async fn activate_current_live_startup(
     let session_id = startup_session_id(&request, &loaded.source);
     let initial_run_id = format!("run-{session_id}");
     let snapshot = build_startup_snapshot(&state, &request, &loaded, &session_id, &initial_run_id)?;
+    {
+        let mut presentation = state.current_display_presentation.write().await;
+        crate::router_v2::handlers::visualization::display::initialize_scene_airbox_visualization(
+            &loaded.scene, &mut presentation,
+        )?;
+    }
     let session_epoch = {
         let mut current = state.current_live_state.write().await;
         let epoch = state
@@ -201,6 +234,8 @@ pub(crate) async fn activate_current_live_startup(
             Some(source_root),
             Some(loaded.source.path.clone()),
             progress_sender,
+            request.solver_profile.clone(),
+            request.cuda_trace.clone(),
         );
         tokio::pin!(preparation);
         let mut progress_receiver_open = true;
@@ -473,6 +508,7 @@ async fn finish_startup_acceptance(
             &state,
             &accepted_context,
             "startup",
+            None,
         )
         .await;
 
@@ -577,6 +613,14 @@ fn validate_request(request: &DockerStartupRequest) -> Result<(), ApiError> {
             "docker startup request_id is invalid",
         ));
     }
+    if let Some(value) = &request.solver_profile {
+        crate::accepted_solver_profile::request_digest(value)
+            .map_err(|error| ApiError::unprocessable_with_code("invalid_solver_profile", error.to_string()))?;
+    }
+    if let Some(value) = &request.cuda_trace {
+        crate::accepted_solver_profile::cuda_trace::request_digest(value)
+            .map_err(|error| ApiError::unprocessable_with_code("invalid_cuda_trace", error.to_string()))?;
+    }
     validate_source_identity(&request.source)?;
     if request.execution.mode != "canonical_live_v2"
         || !request.execution.auto_study
@@ -672,23 +716,26 @@ async fn load_startup_scene(
             source_snapshot_path.display().to_string(),
         ];
         let scene_output =
-            crate::script::run_python_helper_bounded(&repo_root, &workspace_root, &scene_args)?;
+            crate::script::run_python_helper_bounded(&repo_root, &workspace_root, &scene_args)
+                .map_err(startup_helper_timeout_rejection)?;
         if !scene_output.status.success() {
+            if let Some(message) =
+                script_load_rejection(scene_output.status.code(), &scene_output.stdout)
+            {
+                // The script raised before any live state, RunIntent or catalog
+                // entry exists, so this is a known terminal rejection.
+                return Err(ApiError::unprocessable_with_code(
+                    "validation_error",
+                    message,
+                ));
+            }
             let stderr = String::from_utf8_lossy(&scene_output.stderr);
             return Err(ApiError::internal(format!(
                 "python SceneDocument helper failed: {}",
                 stderr.trim()
             )));
         }
-        let mut scene: SceneDocument =
-            serde_json::from_slice(&scene_output.stdout).map_err(|error| {
-                ApiError::internal(format!(
-                    "failed to deserialize SceneDocument response: {error}"
-                ))
-            })?;
-        normalize_scene_document_magnetization_assets(&mut scene);
-        fullmag_authoring::validate_scene_document_for_authoring(&scene)
-            .map_err(|error| ApiError::bad_request(error.message))?;
+        let scene = decode_startup_scene(&scene_output.stdout)?;
 
         // Export the script-owned runtime metadata through the same canonical
         // Python loader.  This is a bounded read-only capture; it does not
@@ -702,9 +749,11 @@ async fn load_startup_scene(
             "--source-snapshot".to_string(),
             source_snapshot_path.display().to_string(),
             "--skip-geometry-assets".to_string(),
+            "--runtime-flags-only".to_string(),
         ];
         let output =
-            crate::script::run_python_helper_bounded(&repo_root, &workspace_root, &helper_args)?;
+            crate::script::run_python_helper_bounded(&repo_root, &workspace_root, &helper_args)
+                .map_err(startup_helper_timeout_rejection)?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(ApiError::bad_request(format!(
@@ -726,6 +775,7 @@ async fn load_startup_scene(
 
     let (scene, runtime) = loaded;
     let output_storage_binding = bind_docker_output_storage_for_source(&scene, &source.path)?;
+    preflight_script_output_write(&output_storage_binding)?;
 
     Ok(LoadedStartupScene {
         source,
@@ -733,6 +783,71 @@ async fn load_startup_scene(
         runtime,
         output_storage_binding,
     })
+}
+
+/// Called only after a successful capture, before live state or accepted-run
+/// admission. Malformed authored content has a known terminal rejection here;
+/// transport, process failures and later publication keep their own errors.
+fn decode_startup_scene(stdout: &[u8]) -> Result<SceneDocument, ApiError> {
+    let mut scene: SceneDocument = serde_json::from_slice(stdout).map_err(|error| {
+        ApiError::unprocessable_with_code(
+            "validation_error",
+            format!("failed to deserialize SceneDocument response: {error}"),
+        )
+    })?;
+    normalize_scene_document_magnetization_assets(&mut scene);
+    fullmag_authoring::validate_scene_document_for_authoring(&scene)
+        .map_err(|error| ApiError::unprocessable_with_code("validation_error", error.message))?;
+    Ok(scene)
+}
+
+/// A bounded helper that hit its deadline was killed and reaped before any
+/// live state, RunIntent or catalog entry exists, so the startup request has a
+/// known terminal outcome. Any other helper error keeps its classification.
+fn startup_helper_timeout_rejection(error: ApiError) -> ApiError {
+    if error.code.as_deref() != Some(crate::script::PYTHON_HELPER_TIMEOUT_CODE) {
+        return error;
+    }
+    ApiError::unprocessable_with_code(
+        "validation_error",
+        format!(
+            "startup script loading was not admitted: {}; retry with a new request",
+            error.message
+        ),
+    )
+}
+
+/// Read the helper's typed script-load rejection from the last stdout line.
+/// Any other non-zero helper exit stays an internal (outcome-unknown) failure.
+fn script_load_rejection(exit_code: Option<i32>, stdout: &[u8]) -> Option<String> {
+    if exit_code != Some(2) {
+        return None;
+    }
+    let line = stdout
+        .split(|byte| *byte == b'\n')
+        .rev()
+        .find(|line| !line.iter().all(u8::is_ascii_whitespace))?;
+    let value = serde_json::from_slice::<Value>(line).ok()?;
+    let envelope = value.as_object()?;
+    if envelope.len() != 5
+        || envelope.get("schema").and_then(Value::as_str)
+            != Some("fullmag.script-load-rejection.v1")
+        || envelope.get("code").and_then(Value::as_str) != Some("script_load_failed")
+    {
+        return None;
+    }
+    let error_type = envelope.get("error_type")?.as_str()?.trim();
+    let message = envelope.get("message")?.as_str()?.trim();
+    if error_type.is_empty() || message.is_empty() {
+        return None;
+    }
+    let location = match envelope.get("script_line")? {
+        Value::Null => String::new(),
+        line => format!(" (script line {})", line.as_u64()?),
+    };
+    Some(format!(
+        "startup script failed while loading{location}: {error_type}: {message}"
+    ))
 }
 
 /// Resolve the Docker output policy for one admitted source path without
@@ -946,6 +1061,285 @@ fn bind_docker_output_storage_with_alias(
         "temp_dir": temp_dir,
         "data_format": storage.data_format,
     }))
+}
+
+/// Prove that the backend UID can write to the resolved opted-in result and
+/// scratch parents before startup publishes its temporary activating state.
+/// The host-side output binder remains pure and never creates result paths.
+fn preflight_script_output_write(binding: &Value) -> Result<(), ApiError> {
+    if binding.get("binding").and_then(Value::as_str) != Some("docker_script_output_alias") {
+        return Ok(());
+    }
+    let alias_root = PathBuf::from(required_binding_path(binding, "alias_root")?);
+    let source_dir = PathBuf::from(required_binding_path(binding, "source_dir")?);
+    let default_output = PathBuf::from(required_binding_path(binding, "output_dir")?);
+    let storage_value = binding.get("output_storage").cloned().ok_or_else(|| {
+        ApiError::unprocessable_with_code(
+            "docker_startup_output_mapping_invalid",
+            "Docker startup output binding has no resolved storage policy",
+        )
+    })?;
+    let settings: fullmag_ir::OutputStorageIR =
+        serde_json::from_value(storage_value).map_err(|error| {
+            ApiError::unprocessable_with_code(
+                "docker_startup_output_mapping_invalid",
+                format!("Docker startup output policy is invalid: {error}"),
+            )
+        })?;
+    let (output, scratch) = fullmag_runner::project_storage::preflight_project_storage(
+        &settings,
+        &default_output,
+        &source_dir,
+    )
+    .map_err(|error| {
+        ApiError::unprocessable_with_code(
+            "docker_startup_output_mapping_invalid",
+            format!("Docker startup output paths cannot be preflighted: {error}"),
+        )
+    })?;
+
+    let alias_metadata = fs::symlink_metadata(&alias_root)
+        .map_err(|error| output_permission_preflight_error(&alias_root, &error.to_string()))?;
+    if alias_metadata.file_type().is_symlink() || !alias_metadata.is_dir() {
+        return Err(output_permission_preflight_error(
+            &alias_root,
+            "selected output alias is not a real directory",
+        ));
+    }
+    let canonical_alias = fs::canonicalize(&alias_root)
+        .map_err(|error| output_permission_preflight_error(&alias_root, &error.to_string()))?;
+    let mut probe_directories = Vec::new();
+    let mut included = false;
+    for target in [&output, &scratch] {
+        if !target.starts_with(&canonical_alias) {
+            // Absolute paths outside the opted-in alias retain their existing
+            // policy; this helper must not write a canary outside that child.
+            continue;
+        }
+        included = true;
+        let directory = nearest_existing_output_ancestor(target, &canonical_alias)
+            .map_err(|error| output_permission_preflight_error(target, &error))?;
+        if !probe_directories.contains(&directory) {
+            probe_directories.push(directory);
+        }
+    }
+    if !included {
+        return Err(output_permission_preflight_error(
+            &canonical_alias,
+            "resolved output and scratch paths do not use the opted-in alias",
+        ));
+    }
+
+    let nonce = crate::uuid_v4_hex();
+    for directory in probe_directories {
+        probe_output_directory_with_nonce(&directory, &nonce)
+            .map_err(|error| output_permission_preflight_error(&directory, &error))?;
+    }
+    Ok(())
+}
+
+fn required_binding_path<'a>(binding: &'a Value, field: &str) -> Result<&'a str, ApiError> {
+    binding.get(field).and_then(Value::as_str).ok_or_else(|| {
+        ApiError::unprocessable_with_code(
+            "docker_startup_output_mapping_invalid",
+            format!("Docker startup output binding is missing `{field}`"),
+        )
+    })
+}
+
+fn output_permission_preflight_error(path: &Path, detail: &str) -> ApiError {
+    ApiError::unprocessable_with_code(
+        "docker_startup_output_mapping_invalid",
+        format!(
+            "Docker startup output permission preflight failed at `{}`: {detail}",
+            path.display()
+        ),
+    )
+}
+
+fn nearest_existing_output_ancestor(target: &Path, alias_root: &Path) -> Result<PathBuf, String> {
+    if !target.is_absolute() || !target.starts_with(alias_root) {
+        return Err("resolved output path is outside the selected alias".into());
+    }
+    let mut candidate = target.to_path_buf();
+    loop {
+        match fs::symlink_metadata(&candidate) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(format!(
+                        "output path traverses a symlink at `{}`",
+                        candidate.display()
+                    ));
+                }
+                if !metadata.is_dir() {
+                    return Err(format!(
+                        "existing output path is not a directory: `{}`",
+                        candidate.display()
+                    ));
+                }
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if candidate == alias_root {
+                    return Err("selected output alias disappeared during preflight".into());
+                }
+                candidate = candidate
+                    .parent()
+                    .ok_or_else(|| "output path has no existing parent".to_string())?
+                    .to_path_buf();
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+
+    let mut current = alias_root.to_path_buf();
+    for component in candidate
+        .strip_prefix(alias_root)
+        .map_err(|error| error.to_string())?
+        .components()
+    {
+        current.push(component);
+        let metadata = fs::symlink_metadata(&current).map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "output path traverses a symlink at `{}`",
+                current.display()
+            ));
+        }
+        if !metadata.is_dir() {
+            return Err(format!(
+                "output ancestor is not a directory: `{}`",
+                current.display()
+            ));
+        }
+    }
+    let canonical = fs::canonicalize(&candidate).map_err(|error| error.to_string())?;
+    if !canonical.starts_with(alias_root) {
+        return Err("existing output ancestor resolves outside the selected alias".into());
+    }
+    Ok(canonical)
+}
+
+fn probe_output_directory_with_nonce(directory: &Path, nonce: &str) -> Result<(), String> {
+    if nonce.is_empty()
+        || !nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err("output probe nonce is invalid".into());
+    }
+    let path = directory.join(format!(".fullmag-output-preflight-{nonce}"));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| format!("cannot create a private output probe: {error}"))?;
+    let write_error = file
+        .write_all(b"fullmag output preflight\n")
+        .and_then(|_| file.sync_all())
+        .err();
+
+    let cleanup = match open_output_probe_without_following(&path) {
+        Ok(candidate) => {
+            let metadata = candidate.metadata();
+            let same_regular_file = metadata.as_ref().is_ok_and(|metadata| {
+                metadata.is_file()
+                    && !metadata.file_type().is_symlink()
+                    && !is_windows_reparse(metadata)
+                    && same_file_identity(&file, &candidate)
+            });
+            let metadata_error = metadata.err();
+            drop(candidate);
+            drop(file);
+            if same_regular_file {
+                fs::remove_file(&path)
+                    .map_err(|error| format!("cannot remove the private output probe: {error}"))
+            } else if let Some(error) = metadata_error {
+                Err(format!("cannot inspect private output probe for cleanup: {error}"))
+            } else {
+                Err("output probe path changed; it was retained to avoid deleting another file".into())
+            }
+        }
+        Err(error) => {
+            drop(file);
+            Err(error)
+        }
+    };
+    match (write_error, cleanup) {
+        (Some(write_error), Ok(())) => Err(format!(
+            "cannot write the private output probe: {write_error}"
+        )),
+        (Some(write_error), Err(cleanup_error)) => Err(format!(
+            "cannot write the private output probe: {write_error}; cleanup also failed: {cleanup_error}"
+        )),
+        (None, cleanup) => cleanup,
+    }
+}
+
+#[cfg(unix)]
+fn open_output_probe_without_following(path: &Path) -> Result<fs::File, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| format!("cannot open the private output probe without following links: {error}"))
+}
+
+#[cfg(windows)]
+fn open_output_probe_without_following(path: &Path) -> Result<fs::File, String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|error| format!("cannot open the private output probe without following links: {error}"))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_output_probe_without_following(_path: &Path) -> Result<fs::File, String> {
+    Err("safe output-probe identity checks are unsupported on this platform".into())
+}
+
+#[cfg(unix)]
+fn same_file_identity(left: &fs::File, right: &fs::File) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (left.metadata(), right.metadata()) {
+        (Ok(left), Ok(right)) => left.dev() == right.dev() && left.ino() == right.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(windows)]
+fn same_file_identity(left: &fs::File, right: &fs::File) -> bool {
+    fn identity(file: &fs::File) -> Option<(u32, u32, u32)> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+
+        let mut information = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+        let succeeded = unsafe {
+            GetFileInformationByHandle(file.as_raw_handle(), information.as_mut_ptr())
+        };
+        if succeeded == 0 {
+            return None;
+        }
+        let information = unsafe { information.assume_init() };
+        Some((
+            information.dwVolumeSerialNumber,
+            information.nFileIndexHigh,
+            information.nFileIndexLow,
+        ))
+    }
+
+    matches!((identity(left), identity(right)), (Some(left), Some(right)) if left == right)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn same_file_identity(_left: &fs::File, _right: &fs::File) -> bool {
+    false
 }
 
 fn validate_script_output_alias(alias_root: &Path) -> Result<(), ApiError> {
@@ -1335,7 +1729,7 @@ fn build_startup_snapshot(
             "source_size_bytes": loaded.source.size_bytes,
             "scene_revision": loaded.scene.revision,
         }
-    }));
+    }).into());
     snapshot.runtime_status = build_runtime_status_view("activating");
     snapshot.simulation_preparation_revision = 1;
     snapshot.simulation_preparation = Some(build_startup_preparation_progress(&snapshot));
@@ -1343,7 +1737,15 @@ fn build_startup_snapshot(
 }
 
 fn startup_session_id(request: &DockerStartupRequest, source: &CapturedSource) -> String {
-    let identity = format!("{}\0{}", request.request_id, source.sha256);
+    let mut identity = format!("{}\0{}", request.request_id, source.sha256);
+    if let Some(value) = &request.solver_profile {
+        identity.push('\0');
+        identity.push_str(&fullmag_session::canonical_json_sha256(value));
+    }
+    if let Some(value) = &request.cuda_trace {
+        identity.push_str("\0cuda_trace\0");
+        identity.push_str(&fullmag_session::canonical_json_sha256(value));
+    }
     format!(
         "docker-startup-{}",
         fullmag_session::hex_sha256(identity.as_bytes())
@@ -1480,6 +1882,8 @@ fn replay_or_reject(
         authorization: AUTHORIZATION_KIND,
         request_id: request.request_id.clone(),
         source_sha256: source.sha256.clone(),
+        solver_profile_sha256: request.solver_profile.as_ref().map(fullmag_session::canonical_json_sha256),
+        cuda_trace_sha256: request.cuda_trace.as_ref().map(fullmag_session::canonical_json_sha256),
         status,
         execution: request.execution.clone(),
         session_id: existing.session.session_id.clone(),
@@ -1549,7 +1953,19 @@ async fn publish_startup_result(
         context,
         state.current_live_session_epoch.load(Ordering::Acquire),
     )?;
+    // Preparation has already published the execution plan and carrier identity.
+    // Validate before mutating the snapshot; startup owns only its own entry.
+    let mut metadata = match snapshot.metadata.as_ref() {
+        Some(metadata) => metadata.as_object().cloned().ok_or_else(|| {
+            ApiError::conflict_with_code(
+                "docker_startup_metadata_invalid",
+                "prepared scene metadata must be an object",
+            )
+        })?,
+        None => serde_json::Map::new(),
+    };
     let artifact_dir = snapshot.session.artifact_dir.clone();
+    crate::session::select_current_accepted_scalar_series(snapshot, &run_id, None);
     snapshot.session.run_id = run_id.clone();
     // The accepted run keeps the durable wait gate, while the current live
     // read model remains command-capable. `waiting_for_solve` is a run-level
@@ -1577,8 +1993,7 @@ async fn publish_startup_result(
         final_e_total: None,
         artifact_dir,
     });
-    snapshot.metadata = Some(json!({
-        STARTUP_METADATA_KEY: {
+    metadata.insert(STARTUP_METADATA_KEY.to_string(), json!({
             "request": request,
             "request_id": request.request_id,
             "source_sha256": loaded.source.sha256,
@@ -1589,14 +2004,16 @@ async fn publish_startup_result(
             "scene_revision": loaded.scene.revision,
             "runtime_metadata": loaded.runtime,
             "output_storage_binding": loaded.output_storage_binding,
-        }
     }));
+    snapshot.metadata = Some(Value::Object(metadata).into());
     snapshot.state_version = snapshot.state_version.saturating_add(1);
     let response = DockerStartupResponse {
         schema: RESPONSE_SCHEMA,
         authorization: AUTHORIZATION_KIND,
         request_id: request.request_id.clone(),
         source_sha256: loaded.source.sha256.clone(),
+        solver_profile_sha256: request.solver_profile.as_ref().map(fullmag_session::canonical_json_sha256),
+        cuda_trace_sha256: request.cuda_trace.as_ref().map(fullmag_session::canonical_json_sha256),
         status: if status == "waiting_for_solve" {
             "waiting_for_solve"
         } else {
@@ -2197,7 +2614,11 @@ fn apply_accepted_recovery_snapshot(
         return false;
     }
     apply_preparation_failure_snapshot(snapshot, error_code, error_message);
-    let mut metadata = snapshot.metadata.take().unwrap_or_else(|| json!({}));
+    let mut metadata = snapshot
+        .metadata
+        .take()
+        .map(crate::shared_json::SharedJson::into_value)
+        .unwrap_or_else(|| json!({}));
     if !metadata.is_object() {
         metadata = json!({"previous_metadata": metadata});
     }
@@ -2254,7 +2675,7 @@ fn apply_accepted_recovery_snapshot(
             .entry("run_id".to_string())
             .or_insert_with(|| json!(run.run_id.clone()));
     }
-    snapshot.metadata = Some(metadata);
+    snapshot.metadata = Some(metadata.into());
     snapshot.session.status = "waiting_for_compute".to_string();
     snapshot.runtime_status = build_runtime_status_view("waiting_for_compute");
     if let Some(run) = snapshot.run.as_mut() {
@@ -2315,7 +2736,11 @@ fn apply_startup_failure_snapshot(
 
     // A scene edit can retain the same session/run/epoch. Preserve the current
     // authoring metadata and record this stale attempt separately.
-    let mut metadata = snapshot.metadata.take().unwrap_or_else(|| json!({}));
+    let mut metadata = snapshot
+        .metadata
+        .take()
+        .map(crate::shared_json::SharedJson::into_value)
+        .unwrap_or_else(|| json!({}));
     if !metadata.is_object() {
         metadata = json!({"previous_metadata": metadata});
     }
@@ -2354,7 +2779,7 @@ fn apply_startup_failure_snapshot(
             startup_object.insert("run_id".to_string(), json!(run.run_id.clone()));
         }
     }
-    snapshot.metadata = Some(metadata);
+    snapshot.metadata = Some(metadata.into());
     if scene_matches {
         apply_preparation_failure_snapshot(
             snapshot,
@@ -2384,6 +2809,8 @@ mod tests {
             schema: REQUEST_SCHEMA.to_string(),
             authorization: AUTHORIZATION_KIND.to_string(),
             request_id: "startup-test-1".to_string(),
+            solver_profile: None,
+            cuda_trace: None,
             source: DockerStartupSource {
                 path: "/opt/fullmag/source/examples/scene.py".to_string(),
                 root: CONTAINER_SOURCE_ROOT.to_string(),
@@ -2504,6 +2931,93 @@ mod tests {
         );
     }
 
+    fn startup_output_binding(
+        alias_root: &Path,
+        source_dir: &Path,
+        output_dir: &Path,
+        temp_dir: Option<&Path>,
+    ) -> Value {
+        let mut settings = fullmag_ir::OutputStorageIR::default();
+        settings.output_dir = Some(output_dir.to_string_lossy().into_owned());
+        settings.temp_dir = temp_dir.map(|path| path.to_string_lossy().into_owned());
+        json!({
+            "schema": "fullmag.docker_script_output_binding.v1",
+            "binding": "docker_script_output_alias",
+            "alias_root": alias_root.to_string_lossy().into_owned(),
+            "source_dir": source_dir.to_string_lossy().into_owned(),
+            "output_dir": output_dir.to_string_lossy().into_owned(),
+            "temp_dir": temp_dir.map(|path| path.to_string_lossy().into_owned()),
+            "output_storage": settings,
+        })
+    }
+
+    #[test]
+    fn startup_output_probe_cleans_its_file_before_activation() {
+        let temporary = tempfile::tempdir().expect("temporary output root");
+        let alias_root = temporary.path().join("script-output");
+        let source_dir = alias_root.join("interactive_study");
+        fs::create_dir_all(&source_dir).expect("create opted output directory");
+        let output_dir = source_dir.join("fdm_cpu_three_relax_continue.zarr");
+        let binding = startup_output_binding(&alias_root, &source_dir, &output_dir, None);
+
+        preflight_script_output_write(&binding).expect("output and default scratch parents are writable");
+
+        assert_eq!(fs::read_dir(&source_dir).expect("read output parent").count(), 0);
+    }
+
+    #[test]
+    fn startup_output_probe_collision_never_overwrites_or_removes_foreign_file() {
+        let temporary = tempfile::tempdir().expect("temporary output root");
+        let probe = temporary.path().join(".fullmag-output-preflight-fixed");
+        fs::write(&probe, b"retained owner file").expect("create collision fixture");
+
+        let error = probe_output_directory_with_nonce(temporary.path(), "fixed")
+            .expect_err("create_new must refuse an existing probe name");
+
+        assert!(error.contains("cannot create"));
+        assert_eq!(fs::read(&probe).expect("read collision fixture"), b"retained owner file");
+    }
+
+    #[test]
+    fn startup_output_probe_checks_distinct_temp_parent_before_writing_any_probe() {
+        let temporary = tempfile::tempdir().expect("temporary output root");
+        let alias_root = temporary.path().join("script-output");
+        let source_dir = alias_root.join("interactive_study");
+        fs::create_dir_all(&source_dir).expect("create opted output directory");
+        let output_dir = source_dir.join("run.zarr");
+        let temp_file = alias_root.join("not-a-temp-directory");
+        fs::write(&temp_file, b"preserve me").expect("create temp-path fixture");
+        let binding = startup_output_binding(&alias_root, &source_dir, &output_dir, Some(&temp_file));
+
+        let error = preflight_script_output_write(&binding)
+            .expect_err("non-directory temp target must reject startup");
+
+        assert_eq!(error.code.as_deref(), Some("docker_startup_output_mapping_invalid"));
+        assert_eq!(fs::read(&temp_file).expect("preserve temp-path fixture"), b"preserve me");
+        assert_eq!(fs::read_dir(&source_dir).expect("read output parent").count(), 0);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn startup_output_probe_rejects_symlink_ancestors_without_following_them() {
+        let temporary = tempfile::tempdir().expect("temporary output root");
+        let alias_root = temporary.path().join("script-output");
+        let outside = temporary.path().join("outside");
+        fs::create_dir_all(&alias_root).expect("create opted output root");
+        fs::create_dir_all(&outside).expect("create outside directory");
+        std::os::unix::fs::symlink(&outside, alias_root.join("escape"))
+            .expect("create symlink fixture");
+
+        let error = nearest_existing_output_ancestor(
+            &alias_root.join("escape/run.zarr"),
+            &alias_root,
+        )
+        .expect_err("symlink ancestor must be refused");
+
+        assert!(error.contains("symlink"));
+        assert_eq!(fs::read_dir(&outside).expect("read outside directory").count(), 0);
+    }
+
     #[test]
     fn docker_output_mapping_rejects_off_prefix_and_immutable_source_paths() {
         let source = captured_source("/opt/fullmag/source/examples/model.py");
@@ -2594,7 +3108,7 @@ mod tests {
         snapshot.metadata = Some(json!({
             "editor": {"draft": "keep"},
             STARTUP_METADATA_KEY: {"request": "current-placeholder"}
-        }));
+        }).into());
         let context = placeholder_context(&snapshot);
         let error = ApiError::conflict("startup_scene_revision_or_content_changed");
 
@@ -2659,7 +3173,7 @@ mod tests {
                 "run_id": "run-accepted-recovery",
                 "step_ids": ["step-recovery"]
             }
-        }));
+        }).into());
         let context = placeholder_context(&snapshot);
         let preparation_error =
             crate::live_accepted_execution::AcceptedLiveStudyPreparationError {
@@ -2870,7 +3384,7 @@ mod tests {
                 "scene_revision": scene.revision,
                 "runtime_metadata": {"interactive": true, "wait_for_solve": true},
             }
-        }));
+        }).into());
         let context = placeholder_context(&snapshot);
         let error = ApiError::conflict_with_code(
             "accepted_frontier_preparation_failed",
@@ -2979,11 +3493,99 @@ mod tests {
                 "preparation_error_code": "accepted_run_catalog_failed",
                 "preparation_error": "catalog materialization failed",
             }
-        }));
+        }).into());
 
         let error = replay_or_reject(&request, &source, &snapshot)
             .expect_err("a preparation failure must not replay as accepted");
         assert_eq!(error.code.as_deref(), Some("accepted_run_recovery_required"));
+    }
+
+    fn profile_parameter() -> Value {
+        json!({"schema_version": "accepted_solver_profile.v1", "config": {
+            "enabled": true, "sample_every": 1, "sample_interval_wall_ms": 0,
+            "max_samples": 128, "emit_engine_log": false, "persist_artifact": true}})
+    }
+
+    fn trace_parameter() -> Value {
+        json!({"schema_version": "accepted_cuda_trace.v1", "max_bytes": 67108864,
+            "max_duration_ms": 60000})
+    }
+
+    #[test]
+    fn startup_cuda_trace_is_separate_optional_and_strict() {
+        let absent = request();
+        assert!(serde_json::to_value(&absent).unwrap().get("cuda_trace").is_none());
+        let mut raw = serde_json::to_value(&absent).unwrap();
+        assert!(serde_json::from_value::<DockerStartupRequest>(raw.clone()).unwrap().cuda_trace.is_none());
+        raw["cuda_trace"] = Value::Null;
+        let supplied_null: DockerStartupRequest = serde_json::from_value(raw).unwrap();
+        assert_eq!(supplied_null.cuda_trace, Some(Value::Null));
+        assert_eq!(validate_request(&supplied_null).unwrap_err().code.as_deref(), Some("invalid_cuda_trace"));
+        let source = CapturedSource { path: PathBuf::from(&absent.source.path),
+            sha256: absent.source.sha256.clone(), size_bytes: 1, bytes: Vec::new() };
+        let mut traced = absent.clone(); traced.cuda_trace = Some(trace_parameter());
+        validate_request(&traced).unwrap();
+        assert_ne!(startup_session_id(&absent, &source), startup_session_id(&traced, &source));
+        assert!(traced.solver_profile.is_none());
+        let mut both = traced.clone(); both.solver_profile = Some(profile_parameter());
+        validate_request(&both).unwrap();
+        assert_ne!(startup_session_id(&traced, &source), startup_session_id(&both, &source));
+        traced.cuda_trace.as_mut().unwrap()["max_bytes"] = json!(true);
+        assert_eq!(validate_request(&traced).unwrap_err().code.as_deref(), Some("invalid_cuda_trace"));
+    }
+
+    #[test]
+    fn startup_cuda_trace_replay_confirms_exact_digest_and_rejects_changed_limits() {
+        let mut request = request(); request.cuda_trace = Some(trace_parameter());
+        let source = CapturedSource { path: PathBuf::from(&request.source.path),
+            sha256: request.source.sha256.clone(), size_bytes: 1, bytes: Vec::new() };
+        let snapshot_request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({"session_id": "trace-replay"})).unwrap();
+        let mut snapshot = default_current_live_state(&snapshot_request);
+        snapshot.metadata = Some(json!({STARTUP_METADATA_KEY: {
+            "request": request, "source_sha256": source.sha256, "source_size_bytes": 1,
+            "status": "waiting_for_compute", "run_id": "run-trace", "step_ids": ["step:run"],
+            "scene_revision": 1, "runtime_metadata": {"interactive": true, "wait_for_solve": true}
+        }}).into());
+        let Json(response) = replay_or_reject(&request, &source, &snapshot).unwrap();
+        assert_eq!(response.cuda_trace_sha256, request.cuda_trace.as_ref().map(fullmag_session::canonical_json_sha256));
+        assert!(response.solver_profile_sha256.is_none());
+        request.cuda_trace.as_mut().unwrap()["max_duration_ms"] = json!(30000);
+        assert_eq!(replay_or_reject(&request, &source, &snapshot).unwrap_err().code.as_deref(),
+            Some("docker_startup_request_conflict"));
+    }
+
+    #[test]
+    fn startup_profile_is_optional_and_changes_semantic_session_identity() {
+        let absent = request();
+        assert!(serde_json::to_value(&absent).unwrap().get("solver_profile").is_none());
+        let source = CapturedSource { path: PathBuf::from(&absent.source.path),
+            sha256: absent.source.sha256.clone(), size_bytes: 1, bytes: Vec::new() };
+        let legacy = format!("{}\0{}", absent.request_id, source.sha256);
+        assert_eq!(startup_session_id(&absent, &source), format!("docker-startup-{}", fullmag_session::hex_sha256(legacy.as_bytes())));
+        let mut explicit = absent.clone(); explicit.solver_profile = Some(profile_parameter());
+        validate_request(&explicit).unwrap();
+        assert_ne!(startup_session_id(&absent, &source), startup_session_id(&explicit, &source));
+        let mut invalid = explicit; invalid.solver_profile.as_mut().unwrap()["config"]["emit_engine_log"] = json!(true);
+        assert_eq!(validate_request(&invalid).unwrap_err().code.as_deref(), Some("invalid_solver_profile"));
+    }
+
+    #[test]
+    fn startup_profile_replay_confirms_the_whole_wrapper_and_rejects_a_changed_profile() {
+        let mut request = request(); request.solver_profile = Some(profile_parameter());
+        let source = CapturedSource { path: PathBuf::from(&request.source.path),
+            sha256: request.source.sha256.clone(), size_bytes: 1, bytes: Vec::new() };
+        let snapshot_request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({"session_id": "profile-replay"})).unwrap();
+        let mut snapshot = default_current_live_state(&snapshot_request);
+        snapshot.metadata = Some(json!({STARTUP_METADATA_KEY: {
+            "request": request, "source_sha256": source.sha256, "source_size_bytes": 1,
+            "status": "waiting_for_compute", "run_id": "run-profile", "step_ids": ["step:run"],
+            "scene_revision": 1, "runtime_metadata": {"interactive": true, "wait_for_solve": true}
+        }}).into());
+        let Json(response) = replay_or_reject(&request, &source, &snapshot).unwrap();
+        assert_eq!(response.solver_profile_sha256, request.solver_profile.as_ref().map(fullmag_session::canonical_json_sha256));
+        request.solver_profile.as_mut().unwrap()["config"]["max_samples"] = json!(256);
+        let error = replay_or_reject(&request, &source, &snapshot).unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("docker_startup_request_conflict"));
     }
 
     #[test]
@@ -2999,6 +3601,125 @@ mod tests {
         noncanonical = request;
         noncanonical.execution.interactive = "caller_override".to_string();
         assert!(validate_request(&noncanonical).is_err());
+    }
+
+    #[tokio::test]
+    async fn malformed_startup_scene_is_rejected_before_live_or_durable_admission() {
+        let mut unknown_field = serde_json::to_value(SceneDocument::default()).unwrap();
+        unknown_field["study"]["unknown_setting"] = json!(true);
+        let mut invalid_resources = serde_json::to_value(SceneDocument::default()).unwrap();
+        invalid_resources["study"]["compute_resources"] =
+            json!({"schema_version": "compute_resources.v0"});
+        for stdout in [
+            b"not JSON".to_vec(),
+            serde_json::to_vec(&unknown_field).unwrap(),
+            serde_json::to_vec(&invalid_resources).unwrap(),
+        ] {
+            let workspace = tempfile::tempdir().unwrap();
+            let submit_store = workspace.path().join("submit-store");
+            let mut state = crate::router_v2::tests::test_app_state();
+            let config = Arc::get_mut(&mut state).unwrap();
+            config.current_workspace_root = workspace.path().to_path_buf();
+            config.submit_store_root = Some(submit_store.clone());
+            let error = activate_current_live_startup_with_loader(
+                Arc::clone(&state),
+                request(),
+                |_, _| async move { decode_startup_scene(&stdout).map(loaded_scene_for_test) },
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(error.code.as_deref(), Some("validation_error"));
+            assert!(state.current_live_state.read().await.is_none());
+            assert_eq!(state.current_live_session_epoch.load(Ordering::Acquire), 0);
+            assert!(
+                state
+                    .current_live_preparation_receipt
+                    .read()
+                    .await
+                    .is_none()
+            );
+            // RunIntent/CAS/catalog publication cannot create any durable data.
+            assert!(!submit_store.exists());
+            assert_eq!(fs::read_dir(workspace.path()).unwrap().count(), 0);
+            assert!(state.current_live_session_transition.try_lock().is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_loader_transport_failure_keeps_internal_error_before_admission() {
+        let state = crate::router_v2::tests::test_app_state();
+        let error = activate_current_live_startup_with_loader(
+            Arc::clone(&state),
+            request(),
+            |_, _| async { Err(ApiError::internal("helper transport failed")) },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code, None);
+        assert!(state.current_live_state.read().await.is_none());
+        assert_eq!(state.current_live_session_epoch.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn only_a_reaped_helper_timeout_is_a_terminal_startup_rejection() {
+        let mut timeout = ApiError::internal("Python helper exceeded the 30 second deadline");
+        timeout.code = Some(crate::script::PYTHON_HELPER_TIMEOUT_CODE.to_string());
+        let rejected = startup_helper_timeout_rejection(timeout);
+        assert_eq!(
+            rejected.status,
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(rejected.code.as_deref(), Some("validation_error"));
+        assert!(rejected.message.contains("30 second deadline"));
+
+        // An uncoded timeout (cleanup failed) or another failure stays unknown.
+        let unreaped = startup_helper_timeout_rejection(ApiError::internal(
+            "Python helper exceeded the 30 second deadline; process cleanup failed: wait failed",
+        ));
+        assert_eq!(
+            unreaped.status,
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(unreaped.code, None);
+    }
+
+    #[test]
+    fn only_the_typed_script_load_envelope_is_a_terminal_rejection() {
+        let envelope = json!({
+            "schema": "fullmag.script-load-rejection.v1",
+            "code": "script_load_failed",
+            "error_type": "ValueError",
+            "message": "LLG relaxation requires an explicit timestep policy",
+            "script_line": 38,
+        })
+        .to_string();
+        let stdout = format!("user print\n\n{envelope}\n");
+        assert_eq!(
+            script_load_rejection(Some(2), stdout.as_bytes()).as_deref(),
+            Some(
+                "startup script failed while loading (script line 38): \
+                 ValueError: LLG relaxation requires an explicit timestep policy"
+            )
+        );
+        let without_line = envelope.replace("38", "null");
+        assert_eq!(
+            script_load_rejection(Some(2), without_line.as_bytes()).as_deref(),
+            Some(
+                "startup script failed while loading: \
+                 ValueError: LLG relaxation requires an explicit timestep policy"
+            )
+        );
+        // Another exit code, schema or shape keeps the unknown 500 outcome.
+        assert!(script_load_rejection(Some(1), envelope.as_bytes()).is_none());
+        assert!(script_load_rejection(None, envelope.as_bytes()).is_none());
+        assert!(script_load_rejection(Some(2), b"Traceback (most recent call last):\n").is_none());
+        let other_schema = envelope.replace("script-load-rejection", "scene-render-rejection");
+        assert!(script_load_rejection(Some(2), other_schema.as_bytes()).is_none());
+        let empty_message =
+            envelope.replace("LLG relaxation requires an explicit timestep policy", " ");
+        assert!(script_load_rejection(Some(2), empty_message.as_bytes()).is_none());
     }
 
     #[test]
@@ -3038,6 +3759,55 @@ mod tests {
                 wait_for_solve: true
             }
         );
+    }
+
+    #[tokio::test]
+    async fn startup_result_preserves_prepared_scene_metadata() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let prepared = json!({
+            "execution_plan": {"prepared": "plan"},
+            "antenna_domain_publication": {"generation": "accepted-domain"},
+            "magnetic_state_present": false,
+            "other_owner": {"keep": true},
+            STARTUP_METADATA_KEY: {"status": "preparing"},
+        });
+        state.current_live_state.write().await.as_mut().unwrap().metadata =
+            Some(prepared.clone().into());
+        let context = crate::capture_current_live_request_context(&state).await.unwrap();
+        publish_startup_result(
+            &state, &context, &request(),
+            &loaded_scene_for_test(SceneDocument::default()),
+            "accepted-run".to_string(), vec!["antenna-stage".to_string()],
+            "waiting_for_solve",
+        ).await.unwrap();
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        let metadata = snapshot.metadata.as_ref().unwrap();
+        for key in ["execution_plan", "antenna_domain_publication", "magnetic_state_present", "other_owner"] {
+            assert_eq!(metadata.get(key), prepared.get(key), "lost prepared metadata: {key}");
+        }
+        assert_eq!(metadata.pointer("/docker_startup/status"), Some(&json!("waiting_for_solve")));
+        assert_eq!(metadata.pointer("/docker_startup/run_id"), Some(&json!("accepted-run")));
+        assert_eq!(snapshot.session.status, "awaiting_command");
+    }
+
+    #[tokio::test]
+    async fn startup_result_rejects_nonobject_metadata_before_mutation() {
+        for malformed in [Value::Null, json!([]), json!("invalid")] {
+            let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+            state.current_live_state.write().await.as_mut().unwrap().metadata =
+                Some(malformed.into());
+            let context = crate::capture_current_live_request_context(&state).await.unwrap();
+            let before = serde_json::to_value(state.current_live_state.read().await.as_ref().unwrap()).unwrap();
+            let error = publish_startup_result(
+                &state, &context, &request(),
+                &loaded_scene_for_test(SceneDocument::default()),
+                "must-not-publish".to_string(), vec![], "waiting_for_solve",
+            ).await.unwrap_err();
+            assert_eq!(error.code.as_deref(), Some("docker_startup_metadata_invalid"));
+            let after = serde_json::to_value(state.current_live_state.read().await.as_ref().unwrap()).unwrap();
+            assert_eq!(before, after);
+        }
     }
 
     #[tokio::test]

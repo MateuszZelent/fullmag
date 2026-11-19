@@ -16,7 +16,7 @@ worktree; oba kontenery dostają jego readonly bind mount.
 | Usługa | Odpowiedzialność | Dostęp sieciowy |
 | --- | --- | --- |
 | `frontend` | Przypięte zależności JS, Next.js dev, HMR i proxy API | Jeden wybrany port `127.0.0.1:<port>:8080` |
-| `backend` | Przyrostowy build, potem API, Python DSL i native runtime | Wyłącznie `backend:8081` w prywatnej sieci projektu |
+| `backend` | Walidacja pakietu, build do publikacji gdy potrzebny, potem API, Python DSL i native runtime | Wyłącznie `backend:8081` w prywatnej sieci projektu |
 
 Backend zawiera FDM CPU, FDM GPU, FEM CPU i FEM GPU. Wybór realizacji następuje
 w modelu i plannerze, a wymuszone GPU nie ma cichego fallbacku CPU. Obecność
@@ -55,34 +55,36 @@ kontenerem budującym a runtime. Przygotowanie przypiętego obrazu toolchaina
 oraz krótkie narzędzia sprawdzające storage są osobnymi operacjami utrzymania,
 a nie dodatkowymi usługami aplikacji.
 
-Backend DEV używa profilu v2 opisanego w ADR 0061: jawnej pary prywatnych
-wolumenów Docker pod `/build` i `/opt/fullmag/package`. Cache Cargo, CMake,
-CUDA, MFEM, hypre, libCEED, zależności pnpm, staging, pakiety, logi, receipty
-i provenance należą do technicznych wolumenów grupy; Docker Desktop przechowuje
-je w swoim wewnętrznym dysku danych, a nie w Windows `storage` projektu.
-Control volume przechowuje kontrolę operacji, manifesty, receipty i provenance
-launchera, a package volume przechowuje kandydata, bieżący pakiet, rollback oraz
-metadane rotacji. Warstwy obrazów i ich BuildKit context pozostają w magazynie
-obrazu/BuildKit Dockera. Mały hostowy run root może zawierać wyłącznie dane
-operacyjne sesji i handoffu; nie jest stagingiem, cache'em ani magazynem
-receiptów buildu.
-Frontend ma analogiczny nazwany wolumen cache/control. Przygotowanie wolumenów
-i migracja technicznych markerów mają dowód częściowy; cold build, API, mounty,
-brak zapisu buildu do hosta oraz pomiary restartu i kompilacji przyrostowej
-pozostają **NOT VERIFIED**. Stare cache zachowujemy do osobnej kontroli użycia
-i rollbacku. Nie usuwaj ani nie przenoś aktywnego cache ręcznie.
+ADR 0076 zastępuje dotychczasową topologię wielu prywatnych volume’ów dla daily
+DEV. Wymagany jest jeden stabilny `BuildControl.volume` na grupę: dotychczasowy
+root control/lock/namespace zostaje, `private/backend` montuje się jako `/build`,
+`private/frontend` jako frontend state, a `private/ledger` jako `/host-ledger`.
+Frontend nie montuje rootu control, backend cache ani ledgeru. Pakiet backendu,
+Cargo registry/git i pnpm store pozostają w globalnych shared volumes; obrazy i
+BuildKit w magazynie Dockera. Nie zmieniaj nazwy prywatnego volume przy zmianie
+toolchaina, profilu, dependency hash ani próby. Fingerprint weryfikuje cache;
+niezgodny cache można inwalidować pod blokadą, po zachowaniu pakietu current i
+jednego zweryfikowanego rollbacku. Hostowy run root, źródła, sesje i wyniki
+zachowują dotychczasową granicę. Stare cache wymagają migracji pojedynczej,
+stopped/drained grupy, archiwum i kontroli referencji. Ta decyzja jest
+kontraktem; implementacja, mounty, restart i compiler-output cleanup są **NOT VERIFIED**.
+Zakres supersession: [ADR 0076](../adr/0076-single-private-volume-per-dev-group.md).
+ Cleanup compiler outputs `.fullmag-build`, cache-hit i nieudana generacja
+ podlegają sekcji 7 ADR 0076; runtime pozostaje **NOT VERIFIED** do czasu dowodu
+ z docelowej grupy.
 
-Niezmienione pliki cienia zachowują zawartość i metadane potrzebne kompilacji
-przyrostowej. Zmiana modułu przebudowuje go oraz rzeczywistych zależnych konsumentów;
-zmiana wspólnego typu może wymagać więcej pracy niż zmiana pliku wykonawczego.
+Historyczny opis incremental compiler outputs zachowujemy jako dowód starszego
+wariantu; nie określa on nowej retencji `.fullmag-build` z ADR 0076.
 Zmiana kodu aplikacji nie przebudowuje automatycznie CUDA, MFEM, hypre ani
 libCEED. Zmiana zależności, kompilatora lub flag może unieważnić szerszy cache.
-Blokada backendu chroni konkretny trwały wolumen; odrębne grupy mogą kompilować
-równolegle. Blokady i rejestry techniczne buildu pozostają w granicy grupy Compose.
+Blokada grupy chroni wszystkie zapisy do stabilnego `BuildControl.volume`;
+odrębne grupy mogą kompilować równolegle. Toolchain/ABI fingerprint steruje
+zgodnością i inwalidacją cache, nie tworzy nowej nazwy volume. Blokady i rejestry
+techniczne buildu pozostają w granicy grupy Compose.
 Przydziały CPU/RAM/GPU grupy przechodzą przez jej własny ledger
 (`group-ledger-v1`, [ADR 0067](../adr/0067-docker-dev-group-isolation.md)):
-nazwany wolumen grupy pod `/host-ledger`, operacyjny stan runtime, a nie cache
-buildu ani dane sesji. Grupy nie rezerwują zasobów między sobą; chronią je
+`private/ledger` w tym samym stabilnym `BuildControl.volume`, montowany pod
+`/host-ledger`; operacyjny stan runtime, nie cache buildu ani dane sesji. Grupy nie rezerwują zasobów między sobą; chronią je
 statyczne budżety `FULLMAG_DEV_*`. Globalny `host-ledger-v1` dotyczy release,
 kwalifikacji i managed runtime.
 
@@ -160,13 +162,32 @@ zgodna para kończy się błędem. Jawne `source_root`, `port` i `request_id` mo
 przekazać jako opcjonalne argumenty recepty, a istniejące ręczne piny pozostają
 pod `just docker-dev-script-pinned`.
 
+Obie recepty działają na pierwszym planie przez cały czas przebiegu: wypisują
+adres `/workspace` na zweryfikowanym porcie, nowe wpisy engine log oraz zmiany
+statusu, kroku i czasu solvera. Końcowy JSON pozostaje na stdout; komunikaty
+terminalowe są na stderr i są opróżniane na bieżąco. `interactive=True` nie
+odłącza terminala. Przy `wait_for_solve=True` terminal czeka, aż użytkownik
+wybierze Compute w interfejsie.
+
+Ctrl+C wysyła pojedynczą komendę Stop z jawnym `target.run_id` oraz przypiętym
+API instance i session scope, następnie obserwuje stan końcowy z budżetem
+30 sekund (pojedyncze zapytanie ma dodatkowy, ograniczony timeout).
+Potwierdzone przerwanie zwraca kod 130; niepotwierdzony Stop również zwraca
+130, lecz wynik ma `state=unknown` i komunikat o konieczności sprawdzenia UI.
+Launcher nie powtarza mutacji po utracie odpowiedzi. Nie zatrzymuje usług ani
+nie usuwa wyników. Przerwanie przed uzyskaniem odpowiedzi aktywacji może mieć
+nieznany wynik; zachowane receipty wymagają wtedy uzgodnienia, bez ponawiania
+Solve. Opcjonalny `run-script --timeout-seconds` ogranicza samą obserwację i
+nie wysyła Stop. Niskopoziomowe `docker_dev.py activate-script` pozostaje
+operacją samej aktywacji dla narzędzi recovery.
+
 Na Windows wolne miejsce dla danych technicznych sprawdzaj na dysku danych
 Docker Desktop: tam znajdują się named volumes i BuildKit. `FULLMAG_PROJECT_STORAGE_ROOT`
 zawiera dane użytkownika i nie powinien być używany jako rezerwuar cache buildu.
 Dokładne progi dla cache frontendu, Cargo i toolchaina muszą być sprawdzane przez
 launcher; ich zgodność z tym podziałem pozostaje **NOT VERIFIED**. Brak miejsca
-powinien przerwać start przed kosztownym buildem i zachować dotychczasowy cache,
-sesje oraz wyniki.
+powinien przerwać start przed kosztownym buildem i zachować sesje, wyniki oraz
+współdzielone zależności; compiler outputs podlegają ADR 0076.
 
 Odpowiednik bez `just`:
 
@@ -190,7 +211,7 @@ Frontend reaguje przez HMR na zapis plików. Tryb obserwacji wynika z mountu
 Po wykryciu zmiany Next przebudowuje zmienione moduły. Docker DEV pomija wygenerowane
 katalogi `.fullmag-frontend`, `.next*` i `node_modules`; `app`, `src`, `public`
 i `scripts` pozostają obserwowane. Zależności pnpm i cache Next zostają w
-nazwanym wolumenie frontendowym; HMR nie buduje backendu ani toolchaina.
+subpath `private/frontend` stabilnego volume; HMR nie buduje backendu ani toolchaina.
 
 Tailwind używa jawnych wzorców plików w `app/globals.css`, ograniczonych do
 `app` i `src`. Nowe pasujące pliki i klasy pozostają wykrywane przez HMR.
@@ -209,7 +230,7 @@ docker logs -f <backend-container-id>
 
 Usługi Compose DEV ustawiają Docker `json-file` logging z rotacją `10m × 3`
 na każdy kontener. Frontend zapisuje szczegóły Next w stałym
-`/state/development/next.log` z named volume, z limitem 64 MiB. Nadmiar trafia
+`/state/development/next.log` z subpath `private/frontend`, z limitem 64 MiB. Nadmiar trafia
 do rotowanego logu Docker. Przy następnym starcie, pod blokadą procesu,
 pełny log jest atomowo przenoszony do jednej poprzedniej kopii
 `next.log.rollback`; niepełny log pozostaje do dalszego dopisywania.
@@ -217,16 +238,96 @@ Szczegóły i pozostałe ograniczenia retencji opisuje
 [cykl danych](docker-build-storage-lifecycle.md#4-co-sprzątamy-automatycznie-a-co-pozostaje).
 Limity logów nie są quota dla cache, wolumenów ani BuildKit.
 
-Każdy start sam sprawdza aktualne zamontowane źródła. Bez zmian używa istniejącego
-wyniku; po edycji kompiluje zmienione moduły oraz ich zależnych konsumentów,
-zachowując cache. Użytkownik nie odświeża osobno manifestu i nie uruchamia drugiego
-kontenera budującego. Frontend pozostaje uruchomiony.
+Każdy start weryfikuje aktualne zamontowane źródła i pakiet. Zgodny pakiet
+pozwala przejść do API bez kompilacji; po zmianie wejść build może wymagać pełnej
+kompilacji, której private compiler outputs podlegają ADR 0076. Użytkownik nie
+odświeża osobno manifestu i nie uruchamia drugiego kontenera budującego. Frontend pozostaje uruchomiony.
 
 Przy zgodnym obrazie i mountach restart zachowuje ID backendu. Zmiana obrazu lub
 mountów może wymagać odtworzenia usługi. Sesje, wyniki i baza grupy pozostają.
 Nie zastępuj tego procedurą `down --volumes`, przejęciem obcej grupy ani resetem
 ownera. Niepotwierdzone zatrzymanie wymaga kanonicznego recovery; nie jest zgodą
 na ponowne uruchomienie aktywnej symulacji. Zachowaj logi i receipty błędu.
+
+### Kontynuacja po potwierdzonym anulowaniu zadania i terminalnym ownerze Failed
+
+`recover-cancelled-volume` rozróżnia recovery ownera `Unknown` od kontynuacji
+autentycznego, terminalnego `Failed`. Ten drugi wariant wymaga poprawnego
+receiptu natywnego anulowania wskazanego zadania, zgodnych hashy requestu,
+ownera, konfiguracji, process receipt i katalogów oraz braku nieterminalnych
+zadań i aktywnych rezerwacji. Pod lease grupy ponownie sprawdza oba kontenery,
+źródła, storage i ich piny, a następnie usuwa wyłącznie wskazaną parę maintenance.
+Layout `group-volume-v1`, dane użytkownika i wyniki pozostają zachowane.
+
+Kontynuacja `Failed` korzysta z istniejącego jawnego pinu
+`FULLMAG_DOCKER_PREVIOUS_CONFIG_SHA256` oraz zwykłego `service-ensure`.
+Rotacja konfiguracji sprawdza poprzednie bajty i profil operatora; zmienia
+plik konfiguracji i zachowuje jego poprzednią wersję, bez edycji katalogów
+runów lub wyników. Native sprawdza terminalnego ownera i przejmuje jego lock
+przez normalny startup. Nie przepisujemy `Failed` na `Unknown`, nie tworzymy
+fikcyjnego receiptu native recovery i nie odtwarzamy anulowanego zadania.
+Start nie otrzymuje skryptu ani parametrów cancellation maintenance.
+Receipt `cancelled_failed_owner_continuation` zapisuje tryb i piny tej operacji.
+Nowy backend musi przejść zwykłą bramkę cgroup READY oraz admission API;
+testy źródeł nie potwierdzają wykonania tej ścieżki w runtime.
+
+### Odzyskiwanie po anulowaniu zaakceptowanego FDM GPU po przygotowaniu in-process
+
+Jeżeli zaakceptowany run FDM GPU strict double otrzymał kompletny receipt geometrii,
+siatki i przestrzeni, ale został anulowany przed Compute, użyj wyłącznie jawnego
+wariantu `in-process-fdm`. Domyślny `failed-external` nadal obsługuje wyłącznie
+przygotowanie zakończone błędem zewnętrznego procesu. Wariant in-process nie
+tworzy ani nie udaje rekordu nieudanego preparera.
+
+Podgląd wymaga dokładnych pinów development, iteracji i aktywacji. Zwiąże RunIntent
+z niezmienną definicją, StudyPlan i katalogiem ProblemIR w CAS, potwierdzi zgodną
+intencję FDM GPU strict double, komplet pięciu certyfikatów oraz zamkniętą bramkę
+manualnego startu. Odrzuci claim/admission/worker, lease solvera lub hosta,
+rezerwację, niepustą kolejkę, zewnętrzny launch/exit/lease preparera i receipt
+retry. Nie uruchamia Solve ani ponownego startu.
+
+Jeżeli działająca grupa pochodzi z pomyślnego `resume-volume`, podaj
+`--runtime-phase resume` oraz jego UUID w zachowanym dla zgodności argumencie
+`--iteration-attempt`. Domyślna faza to `iteration`. Plan i journal przypinają
+wybraną fazę razem z dokładnym receiptem; nie można podstawić receiptu innej
+kontynuacji lub instancji kontenera.
+
+Gdy grupa ma już wcześniejszy rekord recovery, domyślnie podgląd odmawia
+kolejnego drain. `--previous-recovery-sha256 <sha-surowego-rekordu>` pozwala
+zakwalifikować rotację wyłącznie po weryfikacji jego niezmiennego terminalu
+i trwałego archiwum. Plan przypina wcześniejsze dowody; historia nadal
+zabrania ponowienia poprzedniego request ID i wznowienia jego state root.
+Rekord v2 wymaga aktualnego kontrolera, który sprawdza tę historię. Przykład
+podglądu:
+
+```powershell
+python -B <repo>\scripts\docker_dev.py --repo-root <repo> recover-cancelled-activation `
+  --attempt <development-attempt> --iteration-attempt <iteration-attempt> `
+  --activation-attempt <activation-attempt> --config-sha256 <config-sha256> `
+  --source-root <repo> --port <port> --preparation-kind in-process-fdm
+```
+
+Po sprawdzeniu zwróconego planu zastosuj go tylko z dokładnym SHA planu z podglądu:
+
+```powershell
+python -B <repo>\scripts\docker_dev.py --repo-root <repo> recover-cancelled-activation `
+  --attempt <development-attempt> --iteration-attempt <iteration-attempt> `
+  --activation-attempt <activation-attempt> --config-sha256 <config-sha256> `
+  --source-root <repo> --port <port> --preparation-kind in-process-fdm `
+  --apply --expected-plan-sha256 <plan-sha256>
+```
+
+Odzyskanie zatrzymuje i uwierzytelnia drain tylko przypiętego backendu, zachowując
+SessionStore, historię, frontend i wszystkie wolumeny. Następny konsument może
+utworzyć archiwum i świeży runtime przez istniejącą ścieżkę recovery. To jest
+recreate z zachowanym archiwum, nie wznowienie tego samego runu ani podstawienie
+CPU za żądany GPU. Niezgodny CAS, zmieniona instancja, otwarta bramka albo
+jakikolwiek owner kończy podgląd błędem bez wykonania stopu.
+
+Wariant `in-process-fdm` wysyła do przypiętego backendu pojedynczy `SIGTERM`
+poleceniem `docker kill --signal=TERM <backend-id>` i obserwuje zatrzymanie do
+120 sekund. Po upływie terminu zachowuje journal i zasoby; nie eskaluje sygnału
+ani nie wysyła go ponownie przy wznowieniu.
 
 ### Anulowanie nieudanej próby przed startem workera
 
@@ -256,6 +357,47 @@ Dokładnie przypięte częściowe zakończenie można dokończyć tym samym żą
 reset, ponowienie Solve ani automatyczne odtworzenie zaakceptowanego skryptu.
 Implementacja i regresje źródłowe nie zastępują testu tej operacji w Dockerze.
 
+Zarządzany wrapper dla działającego diagnostycznego backendu:
+
+```text
+just docker-dev-cancel-failed-no-spawn <source_root> <backend_id> <image_id> <process_receipt_sha256> <request.json> <request_sha256> false
+```
+
+Ostatni argument `false` wykonuje podgląd. `true` wywołuje istniejący operator
+natywny dokładnie raz, wewnątrz przypiętego backendu i pod lease operacji grupy.
+Wrapper wymaga prywatnego ledgeru DEV, aktualnych immutable development/Compose
+receiptów oraz identycznych pinów native. Publikuje trwały wynik natywny przed
+oddaniem odpowiedzi i osobny record `fullmag.docker-no-spawn-cancellation.v1`
+z referencją `no-spawn-cancellation/current.json`. Niepewne zakończenie zachowuje
+lease operacji do inspekcji; nie jest zgodą na ponowienie.
+
+Wrapper przygotowuje image-owned środowisko CPU CUDA ABI tak samo jak
+entrypoint i sprawdza zależności loadera przed przyjęciem operacji oraz przed
+wywołaniem native. Historyczny błąd tego wrappera, w którym loader odmówił
+załadowania `libcuda.so.1`, ma wąską ścieżkę technicznego zakończenia operacji:
+do recepty po argumencie `apply` przekazuje się attempt i SHA niepewnego
+receiptu. Wymaga ona rozpoznanej wersji wykonawcy, dokładnego błędu loadera,
+niezmienionych danych runu i niewykorzystanej bramki pod istniejącymi lockami.
+Zachowuje oryginalny receipt oraz żądanie; tylko pierwotny helper zwalnia swój
+lease po publikacji terminala technicznego. Nie rozlicza zadania ani native
+zasobów i nie obejmuje innych niepewnych zakończeń operatora.
+
+Po potwierdzonej cancellation, dla profilu Linux z zachowanym niepustym store,
+`docker-dev-stop-failed` ma osobną ścieżkę
+`native-runtime-supervision-linux-retained`. Sprawdza natywny wynik, wszystkie
+lease/rezerwacje, pełny bounded inventory runów, immutable CAS i runy manualne
+bez release/claim. Zatrzymuje wyłącznie przypiętą prywatną parę usług; zachowuje
+owner `Failed` oraz receipt `shutdown_unknown`, nie przedstawia ich jako drain.
+Recreate ponownie sprawdza ten sam dowód i zachowuje state/user-data. Poprzednia
+ścieżka Windows i klasyfikator API exit-101 mają niezmienione warunki.
+
+Przy braku aktualnej próbki compute-node przed spawnem scheduler zachowuje
+typ `ComputeNodeSampleNotCurrent` i szczegółową przyczynę. Po ograniczonym retry
+oddaje sterowanie pętli jako `WorkerLaunchDeferred`, zwalniając tylko slot
+supervisora. Claim, Start, lease i niewykorzystany permit pozostają bez zmian;
+drain i cancellation mogą być obsługiwane. Nieaktualna próbka nadal blokuje
+spawn; błędy konfiguracji, ownera i uszkodzonego rekordu pozostają fatalne.
+
 ### Kontrolowane odtworzenie terminalnego failed run
 
 Jeżeli własny backend zakończył się terminalnym błędem, a jego usługi są
@@ -276,9 +418,9 @@ just docker-dev-recreate-volume `
 
 Resume zachowuje istniejące usługi i wolumeny; `restart_backend=true` można
 ustawić tylko dla zatrzymanego, dokładnie przypiętego backendu. Recreate-volume
-zachowuje named build/package/frontend/control volumes i dane sesji, a
-`fresh_state=true` tworzy nowy root sesji wyłącznie w zwykłej, jawnie wybranej
-recreacji. Żadna z tych komend nie uruchamia osobnego `up`, kontenera budującego,
+zachowuje stabilny `BuildControl.volume`, shared package namespace i dane sesji;
+nie tworzy nowego prywatnego volume dla toolchaina/profilu. `fresh_state=true`
+tworzy nowy root sesji wyłącznie w zwykłej, jawnie wybranej recreacji. Żadna z tych komend nie uruchamia osobnego `up`, kontenera budującego,
 startupowego POST ani Solve.
 
 Ta ścieżka nie jest recovery nieznanego ownera. Nie używaj jej dla aktywnego
@@ -288,6 +430,41 @@ nie resetuje ownera, nie usuwa cache i nie tworzy nowej grupy. W razie błędu
 tożsamości, CAS, provenance lub storage pozostaje fail-closed, z zachowanym
 receiptem i diagnostyką. Stara recepta hostowego receipt DEV pozostaje ścieżką
 odrzuconą, a nie instrukcją kompatybilności.
+
+### Dokończenie przerwanego fresh-state archiwum
+
+Jeśli dokładnie przypięta operacja `recreate-services` zakończyła się stanem
+`outcome-unknown-resources-retained` przed archiwizacją, ale jej pierwotny helper
+nadal utrzymuje `/control/active`, użyj dedykowanej kontynuacji. Nie ponawia ona
+`docker stop`, `docker rm` ani Solve. Wymaga bieżącego procesu hostowego bez
+pierwotnego writera, potwierdzonego `READY`/`LOGGED` oryginalnego helpera,
+pełnego ID kontenera, obrazu helpera i ID silnika Docker. Weryfikuje także
+kanoniczny fence anulowania oraz historyczny snapshot pary usług; backend musi
+być zatrzymany z kodem 0. Snapshot frontendu może pochodzić sprzed jego
+zatrzymania i nie jest traktowany jako dowód jego kodu wyjścia.
+
+Najpierw uruchom preview bez `apply`; wypisany SHA jest wymagany przy apply:
+
+```powershell
+just docker-dev-resume-interrupted-fresh-archive `
+  $priorAttempt $configSha256 $source $recreationAttempt `
+  $unknownReceiptSha256 $helperContainerId $helperImage $engineId
+
+just docker-dev-resume-interrupted-fresh-archive `
+  $priorAttempt $configSha256 $source $recreationAttempt `
+  $unknownReceiptSha256 $helperContainerId $helperImage $engineId `
+  $planSha256 true
+```
+
+Kontynuacja zachowuje bajty pierwotnego niepewnego receipt w niemutowalnym
+sidecarze, publikuje intent przed ruchem danych i korzysta z istniejącego
+archiwizatora runtime. Końcowe `receipt.json`, `current.json`, `verified.json`
+i `terminal.json` muszą zawierać identyczny succeeded receipt; terminal jest
+publikowany jako ostatni, aby pierwotny helper sam zwolnił marker aktywności.
+Po publikacji kontynuacja wykonuje odłączony readback i przypina archiwum do
+fence anulowania. Nie uruchamia usług ani nowej sesji. Jeśli obserwacja helpera,
+CAS, kontenerów lub inode zmieni się względem preview, niczego nie usuwa i
+kończy się błędem do ponownego inventory/review.
 
 ### Logi i gotowość
 
@@ -392,26 +569,30 @@ i rzeczywiste granice automatycznego sprzątania:
 | Dane | Trwałe miejsce |
 | --- | --- |
 | Źródła | Wybrany checkout Windows, readonly bind; frontend HMR |
-| Toolchain, zależności, cache kompilatorów, staging i pakiet dev | Nazwane wolumeny Docker grupy Compose oraz BuildKit; nie hostowy `storage` |
-| Manifesty wejściowe, konteksty, logi buildu, receipty i provenance | Techniczne wolumeny Docker grupy Compose; nie Windows storage |
-| Kontrola runtime i metadata usług technicznych | Wydzielony podwolumen Docker grupy Compose; nie katalog sesji użytkownika |
+| Toolchain, cache backendu, staging i logi | `private/backend` stabilnego `BuildControl.volume`; zależności obrazu w BuildKit |
+| Manifesty, receipty, locks i provenance | Dotychczasowy root `BuildControl.volume`; nie Windows storage |
+| Frontend cache i Next state | `private/frontend` tego samego volume; bez dostępu do rootu control/backendu/ledgeru |
+| Control i ledger grupy | Root volume oraz `private/ledger`; nie są cache i nie podlegają rebuild wipe |
+| Pakiet dev, Cargo registry/git i pnpm store | Project-scoped `fullmag-shared-*`; pakiet w dokładnym `groups/<unit_key>` |
 | Sesje, modele, wyniki i logi symulacji | Fizyczny storage Windows, mount `/state` |
 | Ustawienia, ostatnie projekty i historia grupy | `storage/user-data/<compose-project>/workspace.db`, mount `/user-data` |
-| Przydziały CPU/RAM/GPU grupy | Ledger grupy `group-ledger-v1` w jej nazwanym wolumenie Docker, mount `/host-ledger`; nie cache buildu. Release i kwalifikacja używają `host-ledger-v1` |
+| Przydziały CPU/RAM/GPU grupy | DEV `group-ledger-v1` w `private/ledger` pod `/host-ledger`; release i kwalifikacja zachowują `host-ledger-v1` |
 
 ### Granica zapisu i kontrola wzrostu danych technicznych
 
-Launcher powinien tworzyć oraz przypinać do jednej grupy Compose osobne
-przestrzenie techniczne dla backendowego `/build`, opublikowanego pakietu
-`/opt/fullmag/package`, wspólnego control/provenance, runtime-control oraz
-frontendowego cache i stanu developmentu. Ich nazwy, klucze profilu i marker
-właściciela wynikają z projektu Compose oraz worktree; operator nie wskazuje
-drugiego hostowego katalogu jako zamiennika. `subpath` może izolować frontend od
-backendowych receiptów, ale nie zmienia własności ani trwałości wolumenu.
+Launcher powinien tworzyć i przypinać do grupy dokładnie jeden prywatny named
+volume: istniejący stabilnie nazwany `BuildControl.volume`. Jego root zachowuje
+control/lock/namespace, bez wymaganego katalogu `control/`; `/build`, frontend
+state i `/host-ledger` mapują na `private/backend`, `private/frontend` i
+`private/ledger`. Mount frontendu obejmuje wyłącznie jego subpath, nigdy volume
+root, backend cache ani ledger. Nazwa zależy od Compose project/worktree ID, a
+nie od profilu, toolchaina, dependency hash lub attempt. Global shared
+Cargo/pnpm/packages oraz image/BuildKit pozostają osobnymi zasobami.
 
 BuildKit przechowuje warstwy obrazu i cache zależności na dysku danych Docker
-Desktop. Named volumes przechowują wynik przyrostowego buildu, staging, pakiet,
-logi, receipty i provenance do czasu kontrolowanej retencji. Samo zatrzymanie
+Desktop. Named volumes przechowują workspace źródeł, logi, receipty i provenance;
+compiler outputs `.fullmag-build` podlegają ADR 0076, a pakiety current/rollback
+pozostają w shared package volume. Samo zatrzymanie
 lub usunięcie kontenera nie powinno usuwać tych danych; ich usunięcie wymaga
 jawnej operacji lifecycle dla dokładnej grupy, po sprawdzeniu aktywnych runów,
 mountów, lease i możliwości rollbacku. `docker compose down --volumes`, globalny
@@ -419,9 +600,9 @@ prune oraz ręczne kasowanie katalogów nie są procedurą codziennego restartu.
 
 Każdy nowy build używa klucza wejścia i istniejącego cache. Zastąpiony pakiet
 można usunąć dopiero po trwałym zapisaniu nowego pakietu, receiptów rotacji i
-dowodu, że żaden run, sesja, rollback ani proces go nie referuje. Cache
-kompilatorów i zależności pozostaje, bo jego ponowne pobranie lub przebudowa
-generuje duplikaty i wydłuża następny start. Automatyczna retencja technicznych
+dowodu, że żaden run, sesja, rollback ani proces go nie referuje. Współdzielone
+cache zależności pozostają według własnej retencji; prywatne compiler outputs
+nie są zachowywane po udanej publikacji. Automatyczna retencja technicznych
 wolumenów, jej pomiar rozmiaru oraz bezpieczne odtworzenie pozostają
 **NOT VERIFIED** w obecnym wariancie.
 
@@ -567,7 +748,23 @@ wejść używa tego samego klucza receiptu. Do checkoutu wracają wyłącznie cz
 wersjonowane pliki API. Przed publikacją ponownie sprawdzane są źródła,
 kontenery, obrazy i backing wolumenów.
 
-Zmiana źródeł wymaga najpierw zwykłego restartu backendu tej grupy. Timeout
+Zmiana źródeł wymaga najpierw zwykłego restartu backendu tej grupy.
+
+Codegen wiąże się z wejściami buildu backendu: wymaga zgodności commita,
+`source_snapshot_sha256` i natywnej tożsamości źródeł z receiptem pakietu, a
+nie pełnego `source_digest` drzewa. Snapshot wyklucza ścieżki nieużywane przez
+runtime (`LIVE_RUNTIME_STATUS_EXCLUSIONS` i `LIVE_NON_RUNTIME_*` w
+`docker/all-in-one/backend_source.py`: m.in. `docs/**`, `apps/control-room/**`,
+`scripts/test_*`, `*.md`, `*.source-map.json`), a backend po samej zmianie
+takich plików weryfikuje istniejący pakiet zamiast go przebudowywać. Pełny
+skrót drzewa różniłby się wtedy trwale, choć binarka i OpenAPI są aktualne.
+Na hoście WSL z Docker Desktop źródło bind mountu ma postać
+`/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/<dystrybucja>/<sha256>`;
+codegen potwierdza je przez ten sam inode aliasu
+`/mnt/wsl/docker-desktop-bind-mounts/…` i wybranego checkoutu. Zapieczętowane (bez bitów zapisu) binarki pakietu współdzielonego
+między grupami mogą mieć wiele hardlinków; ich zawartość jest sprawdzana
+skrótem z receiptu. Opublikowane pliki zachowują poprzedni tryb (domyślnie
+`0644`), aby usługa `frontend` mogła je czytać. Timeout
 klienta Docker nie dowodzi zakończenia zdalnego procesu generatora; receipt
 awarii zachowuje identyfikator stagingu i potrzebę uzgodnienia stanu zamiast
 usuwać potencjalnie używane dane. `generate-api-openapi-legacy` zachowuje
@@ -602,16 +799,167 @@ zadania w rozwiązanym storage, nie do rosnącej historii komend w tym przewodni
 2. Zdefiniować w Compose dwa serwisy, źródła, storage, sieć i port.
 3. Przygotować obraz narzędziowy.
 4. Podłączyć wybór checkoutu/worktree i przygotowanie źródeł backendu.
-5. Uruchomić trwały cache kompilacji backendu.
+5. Uruchomić kompilację backendu i opisać retencję compiler outputs.
 6. Zbudować pełny backend: FDM/FEM, CPU/GPU.
 7. Uruchomić frontend Next.js z montowanych źródeł.
 8. Uruchomić oba kontenery w grupie checkoutu, z osobną siecią i portem.
 9. Sprawdzić widoczny Home i komunikację UI–API.
 10. Potwierdzić HMR po edycji pliku w Windows.
-11. Potwierdzić przyrostową przebudowę backendu bez utraty cache.
+11. Potwierdzić cache-hit pakietu oraz kompilację i retencję według ADR 0076.
 12. Sprawdzić parametr skryptu, aktywację modelu, wykonanie GPU i zapis wyników w Windows.
 13. Uzupełnić instrukcję, przeprowadzić wymagane CI/review i scalić na `master`.
 
 Aktualizacje postępu używają „Zadanie X/13”. Numery oznaczają etapy;
 nie są deklaracją ukończenia. Zmiana z ADR 0061 wymaga ponownego sprawdzenia
 cyklu start/restart, zanim wcześniejsze dowody zostaną do niego przypisane.
+
+### Wznowienie samego frontendu po udanym starcie
+
+`just docker-dev-resume <start-attempt> <config-sha256> <source-root> <port>` może wznowić zatrzymany frontend także wtedy, gdy historyczny start zakończył się `succeeded`. Launcher sprawdza dokładne incarnation ID, project, image, source i mounty obu usług oraz wymaga działającego backendu i zatrzymanego frontendu. Startuje wyłącznie frontend; nie zmienia historycznego receipt, nie restartuje backendu i nie powtarza aktywacji ani Solve. Ścieżkę odtworzono po błędzie V8 heap frontendu; wynik zapisywany jest jako nowa operacja `resume`.
+
+### Zatrzymanie diagnostyki po bezpośredniej awarii bootstrapu
+
+`scripts/docker_dev.py stop-bootstrap-volume` obsługuje dwa rozłączne źródła
+dowodów: istniejący `--resume-attempt` albo parę
+`--development-terminal-sha256` i `--process-receipt-sha256` dla bezpośredniego
+startu `development`. Pozostałe wymagane argumenty to `--repo-root`, `--source-root`,
+`--attempt`, `--config-sha256` i `--port`. `--repo-root` jest argumentem globalnym,
+umieszczanym przed nazwą polecenia. Parametry muszą pochodzić z konkretnej
+zachowanej próby, nie z bieżących ustawień innej grupy.
+
+Bezpośredni wariant wymaga stanu `failed-confirmed`, oryginalnych plików
+`process-failure.json` i `readiness-failure.json`, zgodności pierwszego z żywym
+receiptem procesu oraz koperty błędu rzeczywistego producenta. Zachowuje pełne
+kontrole startup fence, PID, cgroup, image, source, inkarnacji API, braku sesji
+i procesów historycznego ownera oraz konsumentów grupy/wolumenu pod blokadą.
+Opcjonalne `--stop-frontend` jest dostępne tylko dla tego wariantu i po
+potwierdzonym stopie backendu zatrzymuje dokładnie przypięty frontend tej grupy.
+Nie usuwa kontenerów ani danych. Brak potwierdzenia zatrzymania pozostawia
+wynik nieznany; operator nie powinien ponawiać sygnału na podstawie timeoutu.
+
+Wariant bezpośredni zapisuje receipt `fullmag.docker-bootstrap-api-stop.v2`
+z jawnym `failure_origin`; wariant resume zachowuje v1. Historyczny owner Ready,
+sesje i lease pozostają zachowane, a native execution pozostaje `unknown`.
+Zatrzymanie diagnostycznego API nie stanowi dowodu native drain i nie uprawnia
+do archiwizacji namespace wymagającej rzeczywistego stanu Drained.
+
+Wąski wariant recovery z historycznym ownerem dopuszcza osobny dowód
+`fullmag.docker-bootstrap-historical-namespace-absence.v1`. Dotyczy sytuacji,
+gdy zachowany `OWNER.host` wskazuje wcześniejszy, usunięty kontener tej samej
+grupy, a obecny backend zatrzymano przez przypięty diagnostic bootstrap stop.
+Dowód wiąże obecne bajty OWNER/process z archiwalnym inspect, buildem i jawnym
+łańcuchem udanych rekreacji; ponownie sprawdza nieobecność dokładnych starych
+kontenerów oraz brak ponownego użycia historycznego hostname w całym silniku.
+Nie odtwarza brakującej historycznej obserwacji procesu i nie deklaruje drain.
+Zwykły recovery nadal wymaga zgodności hosta właściciela.
+
+Dowód powstaje przez `prepare_historical_namespace_absence` i jest publikowany
+niezmiennie w operacji BuildControl. `stop-bootstrap-frontend-volume` wymaga
+wtedy jawnej pary `--historical-namespace-proof <control-relative-path>` oraz
+`--historical-namespace-proof-sha256 <raw-sha256>`; preview i apply wiążą ten
+sam dowód i ponawiają kontrole nieobecności. Archiwizacja nadal wymaga pełnego
+terminalnego accepted store, przypiętego proof i operator authorization.
+Sesje, Zarr, historyczne metadane i lease pozostają zachowane. Ten wyjątek nie
+uprawnia do kasowania rekordów ownera ani do uznania Unknown za terminalny run.
+
+Inwentarz historii aktywacji traktuje `bootstrap-namespace-proof` i
+`bootstrap-container-proof` jako znane, konserwatywne źródła pinów. Ich
+odwołania do aktywacji nadal blokują archiwizację; nie należą do wykluczonych
+danych technicznych. Nieznany root control nadal powoduje odmowę kwalifikacji.
+
+### Przygotowana, nieopublikowana awaria tworzenia sieci
+
+`scripts/docker_volume_network_failure_reconcile.py` może wznowić kompletny
+zestaw `reconciliation/{prepared,result,network-failure-proof}.json`, jeśli
+poprzednia próba zatrzymała się przed CAS. Wymaga pary
+`--resume-prepared-sha256 <sha256>` i `--recovery-id <32 lowercase hex>` obok
+dotychczasowych pinów `--source-root`, `--attempt`, `--receipt-sha256`,
+`--compose-sha256` oraz `--engine-id`. Bez `--apply` wykonuje tylko kwalifikację.
+
+Oryginalny receipt i jego archiwum muszą pozostać identyczne. Obecność blokady
+CAS, terminalu lub wskaźników current/verified powoduje odmowę. Nowa operacja
+sprawdza pełne powiązanie wcześniejszego przygotowania, proof, result i helpera,
+a następnie wykonuje dwie obserwacje i trzecią bezpośrednio przed CAS, zachowując
+zakres group-local: logicznych konsumentów własnego projektu i wolumenu oraz
+bezpośrednich bindów, bez fizycznej analizy cudzych checkoutów Windows/WSL.
+Świeże dowody trafiają
+do `reconciliation/recoveries/<recovery-id>/`; stare pliki pozostają zachowane.
+CAS ponownie sprawdza ich hashe. Wynik wiąże nowy identyfikator z poprzednim
+SHA przygotowania. Wyłącznie oryginalny helper zwalnia active po terminalu.
+Dawne równoległe obserwacje fizycznych cudzych checkoutów nie są częścią
+tego kontraktu group-local; nie są wymagane do tej failure-only publikacji.
+Ścieżka nie obsługuje częściowo opublikowanej transakcji i nie publikuje
+historycznego proof jako świeżego dowodu. Wariant nie łączy się z
+`--recover-absent-helper`: przygotowana generacja nadal wymaga oryginalnego
+żywego helpera. Nowe pliki i terminal są publikowane pod wspólnymi blokadami
+transakcji, z ponownym sprawdzeniem hashy starej generacji przed zapisem.
+Testy źródłowe nie zastępują
+potwierdzenia konkretnej operacji na silniku Docker.
+
+### Pusty bootstrap po SIGABRT API, bez native ownera
+
+`stop-empty-api-abort-volume` obsługuje jawnie wybraną próbę development, która
+zbudowała i opublikowała pakiet, ale API zakończyło start przez SIGABRT (-6)
+przed powstaniem ownera i jakiegokolwiek runu. Wymaga `--attempt`,
+`--config-sha256`, `--source-root` i `--port`; `--preview` zapisuje plan bez
+zatrzymania, a `--apply --expected-plan-sha256 <sha256>` ponownie sprawdza
+ten sam plan pod blokadą operacji i zatrzymuje dokładnie przypiętą parę.
+
+Dowód obejmuje oba puste namespace runtime-services, pusty runs, brak API PID
+i otwartego portu, wyłącznie init i supervisor w backendzie, brak aktywacji,
+zwolnione rezerwacje i lease, zgodność publication/config oraz pełne tożsamości
+i czasy startu usług. Obecność dodatkowego konsumenta projektu lub control
+volume blokuje operację. Odczyty nie analizują fizycznie cudzych checkoutów.
+
+Po stopie backend ma exit 1, frontend exit 0, a process-tree zachowuje
+`shutdown_unknown`, przyczynę API -6 i brak ownera. Receipt potwierdza ten
+rzeczywisty stan; nie deklaruje drain. Oddzielna para
+`recreate-volume --fresh-state --empty-api-abort-stop <stop-attempt>
+--empty-api-abort-stop-sha256 <raw-terminal-sha256>` dopuszcza wyłącznie
+archiwizację tego pustego bootstrapu. Konsument przed operacją i pod jej
+blokadą porównuje raw receipty, plan, kontenery oraz ponowny odczyt pustego
+namespace. Nie przywraca go jako retained runtime i zachowuje stare dane.
+
+### Zachowane wyniki przed archiwizacją aktywacji
+
+Kwalifikacja pojedynczego ukończonego runu rozpoznaje dwa istniejące układy:
+`reversal-attempt-1` z targetem `main` oraz `relax-attempt-1` z targetem
+`relax`. Nazwa katalogu musi zgadzać się z oboma receiptami storage i wpisem
+etapu w `fullmag-run.json`; target musi zgadzać się z deklaracjami wyjść,
+manifestem autosave i metadanymi Zarr. Dodatkowy katalog próby, brakujący
+chunk lub niezgodna tożsamość nadal blokują operację. Walidator nie zmienia
+nazw wyników ani ich zawartości. To rozszerzenie nie uchyla kontroli lease,
+referencji control, aktualnej aktywacji i jej chronionego poprzednika.
+
+### Archiwizacja odrzuconej aktywacji bez Run
+
+`docker-dev-archive-activation` obsługuje jawny wariant `rejected-no-run-v1`:
+
+```text
+just docker-dev-archive-activation "<source-root>" "<activation-id>" false "" true
+just docker-dev-archive-activation "<source-root>" "<activation-id>" true "<preview-plan-sha256>" true
+```
+
+Profil wymaga potwierdzonego API400/422, identycznych receipt/terminal,
+niezmienionego źródła i pełnego eksportu oryginalnych rekordów obok pliku `.py`
+na ext4 WSL (`fullmag.activation-rejection-provenance-export.v1`, kontrakt
+`scripts/docker_activation_history.py::preserved_rejection`). Nie wolno
+odtwarzać eksportu z oszacowanych danych. Brak Run/session/reconciliation,
+brak wycofania poprzednika i kompletny skan SessionStore są wymagane.
+Znaleziony request, jego hash, źródło, RunIntent, admission lub lease blokują
+kwalifikację. Nie pomija się poddrzew wyników ani historii.
+
+Dla tak zakwalifikowanego odrzucenia samo `activation/current.json` może być
+historycznym wskaźnikiem: jego surowe bajty muszą być identyczne z terminalem
+tego samego kandydata. Plan wiąże rodzaj kwalifikacji, identyfikator próby
+oraz oba hashe; pointer pozostaje przypięty w guardach/CAS. Apply ponownie
+kwalifikuje kandydata pod blokadą. `verified`, inne referencje recovery,
+nieznany wynik i zmiana choćby formatu bajtów nadal blokują operację.
+Pozostawiony pointer korzysta z istniejącego odczytu archiwalnego pod dawną
+ścieżką; nie jest usuwany ani przestawiany na inny wynik.
+
+Preview i apply zachowują istniejące blokady, source/consumer pins oraz
+niezmienny digest planu. Apply przenosi dokładnie jeden rekord do `history-v1`
+z zachowaniem wszystkich bajtów i odczytu pod dawnymi ścieżkami. Nie usuwa
+rekordów, nie zwiększa limitu 64 i nie ponawia aktywacji ani Solve. Dla innych
+stanów nadal obowiązują ich osobne kwalifikowane recepty.

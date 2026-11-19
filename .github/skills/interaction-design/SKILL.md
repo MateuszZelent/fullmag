@@ -5,6 +5,6 @@ description: Design and implement microinteractions, motion design, transitions,
 
 # interaction-design
 
-Use the [canonical interaction-design instructions](../../../.agents/skills/interaction-design/SKILL.md).
-Resolve its references and relative paths against that canonical skill directory.
-This entry preserves the GitHub skill mirror without duplicating the skill package.
+Read and follow the canonical [interaction-design skill](../../../.agents/skills/interaction-design/SKILL.md).
+Resolve its references and scripts relative to that canonical directory.
+This entrypoint shares the existing implementation without duplicating it.

@@ -30,3 +30,20 @@ export async function commitOrientationCameraGesture(
     if (settleViewport3DCameraGesture(ref, epoch)) onEnd?.(epoch);
   }
 }
+
+/** Consume OrbitControls inertia before an explicit camera pose replaces it. */
+export function clearOrientationCameraMomentum(controls?: {
+  enableDamping?: boolean;
+  update?: (delta?: number) => unknown;
+}): void {
+  if (!controls?.enableDamping || !controls.update) return;
+  const damping = controls.enableDamping;
+  controls.enableDamping = false;
+  try {
+    // OrbitControls clears its pending spherical and pan deltas in this mode.
+    // The caller applies the requested pose after this synchronous update.
+    controls.update(0);
+  } finally {
+    controls.enableDamping = damping;
+  }
+}

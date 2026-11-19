@@ -5,15 +5,9 @@ import {
   Sparkles,
   Box,
   Camera,
-  Columns2,
   Monitor,
   PanelRight,
-  Play,
-  Pause,
-  SkipForward,
-  Square,
   Scissors,
-  BarChart3,
   Eye,
   Sigma,
   Zap,
@@ -28,6 +22,21 @@ import {
   Activity,
   Blend,
   Maximize2,
+  ChartSpline,
+  CircleDashed,
+  Crop,
+  Crosshair,
+  FileDown,
+  Grip,
+  Hand,
+  LayoutGrid,
+  Maximize,
+  MoveUpRight,
+  Palette,
+  ScanSearch,
+  Waves,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 
 import type { RibbonTabContent } from "./ribbonTypes";
@@ -42,8 +51,10 @@ import {
   fieldCatalogQuantitySupportsSpatialVisualization,
   quantityCatalogEntrySupportsAirbox,
   quantityCatalogEntrySupportsSpatialVisualization,
+  quantityCatalogPickerItem,
 } from "@/kernel/api/quantityIds";
 import { RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND } from "./ribbonCommands";
+import { VIEWPORT_3D_QUALITY_PROFILE_LABELS } from "@/shared/viewport3dQualityLabels";
 
 import type {
   FieldCatalogResource,
@@ -58,6 +69,7 @@ import type {
   VisualizationRenderMode,
   VisualizationTargetKind,
 } from "@/kernel/visualization/ObjectVisualizationController";
+import { SCALAR_COLOR_PALETTE_ITEMS } from "@/shared/visualization/scalarColorPalette";
 
 export type FieldComponentPatch = NonNullable<VisualizationStatePatch["field_component"]>;
 export type VectorColorModePatch = NonNullable<
@@ -91,12 +103,14 @@ export function quantityItemsForVisualizationTarget(
             ? quantityCatalogEntrySupportsAirbox
             : quantityCatalogEntrySupportsSpatialVisualization,
         )
-        .map((quantity) => ({
-          label: quantity.unit
-            ? `${quantity.label} / ${quantity.unit}`
-            : quantity.label || quantity.id,
-          value: quantity.id,
-        }))
+        .map((quantity) =>
+          quantityCatalogPickerItem(
+            quantity,
+            quantity.unit
+              ? `${quantity.label} / ${quantity.unit}`
+              : quantity.label || quantity.id,
+          ),
+        )
     : [];
   const fieldItems = fieldCatalog
     ? fieldCatalog.quantities
@@ -134,10 +148,10 @@ export function quantityItemsForVisualizationTarget(
 }
 
 function mergeQuantityItems(
-  capabilityItems: Array<{ label: string; value: string }>,
+  capabilityItems: Array<{ disabled?: boolean; label: string; value: string }>,
   fieldItems: Array<{ label: string; value: string }>,
-): Array<{ label: string; value: string }> {
-  const merged = new Map<string, { label: string; value: string }>();
+): Array<{ disabled?: boolean; label: string; value: string }> {
+  const merged = new Map<string, { disabled?: boolean; label: string; value: string }>();
   for (const item of capabilityItems) merged.set(item.value, item);
   for (const item of fieldItems) {
     if (!merged.has(item.value)) merged.set(item.value, item);
@@ -222,10 +236,10 @@ export const homeTab: RibbonTabContent = {
       subtitle: "files",
       tone: "neutral",
       actions: [
-        { id: "open",       icon: icon(FileText),            label: "Open",      shortcut: "Ctrl+O", disabled: true, iconColor: C.blue, menu: menu("home-open", "Project", [["New problem", "Ctrl+N"], ["Open project", "Ctrl+O"], "Open example", "Recent sessions"]) },
+        { id: "open",       icon: icon(FileText),            label: "Open",      shortcut: "Ctrl+O", preview: true, disabled: true, iconColor: C.blue, menu: menu("home-open", "Project", [["New problem", "Ctrl+N"], ["Open project", "Ctrl+O"], "Open example", "Recent sessions"]) },
         { id: "study.save-field-state", icon: icon(Save), label: "Save Field", iconColor: C.blue },
         { id: "study.load-field-state", icon: icon(Upload), label: "Load Field", iconColor: C.lavender },
-        { id: "vis-preset", icon: icon(Sparkles),            label: "3D Visual", disabled: true,                     iconColor: C.lavender, menu: menu("home-visual", "Visual preset", ["Publication figure", "Live control room", "Debug overlays"]) },
+        { id: "vis-preset", icon: icon(Sparkles),            label: "3D Visual", preview: true, disabled: true, iconColor: C.lavender, menu: menu("home-visual", "Visual preset", ["Publication figure", "Live control room", "Debug overlays"]) },
       ],
     },
     {
@@ -235,47 +249,9 @@ export const homeTab: RibbonTabContent = {
       tone: "neutral",
       actions: [
         {
-          id: "viewport-3d.open",
-          icon: icon(Box),
-          label: "3D",
-          shortcut: "1",
-          iconColor: "text-indigo-400",
-          splitButton: true,
-          menu: [
-            {
-              type: "radio-group",
-              id: "home-workspace:radio",
-              label: "Workspace mode",
-              value: "3d",
-              items: [
-                {
-                  commandId: "viewport-3d.open",
-                  label: "3D viewport",
-                  value: "3d",
-                },
-                {
-                  commandId: "field-map.open",
-                  label: "2D field map",
-                  value: "field-map",
-                },
-                {
-                  commandId: "analysis-plots.open",
-                  label: "Analysis",
-                  value: "analysis",
-                },
-                {
-                  commandId: "live-charts.open",
-                  label: "Live Charts",
-                  value: "live-charts",
-                },
-              ],
-            },
-          ],
-        },
-        {
           id: "home-camera-rotation",
           icon: icon(Camera),
-          label: "Camera",
+          label: "Rotation mode",
           iconColor: "text-sky-300",
           menu: [
             {
@@ -298,14 +274,10 @@ export const homeTab: RibbonTabContent = {
             },
           ],
         },
-        { id: "ws-2d",      icon: icon(Columns2),  label: "2D",      shortcut: "2", commandId: "field-map.open", iconColor: C.sky },
-        { id: "ws-live-charts", icon: icon(Activity), label: "Live Charts", commandId: "live-charts.open", iconColor: C.blue },
-        { id: "ws-analyze", icon: icon(BarChart3), label: "Analyze",               commandId: "analysis-plots.open",       iconColor: C.green },
         {
           id: "ws-panel",
           icon: icon(PanelRight),
           label: "Panel",
-          shortcut: "Ctrl+B",
           menu: [
             { type: "label", id: "home-panels:label", label: "Panels" },
             {
@@ -334,30 +306,35 @@ export const homeTab: RibbonTabContent = {
               type: "item",
               id: "home-panels:reset-layout",
               label: "Reset layout",
+              preview: true,
               disabled: true,
             },
           ],
         },
-        { id: "ws-focus",   icon: icon(Eye),       label: "Focus",   disabled: true,               iconColor: C.teal },
-      ],
-    },
-    {
-      id: "compute",
-      title: "Compute",
-      subtitle: "runtime",
-      tone: "compute",
-      actions: [
-        { id: "study.prepare-live", icon: icon(Layers3), label: "Prepare", iconColor: C.blue, tooltip: "Materialize the current Live scene preparation receipt without starting the solver" },
-        { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, iconColor: C.green, tooltip: "Submit the study solve command" },
-        { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
-        { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
-        { id: "study.discard-paused-state", icon: icon(Scissors), label: "Discard", iconColor: C.red },
-        { id: "study.stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   iconColor: C.red },
-        { id: "study.skip",  icon: icon(SkipForward),                           label: "Skip",                   iconColor: C.peach },
+        { id: "ws-focus",   icon: icon(Eye),       label: "Focus", preview: true, disabled: true, iconColor: C.teal },
       ],
     },
   ],
 };
+
+const PLANAR_TOOLBAR_RIBBON_ACTIONS: RibbonTabContent["groups"][number]["actions"] = ([
+  ["field-map.tool.navigate", Hand, "Navigate"],
+  ["field-map.tool.zoom-box", ScanSearch, "Zoom box"],
+  ["field-map.tool.crop", Crop, "Crop"],
+  ["field-map.tool.inspect", Crosshair, "Inspect"],
+  ["field-map.tool.profile", ChartSpline, "Profile"],
+  ["field-map.tool.measure", Ruler, "Measure"],
+  ["field-map.zoom-in", ZoomIn, "Zoom in"],
+  ["field-map.zoom-out", ZoomOut, "Zoom out"],
+  ["field-map.fit", Maximize, "Fit"],
+  ["field-map.toggle-vectors", MoveUpRight, "Vectors"],
+  ["field-map.toggle-points", Grip, "Points"],
+  ["field-map.toggle-mesh", Triangle, "Mesh"],
+  ["field-map.toggle-streamlines", Waves, "Field lines"],
+  ["field-map.toggle-contours", CircleDashed, "Contours"],
+  ["field-map.toggle-multislice", LayoutGrid, "Slices"],
+  ["field-map.toggle-legend", Palette, "Legend"],
+] as const).map(([id, Icon, label]) => ({ id, icon: icon(Icon), label, size: "compact" as const }));
 
 export const viewTab: RibbonTabContent = {
   tabId: "view",
@@ -394,22 +371,22 @@ export const viewTab: RibbonTabContent = {
               items: [
                 {
                   commandId: "viewport-3d.profile-interactive-lite",
-                  label: "Interactive Lite",
+                  label: VIEWPORT_3D_QUALITY_PROFILE_LABELS["interactive-lite"],
                   value: "interactive-lite",
                 },
                 {
                   commandId: "viewport-3d.profile-interactive",
-                  label: "Interactive",
+                  label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.interactive,
                   value: "interactive",
                 },
                 {
                   commandId: "viewport-3d.profile-balanced",
-                  label: "Balanced",
+                  label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.balanced,
                   value: "balanced",
                 },
                 {
                   commandId: "viewport-3d.profile-figure",
-                  label: "Figure",
+                  label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.figure,
                   value: "figure",
                 },
                 {
@@ -479,13 +456,7 @@ export const viewTab: RibbonTabContent = {
                   id: "quantity:shader",
                   label: "Colormap",
                   value: "viridis",
-                  items: [
-                    { value: "viridis",  label: "Viridis" },
-                    { value: "inferno",  label: "Inferno" },
-                    { value: "magma",    label: "Magma" },
-                    { value: "coolwarm", label: "Coolwarm" },
-                    { value: "jet",      label: "Jet" },
-                  ],
+                  items: SCALAR_COLOR_PALETTE_ITEMS,
                 },
                 { type: "checkbox",    id: "quantity:auto-scale",         label: "Auto-scale range",       checked: true },
                 { type: "separator",   id: "quantity:colormap:s0" },
@@ -697,12 +668,22 @@ export const viewTab: RibbonTabContent = {
           iconColor: "text-sky-300",
           tooltip: "Open the active monitor in 2D View",
         },
+        // Same command ids as the 2D view toolbar (spec 12 §5.1): tools,
+        // navigation and whole-view masks.
+        ...PLANAR_TOOLBAR_RIBBON_ACTIONS,
         {
           id: "field-map.export-png",
           icon: icon(Download),
           label: "Export",
           iconColor: "text-amber-300",
           tooltip: "Export the current 2D field map",
+        },
+        {
+          id: "field-map.export-data",
+          icon: icon(FileDown),
+          label: "Data",
+          size: "compact",
+          tooltip: "Export the current 2D field data",
         },
       ],
     },
@@ -906,7 +887,7 @@ export const viewTab: RibbonTabContent = {
         {
           id: "view-camera",
           icon: icon(Camera),
-          label: "Camera",
+          label: "Camera settings",
           iconColor: "text-sky-300",
           menu: [
             { type: "item", id: "camera:parameters", label: "Camera parameters", commandId: "viewport-3d.open-camera-dialog" },

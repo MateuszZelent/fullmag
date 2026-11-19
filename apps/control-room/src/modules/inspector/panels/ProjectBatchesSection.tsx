@@ -758,7 +758,7 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
               {` · max parallel ${batch.max_parallel_cases ?? "Auto"}`}
               {` · on failure: ${failurePolicyLabel(batch.failure_policy)}`}
             </div>
-            <div aria-live="polite" className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
+            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
               {commandActions.map((action) => (
                 <Button
                   aria-label={`${batchCommandActionLabel(action)} for batch ${batch.batch_id}`}
@@ -857,7 +857,7 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
               {lifecycleError ? <span className="text-fm-xs text-fm-danger" role="alert">{lifecycleError}</span> : null}
             </div>
             {selected ? (
-              <div aria-live="polite" className="mt-2 grid min-w-0 gap-2 rounded-md border border-fm-subtle p-2">
+              <div className="mt-2 grid min-w-0 gap-2 rounded-md border border-fm-subtle p-2">
                 {cases.status === "loading" && !cases.data ? <p>Loading batch cases…</p> : null}
                 {cases.error ? <p role="alert">Could not load batch cases: {cases.error.message}</p> : null}
                 {cases.data?.cases.map((batchCase) => {
@@ -977,7 +977,7 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
                         </p>
                       ) : null}
                       {publishedRun && selectedRunId === publishedRun.run_id ? (
-                        <div aria-live="polite" className="grid min-w-0 gap-1 rounded-md border border-fm-subtle p-2">
+                        <div className="grid min-w-0 gap-1 rounded-md border border-fm-subtle p-2">
                           {selectedRun.status === "loading" && !selectedRun.data ? <p>Loading run details…</p> : null}
                           {selectedRun.error ? <p role="alert">Could not load run details: {selectedRun.error.message}</p> : null}
                           {selectedRunResource ? (

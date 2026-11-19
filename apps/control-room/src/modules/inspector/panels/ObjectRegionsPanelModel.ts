@@ -49,28 +49,28 @@ export interface RegionShapeDraft {
   center: [number, number, number];
   height: number;
   kind: RegionEditShapeKind;
-  preservedShape?: components["schemas"]["SceneRegionShape"];
   radius: number;
   size: [number, number, number];
 }
 
-export type RegionMaterialParameter = "aex" | "ms" | "alpha" | "ku1";
+export type RegionMaterialParameter =
+  | "aex"
+  | "ms"
+  | "alpha"
+  | "ku1"
+  | "ku2"
+  | "anisotropy_axis";
 export type RegionMaterialConflictPolicy = "error" | "higher_priority_wins";
 
-export interface RegionMaterialOverrideProjection {
+export interface RegionMaterialOverrideDraft {
+  /** Retained verbatim when the scalar editor cannot represent this override. */
+  preservedOverride?: components["schemas"]["SceneRegionMaterialOverride"];
   conflictPolicy: RegionMaterialConflictPolicy;
   parameter: RegionMaterialParameter;
   priority: number;
   unit: string;
   value: number;
-}
-
-export interface RegionMaterialOverrideDraft
-  extends RegionMaterialOverrideProjection {
-  /** Stable rendered-row identity; excluded from dirty checks and API payloads. */
-  uiKey: string;
-  preservedOverride?: components["schemas"]["SceneRegionMaterialOverride"];
-  preservedProjection?: RegionMaterialOverrideProjection;
+  vectorValue?: [number, number, number];
 }
 
 export interface ObjectRegionDiagnosticItem {
@@ -140,8 +140,6 @@ export interface BuildObjectRegionPatchOptions {
    * policy field.
    */
   meshPolicyLane?: ObjectRegionMeshPolicyLane;
-  /** Existing payload baseline used to avoid rewriting unchanged legacy overrides. */
-  baseDraft?: ObjectRegionDraft;
 }
 
 export interface ValidateObjectRegionDraftOptions {
@@ -413,7 +411,7 @@ export function clampObjectRegionDraftShapeToOwnerBounds(
   ownerBounds: RegionOwnerBounds | null,
   frame = "object",
 ): RegionShapeDraft {
-  if (!ownerBounds || frame !== "object" || shape.preservedShape) return shape;
+  if (!ownerBounds || frame !== "object") return shape;
   const halfExtents = halfExtentsForShape(shape, ownerBounds);
   const center = clampCenterToOwnerBounds(shape.center, halfExtents, ownerBounds);
 
@@ -454,45 +452,9 @@ function normalizeMaterialParameter(value: string | null): RegionMaterialParamet
   if (lc === "aex") return "aex";
   if (lc === "alpha") return "alpha";
   if (lc === "ku1") return "ku1";
+  if (lc === "ku2") return "ku2";
+  if (lc === "anisotropy_axis" || lc === "anisu") return "anisotropy_axis";
   return "ms";
-}
-
-const EDITABLE_REGION_MATERIAL_PARAMETERS = ["ms", "aex", "alpha", "ku1"] as const;
-
-export function isEditableRegionMaterialOverride(
-  override: components["schemas"]["SceneRegionMaterialOverride"],
-): boolean {
-  return (
-    EDITABLE_REGION_MATERIAL_PARAMETERS.includes(
-      override.parameter as (typeof EDITABLE_REGION_MATERIAL_PARAMETERS)[number],
-    ) &&
-    override.value.kind === "constant" &&
-    typeof override.value.value === "number" &&
-    (override.conflict_policy === undefined ||
-      override.conflict_policy === "error" ||
-      override.conflict_policy === "higher_priority_wins")
-  );
-}
-
-function materialOverrideProjection(
-  override: components["schemas"]["SceneRegionMaterialOverride"],
-  regionPriority: number | null | undefined,
-): RegionMaterialOverrideProjection {
-  const parameter = normalizeMaterialParameter(override.parameter as string);
-  const field = override.value;
-  return {
-    conflictPolicy: normalizeConflictPolicy(override.conflict_policy ?? null),
-    parameter,
-    priority: Math.round(override.priority ?? regionPriority ?? 0),
-    unit:
-      field.kind === "constant" && field.unit
-        ? field.unit
-        : defaultMaterialOverrideUnit(parameter),
-    value:
-      field.kind === "constant" && typeof field.value === "number"
-        ? field.value
-        : defaultMaterialOverrideValue(parameter),
-  };
 }
 
 function normalizeConflictPolicy(value: string | null): RegionMaterialConflictPolicy {
@@ -504,8 +466,6 @@ function normalizeConflictPolicy(value: string | null): RegionMaterialConflictPo
 function resolveShapeDraft(region: RegionListResource["regions"][number] | null): RegionShapeDraft {
   const shape = region?.shape;
   const kind = shape?.kind;
-  const isEditableShape =
-    kind === "box" || kind === "cylinder" || kind === "sphere";
   const resolvedKind: RegionEditShapeKind =
     kind === "cylinder" || kind === "sphere" ? kind : "box";
 
@@ -530,7 +490,6 @@ function resolveShapeDraft(region: RegionListResource["regions"][number] | null)
     center,
     height,
     kind: resolvedKind,
-    ...(shape && !isEditableShape ? { preservedShape: shape } : {}),
     radius,
     size,
   };
@@ -550,14 +509,43 @@ function resolveMeshPolicyDraft(region: RegionListResource["regions"][number] | 
 function resolveMaterialOverrideDrafts(
   region: RegionListResource["regions"][number] | null,
 ): RegionMaterialOverrideDraft[] {
-  return (region?.material_overrides ?? []).map((override, index) => {
-    const projection = materialOverrideProjection(override, region?.priority);
-    const editable = isEditableRegionMaterialOverride(override);
+  return (region?.material_overrides ?? []).map((override) => {
+    const field = override.value;
+    const parameter = String(override.parameter).toLowerCase();
+    const isVectorAxis =
+      (parameter === "anisotropy_axis" || parameter === "anisu") &&
+      field?.kind === "constant" &&
+      Array.isArray(field.value) &&
+      field.value.length === 3 &&
+      field.value.every((entry) => typeof entry === "number" && Number.isFinite(entry));
+    const isScalar =
+      ["ms", "aex", "alpha", "ku1", "ku2"].includes(parameter) &&
+      field?.kind === "constant" &&
+      typeof field.value === "number" &&
+      Number.isFinite(field.value);
+    const editable =
+      (isScalar || isVectorAxis) &&
+      [undefined, null, "error", "higher_priority_wins"].includes(override.conflict_policy);
+    const value = field?.kind === "constant" && typeof field.value === "number" ? field.value : undefined;
+    const unit = field?.kind === "constant" ? (field.unit ?? "") : "";
+    const normalizedParam = normalizeMaterialParameter(override.parameter as string);
+    const vectorValue: [number, number, number] | undefined = isVectorAxis
+      ? [
+          (field.value as number[])[0] ?? 0,
+          (field.value as number[])[1] ?? 0,
+          (field.value as number[])[2] ?? 1,
+        ]
+      : normalizedParam === "anisotropy_axis"
+        ? [0, 0, 1]
+        : undefined;
     return {
-      ...projection,
-      uiKey: `read:${index}`,
-      preservedOverride: override,
-      ...(editable ? { preservedProjection: projection } : {}),
+      ...(editable ? {} : { preservedOverride: structuredClone(override) }),
+      conflictPolicy: normalizeConflictPolicy(override.conflict_policy ?? null),
+      parameter: normalizedParam,
+      priority: Math.round(override.priority ?? region?.priority ?? 0),
+      unit: unit || defaultMaterialOverrideUnit(normalizedParam),
+      value: value ?? defaultMaterialOverrideValue(normalizedParam),
+      ...(vectorValue ? { vectorValue } : {}),
     };
   });
 }
@@ -572,8 +560,8 @@ export function defaultMaterialOverrideUnit(
   parameter: RegionMaterialParameter,
 ): string {
   if (parameter === "aex") return "J/m";
-  if (parameter === "alpha") return "";
-  if (parameter === "ku1") return "J/m^3";
+  if (parameter === "alpha" || parameter === "anisotropy_axis") return "";
+  if (parameter === "ku1" || parameter === "ku2") return "J/m^3";
   return "A/m";
 }
 
@@ -582,161 +570,18 @@ export function defaultMaterialOverrideValue(
 ): number {
   if (parameter === "aex") return 1e-11;
   if (parameter === "alpha") return 0.1;
-  if (parameter === "ku1") return 0;
+  if (parameter === "ku1" || parameter === "ku2" || parameter === "anisotropy_axis") return 0;
   return 800e3;
 }
 
-function serializeRegionMaterialOverride(
-  override: RegionMaterialOverrideDraft,
-  meshPolicyLane: ObjectRegionMeshPolicyLane,
-): components["schemas"]["SceneRegionMaterialOverride"] {
-  const original = override.preservedOverride;
-  if (original) {
-    if (!isEditableRegionMaterialOverride(original)) {
-      if (
-        meshPolicyLane !== "fem" &&
-        original.conflict_policy === "min_mesh_size_wins"
-      ) {
-        throw new Error(
-          "Cannot preserve this region override on the active lane because its conflict policy is FEM-only.",
-        );
-      }
-      return original;
-    }
-
-    const baseline = override.preservedProjection;
-    if (!baseline) {
-      throw new Error("The original region override projection is unavailable.");
-    }
-    const parameterChanged = override.parameter !== baseline.parameter;
-    const priorityChanged = override.priority !== baseline.priority;
-    const conflictPolicyChanged =
-      override.conflictPolicy !== baseline.conflictPolicy;
-    const unitChanged = override.unit !== baseline.unit;
-    const valueChanged = override.value !== baseline.value;
-    if (
-      !parameterChanged &&
-      !priorityChanged &&
-      !conflictPolicyChanged &&
-      !unitChanged &&
-      !valueChanged
-    ) {
-      return original;
-    }
-
-    const originalValue = original.value;
-    if (
-      originalValue.kind !== "constant" ||
-      typeof originalValue.value !== "number"
-    ) {
-      throw new Error("The original region override is not an editable scalar.");
-    }
-    const value: typeof originalValue = { ...originalValue };
-    if (valueChanged) value.value = override.value;
-    if (unitChanged) value.unit = override.unit.trim() || null;
-
-    return {
-      ...original,
-      ...(parameterChanged ? { parameter: override.parameter } : {}),
-      ...(priorityChanged ? { priority: Math.round(override.priority) } : {}),
-      ...(conflictPolicyChanged
-        ? { conflict_policy: override.conflictPolicy }
-        : {}),
-      value,
-    };
-  }
-
-  const value: components["schemas"]["SceneMaterialParameterField"] = {
-    kind: "constant",
-    value: override.value,
-  };
-  if (override.unit.trim().length > 0) {
-    value.unit = override.unit.trim();
-  }
-  const conflictPolicy = String(override.conflictPolicy);
-  return {
-    ...(meshPolicyLane !== "fem" && conflictPolicy === "min_mesh_size_wins"
-      ? {}
-      : {
-          conflict_policy:
-            conflictPolicy as components["schemas"]["SceneRegionConflictPolicy"],
-        }),
-    parameter: override.parameter,
-    priority: Math.round(override.priority),
-    value,
-  };
-}
-
-export interface RegionParentMaterialParameterInfo {
-  available: boolean;
-  unit: string;
-  value: number | string | null;
-}
-
-export function resolveParentMaterialParameterInfo(
-  parameter: RegionMaterialParameter,
-  objectId: string,
-  materialRef: string,
-  materialFields: MaterialParameterFieldListResource | null,
-  sceneData: SceneResource | null | undefined,
-): RegionParentMaterialParameterInfo {
-  if (materialFields?.fields) {
-    const field = materialFields.fields.find(
-      (candidate) =>
-        candidate.owner_object_id === objectId &&
-        !candidate.source_region_id &&
-        candidate.parameter.toLowerCase() === parameter.toLowerCase(),
-    );
-    if (field) {
-      const unit = field.unit ?? defaultMaterialOverrideUnit(parameter);
-      const authored = field.field;
-      if (authored.kind === "constant") {
-        if (typeof authored.value === "number") {
-          return { available: true, value: authored.value, unit };
-        }
-        return {
-          available: true,
-          value: `constant vector [${authored.value.join(", ")}]`,
-          unit,
-        };
-      }
-      return { available: true, value: `${authored.kind} field`, unit };
-    }
-  }
-
-  const material = sceneData?.materials?.find((candidate) => candidate.id === materialRef);
-  if (material?.properties) {
-    const properties = material.properties as Record<string, unknown>;
-    let value: unknown;
-    if (parameter === "ms") value = properties.Ms;
-    else if (parameter === "aex") value = properties.Aex;
-    else value = properties[parameter];
-    if (typeof value === "number") {
-      return {
-        available: true,
-        value,
-        unit: defaultMaterialOverrideUnit(parameter),
-      };
-    }
-  }
-
-  return {
-    available: false,
-    value: null,
-    unit: defaultMaterialOverrideUnit(parameter),
-  };
-}
-
 export function defaultMaterialOverrideDraft(
-  priority: number,
-  uiKey: string,
+  priority = 0,
 ): RegionMaterialOverrideDraft {
   return {
     conflictPolicy: "error",
     parameter: "ms",
     priority,
     unit: "A/m",
-    uiKey,
     value: 800e3,
   };
 }
@@ -944,7 +789,12 @@ export function objectRegionDraftFromModel(
   return {
     enabled: model.enabled,
     frame: model.frame,
-    materialOverrides: model.materialOverrides.map((override) => ({ ...override })),
+    materialOverrides: model.materialOverrides.map((override) => ({
+      ...override,
+      ...(override.vectorValue
+        ? { vectorValue: [...override.vectorValue] as [number, number, number] }
+        : {}),
+    })),
     meshPolicy: { ...model.meshPolicy },
     name: model.regionName === "unassigned" ? "" : model.regionName,
     ownerBounds: model.ownerBounds,
@@ -976,11 +826,11 @@ export function objectRegionDraftKey(model: ObjectRegionPanelModel): string {
         [
           override.parameter,
           override.value,
+          override.vectorValue ? override.vectorValue.join(",") : "",
           override.unit,
           override.priority,
           override.conflictPolicy,
           JSON.stringify(override.preservedOverride ?? null),
-          JSON.stringify(override.preservedProjection ?? null),
         ].join(","),
       )
       .join("|"),
@@ -990,7 +840,6 @@ export function objectRegionDraftKey(model: ObjectRegionPanelModel): string {
     model.shape.radius,
     model.shape.height,
     model.shape.axis.join(","),
-    JSON.stringify(model.shape.preservedShape ?? null),
     model.meshPolicy.enabled ? "mesh-enabled" : "mesh-disabled",
     model.meshPolicy.maximumElementSize,
     model.meshPolicy.minimumElementSize,
@@ -1010,29 +859,7 @@ export function objectRegionDraftDirty(
   draft: ObjectRegionDraft,
   baseDraft: ObjectRegionDraft,
 ): boolean {
-  const draftWithoutOverrides = { ...draft, materialOverrides: [] };
-  const baseWithoutOverrides = { ...baseDraft, materialOverrides: [] };
-  return (
-    JSON.stringify(draftWithoutOverrides) !== JSON.stringify(baseWithoutOverrides) ||
-    !sameMaterialOverrideDrafts(draft.materialOverrides, baseDraft.materialOverrides)
-  );
-}
-
-function comparableMaterialOverrideDraft(
-  override: RegionMaterialOverrideDraft,
-): components["schemas"]["SceneRegionMaterialOverride"] {
-  // Compare authored payloads, including retained metadata. The original
-  // projection changes after ACK even when the authored value does not.
-  // Allow all retained policies here; the actual patch enforces its lane.
-  return serializeRegionMaterialOverride(override, "fem");
-}
-
-function sameMaterialOverrideDrafts(
-  left: readonly RegionMaterialOverrideDraft[],
-  right: readonly RegionMaterialOverrideDraft[],
-): boolean {
-  return JSON.stringify(left.map(comparableMaterialOverrideDraft)) ===
-    JSON.stringify(right.map(comparableMaterialOverrideDraft));
+  return JSON.stringify(draft) !== JSON.stringify(baseDraft);
 }
 
 export function validateObjectRegionDraft(
@@ -1046,29 +873,27 @@ export function validateObjectRegionDraft(
   if (!Number.isFinite(draft.priority) || !Number.isInteger(draft.priority)) {
     errors.push("Region priority must be an integer.");
   }
-  if (!draft.shape.preservedShape) {
-    if (!draft.shape.center.every(Number.isFinite)) {
-      errors.push("Shape center must contain finite values.");
+  if (!draft.shape.center.every(Number.isFinite)) {
+    errors.push("Shape center must contain finite values.");
+  }
+  if (draft.shape.kind === "box" && !draft.shape.size.every(numberIsPositive)) {
+    errors.push("Box size values must be greater than zero.");
+  }
+  if (
+    (draft.shape.kind === "cylinder" || draft.shape.kind === "sphere") &&
+    !numberIsPositive(draft.shape.radius)
+  ) {
+    errors.push("Radius must be greater than zero.");
+  }
+  if (draft.shape.kind === "cylinder") {
+    if (!numberIsPositive(draft.shape.height)) {
+      errors.push("Height must be greater than zero.");
     }
-    if (draft.shape.kind === "box" && !draft.shape.size.every(numberIsPositive)) {
-      errors.push("Box size values must be greater than zero.");
+    if (!draft.shape.axis.every(Number.isFinite)) {
+      errors.push("Axis must contain finite values.");
     }
-    if (
-      (draft.shape.kind === "cylinder" || draft.shape.kind === "sphere") &&
-      !numberIsPositive(draft.shape.radius)
-    ) {
-      errors.push("Radius must be greater than zero.");
-    }
-    if (draft.shape.kind === "cylinder") {
-      if (!numberIsPositive(draft.shape.height)) {
-        errors.push("Height must be greater than zero.");
-      }
-      if (!draft.shape.axis.every(Number.isFinite)) {
-        errors.push("Axis must contain finite values.");
-      }
-      if (draft.shape.axis.every((component) => component === 0)) {
-        errors.push("Axis must not be the zero vector.");
-      }
+    if (draft.shape.axis.every((component) => component === 0)) {
+      errors.push("Axis must not be the zero vector.");
     }
   }
   if ((options.meshPolicyLane ?? "fem") === "fem" && draft.meshPolicy.enabled) {
@@ -1097,14 +922,18 @@ export function validateObjectRegionDraft(
     }
   }
   for (const override of draft.materialOverrides) {
-    if (
-      override.preservedOverride &&
-      !isEditableRegionMaterialOverride(override.preservedOverride)
-    ) {
-      continue;
-    }
+    if (override.preservedOverride) continue;
     if (!Number.isFinite(override.priority) || !Number.isInteger(override.priority)) {
       errors.push(`${override.parameter} override priority must be an integer.`);
+    }
+    if (override.parameter === "anisotropy_axis") {
+      const axis = override.vectorValue ?? [0, 0, 1];
+      if (!axis.every(Number.isFinite)) {
+        errors.push("anisotropy_axis override must contain finite values.");
+      } else if (axis.every((component) => component === 0)) {
+        errors.push("anisotropy_axis override must not be the zero vector.");
+      }
+      continue;
     }
     if (!Number.isFinite(override.value)) {
       errors.push(`${override.parameter} override value must be finite.`);
@@ -1117,8 +946,7 @@ export function validateObjectRegionDraft(
     }
     if (
       (override.parameter === "aex" ||
-        override.parameter === "alpha" ||
-        override.parameter === "ku1") &&
+        override.parameter === "alpha") &&
       override.value < 0
     ) {
       errors.push(`${override.parameter} override must be non-negative.`);
@@ -1138,8 +966,7 @@ export function buildObjectRegionPatch(
     draft.frame,
   );
   const shape: components["schemas"]["SceneRegionShape"] =
-    clampedShape.preservedShape ??
-    (clampedShape.kind === "cylinder"
+    clampedShape.kind === "cylinder"
       ? {
           axis: clampedShape.axis,
           center: clampedShape.center,
@@ -1157,7 +984,7 @@ export function buildObjectRegionPatch(
             center: clampedShape.center,
             kind: "box",
             size: clampedShape.size,
-        });
+          };
   const meshPolicy: components["schemas"]["SceneRegionMeshPolicy"] | null = draft.meshPolicy.enabled
     ? {
         maximum_element_size: draft.meshPolicy.maximumElementSize,
@@ -1166,26 +993,45 @@ export function buildObjectRegionPatch(
         transition_distance: draft.meshPolicy.transitionDistance,
       }
     : null;
+  const materialOverrides: components["schemas"]["SceneRegionMaterialOverride"][] = draft.materialOverrides.map((override) => {
+    if (override.preservedOverride) return structuredClone(override.preservedOverride);
+    const value: components["schemas"]["SceneMaterialParameterField"] =
+      override.parameter === "anisotropy_axis"
+        ? {
+            kind: "constant",
+            value: override.vectorValue ?? [0, 0, 1],
+          }
+        : {
+            kind: "constant",
+            value: override.value,
+          };
+    if (override.parameter !== "anisotropy_axis" && override.unit.trim().length > 0) {
+      value.unit = override.unit.trim();
+    }
+    const conflictPolicy = String(override.conflictPolicy);
+    return {
+      ...(meshPolicyLane !== "fem" && conflictPolicy === "min_mesh_size_wins"
+        ? {}
+        : {
+            conflict_policy:
+              conflictPolicy as components["schemas"]["SceneRegionConflictPolicy"],
+          }),
+      parameter: override.parameter,
+      priority: Math.round(override.priority),
+      value,
+    };
+  });
+
   const patch: components["schemas"]["SceneObjectRegionPatch"] = {
     enabled: draft.enabled,
     frame: draft.frame,
+    material_overrides: materialOverrides,
     name: draft.name.trim(),
     priority: draft.priority,
     realization_policy:
       meshPolicyLane === "fem" ? draft.realizationPolicy : null,
     shape,
   };
-  if (
-    !options.baseDraft ||
-    !sameMaterialOverrideDrafts(
-      draft.materialOverrides,
-      options.baseDraft.materialOverrides,
-    )
-  ) {
-    patch.material_overrides = draft.materialOverrides.map((override) =>
-      serializeRegionMaterialOverride(override, meshPolicyLane),
-    );
-  }
   if (meshPolicyLane === "fem") {
     patch.mesh_policy = meshPolicy;
   }

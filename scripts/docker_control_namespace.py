@@ -180,11 +180,24 @@ def resolve_namespace(control):
     receipt = json.loads(receipt_raw)
     if not isinstance(receipt, dict):
         raise BuildControlError("Control namespace retirement receipt is invalid")
+    if receipt.get("schema") == "fullmag.docker-failed-bootstrap-quarantine.v1":
+        from docker_volume_failed_bootstrap_quarantine import resolve_cold_namespace
+        resolve_cold_namespace(control, registry, raw, receipt)
+        return
+    if receipt.get("schema") == "fullmag.docker-isolated-session-snapshot.v1":
+        from docker_isolated_snapshot_namespace import resolve_snapshot_namespace
+        resolve_snapshot_namespace(control, registry, raw)
+        return
     if _is_quarantined_receipt(
             receipt, namespace=namespace, project=control.project, volume=control.volume,
             worktree_id=control.identity["worktree_id"],
             project_id=control.identity["project_id"]):
         pass
+    elif _is_empty_stopped_quarantine_receipt(
+            receipt, namespace=namespace, project=control.project, volume=control.volume,
+            worktree_id=control.identity["worktree_id"],
+            project_id=control.identity["project_id"]):
+        _validate_empty_stopped_control_pins(control, receipt)
     elif receipt.get("schema") == SOURCE_TRANSFER_SCHEMA:
         _validate_source_transfer(control, receipt, namespace=namespace,
                                   receipt_path=receipt_path)
@@ -215,11 +228,86 @@ def assert_namespace_activation(control, request_id=None):
     if not control.namespace:
         return
     record = control.namespace_registry["retirement"]
+    if record.get("schema") == "fullmag.docker-failed-bootstrap-quarantine.v1" and request_id is not None:
+        from docker_volume_failed_bootstrap_quarantine import assert_no_replay
+        assert_no_replay(record, request_id)
     if request_id is not None and request_id == record["old_request_id"]:
         raise BuildControlError("The quarantined request cannot be replayed in a new namespace")
+    if record.get("schema") == "fullmag.docker-isolated-session-snapshot.v1":
+        # Ordinary script activation is forbidden until the copied bytes have
+        # passed the actual native first-start gate. Empty/no-script startup
+        # is handled separately by the snapshot-aware DEV launcher.
+        validation = control.read("isolated-snapshot/native-validation.json", optional=True)
+        manifest_raw = control.read_bytes("isolated-snapshot/source-manifest.json")
+        if hashlib.sha256(manifest_raw).hexdigest() != record["source_manifest_sha256"]:
+            raise BuildControlError("Isolated snapshot source manifest changed before activation")
+        if request_id in json.loads(manifest_raw).get("retired_request_ids", []):
+            raise BuildControlError("A retained source request cannot be replayed after snapshot recovery")
+        request_raw = control.read_bytes("isolated-snapshot/request.json")
+        if hashlib.sha256(request_raw).hexdigest() != record["request_sha256"]:
+            raise BuildControlError("Isolated snapshot request changed before activation")
+        request = json.loads(request_raw)
+        expected = {
+            "schema_version": "runtime_service_retained_snapshot_validation.v1",
+            "state": "validated-read-only", "request_sha256": record["request_sha256"],
+            "config_sha256": record["original_config_sha256"],
+            "source_manifest_sha256": record["source_manifest_sha256"],
+            "run_ids": sorted(pin["run_id"] for pins in (
+                request["retained_terminal_runs"], request["retained_held_manual_runs"]
+            ) for pin in pins),
+            "terminal_count": record["terminal_run_count"],
+            "held_count": record["held_manual_run_count"],
+            "owner_changed": False, "compute_started": False,
+        }
+        if json.dumps(validation, sort_keys=True) != json.dumps(expected, sort_keys=True):
+            raise BuildControlError("Isolated snapshot requires native admission before activation")
     # Every helper read also checks the base registry SHA. Missing old local
     # unresolved.json is not itself permission: the constructor validates the
     # explicit immutable quarantine/new-request authorization above.
+
+
+def _is_empty_stopped_quarantine_receipt(receipt, *, namespace, project, volume,
+                                          worktree_id, project_id):
+    """Recognize only the separately scoped, no-RunIntent quarantine contract."""
+    token = receipt.get("recovery_id") if isinstance(receipt, dict) else None
+    return (
+        isinstance(receipt, dict)
+        and receipt.get("schema") == "fullmag.docker-control-namespace-empty-quarantine.v1"
+        and receipt.get("state") == "quarantined-empty-not-replayed"
+        and receipt.get("scope") == "empty-stopped-namespace"
+        and receipt.get("namespace") == namespace
+        and isinstance(token, str) and HEX.fullmatch(token) is not None
+        and namespace == "namespaces/" + token
+        and receipt.get("compose_project") == project
+        and receipt.get("control_volume") == volume
+        and receipt.get("source_worktree_id") == worktree_id
+        and receipt.get("source_project_id") == project_id
+        and receipt.get("allow_new_requests") is True
+        and receipt.get("allow_old_request_replay") is False
+        and isinstance(receipt.get("old_request_id"), str)
+        and bool(receipt.get("old_request_id"))
+    )
+
+
+def _validate_empty_stopped_control_pins(control, receipt):
+    pins = receipt.get("control_pins")
+    required = {
+        "active", receipt.get("activation_receipt_path"),
+        receipt.get("activation_marker_path"),
+        receipt.get("development_terminal_path"),
+        receipt.get("development_compose_path"),
+        "runtime-control/runtime-services/OWNER.json",
+        "runtime-control/runtime-services/LAUNCH.json",
+        "runtime-control/runtime-service/process-tree.json",
+    }
+    if (not isinstance(pins, dict) or None in required or not required.issubset(pins)
+            or any(not isinstance(path, str) or SHA.fullmatch(digest or "") is None
+                   for path, digest in pins.items())):
+        raise BuildControlError("Empty namespace quarantine pins are incomplete")
+    for path, expected in pins.items():
+        relative = _safe_relative(control, path)
+        if hashlib.sha256(_raw(control, relative)).hexdigest() != expected:
+            raise BuildControlError("Empty namespace quarantine control pin changed: " + path)
 
 
 def _regular(path):

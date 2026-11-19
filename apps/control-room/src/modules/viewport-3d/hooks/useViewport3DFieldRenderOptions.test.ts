@@ -66,6 +66,13 @@ describe("sameViewport3DFieldRenderOptions", () => {
     ).toBe(true);
   });
 
+  it("detects Airbox vector color changes independently from the global mode", () => {
+    expect(sameViewport3DFieldRenderOptions(
+      { vectorColorMode: "orientation", partVectorColorModes: new Map([["airbox", "magnitude"]]) },
+      { vectorColorMode: "orientation", partVectorColorModes: new Map([["airbox", "x"]]) },
+    )).toBe(false);
+  });
+
   it("detects changed vector budgets", () => {
     expect(
       sameViewport3DFieldRenderOptions(

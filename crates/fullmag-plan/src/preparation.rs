@@ -850,6 +850,59 @@ impl PreparationMaterialization {
         )
     }
 
+    /// Materialize native FEM mesh/space preparation for the exact provided
+    /// equilibrium mesh of an accepted frequency-response step. This keeps
+    /// FR distinct from time evolution while sharing the same H1/P1 mesh
+    /// evidence contract.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_fem_frequency_response_execution_plan_for_accepted_run(
+        problem_fingerprint: impl Into<String>,
+        source: PreparationPlanSource,
+        requested_backend: BackendTarget,
+        execution_plan: &ExecutionPlanIR,
+        geometry_fingerprint: impl Into<String>,
+        display_fingerprint: impl Into<String>,
+        native: &NativeFemMeshSpaceEvidence,
+    ) -> Result<Self, PreparationPlanError> {
+        source.validate()?;
+        if execution_plan.common.requested_backend != requested_backend {
+            return Err(PreparationPlanError::Contract(
+                "preparation requested backend does not match the execution plan".into(),
+            ));
+        }
+        if execution_plan.common.resolved_backend != BackendTarget::Fem {
+            return Err(PreparationPlanError::Contract(format!(
+                "FEM frequency-response preparation requires resolved backend 'fem', got '{}'",
+                execution_plan.common.resolved_backend.as_str()
+            )));
+        }
+        let BackendPlanIR::FemFrequencyResponse(response) = &execution_plan.backend_plan else {
+            return Err(PreparationPlanError::Contract(
+                "FEM frequency-response preparation requires a frequency-response execution plan"
+                    .into(),
+            ));
+        };
+        if !matches!(
+            &response.equilibrium,
+            &fullmag_ir::EquilibriumSourceIR::Provided
+        ) {
+            return Err(PreparationPlanError::Contract(
+                "accepted FEM frequency-response preparation currently requires an explicit provided equilibrium M0".into(),
+            ));
+        }
+        Self::from_native_fem_mesh_with_identity(
+            problem_fingerprint,
+            PreparationPlanIdentity::AcceptedRun(source),
+            requested_backend,
+            geometry_fingerprint,
+            display_fingerprint,
+            &response.mesh,
+            response.fe_order,
+            response.mesh_build_report.as_ref(),
+            native,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn from_fem_execution_plan_with_identity(
         problem_fingerprint: impl Into<String>,
@@ -1221,7 +1274,10 @@ impl<'a> FdmPreparationEvidence<'a> {
                         marker_ids.extend(legend.iter().map(|entry| entry.numeric_id));
                     }
                     if let Some(mask) = &layer.native_region_mask {
-                        marker_ids.extend(mask.iter().copied().filter(|id| *id != 0));
+                        marker_ids.extend(collect_active_region_marker_ids(
+                            mask,
+                            layer.native_active_mask.as_deref(),
+                        )?);
                     }
                 }
                 let marker_ids = marker_ids.into_iter().collect::<Vec<_>>();

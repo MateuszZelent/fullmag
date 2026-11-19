@@ -38,6 +38,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
@@ -46,6 +47,7 @@ import {
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import type {
   CommandActiveResource,
+  CommandContext,
   CommandContribution,
 } from "@/kernel/commands/commandTypes";
 import {
@@ -132,14 +134,12 @@ const EXPLORER_VIRTUALIZATION_THRESHOLD = 200;
 
 export function resolveExplorerRevealScrollTop({
   activeNodeId,
-  contentOffset = 0,
   rowHeight,
   rowIds,
   scrollTop,
   viewportHeight,
 }: {
   activeNodeId: string | null;
-  contentOffset?: number;
   rowHeight: number;
   rowIds: readonly string[];
   scrollTop: number;
@@ -148,21 +148,13 @@ export function resolveExplorerRevealScrollTop({
   if (!activeNodeId) return null;
   const index = rowIds.indexOf(activeNodeId);
   if (index < 0) return null;
-  const rowTop = contentOffset + index * rowHeight;
+  const rowTop = index * rowHeight;
   const rowBottom = rowTop + rowHeight;
   if (rowTop < scrollTop) return rowTop;
   if (rowBottom > scrollTop + viewportHeight) {
     return Math.max(rowBottom - viewportHeight, 0);
   }
   return null;
-}
-
-function explorerContentOffset(tree: HTMLDivElement): number {
-  const canvas = tree.querySelector<HTMLElement>(".fm-explorer-tree__canvas");
-  if (!canvas) return 0;
-  // Row coordinates start inside the scroll container's padding, not at its edge.
-  return Math.max(0, canvas.getBoundingClientRect().top - tree.getBoundingClientRect().top
-    - (tree.clientTop || 0) + tree.scrollTop);
 }
 
 function statusLabel(status: ExplorerNodeStatus | undefined): string {
@@ -191,18 +183,23 @@ function commandContextForNode(
   node: ExplorerNode,
   commandId: string,
   resourceData: Readonly<Record<string, unknown>>,
-) {
+  sessionScopeKey?: CommandContext["sessionScopeKey"],
+): CommandContext {
   const input = node.contextCommandInputs?.[commandId];
   return createCommandContext("explorer", kernel, {
     ...(input !== undefined ? { input } : {}),
     resourceData,
+    sessionScopeKey,
   });
 }
+
+const MENU_SCOPE_CHANGED_REASON = "The workspace changed. Reopen the context menu.";
 
 export interface ExplorerContextCommandItem {
   active: boolean;
   activeResource: CommandActiveResource | null;
   command: CommandContribution;
+  context: CommandContext;
   disabled: boolean;
   disabledReason: string | null;
 }
@@ -211,26 +208,33 @@ export function contextCommandItemsForNode({
   kernel,
   node,
   resourceData,
+  sessionScopeKey,
 }: {
   kernel: KernelApi;
   node: ExplorerNode;
   resourceData: Readonly<Record<string, unknown>>;
+  sessionScopeKey?: CommandContext["sessionScopeKey"];
 }): ExplorerContextCommandItem[] {
+  const scopeChanged = sessionScopeKey !== undefined &&
+    (kernel.commands.getSessionScopeKey() ?? null) !== sessionScopeKey;
   return contextCommandsForNode(kernel, node).map((command) => {
     const context = commandContextForNode(
       kernel,
       node,
       command.id,
       resourceData,
+      sessionScopeKey,
     );
-    const active = kernel.commands.isActive(command.id, context);
+    const active = !scopeChanged && kernel.commands.isActive(command.id, context);
     return {
       active,
       activeResource: active ? command.activeResource?.(context) ?? null : null,
       command,
-      disabled: !kernel.commands.isEnabled(command.id, context),
-      disabledReason:
-        kernel.commands.get(command.id)?.disabledReason?.(context) ?? null,
+      context,
+      disabled: scopeChanged || !kernel.commands.isEnabled(command.id, context),
+      disabledReason: scopeChanged
+        ? MENU_SCOPE_CHANGED_REASON
+        : command.disabledReason?.(context) ?? null,
     };
   });
 }
@@ -300,13 +304,7 @@ export function sliceVisibleExplorerRows({
   scrollTop: number;
   viewportHeight: number;
 }): ExplorerVisibleRowSlice {
-  // Filtering or collapsing may shorten the tree before the browser emits a
-  // scroll event. Never let an obsolete offset create an oversized spacer.
-  const boundedScrollTop = Math.min(
-    Math.max(0, scrollTop),
-    Math.max(0, rows.length * rowHeight - viewportHeight),
-  );
-  const start = Math.max(0, Math.floor(boundedScrollTop / rowHeight) - overscan);
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
   const visibleCount = Math.ceil(viewportHeight / rowHeight) + overscan * 2;
   const end = Math.min(rows.length, start + visibleCount);
 
@@ -339,6 +337,91 @@ export function flattenVisibleExplorerRows(
   return rows;
 }
 
+function ExplorerContextCommands({
+  kernel,
+  node,
+  resourceData,
+  onInspectCommand,
+  onSelectNode,
+}: {
+  kernel: KernelApi;
+  node: ExplorerNode;
+  resourceData: Readonly<Record<string, unknown>>;
+  onInspectCommand: (commandId: string) => void;
+  onSelectNode?: () => void;
+}) {
+  const { commands } = kernel;
+  const [menuScopeKey] = useState(() => commands.getSessionScopeKey() ?? null);
+  const subscribe = useCallback((listener: () => void) => commands.subscribe(listener), [commands]);
+  const getVersion = useCallback(() => commands.getVersion(), [commands]);
+  useSyncExternalStore(subscribe, getVersion, getVersion);
+  const subscribeScope = useCallback((listener: () => void) => commands.subscribeSessionScope(listener), [commands]);
+  const getScope = useCallback(() => commands.getSessionScopeKey() ?? null, [commands]);
+  const currentScopeKey = useSyncExternalStore(subscribeScope, getScope, getScope);
+  const scopeChanged = currentScopeKey !== menuScopeKey;
+  const menuScopeIsCurrent = () => getScope() === menuScopeKey;
+
+  const commandItems = contextCommandItemsForNode({
+    kernel,
+    node,
+    resourceData,
+    sessionScopeKey: menuScopeKey,
+  });
+  const activeCommandItems = commandItems.reduce<typeof commandItems>((items, item) => {
+    if (item.activeResource?.kind === "command") items.push(item);
+    return items;
+  }, []);
+  return (
+    <>
+      {onSelectNode ? (
+        <ContextMenuItem
+          disabled={scopeChanged}
+          title={scopeChanged ? MENU_SCOPE_CHANGED_REASON : undefined}
+          onSelect={() => {
+            if (menuScopeIsCurrent()) onSelectNode();
+          }}
+        >
+          Select
+        </ContextMenuItem>
+      ) : null}
+      {commandItems.map(({ active, command, context, disabled, disabledReason }) => (
+        <ContextMenuItem
+          key={command.id}
+          data-active={active}
+          disabled={disabled}
+          title={disabledReason ?? (active ? "Command active" : undefined)}
+          onSelect={() => {
+            if (!disabled && menuScopeIsCurrent()) {
+              void commands.execute(command.id, context);
+            }
+          }}
+        >
+          <span>{command.title}</span>
+          {active ? (
+            <span className="fm-context-menu-item__meta">active</span>
+          ) : null}
+        </ContextMenuItem>
+      ))}
+      {activeCommandItems.length > 0 ? (
+        <>
+          <ContextMenuSeparator />
+          {activeCommandItems.map((item) => (
+              <ContextMenuItem
+                key={`${item.command.id}:detail`}
+                onSelect={() => {
+                  const commandId = item.activeResource?.commandId;
+                  if (commandId && menuScopeIsCurrent()) onInspectCommand(commandId);
+                }}
+              >
+                <span>{item.command.title} detail</span>
+              </ContextMenuItem>
+            ))}
+        </>
+      ) : null}
+    </>
+  );
+}
+
 const ExplorerTreeRow = memo(function ExplorerTreeRow({
   active,
   depth,
@@ -348,8 +431,6 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   kernel,
   moduleId,
   node,
-  onKeyboardNavigation,
-  onToggleNode,
   resourceData,
   rowIds,
   tabId,
@@ -362,8 +443,6 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   kernel: KernelApi;
   moduleId: ModuleId;
   node: ExplorerNode;
-  onKeyboardNavigation: (nodeId: string) => void;
-  onToggleNode?: (nodeId: string) => void;
   resourceData: Readonly<Record<string, unknown>>;
   rowIds: readonly string[];
   tabId: ExplorerTabId;
@@ -371,15 +450,6 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   const statusReasonId = useId();
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
   const commandDetail = useCommandDetailResource(selectedCommandId);
-  const commandItems = contextCommandItemsForNode({
-    kernel,
-    node,
-    resourceData,
-  });
-  const activeCommandItems = commandItems.reduce<typeof commandItems>((items, item) => {
-    if (item.activeResource?.kind === "command") items.push(item);
-    return items;
-  }, []);
   const selectable = node.selectable !== false;
 
   function handleSelect(): void {
@@ -389,8 +459,7 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
 
   function handleToggle(): void {
     if (hasChildren) {
-      if (onToggleNode) onToggleNode(node.id);
-      else toggleExplorerNode(tabId, node.id);
+      toggleExplorerNode(tabId, node.id);
     }
   }
 
@@ -403,7 +472,12 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
 
     if (navigationTarget) {
       event.preventDefault();
-      onKeyboardNavigation(navigationTarget);
+      setExplorerKeyboardRow(navigationTarget);
+      const tree = event.currentTarget.closest('[role="tree"]');
+      const targetRow = Array.from(
+        tree?.querySelectorAll<HTMLElement>("[data-node-id]") ?? [],
+      ).find((row) => row.dataset.nodeId === navigationTarget);
+      targetRow?.focus();
       return;
     }
 
@@ -412,27 +486,14 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       if (selectable) handleSelect();
       return;
     }
-    if (event.key === "ArrowRight" && hasChildren) {
+    if (event.key === "ArrowRight" && hasChildren && !expanded) {
       event.preventDefault();
-      if (!expanded) {
-        handleToggle();
-      } else {
-        const currentIndex = rowIds.indexOf(node.id);
-        const firstChildId = rowIds[currentIndex + 1] ?? null;
-        if (firstChildId) onKeyboardNavigation(firstChildId);
-      }
+      toggleExplorerNode(tabId, node.id);
       return;
     }
-    if (event.key === "ArrowLeft") {
-      if (hasChildren && expanded) {
-        event.preventDefault();
-        handleToggle();
-        return;
-      }
-      if (node.parentId && rowIds.includes(node.parentId)) {
-        event.preventDefault();
-        onKeyboardNavigation(node.parentId);
-      }
+    if (event.key === "ArrowLeft" && hasChildren && expanded) {
+      event.preventDefault();
+      toggleExplorerNode(tabId, node.id);
     }
   }
 
@@ -539,42 +600,13 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       <ContextMenuContent>
         <ContextMenuLabel>{node.label}</ContextMenuLabel>
         <ContextMenuSeparator />
-        {selectable ? <ContextMenuItem onSelect={handleSelect}>Select</ContextMenuItem> : null}
-        {commandItems.map(({ active, command, disabled, disabledReason }) => (
-          <ContextMenuItem
-            key={command.id}
-            data-active={active}
-            disabled={disabled}
-            title={disabledReason ?? (active ? "Command active" : undefined)}
-            onSelect={() => {
-              void kernel.commands.execute(
-                command.id,
-                commandContextForNode(kernel, node, command.id, resourceData),
-              );
-            }}
-          >
-            <span>{command.title}</span>
-            {active ? (
-              <span className="fm-context-menu-item__meta">active</span>
-            ) : null}
-          </ContextMenuItem>
-        ))}
-        {activeCommandItems.length > 0 ? (
-          <>
-            <ContextMenuSeparator />
-            {activeCommandItems.map((item) => (
-                <ContextMenuItem
-                  key={`${item.command.id}:detail`}
-                  onSelect={() => {
-                    const commandId = item.activeResource?.commandId;
-                    if (commandId) setSelectedCommandId(commandId);
-                  }}
-                >
-                  <span>{item.command.title} detail</span>
-                </ContextMenuItem>
-              ))}
-          </>
-        ) : null}
+        <ExplorerContextCommands
+          kernel={kernel}
+          node={node}
+          resourceData={resourceData}
+          onInspectCommand={setSelectedCommandId}
+          onSelectNode={selectable ? handleSelect : undefined}
+        />
       </ContextMenuContent>
       <CommandDetailDialog
         commandId={selectedCommandId}
@@ -594,8 +626,8 @@ interface ExplorerTreeViewProps {
   kernel: KernelApi;
   moduleId: ModuleId;
   nodes: readonly ExplorerNode[];
-  onToggleNode?: (nodeId: string) => void;
   sceneResourceData: unknown;
+  sharedCommandResources: Readonly<Record<string, unknown>>;
   tabId: ExplorerTabId;
 }
 
@@ -606,14 +638,12 @@ export function ExplorerTreeView({
   kernel,
   moduleId,
   nodes,
-  onToggleNode,
   sceneResourceData,
+  sharedCommandResources,
   tabId,
 }: ExplorerTreeViewProps) {
   const treeRef = useRef<HTMLDivElement | null>(null);
-  const lastRevealedSelection = useRef<string | null>(null);
   const [viewport, setViewport] = useState({ height: 420, scrollTop: 0 });
-  const pendingKeyboardRow = useRef<string | null>(null);
   const runtimeResourceData = useRuntimeCommandControlResourceData({
     includeSharedDomainReadiness: false,
     includeStageExecution: false,
@@ -622,16 +652,16 @@ export function ExplorerTreeView({
   const commandResourceData = useMemo(
     () => ({
       ...runtimeResourceData,
+      ...sharedCommandResources,
       [MODEL_SCENE_PATH]: sceneResourceData,
       [VISUALIZATION_STATE_PATH]: visualizationState.data,
     }),
-    [runtimeResourceData, sceneResourceData, visualizationState.data],
+    [runtimeResourceData, sceneResourceData, sharedCommandResources, visualizationState.data],
   );
   const rows = useMemo(
     () => flattenVisibleExplorerRows(nodes, expandedIds),
     [expandedIds, nodes],
   );
-  const rowIds = useMemo(() => rows.map((row) => row.node.id), [rows]);
   const virtualized = rows.length > EXPLORER_VIRTUALIZATION_THRESHOLD;
   const visibleRows = useMemo(
     () =>
@@ -692,70 +722,13 @@ export function ExplorerTreeView({
     );
   }, []);
 
-  const requestKeyboardNavigation = useCallback((nodeId: string) => {
-    const tree = treeRef.current;
-    if (!tree || !rowIds.includes(nodeId)) return;
-    pendingKeyboardRow.current = nodeId;
-    setExplorerKeyboardRow(nodeId);
-    const nextScrollTop = resolveExplorerRevealScrollTop({
-      activeNodeId: nodeId,
-      contentOffset: explorerContentOffset(tree),
-      rowHeight: EXPLORER_ROW_HEIGHT,
-      rowIds,
-      scrollTop: tree.scrollTop,
-      viewportHeight: tree.clientHeight || viewport.height,
-    });
-    if (nextScrollTop !== null) {
-      tree.scrollTop = nextScrollTop;
-      setViewport((current) =>
-        current.scrollTop === tree.scrollTop
-          ? current
-          : { ...current, scrollTop: tree.scrollTop },
-      );
-    }
-    const targetRow = Array.from(
-      tree.querySelectorAll<HTMLElement>("[data-node-id]"),
-    ).find((row) => row.dataset.nodeId === nodeId);
-    if (targetRow) {
-      targetRow.focus({ preventScroll: true });
-      pendingKeyboardRow.current = null;
-    }
-  }, [rowIds, viewport.height]);
-
-  useEffect(() => {
-    const nodeId = pendingKeyboardRow.current;
-    const tree = treeRef.current;
-    if (!nodeId || !tree) return;
-    if (!rowIds.includes(nodeId)) {
-      pendingKeyboardRow.current = null;
-      return;
-    }
-    const targetRow = Array.from(
-      tree.querySelectorAll<HTMLElement>("[data-node-id]"),
-    ).find((row) => row.dataset.nodeId === nodeId);
-    if (targetRow) {
-      targetRow.focus({ preventScroll: true });
-      pendingKeyboardRow.current = null;
-    }
-  }, [keyboardRowId, rowIds, viewport.scrollTop]);
-
   useEffect(() => {
     const tree = treeRef.current;
-    if (!activeNodeId) {
-      lastRevealedSelection.current = null;
-      return;
-    }
-    if (!tree || !rowIds.includes(activeNodeId)) return;
-    const selectionKey = JSON.stringify([tabId, activeNodeId]);
-    if (lastRevealedSelection.current === selectionKey) return;
-    lastRevealedSelection.current = selectionKey;
-    // Expanding a different branch must not pull keyboard focus or the user's
-    // scroll position back to an already revealed selection.
+    if (!tree) return;
     const nextScrollTop = resolveExplorerRevealScrollTop({
       activeNodeId,
-      contentOffset: explorerContentOffset(tree),
       rowHeight: EXPLORER_ROW_HEIGHT,
-      rowIds,
+      rowIds: rows.map((row) => row.node.id),
       scrollTop: tree.scrollTop,
       viewportHeight: tree.clientHeight || viewport.height,
     });
@@ -766,7 +739,7 @@ export function ExplorerTreeView({
         ? current
         : { ...current, scrollTop: nextScrollTop },
     );
-  }, [activeNodeId, rowIds, tabId, viewport.height]);
+  }, [activeNodeId, rows, viewport.height]);
 
   return (
     <TooltipProvider delayDuration={350}>
@@ -777,36 +750,34 @@ export function ExplorerTreeView({
         aria-label="Explorer tree"
         onScroll={handleScroll}
       >
-        <div
-          className="fm-explorer-tree__canvas"
-          role="presentation"
-          style={{ height: rows.length * EXPLORER_ROW_HEIGHT, position: "relative" }}
-        >
+        {visibleRows.topPadding > 0 ? (
           <div
-            className="fm-explorer-tree__window"
-            role="presentation"
-            style={{ insetInline: 0, position: "absolute", top: visibleRows.topPadding }}
-          >
-            {visibleRows.rows.map(({ depth, expanded, hasChildren, node }) => (
-              <ExplorerTreeRow
-                key={node.id}
-                active={activeNodeId === node.id}
-                depth={depth}
-                expanded={expanded}
-                focusable={focusableRowId === node.id}
-                hasChildren={hasChildren}
-                kernel={kernel}
-                moduleId={moduleId}
-                node={node}
-                onKeyboardNavigation={requestKeyboardNavigation}
-                onToggleNode={onToggleNode}
-                resourceData={commandResourceData}
-                rowIds={rowIds}
-                tabId={tabId}
-              />
-            ))}
-          </div>
-        </div>
+            aria-hidden="true"
+            style={{ height: visibleRows.topPadding }}
+          />
+        ) : null}
+        {visibleRows.rows.map(({ depth, expanded, hasChildren, node }) => (
+          <ExplorerTreeRow
+            key={node.id}
+            active={activeNodeId === node.id}
+            depth={depth}
+            expanded={expanded}
+            focusable={focusableRowId === node.id}
+            hasChildren={hasChildren}
+            kernel={kernel}
+            moduleId={moduleId}
+            node={node}
+            resourceData={commandResourceData}
+            rowIds={visibleRowIds}
+            tabId={tabId}
+          />
+        ))}
+        {visibleRows.bottomPadding > 0 ? (
+          <div
+            aria-hidden="true"
+            style={{ height: visibleRows.bottomPadding }}
+          />
+        ) : null}
       </div>
     </TooltipProvider>
   );

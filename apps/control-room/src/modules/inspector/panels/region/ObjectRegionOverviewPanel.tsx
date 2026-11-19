@@ -8,10 +8,6 @@ import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type { RegionEditRealizationPolicy } from "../ObjectRegionsPanelModel";
 import type { MeshInspectorLane } from "../fdmMeshInspectorModel";
 import {
-  RegionIntegerField,
-  objectRegionPriorityDraftKey,
-} from "./RegionIntegerField";
-import {
   ObjectRegionMetadataSection,
   ObjectRegionActionsSection,
   ObjectRegionInlineDiagnostics,
@@ -58,7 +54,7 @@ export function ObjectRegionOverviewPanel({
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <ObjectRegionMetadataSection model={model} meshLane={meshLane} />
+      <ObjectRegionMetadataSection model={model} meshLane={meshLane} defaultOpen />
 
       <InspectorGroup title="Region Identity">
         {laneView.inlineDiagnostics ? (
@@ -83,11 +79,12 @@ export function ObjectRegionOverviewPanel({
           checked={draft.enabled}
           onChange={(event: ChangeEvent<HTMLInputElement>) => updateDraft({ enabled: event.target.checked })}
         />
-        <RegionIntegerField
-          draftKey={objectRegionPriorityDraftKey(model.objectId, model.regionId)}
+        <FormField
           label="Priority"
-          value={draft.priority}
-          onValueChange={(priority) => updateDraft({ priority })}
+          type="number"
+          step={1}
+          value={String(draft.priority)}
+          onChange={(event: ChangeEvent<HTMLInputElement>) => updateDraft({ priority: Number(event.target.value) })}
         />
         <FormField
           label="Frame"

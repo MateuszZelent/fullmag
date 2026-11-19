@@ -13,6 +13,21 @@ use fullmag_session::{
 /// Durably admit a claimed application task before publishing its worker
 /// coordinator or process. Replaying the same claim repairs an interrupted
 /// catalog/lease projection without creating a new attempt.
+
+/// A scheduler admission candidate went stale between the queue snapshot and
+/// the durable admission (for example the task was cancelled meanwhile). It is
+/// transient: no durable state was written and the next pass re-reads the queue.
+#[derive(Debug)]
+pub struct StaleTaskAdmissionCandidate;
+
+impl std::fmt::Display for StaleTaskAdmissionCandidate {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("stale scheduler admission candidate")
+    }
+}
+
+impl std::error::Error for StaleTaskAdmissionCandidate {}
+
 pub fn commit_claimed_task_admission(
     store: &SessionStore,
     task: &TaskRecord,
@@ -87,7 +102,7 @@ fn commit_claimed_task_admission_with_host_inner(
     inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
     accepted: Option<&crate::study::AcceptedStudySnapshot>,
 ) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
-    let inputs = capture_admission_inputs(inputs)?;
+    let inputs = capture_admission_inputs(inputs, None)?;
     commit_claimed_task_admission_with(store, task, claim, accepted, |lease, dependencies| {
         let lease = attach_host_launch_binding(ledger, lease)?;
         ledger
@@ -122,7 +137,7 @@ fn try_commit_claimed_task_admission_with_host_inner(
     inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
     accepted: Option<&crate::study::AcceptedStudySnapshot>,
 ) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
-    let inputs = capture_admission_inputs(inputs)?;
+    let inputs = capture_admission_inputs(inputs, None)?;
     commit_claimed_task_admission_with(store, task, claim, accepted, |lease, dependencies| {
         let lease = attach_host_launch_binding(ledger, lease)?;
         ledger.try_commit_task_admission_checked(request, store, &lease, &inputs, || {
@@ -142,13 +157,57 @@ fn attach_host_launch_binding(
     Ok(lease)
 }
 
+/// The same admission transaction owns physical inputs and prepared frozen history.
+pub(crate) fn commit_claimed_task_admission_with_frozen_context(
+    store: &SessionStore,
+    task: &TaskRecord,
+    claim: &TaskClaim,
+    inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
+    frozen: Option<&fullmag_application::FrozenStageContextRefV1>,
+    accepted: &crate::study::AcceptedStudySnapshot,
+) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
+    let snapshot = capture_admission_inputs(inputs, frozen)?;
+    commit_claimed_task_admission_with(store, task, claim, Some(accepted), |lease, dependencies| {
+        let _writer = store.write_transaction()?;
+        dependencies.require_locked(store)?;
+        store.commit_task_admission_with_inputs(lease, &Some(snapshot)).map(Some)
+    })
+}
+
+pub(crate) fn try_commit_claimed_task_admission_with_host_and_frozen_context(
+    store: &SessionStore,
+    task: &TaskRecord,
+    claim: &TaskClaim,
+    ledger: &fullmag_session::host_resource_ledger::HostResourceLedger,
+    request: &fullmag_session::host_resource_ledger::HostReservationRequest,
+    inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
+    frozen: Option<&fullmag_application::FrozenStageContextRefV1>,
+    accepted: &crate::study::AcceptedStudySnapshot,
+) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
+    let snapshot = capture_admission_inputs(inputs, frozen)?;
+    commit_claimed_task_admission_with(store, task, claim, Some(accepted), |lease, dependencies| {
+        let lease = attach_host_launch_binding(ledger, lease)?;
+        ledger.try_commit_task_admission_checked(request, store, &lease, &snapshot, || {
+            dependencies.require_locked(store)
+        })
+    })
+}
+
 fn capture_admission_inputs(
     inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
+    frozen: Option<&fullmag_application::FrozenStageContextRefV1>,
 ) -> Result<fullmag_session::FmsResolvedInputsSnapshot> {
     for input in inputs.values() {
         input.validate().map_err(|error| anyhow::anyhow!(error))?;
     }
-    fullmag_session::FmsResolvedInputsSnapshot::new(serde_json::to_value(inputs)?)
+    match frozen {
+        Some(binding) => {
+            binding.validate()?;
+            fullmag_session::FmsResolvedInputsSnapshot::new_with_frozen_stage_context(
+                serde_json::to_value(inputs)?, serde_json::to_value(binding)?)
+        }
+        None => fullmag_session::FmsResolvedInputsSnapshot::new(serde_json::to_value(inputs)?),
+    }
 }
 
 fn commit_claimed_task_admission_with<'a>(
@@ -231,7 +290,11 @@ fn commit_claimed_task_admission_with<'a>(
         && durable_task.ownership_epoch == Some(claim.ownership_epoch.value())
         && durable_task.resource_id.as_deref() == Some(claim.lease.resource_id.as_str());
     if !is_unclaimed_queue && !is_exact_replay {
-        bail!("durable task is neither queued nor owned by this admission claim");
+        // The scheduler built this claim from an earlier snapshot; the task
+        // changed since (e.g. it was cancelled). Nothing was written yet, so
+        // the candidate is re-evaluated in the next scheduling pass.
+        return Err(anyhow::Error::new(StaleTaskAdmissionCandidate)
+            .context("durable task is neither queued nor owned by this admission claim"));
     }
 
     let kind = match claim.lease.kind {
@@ -717,6 +780,16 @@ pub fn load_current_task_claim(
     run_id: &RunId,
     task_id: &str,
 ) -> Result<TaskClaim> {
+    store.retry_windows_folder_observation("load current task claim", || {
+        load_current_task_claim_once(store, run_id, task_id)
+    })
+}
+
+fn load_current_task_claim_once(
+    store: &SessionStore,
+    run_id: &RunId,
+    task_id: &str,
+) -> Result<TaskClaim> {
     let catalog = store
         .read_run_catalog(run_id.as_str())?
         .context("task claim recovery requires a durable run catalog")?;
@@ -792,4 +865,13 @@ pub fn load_current_task_claim(
         claim.lease.heartbeat_sequence,
     )?;
     Ok(claim)
+}
+
+#[cfg(test)]
+mod scoped_store_io_classification_tests {
+    #[test]
+    fn raw_enodata_is_not_a_global_transient_store_error() {
+        let error: anyhow::Error = std::io::Error::from_raw_os_error(61).into();
+        assert!(!crate::is_transient_store_io(&error));
+    }
 }

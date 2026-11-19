@@ -1,0 +1,143 @@
+--- a/scripts/docker_volume_container_recovery.py
++++ b/scripts/docker_volume_container_recovery.py
+@@ -1049,6 +1049,10 @@
+     ledger_mount, ledger_descriptor = _ledger_snapshot_mount(control, backend, compose)
+     script = r'''import fcntl, hashlib, json, os, pathlib, stat, time
+ MAX_ENTRIES=8192
++MAX_STORE_FILES=32768
++MAX_STORE_DIRECTORIES=4096
++MAX_STORE_RUNS=128
++STORE_WALK_SECONDS=30
+ MAX_CAS_OBJECT_BYTES=128*1024*1024
+ CAS_READ_CHUNK_BYTES=1024*1024
+
+@@ -1118,18 +1122,27 @@
+ if not store.is_dir() or store.is_symlink(): raise RuntimeError('accepted store root is missing')
+ runs=store/'runs'
+ if not runs.is_dir() or runs.is_symlink(): raise RuntimeError('accepted store runs directory is missing')
++v4=observation.get('v4_mode') is True
++store_file_limit=MAX_STORE_FILES if v4 else MAX_ENTRIES
++store_run_limit=MAX_STORE_RUNS if v4 else MAX_ENTRIES
++walk_deadline=time.monotonic()+STORE_WALK_SECONDS if v4 else None
+ run_dirs=[]
+ for entry in os.scandir(runs):
++    if v4 and time.monotonic()>=walk_deadline: raise RuntimeError('v4 accepted store walk exceeded its time bound')
+     if entry.is_symlink() or not entry.is_dir(follow_symlinks=False): raise RuntimeError('accepted store runs has an invalid entry')
+     run_dirs.append(entry.name)
+-    if len(run_dirs)>MAX_ENTRIES: raise RuntimeError('accepted store inventory is unbounded')
+-records={}; run_file_paths={}; count=0
++    if len(run_dirs)>store_run_limit: raise RuntimeError('accepted store run inventory is unbounded')
++records={}; run_file_paths={}; count=0; directory_count=0
+ for current, directories, files in os.walk(store, topdown=True, followlinks=False):
++    if v4 and time.monotonic()>=walk_deadline: raise RuntimeError('v4 accepted store walk exceeded its time bound')
++    directory_count+=1
++    if v4 and directory_count>MAX_STORE_DIRECTORIES: raise RuntimeError('v4 accepted store directory inventory is unbounded')
+     current_path=pathlib.Path(current)
+     if any((current_path/name).is_symlink() for name in directories): raise RuntimeError('accepted store contains a symlink')
+     for name in files:
++        if v4 and time.monotonic()>=walk_deadline: raise RuntimeError('v4 accepted store walk exceeded its time bound')
+         count+=1
+-        if count>MAX_ENTRIES: raise RuntimeError('accepted store inventory is unbounded')
++        if count>store_file_limit: raise RuntimeError('accepted store inventory is unbounded')
+         path=current_path/name
+         if path.is_symlink() or not path.is_file(): raise RuntimeError('accepted store contains an invalid file')
+         if path.is_relative_to(runs): run_file_paths[path.relative_to(runs).as_posix()]=path
+@@ -1137,7 +1150,6 @@
+             relative=path.relative_to(store).as_posix()
+             records[relative]=hashlib.sha256(regular(path,'retained run record')).hexdigest()
+ pins=observation.get('retained_cancelled_runs')
+-v4=observation.get('v4_mode') is True
+ terminal_expected={}
+ held_expected={}
+ if v4:
+--- a/scripts/test_docker_volume_abrupt_stop_recovery.py
++++ b/scripts/test_docker_volume_abrupt_stop_recovery.py
+@@ -1,6 +1,8 @@
+ """Docker-free checks for original-evidence abrupt stop recovery."""
+ from __future__ import annotations
++import ast
+ import copy
++import inspect
+ import hashlib
+ import json
+ from pathlib import Path
+@@ -669,6 +671,79 @@
+             with self.assertRaisesRegex(r.ContainerRecoveryError,'exceeds its size/aggregate bound'):
+                 invoke()
+
++    def _run_embedded_store_inventory(self, *, v4, files=0, directories=1, runs=0,
++                                      bad_file=None, symlink_directory=False, ticks=None):
++        # Execute the production embedded inventory block, without a filesystem
++        # or a second implementation of its caps and validation conditions.
++        function=ast.parse(inspect.getsource(r._ledger_and_store_snapshot))
++        script=next(node.value.value for node in ast.walk(function)
++                    if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant)
++                    and isinstance(node.value.value,str)
++                    and any(isinstance(target,ast.Name) and target.id=='script' for target in node.targets))
++        start=script.index("v4=observation.get('v4_mode') is True\n")
++        finish=script.index("pins=observation.get('retained_cancelled_runs')",start)
++        prefix=script[:script.index('def cas_identity(')]
++        class MetadataPath(type(Path())):
++            def is_symlink(self): return self.name=='symlink'
++            def is_file(self): return self.name!='not-a-file'
++        def entries(_):
++            for index in range(runs):
++                yield SimpleNamespace(name='run-'+str(index),is_symlink=lambda:False,
++                                      is_dir=lambda **kwargs:True)
++        def walk(*args,**kwargs):
++            names=[bad_file] if bad_file else ['payload-'+str(index) for index in range(files)]
++            yield '/store', ['symlink'] if symlink_directory else [], names
++            for index in range(1,directories):
++                yield '/store/directory-'+str(index), [], []
++        def clock():
++            if not v4: raise AssertionError('legacy inventory acquired a new time policy')
++            return next(ticks) if ticks is not None else 0
++        namespace={'observation':{'v4_mode':v4},'store':MetadataPath('/store'),
++                   'runs':MetadataPath('/store/runs'),'pathlib':SimpleNamespace(Path=MetadataPath),
++                   'os':SimpleNamespace(scandir=entries,walk=walk),
++                   'time':SimpleNamespace(monotonic=clock),'hashlib':hashlib}
++        # Only compile/execute the actual constants and actual inventory block.
++        # The helper's real pin, CAS and lease tests below remain unchanged.
++        constants=ast.parse(prefix)
++        constants.body=[node for node in constants.body if isinstance(node,ast.Assign)]
++        exec(compile(constants,'<embedded-store-constants>','exec'),namespace)
++        exec(compile(script[start:finish],'<embedded-store-inventory>','exec'),namespace)
++        return namespace
++
++    def test_embedded_store_file_boundaries_preserve_legacy_and_separate_v4_cap(self):
++        for v4,limit in ((False,8192),(True,32768)):
++            with self.subTest(v4=v4,boundary=limit):
++                self.assertEqual(self._run_embedded_store_inventory(v4=v4,files=limit)['count'],limit)
++                with self.assertRaisesRegex(RuntimeError,'inventory is unbounded'):
++                    self._run_embedded_store_inventory(v4=v4,files=limit+1)
++        self.assertEqual(self._run_embedded_store_inventory(v4=True,files=8193)['count'],8193)
++
++    def test_embedded_v4_directory_boundary_counts_root_and_preserves_legacy_policy(self):
++        self.assertEqual(self._run_embedded_store_inventory(v4=True,directories=4096)['directory_count'],4096)
++        with self.assertRaisesRegex(RuntimeError,'directory inventory is unbounded'):
++            self._run_embedded_store_inventory(v4=True,directories=4097)
++        self.assertEqual(self._run_embedded_store_inventory(v4=False,directories=4097)['directory_count'],4097)
++
++    def test_embedded_v4_run_boundary_keeps_exact_128_limit(self):
++        self.assertEqual(len(self._run_embedded_store_inventory(v4=True,runs=128)['run_dirs']),128)
++        with self.assertRaisesRegex(RuntimeError,'run inventory is unbounded'):
++            self._run_embedded_store_inventory(v4=True,runs=129)
++        self.assertEqual(len(self._run_embedded_store_inventory(v4=False,runs=129)['run_dirs']),129)
++
++    def test_embedded_v4_walk_timeout_covers_run_scan_directory_and_file(self):
++        for arguments,ticks in (({'runs':1},[0,30]),
++                                ({},[0,30]),({'files':1},[0,0,30])):
++            with self.subTest(arguments=arguments), self.assertRaisesRegex(RuntimeError,'time bound'):
++                self._run_embedded_store_inventory(v4=True,ticks=iter(ticks),**arguments)
++
++    def test_embedded_inventory_still_rejects_symlink_and_nonregular_entries(self):
++        for v4 in (False,True):
++            with self.subTest(v4=v4), self.assertRaisesRegex(RuntimeError,'contains a symlink'):
++                self._run_embedded_store_inventory(v4=v4,symlink_directory=True)
++            for bad in ('symlink','not-a-file'):
++                with self.subTest(v4=v4,bad=bad), self.assertRaisesRegex(RuntimeError,'invalid file'):
++                    self._run_embedded_store_inventory(v4=v4,bad_file=bad)
++
+     def test_v4_snapshot_accepts_exact_held_manual_inventory_and_rejects_release_or_unknown_evidence(self):
+         def make_state(root):
+             state=root/'state'; ledger=root/'ledger'; ledger.mkdir()

@@ -230,6 +230,7 @@ fn execute_native_fem_charge_transport(
                 NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature => {
                     Some(field_sample_positions_xyz_m)
                 }
+                NativeFemSteadyTransportOerstedMethod::AnalyticRt0Surface => return Err(RunError { message: "RT0 surface is unavailable outside prepared closed-loop inspection".into() }),
                 NativeFemSteadyTransportOerstedMethod::FemVectorPotential => Some(&[][..]),
             };
             ensure_antenna_not_cancelled(interrupt_requested, "before_rt0_oersted")?;
@@ -284,6 +285,7 @@ fn execute_native_fem_charge_transport(
                     NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature => {
                         "fem_conservative_current_rt0_view.v1"
                     }
+                    NativeFemSteadyTransportOerstedMethod::AnalyticRt0Surface => return Err(RunError { message: "RT0 surface is unavailable outside prepared closed-loop inspection".into() }),
                     NativeFemSteadyTransportOerstedMethod::FemVectorPotential => {
                         "fem_conservative_current_rt0_vector_potential.v1"
                     }
@@ -384,6 +386,7 @@ fn execute_native_fem_charge_transport(
                     "source_kind": source_kind,
                     "realization": match method {
                         NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature => "direct_tetra_quadrature",
+                        NativeFemSteadyTransportOerstedMethod::AnalyticRt0Surface => return Err(RunError { message: "RT0 surface is unavailable outside prepared closed-loop inspection".into() }),
                         NativeFemSteadyTransportOerstedMethod::FemVectorPotential => "fem_vector_potential_hcurl_h1",
                     },
                     "location": "node",

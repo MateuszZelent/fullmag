@@ -47,6 +47,7 @@ RETIREMENT_TIMEOUT_SECONDS = 30.0
 RETIREMENT_NO_MUTATION_CODES = frozenset({
     "live_retirement_invalid_request", "live_retirement_current_mismatch",
     "live_retirement_runtime_not_terminal", "live_retirement_busy",
+    "live_retirement_capture_failed",
 })
 MAX_SCRIPT_BYTES = 1024 * 1024
 MAX_PROVENANCE_BYTES = 256 * 1024
@@ -59,6 +60,25 @@ STARTUP_REJECTION_TRUNCATION_MARKER = "\n...[message middle truncated]...\n"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+SOLVER_PROFILE_SCHEMA = "accepted_solver_profile.v1"
+SOLVER_PROFILE_PRESET = {
+    "schema_version": SOLVER_PROFILE_SCHEMA,
+    "config": {
+        "enabled": True,
+        "sample_every": 1,
+        "sample_interval_wall_ms": 0,
+        "max_samples": 128,
+        "emit_engine_log": False,
+        "persist_artifact": True,
+    },
+}
+CUDA_TRACE_SCHEMA = "accepted_cuda_trace.v1"
+CUDA_TRACE_PRESET = {
+    "schema_version": CUDA_TRACE_SCHEMA,
+    "max_bytes": 536870912,
+    "max_duration_ms": 60000,
+}
+CUDA_TRACE_COMPAT_MAX_BYTES = frozenset({67108864, 134217728})
 STARTUP_RECEIPT_KEY_ENV = "FULLMAG_STARTUP_RECEIPT_KEY"
 STARTUP_RECEIPT_ROOT = Path("/opt/fullmag/control/backend")
 PROVENANCE_SHA256_ENV = "FULLMAG_STARTUP_PROVENANCE_SHA256"
@@ -73,7 +93,11 @@ SCRIPT_REJECTION_CODES = frozenset({
     "accepted_execution_stage_missing", "accepted_gpu_scope_unsupported",
     "accepted_execution_plan_invalid", "accepted_backend_unsupported",
     "accepted_study_step_unsupported", "accepted_study_step_ambiguous",
-    # Output alias validation happens while loading the source, before RunIntent admission.
+    "accepted_script_capture_invalid", "accepted_script_capture_required",
+    "accepted_script_compilation_failed",
+    "invalid_solver_profile", "accepted_solver_profile_unsupported",
+    "invalid_cuda_trace", "accepted_cuda_trace_unsupported",
+    # Output mapping validation is pure and precedes durable run admission.
     "docker_startup_output_mapping_required", "docker_startup_output_mapping_invalid",
 })
 
@@ -295,9 +319,11 @@ class StartupScriptAuthorization:
     container_script_path: str
     request_id: str
     source_commit: str | None = None
+    solver_profile: dict[str, Any] | None = None
+    cuda_trace: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "schema": AUTHORIZATION_SCHEMA,
             "authorization": AUTHORIZATION_KIND,
             "source_root": str(self.source_root),
@@ -317,6 +343,11 @@ class StartupScriptAuthorization:
                 "legacy_cli": False,
             },
         }
+        if self.solver_profile is not None:
+            value["solver_profile"] = dict(self.solver_profile)
+        if self.cuda_trace is not None:
+            value["cuda_trace"] = dict(self.cuda_trace)
+        return value
 
 
 def prepare(
@@ -326,9 +357,15 @@ def prepare(
     request_id: str,
     source_commit: str | None = None,
     container_source_root: str = "/opt/fullmag/source",
+    solver_profile: bool = False,
+    cuda_trace: bool = False,
 ) -> StartupScriptAuthorization:
     """Admit a regular Python file relative to one readonly checkout."""
 
+    if type(solver_profile) is not bool:
+        raise StartupScriptError("solver profile opt-in must be a boolean")
+    if type(cuda_trace) is not bool:
+        raise StartupScriptError("cuda trace opt-in must be a boolean")
     root = _no_reparse_path(Path(source_root), "startup source checkout", require_directory=True)
     candidate = Path(script_path).expanduser()
     if not candidate.is_absolute():
@@ -358,7 +395,75 @@ def prepare(
         container_source_root=container_source_root,
         container_script_path=_container_script_path(relative),
         request_id=_validate_request_id(request_id),
+        solver_profile=_solver_profile_wrapper() if solver_profile else None,
+        cuda_trace=_cuda_trace_wrapper() if cuda_trace else None,
     )
+
+
+def _solver_profile_wrapper() -> dict[str, Any]:
+    return {
+        "schema_version": SOLVER_PROFILE_SCHEMA,
+        "config": dict(SOLVER_PROFILE_PRESET["config"]),
+    }
+
+
+def _validate_solver_profile(value: object, label: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != {"schema_version", "config"}:
+        raise StartupScriptError(f"{label} solver profile wrapper is invalid")
+    if value.get("schema_version") != SOLVER_PROFILE_SCHEMA:
+        raise StartupScriptError(f"{label} solver profile schema is unsupported")
+    config = value.get("config")
+    expected = SOLVER_PROFILE_PRESET["config"]
+    if not isinstance(config, Mapping) or set(config) != set(expected):
+        raise StartupScriptError(f"{label} solver profile config is invalid")
+    for key, expected_value in expected.items():
+        observed = config.get(key)
+        if type(observed) is not type(expected_value) or observed != expected_value:
+            raise StartupScriptError(f"{label} solver profile preset differs at {key}")
+    return _solver_profile_wrapper()
+
+
+def solver_profile_sha256(value: object) -> str:
+    """Hash the complete profile wrapper using the Rust canonical JSON rules."""
+
+    wrapper = _validate_solver_profile(value, "solver profile")
+    payload = json.dumps(
+        wrapper, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _cuda_trace_wrapper() -> dict[str, Any]:
+    return dict(CUDA_TRACE_PRESET)
+
+
+def _validate_cuda_trace(value: object, label: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != set(CUDA_TRACE_PRESET):
+        raise StartupScriptError(f"{label} cuda trace wrapper is invalid")
+    if (type(value.get("schema_version")) is not str
+            or value.get("schema_version") != CUDA_TRACE_SCHEMA):
+        raise StartupScriptError(f"{label} cuda trace schema is unsupported")
+    max_bytes = value.get("max_bytes")
+    if (type(max_bytes) is not int
+            or max_bytes not in {*CUDA_TRACE_COMPAT_MAX_BYTES, CUDA_TRACE_PRESET["max_bytes"]}):
+        raise StartupScriptError(f"{label} cuda trace preset differs at max_bytes")
+    max_duration_ms = value.get("max_duration_ms")
+    if (type(max_duration_ms) is not int
+            or max_duration_ms != CUDA_TRACE_PRESET["max_duration_ms"]):
+        raise StartupScriptError(f"{label} cuda trace preset differs at max_duration_ms")
+    # Preserve the exact accepted wrapper so historical 64/128 MiB request
+    # and session digests remain stable while new opt-ins use the 512 MiB preset.
+    return dict(value)
+
+
+def cuda_trace_sha256(value: object) -> str:
+    """Hash the complete immutable trace wrapper using canonical JSON."""
+
+    wrapper = _validate_cuda_trace(value, "cuda trace")
+    payload = json.dumps(
+        wrapper, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _pinned_parent(path: Path):
@@ -661,7 +766,7 @@ def build_activation_request(authorization: Mapping[str, Any]) -> dict[str, Any]
         not isinstance(source_commit, str) or not COMMIT_RE.fullmatch(source_commit)
     ):
         raise StartupScriptError("startup authorization commit is invalid")
-    return {
+    request = {
         "schema": REQUEST_SCHEMA,
         "authorization": AUTHORIZATION_KIND,
         "request_id": request_id,
@@ -680,6 +785,15 @@ def build_activation_request(authorization: Mapping[str, Any]) -> dict[str, Any]
             "legacy_cli": False,
         },
     }
+    if "solver_profile" in authorization:
+        request["solver_profile"] = _validate_solver_profile(
+            authorization["solver_profile"], "startup authorization"
+        )
+    if "cuda_trace" in authorization:
+        request["cuda_trace"] = _validate_cuda_trace(
+            authorization["cuda_trace"], "startup authorization"
+        )
+    return request
 
 
 def _assert_no_active_session(
@@ -808,6 +922,33 @@ def _retirement_context(api_base: str, token: str, *, timeout: float) -> dict[st
     return value
 
 
+def _validate_observation_retirement(value: Mapping[str, Any]) -> None:
+    """Validate detached history without granting native completion semantics."""
+    evidence = value.get("imported_observation")
+    fields = {"import_id", "session_id", "run_id", "snapshot_sha256", "closure_sha256",
+              "historical_terminal_outcome", "historical_catalog_revision"}
+    if not isinstance(evidence, dict) or set(evidence) != fields:
+        raise StartupScriptError("imported observation retirement evidence is invalid")
+    _validate_request_id(evidence["import_id"])
+    if (evidence["session_id"] != value.get("session_id")
+            or evidence["run_id"] != value.get("run_id")
+            or value.get("terminal_outcome") != "observation_closed"
+            or not isinstance(evidence["historical_terminal_outcome"], str)
+            or evidence["historical_terminal_outcome"] not in {"completed", "failed", "cancelled", "interrupted"}
+            or type(evidence["historical_catalog_revision"]) is not int
+            or evidence["historical_catalog_revision"] <= 0):
+        raise StartupScriptError("imported observation retirement binding differs")
+    snapshot, closure = evidence["snapshot_sha256"], evidence["closure_sha256"]
+    if (not isinstance(snapshot, str) or not SHA256_RE.fullmatch(snapshot)
+            or not isinstance(closure, str) or not closure.startswith("sha256:")
+            or not SHA256_RE.fullmatch(closure[7:])):
+        raise StartupScriptError("imported observation retirement digest is invalid")
+    digest = hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":"),
+                                      ensure_ascii=False).encode("utf-8")).hexdigest()
+    if value.get("terminal_evidence_sha256") != digest:
+        raise StartupScriptError("imported observation retirement evidence digest differs")
+
+
 def _validate_retirement_response(
     response: Mapping[str, Any],
     *,
@@ -817,8 +958,13 @@ def _validate_retirement_response(
     request_scope_epoch: str,
     api_request_scope_epoch: str,
 ) -> dict[str, Any]:
-    if response.get("schema") != RETIREMENT_RESPONSE_SCHEMA:
+    observation = response.get("schema") == "fullmag.live-workspace-retirement-response.v2"
+    if not observation and response.get("schema") != RETIREMENT_RESPONSE_SCHEMA:
         raise StartupScriptError("workspace retirement response schema mismatch")
+    if observation:
+        _validate_observation_retirement(response)
+    elif response.get("imported_observation") is not None:
+        raise StartupScriptError("native retirement response contains observation evidence")
     if response.get("state") not in {"retired", "replayed"}:
         raise StartupScriptError("workspace retirement response state is invalid")
     for field, expected in (
@@ -833,7 +979,8 @@ def _validate_retirement_response(
     for field in ("session_epoch", "scene_revision", "state_version"):
         if type(response.get(field)) is not int or response[field] < 0:
             raise StartupScriptError(f"workspace retirement response {field} is invalid")
-    if response.get("terminal_outcome") not in {"completed", "failed", "cancelled"}:
+    # `startup_failed` retires a workspace whose script never admitted a RunIntent.
+    if not observation and response.get("terminal_outcome") not in {"completed", "failed", "cancelled", "startup_failed"}:
         raise StartupScriptError("workspace retirement response outcome is invalid")
     if response.get("ui_state_scope") != "backend_typed_workspace":
         raise StartupScriptError("workspace retirement response UI scope is invalid")
@@ -858,15 +1005,28 @@ def _validate_retirement_response(
 
 
 def _retirement_preflight_rejection(response: Any) -> str | None:
+    return _retirement_rejection(response)[0]
+
+
+def _retirement_rejection(response: Any) -> tuple[str | None, str]:
+    """Return the no-mutation code, if any, and a bounded detail of the body.
+
+    The detail names the API's code and message so a quarantined activation
+    records why retirement was rejected instead of only its HTTP status.
+    """
     try:
         value = _retirement_json_body(response, "workspace retirement rejection")
     except (StartupScriptError, OSError, ValueError):
-        return None
+        return None, ""
     code = value.get("code")
+    message = value.get("message")
+    detail = ": ".join(str(part)[:1024] for part in (code, message)
+                       if isinstance(part, str) and part)
     status = getattr(response, "status", getattr(response, "code", None))
     expected_status = 400 if code == "live_retirement_invalid_request" else 409
-    return code if (isinstance(code, str) and code in RETIREMENT_NO_MUTATION_CODES
-                    and status == expected_status) else None
+    no_mutation = code if (isinstance(code, str) and code in RETIREMENT_NO_MUTATION_CODES
+                           and status == expected_status) else None
+    return no_mutation, detail
 
 
 def _retirement_archive_receipt(
@@ -912,13 +1072,22 @@ def _retirement_archive_receipt(
         raise StartupScriptError("retirement archive manifest is not valid JSON") from error
     if (
         not isinstance(proof, dict)
-        or proof.get("schema") != "fullmag.live-workspace-retirement-proof.v2"
+        or proof.get("schema") not in {"fullmag.live-workspace-retirement-proof.v2",
+                                       "fullmag.live-workspace-retirement-proof.v3"}
         or proof.get("state") != "retired"
         or proof.get("operation_id") != operation_id
         or proof.get("session_id") != session_id
         or proof.get("run_id") != run_id
     ):
         raise StartupScriptError("retirement archive manifest identity differs")
+    if proof["schema"] == "fullmag.live-workspace-retirement-proof.v3":
+        _validate_observation_retirement(proof)
+        if (proof.get("host_released_reservations") != []
+                or proof.get("accepted_proof_sha256") is not None
+                or proof.get("terminal_catalog_revision") != proof["imported_observation"]["historical_catalog_revision"]):
+            raise StartupScriptError("imported retirement archive claims native execution authority")
+    elif proof.get("imported_observation") is not None:
+        raise StartupScriptError("native retirement archive contains observation evidence")
     proof_scope = proof.get("request_scope_epoch")
     if not isinstance(proof_scope, str) or not proof_scope.strip() or ":" not in proof_scope:
         raise StartupScriptError("retirement archive manifest scope is invalid")
@@ -1213,14 +1382,15 @@ def _retire_current_workspace_transport(
         opener = urllib.request.build_opener(_NoRedirect())
         with opener.open(request, timeout=timeout) as response:
             if response.status < 200 or response.status >= 300:
-                code = _retirement_preflight_rejection(response)
+                code, detail = _retirement_rejection(response)
                 if predecessor is None and code is not None:
                     raise RetirementRefused(operation_id, code)
                 if response.status == 409 or response.status >= 500:
                     raise RetirementOutcomeUnknown(
                         operation_id,
                         "retirement",
-                        f"workspace retirement returned HTTP {response.status}",
+                        f"workspace retirement returned HTTP {response.status}"
+                        + (f" ({detail})" if detail else ""),
                         retirement=_retirement_archive_receipt_or_none(
                             operation_id,
                             session_id=session_id,
@@ -1248,14 +1418,15 @@ def _retire_current_workspace_transport(
     except RetirementOutcomeUnknown:
         raise
     except urllib.error.HTTPError as error:
-        code = _retirement_preflight_rejection(error)
+        code, detail = _retirement_rejection(error)
         if predecessor is None and code is not None:
             raise RetirementRefused(operation_id, code) from error
         if error.code == 409 or error.code >= 500:
             raise RetirementOutcomeUnknown(
                 operation_id,
                 "retirement",
-                f"workspace retirement returned HTTP {error.code}",
+                f"workspace retirement returned HTTP {error.code}"
+                + (f" ({detail})" if detail else ""),
                 retirement=_retirement_archive_receipt_or_none(
                     operation_id,
                     session_id=session_id,
@@ -1313,6 +1484,22 @@ def validate_activation_response(
         raise StartupScriptError("startup activation response request fence mismatch")
     if response.get("source_sha256") != authorization.get("source_sha256"):
         raise StartupScriptError("startup activation response source hash mismatch")
+    if "solver_profile" in authorization:
+        expected_profile_sha256 = solver_profile_sha256(authorization["solver_profile"])
+        observed_profile_sha256 = response.get("solver_profile_sha256")
+        if (not isinstance(observed_profile_sha256, str)
+                or not SHA256_RE.fullmatch(observed_profile_sha256)
+                or observed_profile_sha256 != expected_profile_sha256):
+            raise StartupScriptError("startup activation response solver profile digest mismatch")
+    if "cuda_trace" in authorization:
+        expected_cuda_trace_sha256 = cuda_trace_sha256(authorization["cuda_trace"])
+        observed_cuda_trace_sha256 = response.get("cuda_trace_sha256")
+        if (not isinstance(observed_cuda_trace_sha256, str)
+                or not SHA256_RE.fullmatch(observed_cuda_trace_sha256)
+                or observed_cuda_trace_sha256 != expected_cuda_trace_sha256):
+            raise StartupScriptError("startup activation response cuda trace digest mismatch")
+    elif "cuda_trace_sha256" in response:
+        raise StartupScriptError("startup activation response contains an unsolicited cuda trace digest")
     for field in ("session_id", "run_id"):
         value = response.get(field)
         if not isinstance(value, str) or not value.strip():
@@ -1713,6 +1900,8 @@ __all__ = [
     "StartupScriptAuthorization",
     "StartupScriptError",
     "StartupScriptRejected",
+    "SOLVER_PROFILE_SCHEMA",
+    "SOLVER_PROFILE_PRESET",
     "StartupActivationOutcomeUnknown",
     "RetirementOutcomeUnknown",
     "RetirementRefused",
@@ -1722,6 +1911,7 @@ __all__ = [
     "activation_receipt_path_for_key",
     "build_activation_request",
     "prepare",
+    "solver_profile_sha256",
     "run_from_environment",
     "retire_current_workspace",
     "read_retirement_receipt",

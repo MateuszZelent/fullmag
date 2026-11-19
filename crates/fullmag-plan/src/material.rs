@@ -1,8 +1,6 @@
 use fullmag_ir::{
-    AbsorbingBoundaryFaceIR, AbsorbingBoundaryFrameIR, AbsorbingBoundaryLayerIR,
-    AbsorbingBoundaryProfileIR, GeometryEntryIR, MaterialFieldLocationIR, MaterialFieldPlan,
-    MaterialFieldSourceKind, MaterialParameterFieldIR, MaterialParameterNameIR, ProblemIR,
-    RegionFrameIR, RegionShapeIR,
+    GeometryEntryIR, MaterialFieldLocationIR, MaterialFieldPlan, MaterialFieldSourceKind,
+    MaterialParameterFieldIR, MaterialParameterNameIR, ProblemIR, RegionFrameIR, RegionShapeIR,
 };
 use std::collections::BTreeSet;
 
@@ -18,11 +16,11 @@ fn geometry_translation(entry: &GeometryEntryIR) -> [f64; 3] {
     }
 }
 
-pub(crate) fn object_translation(problem: &ProblemIR, object_id: &str) -> [f64; 3] {
+pub(crate) fn object_translation(problem: &ProblemIR, magnet_name: &str) -> [f64; 3] {
     let Some(magnet) = problem
         .magnets
         .iter()
-        .find(|magnet| magnet.name == object_id)
+        .find(|magnet| magnet.name == magnet_name)
     else {
         return [0.0, 0.0, 0.0];
     };
@@ -104,19 +102,51 @@ fn signed_distance_to_region_shape(point: [f64; 3], shape: &RegionShapeIR) -> Re
     }
 }
 
-fn characteristic_point_spacing(points: &[[f64; 3]]) -> Option<f64> {
-    let mut best = f64::INFINITY;
-    for axis in 0..3 {
-        let mut coords = points.iter().map(|point| point[axis]).collect::<Vec<_>>();
-        coords.sort_by(f64::total_cmp);
-        for pair in coords.windows(2) {
-            let delta = (pair[1] - pair[0]).abs();
-            if delta > 0.0 && delta < best {
-                best = delta;
+/// Sampling support and spacing in metres supplied by the discretization.
+#[derive(Clone, Copy)]
+pub(crate) enum MaterialSampling<'a> {
+    Cells { spacing: f64, active_mask: Option<&'a [bool]> },
+    Nodes { spacings: &'a [f64] },
+}
+
+impl<'a> MaterialSampling<'a> {
+    fn spacing_at(self, index: usize) -> f64 {
+        match self {
+            Self::Cells { spacing, .. } => spacing,
+            Self::Nodes { spacings } => spacings[index],
+        }
+    }
+
+    fn active_mask(self) -> Option<&'a [bool]> {
+        match self {
+            Self::Cells { active_mask, .. } => active_mask,
+            Self::Nodes { .. } => None,
+        }
+    }
+}
+
+/// Local nodal sampling length, independent of coordinate axes and other bodies.
+pub(crate) fn fem_node_spacings(mesh: &fullmag_ir::MeshIR) -> Vec<f64> {
+    let mut spacings = vec![f64::INFINITY; mesh.nodes.len()];
+    for ordinal in 0..mesh.cell_count() {
+        let Some(nodes) = mesh.cells.item_nodes(ordinal) else {
+            continue;
+        };
+        for (offset, &a) in nodes.iter().enumerate() {
+            for &b in &nodes[offset + 1..] {
+                let (Some(pa), Some(pb)) = (mesh.nodes.get(a as usize), mesh.nodes.get(b as usize))
+                else {
+                    continue;
+                };
+                let distance = (pa[0] - pb[0]).hypot(pa[1] - pb[1]).hypot(pa[2] - pb[2]);
+                if distance.is_finite() && distance > 0.0 {
+                    spacings[a as usize] = spacings[a as usize].min(distance);
+                    spacings[b as usize] = spacings[b as usize].min(distance);
+                }
             }
         }
     }
-    best.is_finite().then_some(best)
+    spacings
 }
 
 fn smoothstep01(t: f64) -> f64 {
@@ -127,21 +157,24 @@ fn smoothstep01(t: f64) -> f64 {
 fn transition_weight(
     distance: f64,
     transition: crate::material_transition::ResolvedMaterialTransition,
-    point_spacing: Option<f64>,
-) -> f64 {
+    point_spacing: f64,
+) -> Result<f64, String> {
     use crate::material_transition::ResolvedMaterialTransition;
 
     let width = match transition {
         ResolvedMaterialTransition::None | ResolvedMaterialTransition::Sharp => {
-            return (distance <= 0.0) as u8 as f64;
+            return Ok((distance <= 0.0) as u8 as f64);
         }
         ResolvedMaterialTransition::Metric { width, .. } => width,
         ResolvedMaterialTransition::MeshRelative { cells, .. } => {
-            point_spacing.unwrap_or(0.0) * f64::from(cells)
+            if !point_spacing.is_finite() || point_spacing <= 0.0 {
+                return Err("mesh_relative material transition requires a finite positive local mesh spacing".to_string());
+            }
+            point_spacing * f64::from(cells)
         }
     };
-    if width <= 0.0 {
-        return (distance <= 0.0) as u8 as f64;
+    if !width.is_finite() || width <= 0.0 {
+        return Err("material transition requires a finite positive width".to_string());
     }
 
     let scope = match transition {
@@ -149,7 +182,7 @@ fn transition_weight(
         | ResolvedMaterialTransition::Metric { scope, .. } => scope,
         ResolvedMaterialTransition::Sharp | ResolvedMaterialTransition::None => unreachable!(),
     };
-    match scope {
+    Ok(match scope {
         fullmag_ir::MaterialTransitionScopeIR::Boundary => {
             1.0 - smoothstep01((distance + 0.5 * width) / width)
         }
@@ -167,7 +200,7 @@ fn transition_weight(
                 1.0 - smoothstep01(distance / width)
             }
         }
-    }
+    })
 }
 
 pub(crate) fn evaluate_parameter_field(
@@ -243,6 +276,7 @@ pub(crate) fn resolve_spatial_parameter(
     parameter: MaterialParameterNameIR,
     base_value: f64,
     points: &[[f64; 3]],
+    sampling: MaterialSampling<'_>,
     object_translation: [f64; 3],
 ) -> Result<Vec<f64>, String> {
     resolve_spatial_parameter_excluding_regions(
@@ -251,6 +285,7 @@ pub(crate) fn resolve_spatial_parameter(
         parameter,
         base_value,
         points,
+        sampling,
         object_translation,
         &BTreeSet::new(),
     )
@@ -262,9 +297,18 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
     parameter: MaterialParameterNameIR,
     base_value: f64,
     points: &[[f64; 3]],
+    sampling: MaterialSampling<'_>,
     object_translation: [f64; 3],
     excluded_region_ids: &BTreeSet<String>,
 ) -> Result<Vec<f64>, String> {
+    if let MaterialSampling::Nodes { spacings } = sampling {
+        if spacings.len() != points.len() {
+            return Err("material sampling spacing count must match sample points".to_string());
+        }
+    }
+    // Solvers identify a magnet by its name; region ownership uses its immutable ID.
+    let owner_object_id = problem.magnets.iter().find(|magnet| magnet.name == owner_object_id)
+        .and_then(|magnet| magnet.object_id.as_deref()).unwrap_or(owner_object_id);
     // Gather active object regions for this owner
     let enabled_regions = problem
         .object_regions
@@ -328,15 +372,43 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
     // Sort overrides/assignments by priority desc, then by region_id to keep sort stable
     overrides.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
+    // A sharp transition, or none, needs only membership, which CSG regions
+    // provide without a signed distance. Compile those predicates once.
+    let membership_predicates = overrides
+        .iter()
+        .map(|&(_, _, _, region_opt, ..)| {
+            let Some(region) = region_opt else {
+                return Ok(None);
+            };
+            let RegionShapeIR::Csg { expression } = &region.shape else {
+                return Ok(None);
+            };
+            match crate::material_transition::resolved_region_transition(region, parameter) {
+                crate::material_transition::ResolvedMaterialTransition::None
+                | crate::material_transition::ResolvedMaterialTransition::Sharp => {
+                    crate::selection::geometry::GeometryPredicate::from_geometry_entry(
+                        expression,
+                        crate::selection::geometry::AffineTransform3::identity(),
+                        crate::selection::geometry::BoundaryMembership::inclusive(),
+                    )
+                    .map(Some)
+                    .map_err(|err| err.to_string())
+                }
+                _ => Ok(None),
+            }
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
     let mut resolved_values = if overrides.is_empty() {
         vec![base_value; points.len()]
     } else {
-        let point_spacing = characteristic_point_spacing(points);
         let mut resolved_values = Vec::with_capacity(points.len());
-        for &point in points {
+        for (point_index, &point) in points.iter().enumerate() {
             let mut active_at_point = Vec::new();
-            for &(region_id, priority, value, region_opt, frame, policy, ref source_id) in
-                &overrides
+            for (
+                override_index,
+                &(region_id, priority, value, region_opt, frame, policy, ref source_id),
+            ) in overrides.iter().enumerate()
             {
                 let weight = if let Some(region) = region_opt {
                     let coords = match frame {
@@ -347,10 +419,19 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                             point[2] - object_translation[2],
                         ],
                     };
-                    let distance = signed_distance_to_region_shape(coords, &region.shape)?;
                     let transition =
                         crate::material_transition::resolved_region_transition(region, parameter);
-                    transition_weight(distance, transition, point_spacing)
+                    let distance = match &membership_predicates[override_index] {
+                        Some(predicate) => {
+                            if predicate.contains(coords).map_err(|err| err.to_string())? {
+                                -1.0
+                            } else {
+                                1.0
+                            }
+                        }
+                        None => signed_distance_to_region_shape(coords, &region.shape)?,
+                    };
+                    transition_weight(distance, transition, sampling.spacing_at(point_index))?
                 } else {
                     1.0
                 };
@@ -406,6 +487,7 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
             owner_object_id,
             &mut resolved_values,
             points,
+            sampling.active_mask(),
             object_translation,
         )?;
     }
@@ -435,20 +517,6 @@ fn validate_resolved_parameter_value(
             parameter, value
         ))
     }
-}
-
-fn bounds_from_points(points: &[[f64; 3]]) -> Option<[f64; 6]> {
-    let first = points.first()?;
-    let mut bounds = [first[0], first[1], first[2], first[0], first[1], first[2]];
-    for point in points.iter().skip(1) {
-        bounds[0] = bounds[0].min(point[0]);
-        bounds[1] = bounds[1].min(point[1]);
-        bounds[2] = bounds[2].min(point[2]);
-        bounds[3] = bounds[3].max(point[0]);
-        bounds[4] = bounds[4].max(point[1]);
-        bounds[5] = bounds[5].max(point[2]);
-    }
-    Some(bounds)
 }
 
 fn universe_bounds(problem: &ProblemIR) -> Option<[f64; 6]> {
@@ -484,112 +552,10 @@ fn universe_bounds(problem: &ProblemIR) -> Option<[f64; 6]> {
     ])
 }
 
-fn smootherstep(value: f64) -> f64 {
-    let t = value.clamp(0.0, 1.0);
-    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
-}
-
-fn absorbing_profile_value(profile: AbsorbingBoundaryProfileIR, value: f64) -> f64 {
-    let t = value.clamp(0.0, 1.0);
-    match profile {
-        AbsorbingBoundaryProfileIR::Linear => t,
-        AbsorbingBoundaryProfileIR::Quadratic => t * t,
-        AbsorbingBoundaryProfileIR::Smootherstep => smootherstep(t),
-    }
-}
-
-fn absorbing_face_weight(
-    face: AbsorbingBoundaryFaceIR,
-    point: [f64; 3],
-    bounds: [f64; 6],
-    layer: &AbsorbingBoundaryLayerIR,
-) -> f64 {
-    let (axis, positive) = match face {
-        AbsorbingBoundaryFaceIR::XPlus => (0, true),
-        AbsorbingBoundaryFaceIR::XMinus => (0, false),
-        AbsorbingBoundaryFaceIR::YPlus => (1, true),
-        AbsorbingBoundaryFaceIR::YMinus => (1, false),
-        AbsorbingBoundaryFaceIR::ZPlus => (2, true),
-        AbsorbingBoundaryFaceIR::ZMinus => (2, false),
-    };
-    let distance = if positive {
-        bounds[axis + 3] - point[axis]
-    } else {
-        point[axis] - bounds[axis]
-    };
-    if !distance.is_finite() || distance < 0.0 || distance > layer.total_width_m {
-        return 0.0;
-    }
-    let ramp_start = layer.total_width_m - layer.ramp_width_m;
-    let t = if distance <= ramp_start {
-        1.0
-    } else {
-        (layer.total_width_m - distance) / layer.ramp_width_m
-    };
-    absorbing_profile_value(layer.profile, t)
-}
-
-fn apply_absorbing_boundary_layer(
-    problem: &ProblemIR,
-    owner_object_id: &str,
-    values: &mut [f64],
-    points: &[[f64; 3]],
-    object_translation: [f64; 3],
-) -> Result<(), String> {
-    let Some(layer) = problem
-        .magnets
-        .iter()
-        .find(|magnet| magnet.name == owner_object_id)
-        .and_then(|magnet| magnet.absorbing_boundary.as_ref())
-    else {
-        return Ok(());
-    };
-    if values.len() != points.len() {
-        return Err("absorbing boundary alpha field length does not match points".to_string());
-    }
-    let (profile_points, bounds) = match layer.frame {
-        AbsorbingBoundaryFrameIR::Object => {
-            let local = points
-                .iter()
-                .map(|point| {
-                    [
-                        point[0] - object_translation[0],
-                        point[1] - object_translation[1],
-                        point[2] - object_translation[2],
-                    ]
-                })
-                .collect::<Vec<_>>();
-            let bounds = bounds_from_points(&local).ok_or_else(|| {
-                format!("absorbing boundary for '{owner_object_id}' requires at least one point")
-            })?;
-            (local, bounds)
-        }
-        AbsorbingBoundaryFrameIR::Universe => {
-            let bounds = universe_bounds(problem)
-                .or_else(|| bounds_from_points(points))
-                .ok_or_else(|| {
-                    format!(
-                        "absorbing boundary for '{owner_object_id}' requires at least one point"
-                    )
-                })?;
-            (points.to_vec(), bounds)
-        }
-    };
-    for (value, point) in values.iter_mut().zip(profile_points) {
-        let weight = layer
-            .faces
-            .iter()
-            .map(|face| absorbing_face_weight(*face, point, bounds, layer))
-            .fold(0.0, f64::max);
-        *value += layer.max_damping * weight;
-        if !value.is_finite() || *value < 0.0 {
-            return Err(format!(
-                "resolved absorbing boundary alpha for '{owner_object_id}' is invalid"
-            ));
-        }
-    }
-    Ok(())
-}
+#[path = "spatial_absorber.rs"]
+mod spatial_absorber;
+use spatial_absorber::apply_absorbing_boundary_layer;
+pub use spatial_absorber::validate_absorbing_region_boundary;
 
 pub(crate) fn build_material_field_plans(
     problem: &ProblemIR,
@@ -700,6 +666,7 @@ pub(crate) fn build_material_field_plans(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fullmag_ir::{AbsorbingBoundaryFaceIR, AbsorbingBoundaryFrameIR, AbsorbingBoundaryLayerIR, AbsorbingBoundaryProfileIR};
 
     fn layer(profile: AbsorbingBoundaryProfileIR) -> AbsorbingBoundaryLayerIR {
         AbsorbingBoundaryLayerIR {
@@ -709,6 +676,7 @@ mod tests {
             faces: vec![AbsorbingBoundaryFaceIR::XPlus],
             profile,
             frame: AbsorbingBoundaryFrameIR::Object,
+            expression: None,
         }
     }
 
@@ -716,7 +684,7 @@ mod tests {
     fn absorbing_boundary_uses_smootherstep_and_adds_to_base_alpha() {
         let mut problem = ProblemIR::bootstrap_example();
         problem.magnets[0].absorbing_boundary =
-            Some(layer(AbsorbingBoundaryProfileIR::Smootherstep));
+            Some(layer(AbsorbingBoundaryProfileIR::Smootherstep).into());
         let points = vec![
             [0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0],
@@ -729,6 +697,7 @@ mod tests {
             MaterialParameterNameIR::Alpha,
             0.1,
             &points,
+            MaterialSampling::Cells { spacing: 1.0, active_mask: None },
             [0.0, 0.0, 0.0],
         )
         .expect("alpha profile should resolve");
@@ -739,6 +708,54 @@ mod tests {
     }
 
     #[test]
+    fn absorbing_boundary_profiles_materialize_ramp_and_plateau() {
+        use AbsorbingBoundaryProfileIR::{Custom, Logarithmic, Tanh};
+
+        let points = [
+            [0.0, 0.0, 0.0],
+            [6.0, 0.0, 0.0],
+            [7.0, 0.0, 0.0],
+            [9.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+        ];
+        let mut problem = ProblemIR::bootstrap_example();
+        for (profile, expression, midpoint) in [
+            (Logarithmic, None, 5.5_f64.ln() / 10.0_f64.ln()),
+            (Tanh, None, 0.5),
+            (Custom, Some("u**3"), 0.125),
+        ] {
+            let mut config = layer(profile);
+            config.expression = expression.map(str::to_string);
+            problem.magnets[0].absorbing_boundary = Some(config.into());
+            let mut values = [0.1; 5];
+            apply_absorbing_boundary_layer(&problem, "strip", &mut values, &points, None, [0.0; 3])
+                .expect("profile should materialize");
+            assert_eq!(values[0], 0.1);
+            assert_eq!(values[1], 0.1);
+            assert!((values[2] - (0.1 + 0.5 * midpoint)).abs() < 1e-12);
+            assert_eq!(values[3..], [0.6, 0.6]);
+        }
+    }
+
+    #[test]
+    fn absorbing_boundary_checks_unprobed_sample_during_materialization() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let mut config = layer(AbsorbingBoundaryProfileIR::Custom);
+        // A dyadic pole lies exactly between the validation samples.
+        config.expression = Some("u*(u-0.009765625)/(u-0.009765625)".into());
+        config.compile_profile().expect("probe should pass");
+        config.total_width_m = 1.0;
+        config.ramp_width_m = 1.0;
+        config.faces = vec![AbsorbingBoundaryFaceIR::XMinus];
+        problem.magnets[0].absorbing_boundary = Some(config.into());
+        let mut values = [0.1; 2];
+        let points = [[0.0, 0.0, 0.0], [507.0 / 512.0, 0.0, 0.0]];
+        let error = apply_absorbing_boundary_layer(&problem, "strip", &mut values, &points, None, [0.0; 3])
+            .unwrap_err();
+        assert!(error.contains("expression is undefined"));
+    }
+
+    #[test]
     fn absorbing_boundary_combines_faces_by_maximum() {
         let mut problem = ProblemIR::bootstrap_example();
         let mut config = layer(AbsorbingBoundaryProfileIR::Linear);
@@ -746,7 +763,7 @@ mod tests {
             AbsorbingBoundaryFaceIR::XPlus,
             AbsorbingBoundaryFaceIR::YPlus,
         ];
-        problem.magnets[0].absorbing_boundary = Some(config);
+        problem.magnets[0].absorbing_boundary = Some(config.into());
         let points = vec![[4.0, 4.0, 0.0]];
         let values = resolve_spatial_parameter(
             &problem,
@@ -754,9 +771,14 @@ mod tests {
             MaterialParameterNameIR::Alpha,
             0.1,
             &points,
+            MaterialSampling::Cells { spacing: 1.0, active_mask: None },
             [0.0, 0.0, 0.0],
         )
         .expect("corner profile should resolve");
         assert!((values[0] - 0.6).abs() < 1e-12);
     }
 }
+
+#[cfg(test)]
+#[path = "material_audit_tests.rs"]
+mod material_audit_tests;

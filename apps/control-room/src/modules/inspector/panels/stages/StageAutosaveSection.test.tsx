@@ -44,8 +44,8 @@ describe("StageAutosaveSection", () => {
           ...DEFAULT_STAGE_AUTOSAVE_DRAFT,
           enabled: true,
           fields: [
-            { cadence: "2e-12", quantity: "m", rowKey: "original-0" },
-            { cadence: "4e-12", quantity: "H_demag", rowKey: "original-1" },
+            { cadence: "2e-12", quantity: "m" },
+            { cadence: "4e-12", quantity: "H_demag" },
           ],
           format: "hdf5",
           layout: "separate",
@@ -100,7 +100,7 @@ describe("StageAutosaveSection", () => {
     draft.stageAutosave = {
       ...DEFAULT_STAGE_AUTOSAVE_DRAFT,
       enabled: true,
-      fields: [{ cadence: "2e-12", quantity: "m", rowKey: "added-0" }],
+      fields: [{ cadence: "2e-12", quantity: "m" }],
       format: "hdf5",
       layout: "separate",
       tableCadence: "1e-12",

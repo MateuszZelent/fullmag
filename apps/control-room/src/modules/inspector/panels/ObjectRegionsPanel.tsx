@@ -73,7 +73,6 @@ import { ObjectRegionNestedRegionsPanel as ObjectRegionNestedRegionsPanelImpl } 
 import { ObjectRegionOverviewPanel as ObjectRegionOverviewPanelImpl } from "./region/ObjectRegionOverviewPanel";
 import { ObjectRegionTexturePanel as ObjectRegionTexturePanelImpl } from "./region/ObjectRegionTexturePanel";
 import { ObjectRegionVisualizationPanel as ObjectRegionVisualizationPanelImpl } from "./region/ObjectRegionVisualizationPanel";
-import { regionMaterialOverridePriorityDraftKey } from "./region/RegionIntegerField";
 import type {
   RegionAuxiliaryDraftSession,
   RegionSubPanelProps,
@@ -185,7 +184,6 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   const baseDraft = useMemo(() => objectRegionDraftFromModel(model), [model]);
   const draftKey = `${sessionScopeKey ?? "no-session"}:${objectRegionDraftKey(model)}`;
   const draftIdentityKey = objectRegionDraftIdentityKey(model);
-  const nextMaterialOverrideUiKey = useRef(0);
   const fieldDrafts = useQuantityFieldDraftScope(
     `${sessionScopeKey ?? "no-session"}:${draftIdentityKey}`,
   );
@@ -405,20 +403,12 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
     updateDraft({
       materialOverrides: [
         ...draft.materialOverrides,
-        defaultMaterialOverrideDraft(
-          draft.priority,
-          `new:${nextMaterialOverrideUiKey.current++}`,
-        ),
+        defaultMaterialOverrideDraft(draft.priority),
       ],
     });
   }
 
   function removeMaterialOverride(index: number): void {
-    const removedOverride = draft.materialOverrides[index];
-    if (!removedOverride) return;
-    fieldDrafts.store.remove(
-      regionMaterialOverridePriorityDraftKey(removedOverride.uiKey),
-    );
     updateDraft({
       materialOverrides: draft.materialOverrides.filter(
         (_override, overrideIndex) => overrideIndex !== index,
@@ -466,13 +456,6 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
       setFeedback({ kind: "error", message: "Select an authored object region." });
       return false;
     }
-    const rawFieldBlockReason = quantityFieldDraftBlockReason(
-      fieldDrafts.store.getSummary(),
-    );
-    if (rawFieldBlockReason) {
-      setFeedback({ kind: "error", message: rawFieldBlockReason });
-      return false;
-    }
     const validationErrors = validateObjectRegionDraft(draft, {
       meshPolicyLane: meshLane,
     });
@@ -504,10 +487,7 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
           return api.model.patchObjectRegionResource(
             model.objectId,
             model.regionId,
-            buildObjectRegionPatch(draft, {
-              baseDraft,
-              meshPolicyLane: meshLane,
-            }),
+            buildObjectRegionPatch(draft, { meshPolicyLane: meshLane }),
             options,
           );
         },
@@ -839,9 +819,6 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
     updateMaterialOverride,
     addMaterialOverride,
     removeMaterialOverride,
-    removeQuantityFieldDraftKeys: (keys) => {
-      for (const key of keys) fieldDrafts.store.remove(key);
-    },
     applyRegion,
     duplicateRegion,
     deleteRegion,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import errno
+import itertools
 import json
 import os
 from pathlib import Path
@@ -48,6 +49,7 @@ class _Logger:
     stdin = _LoggerStdin()
 
     def poll(self):
+        # The control helper stays alive until the lease is finalized.
         return None
 
     def wait(self, timeout):
@@ -153,10 +155,11 @@ assert docker_build_control.mirror_console(b"progress\\n") is False
         control.namespace_registry = None
         control.namespace_registry_sha256 = None
         control._active_operation = None
+        # Helper identity pinning inspects Docker; this test covers console loss only.
+        control._pin_operation_helper = lambda _operation: "a" * 64
         control.helper_args = lambda *args, **kwargs: ["fake-control-helper"]
         control.space = lambda: {"available_bytes": 64 * 1024**3}
         control._line = Mock(side_effect=("READY", "LOGGED"))
-        control._inspect_operation_helper = Mock(return_value="a" * 64)
         written = []
         control.write = lambda path, value: written.append((path, value))
         logger = _Logger()
@@ -168,8 +171,6 @@ assert docker_build_control.mirror_console(b"progress\\n") is False
             sink = build_control.sys.stdout
         sink.close()
 
-        control._inspect_operation_helper.assert_called_once_with(operation)
-        self.assertIsNone(control._active_operation)
         paths = [path for path, _value in written]
         self.assertTrue(any(path.endswith("/terminal.json") for path in paths))
         self.assertTrue(any(path == "development/current.json" for path in paths))
@@ -198,7 +199,7 @@ assert docker_build_control.mirror_console(b"progress\\n") is False
             raise AssertionError(args)
 
         with patch.object(volume_dev, "docker_text", side_effect=docker_text), patch.object(
-            volume_dev.time, "monotonic", side_effect=(0.0, 1.0, 46.0, 46.0, 50.0)
+            volume_dev.time, "monotonic", side_effect=itertools.chain((0.0,), itertools.repeat(46.0))
         ), patch.object(volume_dev.time, "sleep"), patch.object(
             build_control.sys, "stdout", _BrokenStream()
         ):

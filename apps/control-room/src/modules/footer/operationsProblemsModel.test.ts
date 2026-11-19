@@ -8,10 +8,7 @@ import type {
   SimulationPreparationResource,
 } from "@/kernel/api/apiTypes";
 
-import {
-  buildOperationsProjection,
-  buildProblemsProjection,
-} from "./operationsProblemsModel";
+import { buildProblemsProjection } from "./operationsProblemsModel";
 
 const commandQueue: CommandQueueStatusResource = {
   accepted_count: 0,
@@ -123,27 +120,6 @@ const geometryDiagnostics: GeometryDiagnosticsResource = {
 };
 
 describe("operationsProblemsModel", () => {
-  it("projects preparation, mesh, and commands without synthesizing progress", () => {
-    const model = buildOperationsProjection({
-      commandQueue,
-      meshBuild,
-      preparation,
-    });
-
-    expect(model.rows.map((row) => row.id)).toEqual([
-      "preparation:prep-12",
-      "mesh:mesh-good-7",
-      "command:mesh-13",
-      "command:grid-12",
-    ]);
-    expect(model.rows[0]).toMatchObject({
-      detail: "Gmsh pass 2",
-      revision: "21",
-      status: "running",
-    });
-    expect(model.rows.every((row) => !("progressPercent" in row))).toBe(true);
-  });
-
   it("projects source diagnostics and preserves last-good mesh identity", () => {
     const model = buildProblemsProjection({
       commandQueue,

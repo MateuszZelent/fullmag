@@ -78,6 +78,7 @@ interface TorqueDraft {
   spinPolarization: string;
   stackNormal: string;
   target: string;
+  timeExpression: string;
   xiDl: string;
   xiFl: string;
 }
@@ -116,6 +117,7 @@ const DEFAULT_TORQUE: TorqueDraft = {
   spinPolarization: "0, 0, 1",
   stackNormal: "",
   target: "",
+  timeExpression: "",
   xiDl: "0",
   xiFl: "0",
 };
@@ -149,15 +151,12 @@ function vectorText(value: unknown): string {
 }
 
 function parseVector(value: string, label: string): number[] {
-  const commaParts = value.split(",");
-  if (commaParts.some((part) => !part.trim())) throw new Error(`${label} requires three finite components.`);
-  const parsed = commaParts.flatMap((part) => part.trim().split(/\s+/)).map(Number);
+  const parsed = value.split(/[\s,]+/).filter(Boolean).map(Number);
   if (parsed.length !== 3 || parsed.some((entry) => !Number.isFinite(entry))) throw new Error(`${label} requires three finite components.`);
   return parsed;
 }
 
 function finite(value: string, label: string): number {
-  if (!value.trim()) throw new Error(`${label} is required.`);
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`${label} must be finite.`);
   return parsed;
@@ -209,6 +208,7 @@ function torqueDraft(
     spinPolarization: vectorText(record.spin_polarization),
     stackNormal: vectorText(record.stack_normal),
     target: jsonText(record.target),
+    timeExpression: jsonText(record.time_expression),
     xiDl: text(record.xi_dl),
     xiFl: text(record.xi_fl),
   };
@@ -273,6 +273,11 @@ export function buildTorque(draft: TorqueDraft): SceneSpinTorque {
     spin_polarization: parseVector(draft.spinPolarization, "Spin polarization"),
     stack_normal: optionalVector(draft.stackNormal, "Stack normal"),
     target: optionalJson(draft.target) as never,
+    ...(draft.formulaVersion !== "slonczewski.fullmag.v2"
+      || draft.currentSource.trim()
+      || !draft.timeExpression.trim()
+      ? {}
+      : { time_expression: optionalJson(draft.timeExpression) as Record<string, unknown> }),
   };
   return {
     kind: draft.kind,
@@ -350,6 +355,8 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
   const selected = (requestedId ? items.find((item) => identity(item) === requestedId)
     : resourceIndex !== undefined && resourceIndex !== null ? items[resourceIndex] : null) ?? null;
   const selectedId = requestedId || (selected ? identity(selected) : "");
+  const usesPosition = !requestedId && resourceIndex !== undefined && resourceIndex !== null;
+  const resolvedPositionId = usesPosition && active.status === "ready" ? selectedId || null : null;
   const readOnly = selected ? isUnsupportedSpinAuthoringResource(family, object(selected)) : false;
   const incomingDraft = family === "spin_torque"
     ? torqueDraft(selected as SceneSpinTorque | null, selected ? null : initialScope)
@@ -359,22 +366,32 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
           ? null
           : resolveOerstedCurrentSource(currents.data?.items ?? [], initialScope ?? null),
       );
-  const keyFor = (localId: string) => JSON.stringify([sessionScopeKey, family,
-    resourceId ?? (resourceIndex !== undefined && resourceIndex !== null ? `index:${resourceIndex}` : localId || "new"),
-    initialScope?.objectId ?? null, initialScope?.regionId ?? null]);
+  const keyFor = (localId: string) => {
+    const id = resourceId ?? localId;
+    const target = id
+      ? ["resource", id]
+      : resourceIndex !== undefined && resourceIndex !== null
+        ? ["position", resourceIndex]
+        : ["create"];
+    return JSON.stringify([
+      sessionScopeKey, family, target, initialScope?.objectId ?? null, initialScope?.regionId ?? null,
+    ]);
+  };
   const draftKey = keyFor(localSelectedId);
   const [draftState, setDraftState] = useState<{
     key: string; value: TorqueDraft | OerstedDraft; baseline: TorqueDraft | OerstedDraft;
-    ackRevision: number | null; conflicts: string[];
-  }>({ key: draftKey, value: incomingDraft, baseline: incomingDraft, ackRevision: null, conflicts: [] });
+    ackRevision: number | null; conflicts: string[]; positionId: string | null;
+  }>({ key: draftKey, value: incomingDraft, baseline: incomingDraft, ackRevision: null, conflicts: [], positionId: resolvedPositionId });
   const [unconfirmedAck, setUnconfirmedAck] = useState<{ key: string; minimumRevision: number } | null>(null);
   const sourceRevision = active.data?.scene_revision;
   const sameDraft = draftState.key === draftKey;
+  const positionId = sameDraft ? draftState.positionId : null;
+  if (resolvedPositionId && positionId === null) {
+    setDraftState({ key: draftKey, value: incomingDraft, baseline: incomingDraft, ackRevision: null, conflicts: [], positionId: resolvedPositionId });
+  }
   const olderThanAck = sameDraft && draftState.ackRevision !== null && (sourceRevision ?? -1) < draftState.ackRevision;
-  const legacyTargetChanged = sameDraft && !requestedId && resourceIndex !== undefined && resourceIndex !== null
-    && selected !== null && draftState.baseline.id !== incomingDraft.id;
-  const targetUnavailable = Boolean(legacyTargetChanged || (selectedId || resourceIndex !== undefined && resourceIndex !== null)
-    && !selected && active.status === "ready" && !olderThanAck);
+  const legacyTargetUnavailable = usesPosition && (!selected || positionId !== selectedId);
+  const targetUnavailable = legacyTargetUnavailable || Boolean(selectedId && !selected && active.status === "ready" && !olderThanAck);
   const baseDraft = sameDraft && (olderThanAck || targetUnavailable) ? draftState.baseline : incomingDraft;
   const reconciled = sameDraft ? reconcileSpinAuthoringDraft(baseDraft, draftState.value, draftState.baseline)
     : { draft: baseDraft, conflicts: [] };
@@ -397,15 +414,20 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
   const [feedbackState, setFeedbackState] = useState<{ key: string; kind: "error" | "success" | "warning"; message: string } | null>(null);
   const feedback = feedbackState?.key === draftKey ? feedbackState : null;
   const setFeedback = (value: { kind: "error" | "success" | "warning"; message: string } | null) => setFeedbackState(value ? { ...value, key: draftKey } : null);
-  const [pendingOperation, setPendingOperation] = useState<{
-    id: number;
-    sessionScopeKey: string;
-    draftKey: string;
-    action: "save" | "delete";
-  } | null>(null);
-  const nextPendingOperationId = useRef(0);
-  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey && pendingOperation.draftKey === draftKey;
-  const inFlightKey = useRef<string | null>(null);
+  const inFlight = useRef(new Map<string, "save" | "delete">());
+  const [pendingOperations, setPendingOperations] = useState<ReadonlyMap<string, "save" | "delete">>(new Map());
+  const pendingOperation = pendingOperations.get(draftKey);
+  const pending = pendingOperation !== undefined;
+
+  function beginOperation(action: "save" | "delete"): void {
+    inFlight.current.set(draftKey, action);
+    setPendingOperations(new Map(inFlight.current));
+  }
+
+  function finishOperation(): void {
+    inFlight.current.delete(draftKey);
+    if (mounted.current) setPendingOperations(new Map(inFlight.current));
+  }
   const validationKey = `${draftKey}:${sourceRevision ?? "none"}:${JSON.stringify(draft)}`;
   const [validationState, setValidationState] = useState<{ key: string; response: TransportValidationResponse | null }>({ key: "", response: null });
   const validation = validationState.key === validationKey ? validationState.response : null;
@@ -474,22 +496,20 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
   }, [api, commands, family, readOnly, selectedId, sessionScopeKey, sourceCurrent, targetUnavailable, conflictReason, validationKey]);
 
   const patch = (value: Partial<TorqueDraft> | Partial<OerstedDraft>) => {
-    if (readOnly || targetUnavailable || pending && pendingOperation?.action === "delete" || "id" in value && (pending || inFlightKey.current === draftKey)) return;
+    if (readOnly || targetUnavailable || pending && pendingOperation === "delete" || "id" in value && (pending || inFlight.current.has(draftKey))) return;
     setDraftState({ key: draftKey, value: Object.assign({}, draft, value) as TorqueDraft | OerstedDraft,
-      baseline: baseDraft, ackRevision: sameDraft ? draftState.ackRevision : null, conflicts });
+      baseline: baseDraft, ackRevision: sameDraft ? draftState.ackRevision : null, conflicts, positionId });
   };
 
   async function save(): Promise<boolean> {
-    if (!sessionScopeKey || pending || inFlightKey.current === draftKey || !valid || Boolean(selectedId) && !dirty) return false;
+    if (!sessionScopeKey || pending || inFlight.current.has(draftKey) || !valid || Boolean(selectedId) && !dirty) return false;
     const submittedDraft = draft;
     const mutationContext = captureMutationContext();
     const generation = targetGeneration.current;
     const isCurrentDraft = () => mounted.current && activeDraftKey.current === draftKey && targetGeneration.current === generation && mutationContext.isCurrentSessionScope?.() === true;
-    const operationId = ++nextPendingOperationId.current;
-    inFlightKey.current = draftKey;
+    beginOperation("save");
     setDraftState({ key: draftKey, value: submittedDraft, baseline: baseDraft,
-      ackRevision: sameDraft ? draftState.ackRevision : null, conflicts: [] });
-    setPendingOperation({ id: operationId, sessionScopeKey, draftKey, action: "save" });
+      ackRevision: sameDraft ? draftState.ackRevision : null, conflicts: [], positionId });
     setFeedback(null);
     try {
       if (!capability?.authoring_allowed) throw new Error(capability?.reason ?? "Authoring capability is unavailable.");
@@ -542,7 +562,7 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
         if (current.key !== draftKey) return current;
         const next = reconcileSpinAuthoringDraft(acknowledged, current.value, submittedDraft);
         return { key: acknowledgedKey, value: next.draft, baseline: acknowledged, ackRevision: commit.scene_revision,
-          conflicts: [...new Set([...current.conflicts, ...next.conflicts])] };
+          conflicts: [...new Set([...current.conflicts, ...next.conflicts])], positionId };
       });
       if (!selectedId) setLocalSelectedId(submittedDraft.id);
       setFeedbackState({ key: acknowledgedKey, kind: "success", message: "Authoring resource committed." });
@@ -552,27 +572,24 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
       return false;
     } finally {
-      if (inFlightKey.current === draftKey) inFlightKey.current = null;
-      if (mounted.current) setPendingOperation((current) => current?.id === operationId ? null : current);
+      finishOperation();
     }
   }
 
   function resetDraft(): void {
-    if (pending || inFlightKey.current === draftKey) return;
+    if (pending || inFlight.current.has(draftKey)) return;
     setDraftState({ key: draftKey, value: baseDraft, baseline: baseDraft,
-      ackRevision: olderThanAck ? draftState.ackRevision : null, conflicts: [] });
+      ackRevision: olderThanAck ? draftState.ackRevision : null, conflicts: [], positionId });
     setFeedback(null);
   }
 
   async function remove(): Promise<void> {
-    if (!selectedId || active.data?.scene_revision === undefined || readOnly || !sessionScopeKey || pending || inFlightKey.current === draftKey || !valid || dirty) return;
+    if (!selectedId || active.data?.scene_revision === undefined || readOnly || !sessionScopeKey || pending || inFlight.current.has(draftKey) || !valid || dirty) return;
     const submittedRevision = active.data.scene_revision;
     const mutationContext = captureMutationContext();
     const generation = targetGeneration.current;
     const isCurrentDraft = () => mounted.current && activeDraftKey.current === draftKey && targetGeneration.current === generation && mutationContext.isCurrentSessionScope?.() === true;
-    const operationId = ++nextPendingOperationId.current;
-    inFlightKey.current = draftKey;
-    setPendingOperation({ id: operationId, sessionScopeKey, draftKey, action: "delete" });
+    beginOperation("delete");
     try {
       if (!capability?.authoring_allowed || validation?.execution.authoring_allowed !== true) throw new Error(capability?.reason ?? validation?.execution.reason ?? "Latest validation does not permit mutation.");
       const commit = await runAuthoringMutationWithHistory(
@@ -600,8 +617,7 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
       if (!isCurrentDraft()) return;
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
     } finally {
-      if (inFlightKey.current === draftKey) inFlightKey.current = null;
-      if (mounted.current) setPendingOperation((current) => current?.id === operationId ? null : current);
+      finishOperation();
     }
   }
 
@@ -620,14 +636,14 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
     {resourceId === undefined && resourceIndex === undefined ? <>
       <FormField label="Resource" type="select" value={localSelectedId} disabled={dirty || pending} onChange={(event) => {
         const id = event.target.value;
-        if (!dirty && !pending && inFlightKey.current !== draftKey && (id === "" || items.some((item) => identity(item) === id))) setLocalSelectedId(id);
+        if (!dirty && !pending && !inFlight.current.has(draftKey) && (id === "" || items.some((item) => identity(item) === id))) setLocalSelectedId(id);
       }}><option value="">New resource</option>
         {localSelectedId && !items.some((item) => identity(item) === localSelectedId) ? <option value={localSelectedId} disabled>{localSelectedId} (unconfirmed; preserved)</option> : null}
         {items.map((item, index) => <option key={`${identity(item)}:${index}`} value={identity(item)}>{identity(item) || `Unknown ${index + 1}`}</option>)}
       </FormField>
       {dirty || pending ? <p className="fm-help-text" role="status">Apply or Revert changes before switching resources.</p> : null}
     </> : null}
-    <fieldset className="m-0 min-w-0 border-0 p-0" disabled={targetUnavailable || pending && pendingOperation?.action === "delete"}>
+    <fieldset className="m-0 min-w-0 border-0 p-0" disabled={targetUnavailable || pending && pendingOperation === "delete"}>
     {readOnly && selected ? <><FeedbackBanner kind="warning" message="Unknown authoring record is preserved losslessly and is read-only." /><FormField label="Opaque payload" type="textarea" rows={20} readOnly value={JSON.stringify(selected, null, 2)} /></> : family === "spin_torque" ? <TorqueFields currentTransports={currents.data?.items ?? []} draft={draft as TorqueDraft} identityReadOnly={Boolean(selectedId) || pending} patch={patch} /> : <OerstedFields currentTransports={currents.data?.items ?? []} draft={draft as OerstedDraft} identityReadOnly={Boolean(selectedId) || pending} patch={patch} />}
     </fieldset>
     {!readOnly ? <div className="fm-help-text"><div>Qualification: {validation?.execution.qualification ?? capability?.status ?? "checking"}</div><div>{validation?.execution.reason ?? capability?.reason ?? "Capability unavailable."}</div></div> : null}
@@ -668,6 +684,17 @@ function TorqueFields({ currentTransports, draft, identityReadOnly, patch }: { c
       <FormField label="Schema version" value={draft.schemaVersion} onChange={field("schemaVersion")} />
     </> : null}
     {draft.kind === "slonczewski" ? <>
+      {currentBinding === "prescribed_density" && draft.formulaVersion === "slonczewski.fullmag.v2" ? (
+        <FormField
+          label="Current time expression"
+          type="textarea"
+          rows={4}
+          spellCheck={false}
+          hint='Current density multiplier in JSON with "source", optional "constants" and "event_times_s" in seconds. Leave blank for constant current.'
+          value={draft.timeExpression}
+          onChange={field("timeExpression")}
+        />
+      ) : null}
       <FormField label="Spin polarization orientation" value={draft.spinPolarization} onChange={field("spinPolarization")} />
       <FormField label="Epsilon prime" value={draft.epsilonPrime} onChange={field("epsilonPrime")} />
       <FormField label="Lambda asymmetry" value={draft.lambdaAsymmetry} onChange={field("lambdaAsymmetry")} />

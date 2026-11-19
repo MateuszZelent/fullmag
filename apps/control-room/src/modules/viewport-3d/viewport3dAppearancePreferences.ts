@@ -5,6 +5,11 @@ export type Viewport3DDimensionOrigin = "frame-center" | "world";
 export type Viewport3DExportBackground = "view" | "transparent";
 
 export interface Viewport3DAppearancePreferences {
+  renderMode: "scientific" | "presentation";
+  materialRoughness: number;
+  materialMetalness: number;
+  softShadows: boolean;
+  exportScale: 1 | 2 | 4;
   backgroundMode: Viewport3DBackgroundMode;
   backgroundStrength: number;
   lightingMode: Viewport3DLightingMode;
@@ -28,6 +33,11 @@ export type Viewport3DAppearanceSection =
   | "all";
 
 export const DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES = Object.freeze({
+  renderMode: "scientific",
+  materialRoughness: 0.35,
+  materialMetalness: 0.5,
+  softShadows: true,
+  exportScale: 2,
   backgroundMode: "gradient",
   backgroundStrength: 0.65,
   lightingMode: "studio",
@@ -62,6 +72,7 @@ export function resolveViewport3DAppearanceDiagnostics({
   postProcessingAvailable = true,
   postProcessingDataProtected = false,
   profileAllowsAntialias,
+  profileAllowsAmbientOcclusion = true,
 }: {
   ambientOcclusionRequested: boolean;
   antialiasRequested: boolean;
@@ -69,27 +80,31 @@ export function resolveViewport3DAppearanceDiagnostics({
   postProcessingAvailable?: boolean;
   postProcessingDataProtected?: boolean;
   profileAllowsAntialias: boolean;
+  profileAllowsAmbientOcclusion?: boolean;
 }): Viewport3DAppearanceDiagnostics {
   const postProcessingEffect = (
     requested: boolean,
+    profileAllowsEffect = true,
   ): Viewport3DEffectDiagnostic => {
     const reason = !requested
       ? null
       : postProcessingDataProtected
         ? "Quantitative field colors are protected"
+        : !profileAllowsEffect
+          ? "The selected quality disables ambient occlusion."
         : !postProcessingAvailable
           ? "Post-processing is disabled by browser configuration."
           : null;
     return {
       requested,
-      effective: requested && postProcessingAvailable && !postProcessingDataProtected,
+      effective: requested && profileAllowsEffect && postProcessingAvailable && !postProcessingDataProtected,
       reason,
     };
   };
 
   const antialiasEffective = antialiasRequested && profileAllowsAntialias;
   return {
-    ambientOcclusion: postProcessingEffect(ambientOcclusionRequested),
+    ambientOcclusion: postProcessingEffect(ambientOcclusionRequested, profileAllowsAmbientOcclusion),
     bloom: postProcessingEffect(bloomRequested),
     antialias: {
       requested: antialiasRequested,
@@ -103,6 +118,7 @@ export function resolveViewport3DAppearanceDiagnostics({
 }
 
 const APPEARANCE_ENUMS = {
+  renderMode: ["scientific", "presentation"],
   backgroundMode: ["solid", "gradient"],
   lightingMode: ["flat", "studio"],
   lightingSpace: ["camera", "world"],
@@ -111,6 +127,8 @@ const APPEARANCE_ENUMS = {
 } as const;
 
 const APPEARANCE_NUMERIC_BOUNDS = {
+  materialRoughness: [0.05, 1],
+  materialMetalness: [0, 1],
   backgroundStrength: [0, 1],
   lightingIntensity: [0, 2],
   lightingAzimuth: [-180, 180],
@@ -126,6 +144,11 @@ export function normalizeViewport3DAppearancePreferences(
   const record = asRecord(value);
   const defaults = DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES;
   return {
+    renderMode: enumValue(record.renderMode, APPEARANCE_ENUMS.renderMode, defaults.renderMode),
+    materialRoughness: numericValue(record.materialRoughness, APPEARANCE_NUMERIC_BOUNDS.materialRoughness, defaults.materialRoughness),
+    materialMetalness: numericValue(record.materialMetalness, APPEARANCE_NUMERIC_BOUNDS.materialMetalness, defaults.materialMetalness),
+    softShadows: booleanValue(record.softShadows, defaults.softShadows),
+    exportScale: record.exportScale === 1 || record.exportScale === 2 || record.exportScale === 4 ? record.exportScale : defaults.exportScale,
     backgroundMode: enumValue(record.backgroundMode, APPEARANCE_ENUMS.backgroundMode, defaults.backgroundMode),
     backgroundStrength: numericValue(record.backgroundStrength, APPEARANCE_NUMERIC_BOUNDS.backgroundStrength, defaults.backgroundStrength),
     lightingMode: enumValue(record.lightingMode, APPEARANCE_ENUMS.lightingMode, defaults.lightingMode),
@@ -148,6 +171,12 @@ export function applyViewport3DAppearancePatch(
 ): Viewport3DAppearancePreferences {
   const record = asRecord(patch);
   const next = { ...current };
+  if (isEnumValue(record.renderMode, APPEARANCE_ENUMS.renderMode)) next.renderMode = record.renderMode;
+  if (isFiniteNumber(record.materialRoughness)) next.materialRoughness = clamp(record.materialRoughness, APPEARANCE_NUMERIC_BOUNDS.materialRoughness);
+  if (isFiniteNumber(record.materialMetalness)) next.materialMetalness = clamp(record.materialMetalness, APPEARANCE_NUMERIC_BOUNDS.materialMetalness);
+  if (typeof record.softShadows === "boolean") next.softShadows = record.softShadows;
+  if (record.exportScale === 1 || record.exportScale === 2 || record.exportScale === 4) next.exportScale = record.exportScale;
+
 
   if (isEnumValue(record.backgroundMode, APPEARANCE_ENUMS.backgroundMode)) next.backgroundMode = record.backgroundMode;
   if (isFiniteNumber(record.backgroundStrength)) next.backgroundStrength = clamp(record.backgroundStrength, APPEARANCE_NUMERIC_BOUNDS.backgroundStrength);

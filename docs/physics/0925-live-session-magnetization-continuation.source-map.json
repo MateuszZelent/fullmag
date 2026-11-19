@@ -1,0 +1,56 @@
+{
+  "document": {
+    "path": "docs/physics/0925-live-session-magnetization-continuation.md"
+  },
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "runtime-verified"},
+    {"solver": "FEM", "device": "GPU", "status": "runtime-verified"},
+    {"solver": "FDM", "device": "CPU", "status": "runtime-verified"},
+    {"solver": "FDM", "device": "GPU", "status": "runtime-verified"}
+  ],
+  "equations": [
+    {
+      "id": "eq-live-llg-ivp",
+      "symbols": ["m_i", "m_0", "gamma_0", "alpha", "H_eff", "t_0"],
+      "sources": ["source-bind-plan"]
+    },
+    {
+      "id": "eq-live-initial-state-choice",
+      "symbols": ["m_0", "m_prev", "m_auth", "D"],
+      "sources": ["source-decide", "source-final-state", "source-pin", "source-resolve"]
+    }
+  ],
+  "symbols": [
+    {"id": "m_i", "latex": "$\\mathbf m_i$", "meaning": "jednostkowa magnetyzacja w punkcie dyskretyzacji", "si_unit": "$1$"},
+    {"id": "m_0", "latex": "$\\mathbf m^{(0)}_i$", "meaning": "stan początkowy komendy", "si_unit": "$1$"},
+    {"id": "m_prev", "latex": "$\\mathbf m^{\\mathrm{prev}}_i$", "meaning": "stan końcowy opublikowany przez poprzednią udaną komendę sesji", "si_unit": "$1$"},
+    {"id": "m_auth", "latex": "$\\mathbf m^{\\mathrm{auth}}_i$", "meaning": "stan zrealizowany z zasobów magnetyzacji sceny", "si_unit": "$1$"},
+    {"id": "D", "latex": "$\\mathcal D$", "meaning": "tożsamość dyskretyzacji: siatka lub mesh, przynależność regionów, maska aktywności", "si_unit": "$1$"},
+    {"id": "gamma_0", "latex": "$\\gamma_0$", "meaning": "współczynnik żyromagnetyczny razy przenikalność próżni", "si_unit": "$\\mathrm{m\\,A^{-1}\\,s^{-1}}$"},
+    {"id": "alpha", "latex": "$\\alpha$", "meaning": "tłumienie Gilberta", "si_unit": "$1$"},
+    {"id": "H_eff", "latex": "$\\mathbf H_{\\mathrm{eff}}$", "meaning": "pole efektywne", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "t_0", "latex": "$t_0$", "meaning": "czas początkowy komendy", "si_unit": "$\\mathrm{s}$"}
+  ],
+  "sources": [
+    {"id": "source-final-state", "path": "crates/fullmag-api/src/live_accepted_continuation.rs", "symbol": "declare_final_state_output", "responsibility": "Declares the final_state output of the selected live step."},
+    {"id": "source-decide", "path": "crates/fullmag-api/src/live_accepted_continuation.rs", "symbol": "decide_initial_state", "responsibility": "Applies the continuation rule and records its provenance."},
+    {"id": "source-pin", "path": "crates/fullmag-api/src/live_accepted_continuation.rs", "symbol": "declare_pinned_initial_state", "responsibility": "Pins the previous run's state artifact as the step input."},
+    {"id": "source-resolve", "path": "crates/fullmag-runtime-control/src/study.rs", "symbol": "resolve_pinned_state_inputs", "responsibility": "Resolves the pinned state input for the worker."},
+    {"id": "source-bind-plan", "path": "crates/fullmag-runner/src/lib.rs", "symbol": "materialize_study_magnetization_input", "responsibility": "Binds the state to the execution plan layout and rejects a mismatch."},
+    {"id": "source-live-api", "path": "packages/fullmag-py/src/fullmag/live/__init__.py", "symbol": "connect", "responsibility": "Opens the live session in which commands continue."}
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "`fm.relax(...)` / `fm.run(until)` w sesji live",
+        "type": "wywołanie",
+        "default": "—",
+        "si_unit": "$\\mathrm{s}$",
+        "validation": "jawny krok czasowy etapu",
+        "meaning": "komenda, której stan początkowy wybiera reguła",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`study.steps[].inputs[initial_state]`"
+      }
+    ]
+  }
+}

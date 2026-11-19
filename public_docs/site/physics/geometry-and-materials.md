@@ -27,7 +27,7 @@ page explains how those contracts compose and records the physical assumptions a
 (geometry-and-materials-problem-statement)=
 ## Physical model
 
-Let `Omega` be the magnetic domain and `Omega_i` its authored regions. A valid realization preserves
+Let $\Omega_{\mathrm{mag}}$ be the magnetic domain and $\Omega_i$ its authored regions. A valid realization preserves
 the intended membership relation:
 
 (geometry-and-materials-governing-equations)=
@@ -37,6 +37,15 @@ the intended membership relation:
 \Omega_{\mathrm{mag}} = \bigcup_i \Omega_i,
 \qquad
 \Omega_i \cap \Omega_j = \varnothing \quad (i \ne j)
+```
+
+```{figure} /_static/diagrams/geometry-regions-materials-realization.svg
+:alt: Three-panel diagram showing (a) CSG Box minus Cylinder with an ObjectRegion core override, object vs world coordinate frames, and spatial MaterialParameterField profile; (b) FDM Cartesian grid discretization with active masks and region indices; and (c) FEM single shared conforming domain with outer airbox Omega_a, hole boundary markers, and local core mesh grading.
+:width: 100%
+:name: fig-geometry-regions-materials-realization
+:figclass: fm-physics-figure
+
+From authored CSG and region overrides to discrete backend supports: **(a)** nested `Box - Cylinder` geometry, priority-resolved `ObjectRegion` (`frame="object"` vs. `frame="world"`), boundary `material_transition`, and spatial `MaterialParameterField`; **(b)** FDM structured Cartesian cells with active mask $\mathcal{A}$ and region indices $r_i$; **(c)** FEM single shared conforming mesh $\Omega_m \subset \Omega_a$ with element/face markers and local region size grading (never overlapping independent submeshes; see Geuzaine & Remacle 2009, [HAL OA PDF](https://hal.science/hal-03406365v1/file/Geuzaine2009.pdf), and Körber et al. 2021, [arXiv:2104.06943](https://arxiv.org/abs/2104.06943)).
 ```
 
 The equation describes the resolved physical partition, not every intermediate authoring shape.
@@ -55,9 +64,9 @@ precision, or device can materialize it.
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| `$\Omega_{\mathrm{mag}}$` | resolved magnetic domain | `$\mathrm{m^3}$` |
-| `$\Omega_i$` | authored magnetic region | `$\mathrm{m^3}$` |
-| `$p$` | material parameter | parameter-dependent |
+| $\Omega_{\mathrm{mag}}$ | resolved magnetic domain | $\mathrm{m^3}$ |
+| $\Omega_i$ | authored magnetic region | $\mathrm{m^3}$ |
+| $p$ | material parameter | parameter-dependent |
 
 (geometry-and-materials-assumptions-and-validity)=
 ## Assumptions and validity
@@ -132,9 +141,9 @@ The geometry mixin implements these operators:
 
 | Python expression | Set operation | Canonical IR kind |
 |---|---|---|
-| `a - b` | difference `a \\\\ b` | `difference` |
-| `a + b` | union `a \\\\cup b` | `union` |
-| `a & b` | intersection `a \\\\cap b` | `intersection` |
+| `a - b` | difference $a \setminus b$ | `difference` |
+| `a + b` | union $a \cup b$ | `union` |
+| `a & b` | intersection $a \cap b$ | `intersection` |
 
 The explicit constructors `fm.Difference(base, tool)`, `fm.Union(a, b)`, and
 `fm.Intersection(a, b)` produce the same typed records. Operands remain nested in `to_ir()`;
@@ -327,9 +336,9 @@ study.stages.add_run(stage_id="inspect_field", until=1.0e-15)
 `min_mesh_size_wins` are the other declared conflict policies. Equal-priority overlap with
 `error` fails closed; assignment order is not used as a tie-breaker.
 
-`sampled` fields are currently authoring-only. The asset identity and sampling location survive in
-ProblemIR, but the planner rejects materialization until the asset-loading and mesh-cardinality
-contract is available. A legal Python object is therefore not evidence of sampled-field runtime
+`sampled` fields are preserved in `ProblemIR` with their asset identity and sampling location,
+but runtime materialization is rejected by the planner until asset loading and mesh-cardinality
+validation are connected. A valid Python object is therefore not evidence of sampled-field runtime
 support.
 
 ### Material transitions
@@ -445,13 +454,13 @@ region override, one region mesh policy, one interface transition policy, and on
 world-frame field. It does not claim a completed mesh or a solved field; those are produced only by
 the selected build and runtime workflow.
 
-## Control Room crosswalk
+## Control Room support
 
 The intended path for scalar object parameters is `Model Explorer -> Objects -> <object> -> Material`;
 region membership and local mesh controls are exposed only where the capability register marks them
 as supported. Spatial fields, imported-CAD authoring, advanced boolean operations, and unqualified
-mesh policies remain Python/ProblemIR-first unless a named Control Room transaction is implemented.
-Backend or Python availability must not be interpreted as UI availability.
+mesh policies remain Python-configured unless a named Control Room action is implemented.
+Backend or Python availability does not imply UI availability.
 
 See {doc}`/frontend/capability-register` for the current support matrix.
 
@@ -496,16 +505,13 @@ material-field materialization, or every mixed FEM topology.
 (geometry-and-materials-scientific-bibliography)=
 ## Bibliography
 
-1. W. F. Brown Jr., *Micromagnetics*, Wiley, 1963.
-2. A. Hubert and R. Schafer, *Magnetic Domains*, Springer, 1998.
-3. P. G. Ciarlet, *The Finite Element Method for Elliptic Problems*, SIAM, 2002.
-4. O. C. Zienkiewicz, R. L. Taylor, and J. Z. Zhu, *The Finite Element Method: Its Basis and
-   Fundamentals*, 7th ed., Butterworth-Heinemann, 2013.
-5. C. Geuzaine and J.-F. Remacle, "Gmsh: a three-dimensional finite element mesh generator,"
-   *International Journal for Numerical Methods in Engineering* **79**, 1309-1331 (2009),
-   [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
+1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963. [WorldCat record](https://search.worldcat.org/title/536451).
+2. A. Hubert and R. Schäfer, *Magnetic Domains: The Analysis of Magnetic Microstructures*, Springer, Berlin, 1998.
+3. P. G. Ciarlet, *The Finite Element Method for Elliptic Problems*, SIAM Classics in Applied Mathematics, 2002. [doi:10.1137/1.9780898719208](https://doi.org/10.1137/1.9780898719208) ([frontmatter OA PDF](https://epubs.siam.org/doi/pdf/10.1137/1.9780898719208.fm)).
+4. O. C. Zienkiewicz, R. L. Taylor, and J. Z. Zhu, *The Finite Element Method: Its Basis and Fundamentals*, 7th ed., Butterworth-Heinemann, 2013.
+5. C. Geuzaine and J.-F. Remacle, "Gmsh: A 3-D finite element mesh generator with built-in pre- and post-processing facilities," *International Journal for Numerical Methods in Engineering* **79**(11), 1309–1331 (2009). [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579) · [Open Access (HAL PDF)](https://hal.science/hal-03406365v1/file/Geuzaine2009.pdf).
+6. L. Körber, G. Quasebarth, A. Otto, and A. Kákay, "Finite-element dynamic-matrix approach for spin-wave dispersions in magnonic waveguides with arbitrary cross section," *AIP Advances* **11**(9) (2021). [doi:10.1063/5.0054169](https://doi.org/10.1063/5.0054169) · [arXiv:2104.06943 (OA)](https://arxiv.org/abs/2104.06943) (CC-BY).
 
-(fullmag-geometry-and-materials-source-code-index)=
 (geometry-and-materials-implementation-mapping)=
 ## Implementation mapping
 
@@ -514,6 +520,7 @@ The Python authoring classes build typed records first. `Problem.to_ir` collects
 requested. Backend planners and runners own materialization, marker assignment, topology, and
 device-specific support.
 
+(fullmag-geometry-and-materials-source-code-index)=
 (geometry-and-materials-source-code-index)=
 ## Source-code index
 

@@ -1,4 +1,4 @@
-import { Children, type ReactElement } from "react";
+import { Children, type KeyboardEvent, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -7,6 +7,9 @@ import { SegmentedControl } from "./SegmentedControl";
 interface SegmentedItemProps {
   disabled?: boolean;
   onClick: () => void;
+  onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
+  tabIndex?: number;
+  "aria-disabled"?: boolean;
 }
 
 describe("SegmentedControl", () => {
@@ -33,9 +36,26 @@ describe("SegmentedControl", () => {
     expect(html).toContain("border-fm-subtle");
     expect(html).toContain("shadow-fm-control-inset");
     expect(html).toContain("bg-fm-accent");
-    expect(html).toContain("text-fm-inverse");
+    expect(html).toContain("text-fm-on-accent");
     expect(html).toContain("active:scale-[0.98]");
     expect(html).not.toContain("border-r");
+  });
+
+  it.each(["unavailable", "missing"])("keeps a keyboard entry when the value is %s", (value) => {
+    const html = renderToStaticMarkup(
+      <SegmentedControl
+        aria-label="Render mode"
+        options={[
+          { label: "Unavailable", value: "unavailable", disabled: true },
+          { label: "Shaded", value: "surface" },
+          { label: "Wire", value: "wireframe" },
+        ]}
+        value={value}
+        onValueChange={() => undefined}
+      />,
+    );
+    expect(html.match(/tabindex="0"/g)).toHaveLength(1);
+    expect(html).toMatch(/data-value="surface"[^>]*tabindex="0"/);
   });
 
   it("selects an enabled option", () => {
@@ -74,6 +94,28 @@ describe("SegmentedControl", () => {
 
     expect(onValueChange).not.toHaveBeenCalled();
     expect(options[0]?.props.disabled).toBe(true);
+  });
+
+  it("keeps the current radio focusable while an update is pending and blocks repeat changes", () => {
+    const onValueChange = vi.fn();
+    const focus = vi.fn();
+    const group = SegmentedControl({
+      "aria-label": "Wireframe mesh",
+      pending: true,
+      options: [{ label: "Surface mesh", value: "surface" }, { label: "Full volume mesh", value: "full" }],
+      value: "full",
+      onValueChange,
+    });
+    const options = Children.toArray(group.props.children) as ReactElement<SegmentedItemProps>[];
+    const html = renderToStaticMarkup(group);
+    expect(html).toContain('aria-busy="true"');
+    expect(options[1]?.props.disabled).toBe(false);
+    expect(options[1]?.props.tabIndex).toBe(0);
+    expect(options[1]?.props["aria-disabled"]).toBe(true);
+    options[0]?.props.onClick();
+    options[1]?.props.onKeyDown({ key: "ArrowLeft", preventDefault: vi.fn(), currentTarget: { parentElement: { querySelectorAll: () => [{ focus }, { focus }] } } } as unknown as KeyboardEvent<HTMLButtonElement>);
+    expect(onValueChange).not.toHaveBeenCalled();
+    expect(focus).not.toHaveBeenCalled();
   });
 
   it("supports a compact visible label with a full accessible name", () => {

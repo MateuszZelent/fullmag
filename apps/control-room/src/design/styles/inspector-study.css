@@ -25,6 +25,14 @@
   animation: fm-study-progress-indeterminate 1.4s ease-in-out infinite;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  /* Busy state stays visible: static bar with an opacity pulse instead of sliding. */
+  .fm-study-progress--indeterminate .fm-study-progress__bar {
+    animation: fm-reduced-busy-pulse 2s ease-in-out infinite;
+    transform: translateX(70%);
+  }
+}
+
 @keyframes fm-study-progress-indeterminate {
   0% {
     transform: translateX(-100%);
@@ -323,4 +331,29 @@ button.fm-study-stage-card:focus-visible {
   margin-top: var(--fm-space-3);
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-xs);
+}
+
+.fm-study-select select {
+  min-height: var(--fm-inspector-control-height);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-inspector-control-radius);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-ui);
+  font-size: var(--fm-inspector-control-font-size);
+  padding: 0 var(--fm-space-6) 0 var(--fm-space-2);
+}
+
+.fm-study-select select:focus-visible {
+  border-color: var(--fm-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 18%, transparent);
+  outline: none;
+}
+
+.fm-study-select select:disabled {
+  border-color: var(--fm-border-disabled);
+  background: var(--fm-bg-disabled);
+  color: var(--fm-text-disabled);
+  opacity: 1;
+  cursor: not-allowed;
 }

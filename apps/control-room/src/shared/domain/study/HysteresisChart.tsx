@@ -10,7 +10,7 @@ import {
   useSyncExternalStore,
   type KeyboardEvent,
 } from "react";
-import type { ECharts, EChartsOption } from "echarts";
+import type { ECharts, EChartsOption, SetOptionOpts } from "echarts";
 
 import type {
   HysteresisAngularFamilyResource,
@@ -37,6 +37,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import type { KernelApi } from "@/kernel/types";
 import { Button } from "@/shared/ui/Button";
+import { useToolbarRovingFocus } from "@/shared/ui/useToolbarRovingFocus";
 import { ChevronLeft, ChevronRight, Pause, Play, ZoomOut } from "lucide-react";
 
 interface HysteresisChartProps {
@@ -240,7 +241,7 @@ interface TooltipParam {
   seriesName?: unknown;
 }
 
-interface HysteresisChartColors {
+export interface HysteresisChartColors {
   active: string;
   axis: string;
   border: string;
@@ -1045,6 +1046,287 @@ function hysteresisMetricMarkerColor(
   }
 }
 
+const HYSTERESIS_CHART_ANIMATION_DURATION_UPDATE_MS = 300;
+
+export interface HysteresisChartOptionInput {
+  activePoint: HysteresisPointSchema | null;
+  angularFamily: HysteresisAngularFamilyResource | null | undefined;
+  branchMode: string | null;
+  branches: HysteresisBranch[];
+  colors: HysteresisChartColors;
+  formatXValue: (fieldValmT: number) => number;
+  liveFieldValue: number | null;
+  liveSweep: boolean;
+  liveYValue: number | null;
+  metrics: HysteresisMetricsSchema | null | undefined;
+  minorLoops: HysteresisMinorLoop[];
+  points: HysteresisPointSchema[];
+  /** True when updating an existing chart instance: keep the user's zoom window. */
+  preserveZoomWindow: boolean;
+  viewMode: ViewMode;
+  xAxisUnit: XAxisUnit;
+  yAxisKey: YAxisKey;
+}
+
+function withoutHysteresisChartZoomWindow(
+  dataZoom: EChartsOption["dataZoom"],
+): EChartsOption["dataZoom"] {
+  if (!Array.isArray(dataZoom)) return dataZoom;
+  return dataZoom.map((entry) => {
+    const rest: Record<string, unknown> = { ...(entry as Record<string, unknown>) };
+    delete rest.start;
+    delete rest.end;
+    return rest;
+  }) as EChartsOption["dataZoom"];
+}
+
+/**
+ * Pure ECharts option builder for the hysteresis chart. The chart instance is
+ * created once per mount; every data or view change only calls `setOption`
+ * with this model (series merged by stable id, see HYSTERESIS_CHART_SET_OPTION_OPTS).
+ */
+export function buildHysteresisChartOption({
+  activePoint,
+  angularFamily,
+  branchMode,
+  branches,
+  colors,
+  formatXValue,
+  liveFieldValue,
+  liveSweep,
+  liveYValue,
+  metrics,
+  minorLoops,
+  points,
+  preserveZoomWindow,
+  viewMode,
+  xAxisUnit,
+  yAxisKey,
+}: HysteresisChartOptionInput): EChartsOption {
+  const seriesList: Array<Record<string, unknown>> = [];
+  const lineSeries = viewMode === "angular-family"
+    ? buildHysteresisAngularFamilyLineSeriesModel(
+        angularFamily,
+        yAxisKey,
+        formatXValue,
+      )
+    : buildHysteresisChartLineSeriesModel(
+        points,
+        branches,
+        minorLoops,
+        viewMode,
+        yAxisKey,
+        formatXValue,
+        branchMode,
+      );
+  const adaptiveMarkerData = buildHysteresisAdaptivePointMarkerModel(
+    points,
+    branches,
+    minorLoops,
+    viewMode,
+    yAxisKey,
+    formatXValue,
+    branchMode,
+  );
+  lineSeries.forEach((series, seriesIndex) => {
+    if (series.branchId == null) {
+      seriesList.push({
+        name: series.name,
+        type: "line",
+        data: series.data,
+        smooth: true,
+        showSymbol: true,
+        symbolSize: 6,
+        lineStyle: { width: 3, color: colors.branchDescending },
+        itemStyle: { color: colors.branchDescending },
+      });
+      return;
+    }
+    const angularFamilyColors = [
+      colors.metric,
+      colors.branchAscending,
+      colors.branchDescending,
+      colors.remanence,
+      colors.active,
+    ];
+    const color = series.branchId.startsWith("angular-family:")
+      ? angularFamilyColors[seriesIndex % angularFamilyColors.length]
+      : series.branchId.startsWith("oop-overlay")
+      ? colors.remanence
+      : series.branchId.startsWith("mx-overlay")
+        ? colors.metric
+        : series.branchId.startsWith("my-overlay")
+          ? colors.branchAscending
+          : series.branchId.startsWith("mz-overlay")
+            ? colors.branchDescending
+            : series.branchId.startsWith("ip-overlay") || series.branchId === "ascending"
+              ? colors.branchAscending
+              : colors.branchDescending;
+    seriesList.push({
+      id: series.branchId,
+      name: series.name,
+      type: "line",
+      data: series.data,
+      smooth: true,
+      showSymbol: true,
+      symbolSize: 6,
+      lineStyle: { width: 3, color },
+      itemStyle: { color },
+    });
+  });
+
+  const markPoints: Array<Record<string, unknown>> = [];
+  const markLines: Array<Record<string, unknown>> = [];
+  const metricMarkers = buildHysteresisMetricMarkerModel({
+    formatXValue,
+    metrics,
+    points,
+    yAxisKey,
+  });
+  metricMarkers.forEach((marker) => {
+    markPoints.push({
+      name: marker.label,
+      value: formatHysteresisMetricMarkerValue(marker),
+      coord: [marker.x, marker.value ?? 0],
+      itemStyle: { color: hysteresisMetricMarkerColor(marker.kind, colors) },
+    });
+  });
+
+  if (liveFieldValue != null) {
+    markLines.push({
+      xAxis: formatXValue(liveFieldValue),
+      lineStyle: { type: "dashed", color: colors.textMuted, width: 1 },
+      label: { show: false },
+    });
+  }
+  if (activePoint) {
+    markLines.push({
+      yAxis: getPointYValue(activePoint, yAxisKey),
+      lineStyle: { type: "dashed", color: colors.textMuted, width: 1 },
+      label: { show: false },
+    });
+  }
+  const tooltipPoints = uniqueHysteresisPointsById([
+    ...points,
+    ...branches.flatMap((branch) => branch.points),
+    ...minorLoops.flatMap((loop) => loop.points),
+  ]);
+
+  return {
+    aria: { enabled: true, decal: { show: false } },
+    // A live sweep pushes a new option on every resource revision; tweening each
+    // update would re-animate the whole loop, so updates are applied instantly.
+    animationDurationUpdate: liveSweep ? 0 : HYSTERESIS_CHART_ANIMATION_DURATION_UPDATE_MS,
+    backgroundColor: "transparent",
+    tooltip: {
+      trigger: "axis",
+      backgroundColor: colors.surface,
+      borderColor: colors.border,
+      textStyle: { color: colors.text },
+      formatter: (params: unknown) =>
+        formatHysteresisChartTooltip(params, {
+          branchMode,
+          points: tooltipPoints,
+          xAxisUnit,
+        }),
+    },
+    grid: {
+      left: "5%",
+      right: "5%",
+      bottom: "12%",
+      top: "10%",
+      containLabel: true,
+    },
+    xAxis: {
+      type: "value",
+      scale: HYSTERESIS_CHART_VALUE_AXIS_SCALE,
+      name: `Applied Field H [${xAxisUnit}]`,
+      nameLocation: "middle",
+      nameGap: 30,
+      splitLine: { show: true, lineStyle: { color: colors.border } },
+      axisLabel: { color: colors.axis },
+    },
+    yAxis: {
+      type: "value",
+      scale: HYSTERESIS_CHART_VALUE_AXIS_SCALE,
+      name: viewMode === "oop-ip-overlay"
+        ? "Magnetization M/Ms (oop / ip)"
+        : viewMode === "rgb-overlay"
+          ? "Magnetization M/Ms (x / y / z)"
+          : viewMode === "angular-family"
+            ? `Magnetization M/Ms (${yAxisKey.replace("m_", "")}) by angle`
+        : `Magnetization M/Ms (${yAxisKey.replace("m_", "")})`,
+      splitLine: { show: true, lineStyle: { color: colors.border } },
+      axisLabel: { color: colors.axis },
+    },
+    dataZoom: preserveZoomWindow
+      ? withoutHysteresisChartZoomWindow(buildHysteresisChartDataZoomModel(colors))
+      : buildHysteresisChartDataZoomModel(colors),
+    series: [
+      ...seriesList.map((s) => ({
+        ...s,
+        id: typeof s.id === "string"
+          ? s.id
+          : typeof s.name === "string"
+            ? s.name
+            : undefined,
+        // The chart instance is reused across updates and series are merged by id,
+        // so absent markers must be cleared explicitly instead of left undefined.
+        markPoint: markPoints.length > 0 ? {
+          symbol: "pin",
+          symbolSize: 30,
+          label: { show: false },
+          data: markPoints,
+        } : { data: [] },
+        markLine: markLines.length > 0 ? {
+          symbol: ["none", "none"],
+          data: markLines,
+        } : { data: [] },
+      })),
+      ...(adaptiveMarkerData.length > 0 ? [{
+        id: "hysteresis-adaptive-refinement-points",
+        name: "Adaptive refinement points",
+        type: "scatter",
+        coordinateSystem: "cartesian2d",
+        data: adaptiveMarkerData,
+        symbol: "diamond",
+        symbolSize: 11,
+        itemStyle: {
+          borderColor: colors.surface,
+          borderWidth: 1,
+          color: colors.metric,
+        },
+        z: 9,
+      }] : []),
+      ...(activePoint ? [{
+        id: "hysteresis-active-point",
+        name: "Active Point",
+        type: "effectScatter",
+        coordinateSystem: "cartesian2d",
+        data: [[formatXValue(activePoint.field_value_mT), getPointYValue(activePoint, yAxisKey)]],
+        symbolSize: 12,
+        showEffectOn: "render",
+        rippleEffect: { brushType: "stroke", scale: 3 },
+        itemStyle: { color: colors.active },
+        z: 10,
+      }] : liveFieldValue != null && liveYValue != null ? [{
+        id: "hysteresis-live-field",
+        name: "Live Field",
+        type: "effectScatter",
+        coordinateSystem: "cartesian2d",
+        data: [[formatXValue(liveFieldValue), liveYValue]],
+        symbolSize: 10,
+        showEffectOn: "render",
+        rippleEffect: { brushType: "stroke", scale: 2 },
+        itemStyle: { color: colors.active },
+        z: 10,
+      }] : []),
+    ] as EChartsOption["series"],
+  };
+}
+
+export const HYSTERESIS_CHART_SET_OPTION_OPTS: SetOptionOpts = { replaceMerge: ["series"] };
+
 export function HysteresisChart(props: HysteresisChartProps) {
   return useHysteresisChartView(props);
 }
@@ -1081,6 +1363,8 @@ function useHysteresisChartView({
   const [xAxisUnit, setXAxisUnit] = useState<XAxisUnit>("mT");
   const [viewMode, setViewMode] = useState<ViewMode>("full");
   const [isPlaying, setIsPlaying] = useState(false);
+  const playerToolbarRef = useRef<HTMLDivElement>(null);
+  const playerToolbarKeyDown = useToolbarRovingFocus(playerToolbarRef, { deps: [isPlaying] });
 
   const elementRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ECharts | null>(null);
@@ -1128,6 +1412,10 @@ function useHysteresisChartView({
   const liveYValue = activePoint ? getPointYValue(activePoint, yAxisKey) : getProgressYValue(progress, yAxisKey);
   const liveSettleLabel = progressSettleLabel(progress);
   const activePointSnapshotId = activePoint?.snapshot_id ?? null;
+  const scrubberTotal = progress?.total_points || points.length;
+  const scrubberValueText = activePoint
+    ? `Point ${resolvedActiveIndex + 1} of ${scrubberTotal}, H = ${activePoint.field_value_mT.toFixed(2)} mT`
+    : `Point ${resolvedActiveIndex >= 0 ? resolvedActiveIndex + 1 : 0} of ${scrubberTotal}`;
   const replayAction = hysteresisChartReplayActionPresentation(
     activePointSnapshotId,
     activePoint?.snapshot_storage_status ?? null,
@@ -1274,232 +1562,28 @@ function useHysteresisChartView({
     return () => clearInterval(interval);
   }, [isPlaying, points.length]);
 
+  // Latest option model, kept so the mount effect can apply it once the lazily
+  // imported ECharts module resolves after data has already arrived.
+  const latestOptionRef = useRef<EChartsOption | null>(null);
+  const liveSweep = progress?.active === true;
+
+  // Mount: create the ECharts instance once, wire resize and click, dispose on unmount.
   useEffect(() => {
     const element = elementRef.current;
     if (!element) return;
 
-    let chart: ECharts;
+    let chart: ECharts | null = null;
     let disposed = false;
+    const onClick = (params: unknown) => handleChartClick(params);
 
     import("echarts").then((echarts) => {
       if (disposed) return;
       chart = echarts.init(element, undefined, { renderer: "canvas" });
       chartRef.current = chart;
-      const colors = readHysteresisChartColors(element);
-
-      chart.on("click", handleChartClick);
-
-      const seriesList: Array<Record<string, unknown>> = [];
-      const lineSeries = viewMode === "angular-family"
-        ? buildHysteresisAngularFamilyLineSeriesModel(
-            angularFamily,
-            yAxisKey,
-            formatXValue,
-          )
-        : buildHysteresisChartLineSeriesModel(
-            points,
-            branches,
-            minorLoops,
-            viewMode,
-            yAxisKey,
-            formatXValue,
-            branchMode,
-          );
-      const adaptiveMarkerData = buildHysteresisAdaptivePointMarkerModel(
-        points,
-        branches,
-        minorLoops,
-        viewMode,
-        yAxisKey,
-        formatXValue,
-        branchMode,
-      );
-      lineSeries.forEach((series, seriesIndex) => {
-        if (series.branchId == null) {
-          seriesList.push({
-            name: series.name,
-            type: "line",
-            data: series.data,
-            smooth: true,
-            showSymbol: true,
-            symbolSize: 6,
-            lineStyle: { width: 3, color: colors.branchDescending },
-            itemStyle: { color: colors.branchDescending },
-          });
-          return;
-        }
-        const angularFamilyColors = [
-          colors.metric,
-          colors.branchAscending,
-          colors.branchDescending,
-          colors.remanence,
-          colors.active,
-        ];
-        const color = series.branchId.startsWith("angular-family:")
-          ? angularFamilyColors[seriesIndex % angularFamilyColors.length]
-          : series.branchId.startsWith("oop-overlay")
-          ? colors.remanence
-          : series.branchId.startsWith("mx-overlay")
-            ? colors.metric
-            : series.branchId.startsWith("my-overlay")
-              ? colors.branchAscending
-              : series.branchId.startsWith("mz-overlay")
-                ? colors.branchDescending
-                : series.branchId.startsWith("ip-overlay") || series.branchId === "ascending"
-                  ? colors.branchAscending
-                  : colors.branchDescending;
-        seriesList.push({
-          id: series.branchId,
-          name: series.name,
-          type: "line",
-          data: series.data,
-          smooth: true,
-          showSymbol: true,
-          symbolSize: 6,
-          lineStyle: { width: 3, color },
-          itemStyle: { color },
-        });
-      });
-
-      const markPoints: Array<Record<string, unknown>> = [];
-      const markLines: Array<Record<string, unknown>> = [];
-      const metricMarkers = buildHysteresisMetricMarkerModel({
-        formatXValue,
-        metrics,
-        points,
-        yAxisKey,
-      });
-      metricMarkers.forEach((marker) => {
-        markPoints.push({
-          name: marker.label,
-          value: formatHysteresisMetricMarkerValue(marker),
-          coord: [marker.x, marker.value ?? 0],
-          itemStyle: { color: hysteresisMetricMarkerColor(marker.kind, colors) },
-        });
-      });
-
-      if (liveFieldValue != null) {
-        markLines.push({
-          xAxis: formatXValue(liveFieldValue),
-          lineStyle: { type: "dashed", color: colors.textMuted, width: 1 },
-          label: { show: false },
-        });
+      chart.on("click", onClick);
+      if (latestOptionRef.current) {
+        chart.setOption(latestOptionRef.current, HYSTERESIS_CHART_SET_OPTION_OPTS);
       }
-      if (activePoint) {
-        markLines.push({
-          yAxis: getPointYValue(activePoint, yAxisKey),
-          lineStyle: { type: "dashed", color: colors.textMuted, width: 1 },
-          label: { show: false },
-        });
-      }
-      const tooltipPoints = uniqueHysteresisPointsById([
-        ...points,
-        ...branches.flatMap((branch) => branch.points),
-        ...minorLoops.flatMap((loop) => loop.points),
-      ]);
-
-      const option: EChartsOption = {
-        backgroundColor: "transparent",
-        tooltip: {
-          trigger: "axis",
-          backgroundColor: colors.surface,
-          borderColor: colors.border,
-          textStyle: { color: colors.text },
-          formatter: (params: unknown) =>
-            formatHysteresisChartTooltip(params, {
-              branchMode,
-              points: tooltipPoints,
-              xAxisUnit,
-            }),
-        },
-        grid: {
-          left: "5%",
-          right: "5%",
-          bottom: "12%",
-          top: "10%",
-          containLabel: true,
-        },
-        xAxis: {
-          type: "value",
-          scale: HYSTERESIS_CHART_VALUE_AXIS_SCALE,
-          name: `Applied Field H [${xAxisUnit}]`,
-          nameLocation: "middle",
-          nameGap: 30,
-          splitLine: { show: true, lineStyle: { color: colors.border } },
-          axisLabel: { color: colors.axis },
-        },
-        yAxis: {
-          type: "value",
-          scale: HYSTERESIS_CHART_VALUE_AXIS_SCALE,
-          name: viewMode === "oop-ip-overlay"
-            ? "Magnetization M/Ms (oop / ip)"
-            : viewMode === "rgb-overlay"
-              ? "Magnetization M/Ms (x / y / z)"
-              : viewMode === "angular-family"
-                ? `Magnetization M/Ms (${yAxisKey.replace("m_", "")}) by angle`
-            : `Magnetization M/Ms (${yAxisKey.replace("m_", "")})`,
-          splitLine: { show: true, lineStyle: { color: colors.border } },
-          axisLabel: { color: colors.axis },
-        },
-        dataZoom: buildHysteresisChartDataZoomModel(colors),
-        series: [
-          ...seriesList.map((s) => ({
-            ...s,
-            id: typeof s.id === "string"
-              ? s.id
-              : typeof s.name === "string"
-                ? s.name
-                : undefined,
-            markPoint: markPoints.length > 0 ? {
-              symbol: "pin",
-              symbolSize: 30,
-              label: { show: false },
-              data: markPoints,
-            } : undefined,
-            markLine: markLines.length > 0 ? {
-              symbol: ["none", "none"],
-              data: markLines,
-            } : undefined,
-          })),
-          ...(adaptiveMarkerData.length > 0 ? [{
-            name: "Adaptive refinement points",
-            type: "scatter",
-            coordinateSystem: "cartesian2d",
-            data: adaptiveMarkerData,
-            symbol: "diamond",
-            symbolSize: 11,
-            itemStyle: {
-              borderColor: colors.surface,
-              borderWidth: 1,
-              color: colors.metric,
-            },
-            z: 9,
-          }] : []),
-          ...(activePoint ? [{
-            name: "Active Point",
-            type: "effectScatter",
-            coordinateSystem: "cartesian2d",
-            data: [[formatXValue(activePoint.field_value_mT), getPointYValue(activePoint, yAxisKey)]],
-            symbolSize: 12,
-            showEffectOn: "render",
-            rippleEffect: { brushType: "stroke", scale: 3 },
-            itemStyle: { color: colors.active },
-            z: 10,
-          }] : liveFieldValue != null && liveYValue != null ? [{
-            name: "Live Field",
-            type: "effectScatter",
-            coordinateSystem: "cartesian2d",
-            data: [[formatXValue(liveFieldValue), liveYValue]],
-            symbolSize: 10,
-            showEffectOn: "render",
-            rippleEffect: { brushType: "stroke", scale: 2 },
-            itemStyle: { color: colors.active },
-            z: 10,
-          }] : []),
-        ] as EChartsOption["series"],
-      };
-
-      chart.setOption(option);
     });
 
     const resizeObserver = new ResizeObserver(() => {
@@ -1510,10 +1594,41 @@ function useHysteresisChartView({
     return () => {
       disposed = true;
       resizeObserver.disconnect();
-      chartRef.current?.off("click", handleChartClick);
-      chartRef.current?.dispose();
+      if (chart) {
+        chart.off("click", onClick);
+        chart.dispose();
+      }
+      if (chartRef.current === chart) chartRef.current = null;
     };
-  }, [activePoint, angularFamily, branchMode, branches, formatXValue, liveFieldValue, liveYValue, metrics, minorLoops, points, progress, viewMode, xAxisUnit, yAxisKey]);
+  }, []);
+
+  // Update: rebuild the option model from current data and apply it to the existing instance.
+  useEffect(() => {
+    const element = elementRef.current;
+    if (!element) return;
+    const chart = chartRef.current;
+    const option = buildHysteresisChartOption({
+      activePoint,
+      angularFamily,
+      branchMode,
+      branches,
+      colors: readHysteresisChartColors(element),
+      formatXValue,
+      liveFieldValue,
+      liveSweep,
+      liveYValue,
+      metrics,
+      minorLoops,
+      points,
+      // The very first option on a fresh instance carries the full zoom window.
+      preserveZoomWindow: chart != null && latestOptionRef.current != null,
+      viewMode,
+      xAxisUnit,
+      yAxisKey,
+    });
+    latestOptionRef.current = option;
+    chart?.setOption(option, HYSTERESIS_CHART_SET_OPTION_OPTS);
+  }, [activePoint, angularFamily, branchMode, branches, formatXValue, liveFieldValue, liveSweep, liveYValue, metrics, minorLoops, points, viewMode, xAxisUnit, yAxisKey]);
 
   return (
     <div
@@ -1582,7 +1697,13 @@ function useHysteresisChartView({
           </div>
         ) : null}
 
-        <div className="fm-hysteresis-player-controls">
+        <div
+          ref={playerToolbarRef}
+          className="fm-hysteresis-player-controls"
+          role="toolbar"
+          aria-label="Hysteresis playback"
+          onKeyDown={playerToolbarKeyDown}
+        >
           <Button
             size="sm"
             variant="secondary"
@@ -1597,8 +1718,10 @@ function useHysteresisChartView({
               )
             }
             disabled={navigationIndex <= 0}
+            aria-label="Previous hysteresis point"
+            title="Previous hysteresis point"
           >
-            <ChevronLeft size={16} />
+            <ChevronLeft aria-hidden="true" size={16} />
           </Button>
           <Button
             size="sm"
@@ -1606,7 +1729,7 @@ function useHysteresisChartView({
             onClick={() => setIsPlaying(!isPlaying)}
             className="fm-hysteresis-play-button"
           >
-            {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+            {isPlaying ? <Pause aria-hidden="true" size={14} /> : <Play aria-hidden="true" size={14} />}
             {isPlaying ? "Pause" : "Play Loop"}
           </Button>
           <Button
@@ -1623,8 +1746,10 @@ function useHysteresisChartView({
               )
             }
             disabled={points.length === 0 || navigationIndex >= points.length - 1}
+            aria-label="Next hysteresis point"
+            title="Next hysteresis point"
           >
-            <ChevronRight size={16} />
+            <ChevronRight aria-hidden="true" size={16} />
           </Button>
           <Button
             size="sm"
@@ -1651,7 +1776,7 @@ function useHysteresisChartView({
             disabled={points.length === 0}
             title="Reset local chart zoom"
           >
-            <ZoomOut size={14} />
+            <ZoomOut aria-hidden="true" size={14} />
             Reset zoom
           </Button>
           <Button
@@ -1668,6 +1793,8 @@ function useHysteresisChartView({
       <div
         ref={elementRef}
         className="fm-hysteresis-chart-canvas"
+        role="img"
+        aria-label={`Hysteresis loop chart, ${points.length} points`}
       />
 
       {(points.length > 0 || liveFieldValue != null) && (
@@ -1706,6 +1833,7 @@ function useHysteresisChartView({
                 if (nextIndex != null) selectPoint(nextIndex);
               }}
               aria-label="Hysteresis point scrubber"
+              aria-valuetext={scrubberValueText}
               className="fm-hysteresis-scrubber"
             />
           )}

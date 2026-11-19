@@ -10,34 +10,28 @@ owner: fullmag-public-docs
 # Results
 
 (python-api-runtime-results-problem-statement)=
-<!-- (problem-statement)= -->
 ## Contract
 `Result` is the executed (or planned) run outcome: status, resolved backend/mode/precision, step
 statistics, optional final magnetization, and output directory.
 
 (python-api-runtime-results-governing-equations)=
-<!-- (governing-equations)= -->
 ## Governing equations
 No physical equation is owned here; step energy and torque quantities are defined by the
 interaction pages.
 
 (python-api-runtime-results-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 Energy scalars are in joules; measure-like maxima `max_h_eff`, `max_h_demag` in $\mathrm{A\,m^{-1}}$;
 `max_torque_T` in tesla; `max_dm_dt` in $\mathrm{s^{-1}}$; times in seconds.
 
 (python-api-runtime-results-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 `last()` and `series()` require step data; unknown quantities raise immediately.
 
 (python-api-runtime-results-python-api)=
-<!-- (python-api)= -->
 ## Python API
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| --- | --- | --- | $1$ | --- | --- | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | --- |
 | `Result.status` | `str` | `required` | $1$ | `completed`, `planned`, or `not-executable` | `completed`, `planned`, or `not-executable` | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | run status |
 | `Result.backend` | `BackendTarget` | `required` | $1$ | Resolved backend | Resolved backend | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `requested_backend` |
 | `Result.mode` | `ExecutionMode` | `required` | $1$ | Resolved execution mode | Resolved execution mode | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `execution_mode` |
@@ -82,70 +76,55 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 ```
 
 (python-api-runtime-results-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
 `Result` is runtime output, not lowering input; it has no `ProblemIR` destination. Its backend,
 mode, and precision fields echo the resolved execution record.
 
 (python-api-runtime-results-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
 
-Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+Requested intent is the value authored by Python and preserved in `ProblemIR`; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
 
 An unknown scalar quantity or a missing region raises immediately. `save_state()` on a result
 without `final_magnetization` raises an explanatory error.
 
 (python-api-runtime-results-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
 Step statistics originate from the native runner payload and are mapped field-by-field.
 
 (python-api-runtime-results-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## Implementation mapping
 Anchor: `packages/fullmag-py/src/fullmag/runtime/simulation.py` (`class Result`, `StepStats`,
 `ScalarQuantityDescriptor`).
 
 (python-api-runtime-results-validation)=
-<!-- (validation)= -->
 ## Validation
 Ownership tests compare this inventory with live signatures.
 
 (python-api-runtime-results-limitations)=
-<!-- (limitations)= -->
 ## Limitations
 A `planned` or `not-executable` result carries no step data; consumers must branch on `status`.
 
 (python-api-runtime-results-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## Scientific bibliography
 Quantity definitions belong to the interaction and outputs pages.
 
-(python-api-runtime-results-source-code-index)=
-<!-- (source-code-index)= -->
-
-## Control Room crosswalk
+## Control Room support
 
 Status: Runtime and provenance data are inspection-only; they are not standalone authoring controls.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Runtime` | `inspection-only` | No runtime-authoring transaction |
-| Parameters without a named UI field | `Model Explorer -> Runtime` | `not implemented` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Runtime` | `Python-only` | Authored in Python |
 
-not implemented: frontend support for runtime-selection and artifact-publication parameters.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx (RuntimeExplorerInspectorPanels)`.
+Result inspection parameters outside the workspace runtime panel remain Python-only.
+See [Control Room capability register](/frontend/capability-register) for the UI support matrix.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx` (`RuntimeExplorerInspectorPanels`).
 
+(python-api-runtime-results-source-code-index)=
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Result and step stats | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | [`class Result`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77), `StepStats` | Executed outcome mapping | Ownership test |
+| Result and step stats | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | [`class Result`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77), `StepStats` | Executed outcome mapping | Ownership and API contract tests |
 | Scalar access | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `Result.series`, `Result.last` | Series/point read | Ownership test |
-
-### Source-map coverage
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Resolved result record and scalar accessors. | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | [`class Result`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | Resolved result record and scalar accessors. | Source-map validator and focused API tests |

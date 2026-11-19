@@ -76,16 +76,12 @@ export function createChartYAxisDisplayTransforms(
 
 export function resolveChartScalePolicy(unit: string): ChartScalePolicy {
   const resolved = resolveChartUnit(unit);
-  if (resolved?.dimension === "dimensionless") {
-    return { kind: "dimensionless", displayUnit: "" };
-  }
-  if (!resolved) {
-    return { kind: "fixed", factor: 1, displayUnit: unit.trim() };
-  }
-  return {
-    kind: "si-prefix",
-    canonicalUnit: resolved.canonicalUnit,
-  };
+  return resolved?.dimension === "dimensionless"
+    ? { kind: "dimensionless", displayUnit: "" }
+    : {
+        kind: "si-prefix",
+        canonicalUnit: resolved?.canonicalUnit ?? unit.trim(),
+      };
 }
 
 export function createChartDisplayTransform(

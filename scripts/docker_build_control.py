@@ -7,6 +7,7 @@ network, Docker socket, host writes, or application execution responsibility.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections.abc import Mapping
 import errno
 import hashlib
 import json
@@ -37,7 +38,7 @@ CACHE_CONTROL_DOCUMENTS_PER_ATTEMPT = 6
 MIN_FREE_CONTROL_BYTES = CACHE_CONTROL_ATTEMPT_WINDOW * (
     MAX_LOG_BYTES + CACHE_CONTROL_DOCUMENTS_PER_ATTEMPT * MAX_DOCUMENT_BYTES
 )
-CACHE_ONLY_PHASES = frozenset(("toolchain", "image-dev", "image-backend"))
+CACHE_ONLY_PHASES = frozenset(("toolchain", "image-dev", "image-backend", "cache-maintenance", "cache-retirement"))
 LABEL_SCHEMA = "fullmag.build-control.v1"
 
 
@@ -47,6 +48,27 @@ class BuildControlError(RuntimeError):
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def semantic_build_inputs(inputs):
+    """Project build identity while retaining console ownership in receipts.
+
+    Only the exact, validated operation token is non-semantic. Every other
+    input, including unknown future keys, remains covered by the digest.
+    """
+    if not isinstance(inputs, Mapping):
+        raise BuildControlError("Build inputs must be an object")
+    result = dict(inputs)
+    if "console_session_id" in result:
+        token = result["console_session_id"]
+        if not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None:
+            raise BuildControlError("Build input console session identity is invalid")
+        del result["console_session_id"]
+    return result
+
+
+def build_input_digest(inputs):
+    return hashlib.sha256(canonical(semantic_build_inputs(inputs))).hexdigest()
 
 
 def _available_space(space):
@@ -98,6 +120,11 @@ def control_read_script(path, maximum=MAX_DOCUMENT_BYTES):
         raise BuildControlError("Invalid control-volume absolute path")
     if type(maximum) is not int or maximum <= 0 or maximum > MAX_DOCUMENT_BYTES:
         raise BuildControlError("Invalid control-document byte budget")
+
+    from docker_activation_history_reader import activation_history_read_script
+    historical = activation_history_read_script(path, maximum)
+    if historical is not None:
+        return historical
 
     components = parsed.parts[2:]  # omit the root slash and ``control``
     checks = [
@@ -161,6 +188,10 @@ class ControlOutcomeUnknown(BuildControlError):
     """The client observation ended without proving a daemon-side outcome."""
 
 
+class DockerObservationBudgetExceeded(ControlOutcomeUnknown):
+    """A Docker client observation did not finish within its bounded budget."""
+
+
 def bounded_capture(command, *, data=None, timeout=90, env=None, maximum=MAX_DOCUMENT_BYTES):
     # Identify the failing control step without logging command arguments,
     # stdin, or environment values (which may contain private runtime data).
@@ -212,7 +243,7 @@ def bounded_capture(command, *, data=None, timeout=90, env=None, maximum=MAX_DOC
     if sender is not None and not sender.is_alive() and not process.stdin.closed:
         process.stdin.close()
     if interrupted or exceeded.is_set() or any(t.is_alive() for t in readers) or (sender and sender.is_alive()):
-        raise ControlOutcomeUnknown(
+        raise DockerObservationBudgetExceeded(
             f"Docker observation exceeded its time/output budget during {caller} "
             f"(timeout={timeout}s); daemon resources retained"
         )
@@ -340,13 +371,14 @@ class BuildControl:
                 "available_bytes": usage.free, "filesystem": native["host_filesystem"],
                 "volume_serial": native["host_volume_serial"]}
 
-    def assert_windows_pre_pull_space(self):
+    @staticmethod
+    def assert_windows_pre_pull_space():
         """Guard physical Docker Desktop storage before a cold helper pull.
 
         Linux/WSL cannot observe the Docker VM filesystem before its first
         helper image exists; the existing cold pull order is retained there.
         """
-        backing = self._windows_backing_volume()
+        backing = BuildControl._windows_backing_volume()
         if backing is not None:
             _assert_free_space({"available_bytes": backing["available_bytes"]},
                                MIN_FREE_BUILD_BYTES, "cold helper pull admission refused")
@@ -614,8 +646,20 @@ class BuildControl:
         if len(data) > MAX_DOCUMENT_BYTES:
             raise BuildControlError("Control document exceeds its byte budget")
         path = self.path(relative)
+        if relative == "activation/history-v1" or relative.startswith("activation/history-v1/"):
+            raise BuildControlError("Archived activation records are immutable")
+        archive_guard = ""
+        activation = re.match(r"/control/activation/attempts/([0-9a-f]{32})(?:/|$)", path)
+        if activation is not None:
+            history = "/control/activation/history-v1"
+            archived = history + "/" + activation[1]
+            archive_guard = (
+                f"test ! -L {history}; if test -e {history}; then test -d {history}; "
+                f"test \"$(readlink -f {history})\" = {history}; fi; "
+                f"test ! -L {archived}; test ! -e {archived}; "
+            )
         parent = str(PurePosixPath(path).parent)
-        script = (f"umask 027; mkdir -p '{parent}'; "
+        script = (archive_guard + f"umask 027; mkdir -p '{parent}'; "
                   f"test \"$(readlink -f '{parent}')\" = '{parent}'; test ! -L '{path}'; "
                   f"if test -e '{path}'; then test -f '{path}'; test $(stat -c %h '{path}') = 1; fi; "
                   f"t=$(mktemp '{parent}/.publish.XXXXXXXX'); "
@@ -681,6 +725,8 @@ class BuildControl:
                          "\"$(stat -c '%d:%i' /registry/operation.lock)\"; "
                          "test \"$(sha256sum /registry/namespaces/current.json | cut -d' ' -f1)\" = '"
                          + self.namespace_registry_sha256 + "'; ")
+        if phase != "cache-retirement":
+            admission += "test ! -e /control/cache-retirement/closing.json; test ! -L /control/cache-retirement/closing.json; "
         return (admission +
                 "test ! -e /control/active; "
                 f"mkdir -p /control/{phase}/attempts; "
@@ -710,6 +756,15 @@ class BuildControl:
                 or (minimum_free_bytes < MIN_FREE_BUILD_BYTES
                     and phase not in CACHE_ONLY_PHASES)):
             raise BuildControlError("Invalid build-space admission for operation phase")
+        console_id = os.environ.get("FULLMAG_CONSOLE_SESSION_ID")
+        if console_id is not None:
+            if not re.fullmatch(r"[0-9a-f]{32}", console_id):
+                raise BuildControlError("Invalid console session identity")
+            if os.environ.get("FULLMAG_CONSOLE_CANCEL_REQUESTED") == console_id:
+                raise BuildControlError("Console startup cancelled before the next managed operation")
+            if "console_session_id" in inputs and inputs["console_session_id"] != console_id:
+                raise BuildControlError("Console session identity differs from operation inputs")
+            inputs = {**inputs, "console_session_id": console_id}
         token = uuid.uuid4().hex
         root = f"{phase}/attempts/{token}"
         path = self.path(root)
@@ -810,11 +865,10 @@ def build_volume_toolchain(repo):
     """Build the canonical dependency Dockerfile without host staging/receipts."""
     import fullmag_storage as storage
     from bootstrap_docker_toolchain import tracked_input_files, read_input, DEPENDENCY_MANIFEST
-    from docker_compose_identity import compose_project_identity
     require_host()
     repo = validate_host_path(Path(repo).absolute(), "source checkout").resolve(strict=True)
-    layout = storage.resolve_layout(repo, "docker-all-gpu")
-    identity = compose_project_identity(layout)
+    from docker_compose_identity import compose_source_identity
+    identity = compose_source_identity(repo)
     local_volume(repo)
     configured = toolchain_configuration(repo, identity)
     service = configured["services"]["fem-gpu-toolchain"]
@@ -828,7 +882,6 @@ def build_volume_toolchain(repo):
     helper = build["args"]["FULLMAG_CUDA_BASE_IMAGE"]
     if not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", helper):
         raise BuildControlError("CUDA bootstrap image must be pinned by digest")
-    control = BuildControl(identity, helper)
     # The control helper itself is pulled only when it is absent. Do not call
     # prepare() first: its --pull never helper cannot run on a cold host.
     probe_spec = {"name": identity["project_name"], "services": {"build-control": {
@@ -836,10 +889,14 @@ def build_volume_toolchain(repo):
     helper_present = not docker_capture("image", "inspect", helper, allow_failure=True).returncode
     if not helper_present:
         if os.name == "nt":
-            control.assert_windows_pre_pull_space()
+            BuildControl.assert_windows_pre_pull_space()
         # Linux/WSL has no Docker-VM measurement before this image exists; the
         # established cold ordering is retained and documented as such.
         compose_capture(probe_spec, "pull", "build-control", timeout=1800)
+    # Namespace authentication itself runs a --pull never helper. Resolve it
+    # only after the pinned image exists, including when an existing group's
+    # control volume survived an operator's image cleanup.
+    control = BuildControl(identity, helper)
     control.prepare(minimum_free_bytes=(MIN_FREE_CONTROL_BYTES if helper_present
                                         else MIN_FREE_BUILD_BYTES))
 
@@ -854,7 +911,7 @@ def build_volume_toolchain(repo):
         raise BuildControlError("Untracked dependency inputs require explicit Git staging before build")
     source_identity = {"source_inputs": manifest, "build_args": build.get("args", {}),
                        "target": build["target"]}
-    digest = hashlib.sha256(canonical(source_identity)).hexdigest()
+    digest = build_input_digest(source_identity)
     service["image"] = "fullmag/fem-gpu-toolchain:inputs-" + digest[:24]
     with control.operation("toolchain", source_identity,
                            minimum_free_bytes=MIN_FREE_CONTROL_BYTES) as operation:
@@ -899,12 +956,26 @@ def build_volume_toolchain(repo):
     return operation["receipt"]
 
 
-def build_volume_runtime_images(repo, control, toolchain):
+def build_volume_runtime_images(repo, control, toolchain, *, helper_source_binding=None):
     """Prepare trusted wrapper layers through this project's BuildKit only."""
     from docker_dev import BASE_CONTEXT_FILES, RUNTIME_IMAGE_CONTEXT_FILES
     from bootstrap_docker_toolchain import read_input
     require_host()
     repo = validate_host_path(Path(repo).absolute(), "source checkout").resolve(strict=True)
+    helper_source = None
+    if helper_source_binding is not None:
+        import docker_helper_source as helper_source
+        try:
+            helper_source_binding = helper_source.validate_binding_record(helper_source_binding)
+            if Path(helper_source_binding["root"]).resolve(strict=True) != repo:
+                raise helper_source.HelperSourceError("Runtime image context is not the pinned helper checkout")
+            helper_source.revalidate_binding(
+                helper_source_binding,
+                base_context_files=BASE_CONTEXT_FILES,
+                runtime_context_files=RUNTIME_IMAGE_CONTEXT_FILES,
+            )
+        except (OSError, helper_source.HelperSourceError) as error:
+            raise BuildControlError("Pinned helper source is unavailable before runtime image build: " + str(error)) from error
     parent = toolchain["image_id"]
     results = {}
     for kind, inventory in (("dev", BASE_CONTEXT_FILES), ("backend", RUNTIME_IMAGE_CONTEXT_FILES)):
@@ -917,20 +988,26 @@ def build_volume_runtime_images(repo, control, toolchain):
                     for name in names]
         manifest = inputs()
         identity = {"parent_image_id": parent, "files": manifest}
-        digest = hashlib.sha256(canonical(identity)).hexdigest()
+        if helper_source_binding is not None:
+            identity["helper_source"] = helper_source_binding
+        digest = build_input_digest(identity)
         tag = "fullmag/development-" + kind + ":inputs-" + digest[:24]
-        parent_ref = "fullmag/" + control.project + "-base:sha-" + parent.removeprefix("sha256:")
+        parent_digest = parent[7:] if parent.startswith("sha256:") else parent
+        parent_ref = "fullmag/" + control.project + "-base:sha-" + parent_digest
         arguments = {"FULLMAG_DOCKER_HELPERS": "docker/all-in-one/"}
         if kind == "dev":
             arguments.update(RUNTIME_BASE=parent_ref, FULLMAG_TOOLCHAIN_IMAGE_ID=parent,
                              FULLMAG_SCRIPT_HELPERS="scripts/")
         else:
             arguments["DEV_BASE"] = parent_ref
+        labels = {"org.fullmag.compose.project": control.project,
+                  "org.fullmag.build.input-digest": digest}
+        if helper_source_binding is not None:
+            labels.update(helper_source.image_labels(helper_source_binding))
         document = {"name": control.project, "services": {"image-" + kind: {
             "image": tag, "build": {"context": str(repo),
             "dockerfile": "docker/all-in-one/Dockerfile." + kind, "args": arguments,
-            "labels": {"org.fullmag.compose.project": control.project,
-                       "org.fullmag.build.input-digest": digest}}}}}
+            "labels": labels}}}}
         with control.operation("image-" + kind, identity,
                                minimum_free_bytes=MIN_FREE_CONTROL_BYTES) as operation:
             # FROM accepts a named local reference, not Docker's raw image ID.
@@ -953,7 +1030,25 @@ def build_volume_runtime_images(repo, control, toolchain):
             operation["receipt"].update(state="building", cache_hit=bool(cached))
             if not cached:
                 control.require_build_space(operation=operation)
+                if helper_source_binding is not None:
+                    try:
+                        helper_source.revalidate_binding(
+                            helper_source_binding,
+                            base_context_files=BASE_CONTEXT_FILES,
+                            runtime_context_files=RUNTIME_IMAGE_CONTEXT_FILES,
+                        )
+                    except helper_source.HelperSourceError as error:
+                        raise BuildControlError("Pinned helper source changed before BuildKit: " + str(error)) from error
                 control.build(operation, document, "image-" + kind)
+            if helper_source_binding is not None:
+                try:
+                    helper_source.revalidate_binding(
+                        helper_source_binding,
+                        base_context_files=BASE_CONTEXT_FILES,
+                        runtime_context_files=RUNTIME_IMAGE_CONTEXT_FILES,
+                    )
+                except helper_source.HelperSourceError as error:
+                    raise BuildControlError("Pinned helper source changed during BuildKit: " + str(error)) from error
             parent_documents = json.loads(docker_capture("image", "inspect", parent_ref).stdout)
             if (inputs() != manifest
                     or len(parent_documents) != 1
@@ -966,8 +1061,15 @@ def build_volume_runtime_images(repo, control, toolchain):
             if (labels.get("org.fullmag.compose.project") != control.project
                     or labels.get("org.fullmag.build.input-digest") != digest):
                 raise BuildControlError("Runtime image source labels differ")
+            if helper_source_binding is not None:
+                try:
+                    helper_source.startup_hashes_from_image_labels(labels, helper_source_binding)
+                except helper_source.HelperSourceError as error:
+                    raise BuildControlError("Runtime image helper-source labels differ: " + str(error)) from error
             parent = image[0]["Id"]
             operation["receipt"].update(state="succeeded", source_digest=digest, image=tag,
                                         image_id=parent)
+            if helper_source_binding is not None:
+                operation["receipt"]["helper_source"] = helper_source_binding
         results[kind] = operation["receipt"]
     return results

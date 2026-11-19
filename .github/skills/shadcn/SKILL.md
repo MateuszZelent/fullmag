@@ -7,6 +7,6 @@ allowed-tools: Bash(npx shadcn@latest *), Bash(pnpm dlx shadcn@latest *), Bash(b
 
 # shadcn
 
-Use the [canonical shadcn instructions](../../../.agents/skills/shadcn/SKILL.md).
-Resolve its references and relative paths against that canonical skill directory.
-This entry preserves the GitHub skill mirror without duplicating the skill package.
+Read and follow the canonical [shadcn skill](../../../.agents/skills/shadcn/SKILL.md).
+Resolve its references and scripts relative to that canonical directory.
+This entrypoint shares the existing implementation without duplicating it.

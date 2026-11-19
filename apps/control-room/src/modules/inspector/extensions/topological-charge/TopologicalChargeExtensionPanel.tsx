@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useId, useState } from "react";
 import { Calculator } from "lucide-react";
 
 import { useObjectTopologicalChargeResource } from "@/kernel/resources/studyRuntimeResources";
@@ -77,7 +77,7 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
       profile_samples: support === "layer_profile" ? profileSamples : undefined,
     },
   });
-  const model = resolveTopologicalChargePanelModel(resource.status, resource.data, resource.error ?? resource.refreshError);
+  const model = resolveTopologicalChargePanelModel(resource.status, resource.data);
   const busy = resource.status === "loading";
 
   const handleModeChange = useCallback((nextMode: string) => {
@@ -116,7 +116,7 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
         {model.rows.map((row) => (
           <FieldRow key={row.label} label={row.label} value={row.value} />
         ))}
-        <TopologicalChargeProfileTable profile={resource.data?.profile ?? []} current={model.dataCurrent} />
+        <TopologicalChargeProfileTable profile={resource.data?.profile ?? []} />
       </InspectorGroup>
     </div>
   );
@@ -124,18 +124,22 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
 
 function TopologicalChargeProfileTable({
   profile,
-  current,
 }: {
   profile: NonNullable<ReturnType<typeof useObjectTopologicalChargeResource>["data"]>["profile"];
-  current: boolean;
 }) {
+  const headingId = useId();
   if (!profile || profile.length === 0) return null;
 
   return (
-    <div className="fm-topological-charge-profile" aria-label="Topological charge profile">
-      <h4>Support profile</h4>
-      <table>
-        {!current ? <caption>Cached profile — current source is unconfirmed.</caption> : null}
+    <div role="group" className="fm-topological-charge-profile" aria-label="Topological charge profile">
+      <h4 id={headingId}>Support profile</h4>
+      <div
+        aria-labelledby={headingId}
+        className="fm-topological-charge-profile__scroll"
+        role="region"
+        tabIndex={0}
+      >
+      <table aria-labelledby={headingId}>
         <thead>
           <tr>
             <th scope="col">i</th>
@@ -149,7 +153,7 @@ function TopologicalChargeProfileTable({
         <tbody>
           {profile.map((sample) => (
             <tr key={sample.index}>
-              <td>{sample.index}</td>
+              <th scope="row">{sample.index}</th>
               <td>{sample.coordinate_m.toExponential(3)}</td>
               <td>{sample.integration_weight_m.toExponential(3)}</td>
               <td>{typeof sample.charge === "number" ? sample.charge.toFixed(6) : "unavailable"}</td>
@@ -159,6 +163,7 @@ function TopologicalChargeProfileTable({
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -247,7 +252,7 @@ function TopologicalChargeMethodSummary({
         </div>
         <span>{method.sampleQuality}</span>
       </div>
-      <div
+      <div role="group"
         className="fm-topological-charge-method__equations"
         aria-label="Topological charge equations"
       >

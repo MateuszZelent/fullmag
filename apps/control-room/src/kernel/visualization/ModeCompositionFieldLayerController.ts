@@ -644,6 +644,8 @@ function validateBinary(
     nodeIndices.length !== field.pointCount ||
     field.valueCount !== field.pointCount * 6 ||
     field.values.length !== field.valueCount ||
+    field.dtype !== "float64" ||
+    !(field.values instanceof Float64Array) ||
     !allFinite(field.values)
   ) {
     throw new ModeCompositionFieldIdentityError(

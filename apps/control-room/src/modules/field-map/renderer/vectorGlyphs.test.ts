@@ -1,49 +1,86 @@
 import { describe, expect, it } from "vitest";
 
-import { buildVectorGlyphs, normalComponentMarker } from "./vectorGlyphs";
+import {
+  GLYPH_MIN_LENGTH_PX,
+  glyphSpacingForBudget,
+  layoutScreenGlyphs,
+  normalComponentMarker,
+} from "./vectorGlyphs";
 
-describe("vector glyph selection", () => {
-  it("uses a deterministic budget as a limit rather than an incidental stride", () => {
-    const vectors = new Float64Array(30);
-    for (let index = 0; index < 10; index += 1) vectors[index * 3] = index + 1;
-    expect(buildVectorGlyphs(vectors, 3).map((glyph) => glyph.index)).toEqual([
-      1, 5, 8,
-    ]);
-    expect(buildVectorGlyphs(vectors, 3)).toEqual(buildVectorGlyphs(vectors, 3));
+function uniformField(width: number, height: number, vector: [number, number, number]) {
+  const values = new Float64Array(width * height * 3);
+  for (let index = 0; index < width * height; index += 1) values.set(vector, index * 3);
+  return values;
+}
+
+const BASE = {
+  bounds: [0, 1, 0, 1] as const,
+  canvasHeight: 100,
+  canvasWidth: 100,
+  gridHeight: 10,
+  gridWidth: 10,
+  spacingPx: 20,
+  viewport: [0, 1, 0, 1] as const,
+};
+
+describe("screen-space glyph layout", () => {
+  it("places glyphs on a regular 2D grid instead of a row-major stride", () => {
+    const glyphs = layoutScreenGlyphs({ ...BASE, vectors: uniformField(10, 10, [1, 0, 0]) });
+    expect(glyphs).toHaveLength(25);
+    const xs = new Set(glyphs.map((glyph) => Math.round(glyph.x)));
+    const ys = new Set(glyphs.map((glyph) => Math.round(glyph.y)));
+    expect([...xs].sort((a, b) => a - b)).toEqual([10, 30, 50, 70, 90]);
+    expect(ys.size).toBe(5);
   });
 
-  it("does not emit NaN geometry for zero vectors", () => {
-    expect(buildVectorGlyphs(new Float64Array(9), 3)).toEqual([]);
+  it("uses the mumax3 in-plane projection and a minimum arrow length", () => {
+    const tilted = layoutScreenGlyphs({ ...BASE, vectors: uniformField(10, 10, [0.6, 0, 0.8]) });
+    expect(tilted[0]!.kind).toBe("arrow");
+    expect(tilted[0]!.length).toBeCloseTo(0.82 * 20 * 0.6);
+    const tiny = layoutScreenGlyphs({ ...BASE, scale: 0.01, vectors: uniformField(10, 10, [1, 0, 0]) });
+    expect(tiny[0]!.length).toBe(GLYPH_MIN_LENGTH_PX);
   });
 
-  it("caps each arrow to its source cell while preserving the signed normal component", () => {
-    const [glyph] = buildVectorGlyphs(
-      new Float64Array([1e30, -1e30, -7]),
-      1,
-      1e-15,
-      { maxLengthCells: 0.4 },
-    );
-
-    expect(Math.hypot(glyph!.u, glyph!.v)).toBeCloseTo(0.4);
-    expect(glyph!.normal).toBe(-7);
+  it("uses signed normal markers for out-of-plane vectors", () => {
+    const up = layoutScreenGlyphs({ ...BASE, vectors: uniformField(10, 10, [0.1, 0, 1]) });
+    const down = layoutScreenGlyphs({ ...BASE, vectors: uniformField(10, 10, [0, 0.1, -1]) });
+    expect(up[0]!.kind).toBe("out-of-plane");
+    expect(down[0]!.kind).toBe("into-plane");
   });
 
-  it("does not create false arrows from non-finite vector components", () => {
-    expect(
-      buildVectorGlyphs(new Float64Array([Number.NaN, 1, 0, Infinity, 0, 0]), 2),
-    ).toEqual([]);
+  it("points screen angles with v upwards", () => {
+    const [glyph] = layoutScreenGlyphs({ ...BASE, vectors: uniformField(10, 10, [0, 1, 0]) });
+    expect(glyph!.angle).toBeCloseTo(-Math.PI / 2);
+  });
+
+  it("skips masked, zero and non-finite cells", () => {
+    const vectors = uniformField(10, 10, [1, 0, 0]);
+    vectors.set([Number.NaN, 0, 0], 0);
+    // Occupancy codes: 0 occupied, 1 empty.
+    const mask = new Uint8Array(100);
+    mask[11] = 1;
+    const glyphs = layoutScreenGlyphs({ ...BASE, mask, vectors });
+    expect(glyphs.some((glyph) => glyph.index === 0)).toBe(false);
+    expect(glyphs.some((glyph) => glyph.index === 11)).toBe(false);
+    expect(layoutScreenGlyphs({ ...BASE, vectors: new Float64Array(300) })).toEqual([]);
+  });
+
+  it("keeps glyphs anchored to the data while panning", () => {
+    const vectors = uniformField(10, 10, [1, 0, 0]);
+    const original = layoutScreenGlyphs({ ...BASE, vectors });
+    const panned = layoutScreenGlyphs({ ...BASE, vectors, viewport: [0.1, 1.1, 0, 1] });
+    const sameAnchor = panned.find((glyph) => glyph.index === original[1]!.index);
+    expect(sameAnchor?.x).toBeCloseTo(original[1]!.x - 10);
+  });
+
+  it("derives spacing from the vector budget within readable bounds", () => {
+    expect(glyphSpacingForBudget(1000, 1000, 1000)).toBeCloseTo(31.62, 2);
+    expect(glyphSpacingForBudget(1000, 1000, 1e9)).toBe(24);
+    expect(glyphSpacingForBudget(1000, 1000, 0)).toBe(160);
   });
 
   it("keeps the normal component signed in the 2D glyph marker", () => {
     expect(normalComponentMarker(-2)).toEqual({ direction: "into-plane", magnitude: 2 });
     expect(normalComponentMarker(3)).toEqual({ direction: "out-of-plane", magnitude: 3 });
-  });
-
-  it("applies server length mode while retaining a bounded geometry budget", () => {
-    const vectors = new Float64Array([0.1, 0, 0, 10, 0, 0]);
-    expect(buildVectorGlyphs(vectors, 2, 1e-15, { lengthMode: "uniform", maxLengthCells: 0.3 }))
-      .toMatchObject([{ u: 0.3 }, { u: 0.3 }]);
-    expect(buildVectorGlyphs(vectors, 2, 1e-15, { lengthMode: "magnitude", maxLengthCells: 0.3 }))
-      .toMatchObject([{ u: 0.1 }, { u: 0.3 }]);
   });
 });

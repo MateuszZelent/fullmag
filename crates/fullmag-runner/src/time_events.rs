@@ -166,11 +166,31 @@ pub(crate) fn build_resolved_stage_event_schedule_with_origin(
     TimeEventSchedule { times_s: times }
 }
 
+pub(crate) fn extend_absolute_time_expression_events(
+    schedule: &mut TimeEventSchedule,
+    expression: Option<&fullmag_ir::TimeExpressionIR>,
+    stage_start_s: f64,
+    stage_end_s: f64,
+) {
+    let Some(expression) = expression else {
+        return;
+    };
+    schedule.times_s.extend(
+        expression
+            .event_times_s
+            .iter()
+            .copied()
+            .filter(|time| time.is_finite() && *time >= stage_start_s && *time <= stage_end_s),
+    );
+    schedule.times_s.sort_by(f64::total_cmp);
+    schedule.times_s.dedup_by(|right, left| *right == *left);
+}
+
 /// Direct energy minimizers advance in accepted minimization steps, not in
 /// physical time. Building sub-picosecond output events across their synthetic
 /// `until_seconds` horizon can therefore allocate an unbounded vector that the
 /// minimizer never consumes.
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
 pub(crate) fn build_native_fem_stage_event_schedule(
     drives: &[RegionalFieldDriveIR],
     solved_bases: &[ResolvedSolvedAntennaDriveBasisIR],
@@ -224,6 +244,101 @@ pub(crate) fn resolved_stage_drive_discontinuities_with_origin(
     times.sort_by(f64::total_cmp);
     times.dedup_by(|right, left| (*right - *left).abs() <= tolerance_s);
     times
+}
+
+/// Extend the FDM transport schedule using the absolute current-source clock.
+/// Unlike output sampling tolerances, distinct representable source events
+/// must not be merged or skipped merely because they are less than 1e-18 apart.
+pub(crate) fn extend_fdm_transport_envelope_events<'a>(
+    schedule: &mut TimeEventSchedule,
+    envelopes: impl Iterator<Item = &'a fullmag_ir::TimeEnvelopeIR>,
+    stage_start_s: f64,
+    stage_end_s: f64,
+) -> Result<(), String> {
+    for envelope in envelopes {
+        let events: Vec<f64> = match envelope {
+            fullmag_ir::TimeEnvelopeIR::Pulse {
+                t_on_s, t_off_s, ..
+            } => {
+                vec![*t_on_s, *t_off_s]
+            }
+            fullmag_ir::TimeEnvelopeIR::PiecewiseLinear { points } => {
+                points.iter().map(|point| point.time_s).collect()
+            }
+            fullmag_ir::TimeEnvelopeIR::Constant { .. }
+            | fullmag_ir::TimeEnvelopeIR::Sinusoidal { .. }
+            | fullmag_ir::TimeEnvelopeIR::Sinc { .. } => Vec::new(),
+            fullmag_ir::TimeEnvelopeIR::Tabulated { .. } => {
+                return Err(
+                    "FDM transport tabulated envelope has no materialized event contract".into(),
+                );
+            }
+        };
+        for time in events {
+            if !time.is_finite() {
+                return Err("FDM transport source event must be finite".into());
+            }
+            if time >= stage_start_s && time <= stage_end_s {
+                schedule.times_s.push(time);
+            }
+        }
+    }
+    schedule.times_s.sort_by(f64::total_cmp);
+    schedule.times_s.dedup_by(|right, left| *right == *left);
+    Ok(())
+}
+
+/// Select the actual endpoint before solving. A partial event step does not
+/// change the nominal fixed grid; accepted-step counters never define its phase.
+/// This FDM-only path leaves the shared FEM clipping contract unchanged.
+pub(crate) fn next_fdm_transport_step_end(
+    current_s: f64,
+    grid_origin_s: f64,
+    nominal_fixed_dt_s: Option<f64>,
+    proposed_dt_s: f64,
+    stage_end_s: f64,
+    event_times_s: &[f64],
+) -> Result<f64, String> {
+    if !current_s.is_finite()
+        || !grid_origin_s.is_finite()
+        || grid_origin_s > current_s
+        || !proposed_dt_s.is_finite()
+        || proposed_dt_s <= 0.0
+        || !stage_end_s.is_finite()
+        || stage_end_s <= current_s
+        || event_times_s.iter().any(|time| !time.is_finite())
+    {
+        return Err("invalid FDM transport time window or step".into());
+    }
+    let mut target = if let Some(fixed_dt) = nominal_fixed_dt_s {
+        if !fixed_dt.is_finite() || fixed_dt <= 0.0 {
+            return Err("invalid FDM transport nominal fixed timestep".into());
+        }
+        let index = ((current_s - grid_origin_s) / fixed_dt).floor();
+        if !index.is_finite() || index < 0.0 || index >= 9_007_199_254_740_991.0 {
+            return Err("FDM transport nominal grid index is not representable".into());
+        }
+        let mut next = grid_origin_s + (index + 1.0) * fixed_dt;
+        if next <= current_s {
+            next = grid_origin_s + (index + 2.0) * fixed_dt;
+        }
+        next.min(stage_end_s)
+    } else {
+        (current_s + proposed_dt_s.min(stage_end_s - current_s)).min(stage_end_s)
+    };
+    for event in event_times_s {
+        if *event > current_s && *event < target {
+            target = *event;
+        }
+    }
+    let dt = target - current_s;
+    if !target.is_finite() || dt <= 0.0 || !dt.is_finite() || current_s + dt != target {
+        return Err(
+            "FDM transport event/endpoint cannot be reached by a representable positive step"
+                .into(),
+        );
+    }
+    Ok(target)
 }
 
 pub(crate) fn cap_timestep_to_next_event(
@@ -505,6 +620,33 @@ mod tests {
         assert_eq!(
             resolved_stage_drive_discontinuities_with_origin(&drives, &[], 10.0, 10.0, 13.0, 1e-12,),
             vec![11.0, 12.0]
+        );
+    }
+
+    #[test]
+    fn time_expression_events_remain_absolute_and_are_not_coalesced() {
+        let first = 0.4e-12;
+        let second = first + 5.0e-19;
+        let expression = fullmag_ir::TimeExpressionIR {
+            source: "heaviside(t - first) - heaviside(t - second)".into(),
+            constants: Default::default(),
+            event_times_s: vec![first, second, 2.0e-12],
+        };
+        let mut schedule = TimeEventSchedule {
+            times_s: vec![0.0, 1.0e-12],
+        };
+
+        extend_absolute_time_expression_events(
+            &mut schedule,
+            Some(&expression),
+            0.0,
+            1.0e-12,
+        );
+
+        assert_eq!(schedule.times_s, vec![0.0, first, second, 1.0e-12]);
+        assert_eq!(
+            cap_timestep_to_next_event(0.0, 0.8e-12, &schedule.times_s, 0.0),
+            first
         );
     }
 }

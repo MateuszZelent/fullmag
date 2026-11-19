@@ -33,11 +33,11 @@ class Target:
 
     @staticmethod
     def run(run_id: Optional[str] = None) -> dict[str, Any]:
-        return {"kind": "run", "run_id": run_id}
+        return {"kind": "run"} if run_id is None else {"kind": "run", "run_id": run_id}
 
     @staticmethod
     def current_stage(stage_id: Optional[str] = None) -> dict[str, Any]:
-        return {"kind": "current_stage", "stage_id": stage_id}
+        return {"kind": "current_stage"} if stage_id is None else {"kind": "current_stage", "stage_id": stage_id}
 
     @staticmethod
     def stage_index(index: int) -> dict[str, Any]:

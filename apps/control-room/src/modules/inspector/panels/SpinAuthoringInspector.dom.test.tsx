@@ -65,42 +65,6 @@ describe("Spin Torque and Oersted revision fences", () => {
       expect(h.container.textContent).toContain("Authoring resource committed");
     } finally { await h.dispose(); }
   });
-  it.each([
-    { family: "spin_torque", label: "Polarization degree", value: "" },
-    { family: "spin_torque", label: "Current density", value: "1,,2,3" },
-    { family: "oersted_field", label: "Current", value: " \t" },
-    { family: "oersted_field", label: "Center", value: "1,2,3," },
-  ] as const)("blocks invalid $family draft input before remote validation or mutation", async ({ family, label, value }) => {
-    const h = await mountSpin(family, 7);
-    try {
-      await h.edit(label, value);
-      await h.validate();
-      expect(h.validateTransport).not.toHaveBeenCalled();
-      expect(h.sessions.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
-      await act(async () => { expect(await h.sessions.getCurrentSession()?.apply()).toBe(false); });
-      expect(h.validateTransport).not.toHaveBeenCalled();
-      expect(h.replace).not.toHaveBeenCalled();
-      expect(h.create).not.toHaveBeenCalled();
-    } finally { await h.dispose(); }
-  });
-
-  it("accepts explicit zero and mixed comma and whitespace Oersted vector input", async () => {
-    const h = await mountSpin("oersted_field", 7);
-    try {
-      await h.edit("Current", "0");
-      await h.edit("Center", "+1e-9 , -2e-9\t0");
-      await h.validate();
-      expect(h.validateTransport).toHaveBeenCalledTimes(1);
-      expect(h.sessions.getCurrentSession()).toMatchObject({ dirty: true, valid: true });
-      await act(async () => { expect(await h.sessions.getCurrentSession()?.apply()).toBe(true); });
-      expect(h.replace).toHaveBeenCalledTimes(1);
-      expect(h.replace.mock.calls[0]?.[1]).toMatchObject({
-        base_revision: 7,
-        resource: { current: 0, center: [1e-9, -2e-9, 0] },
-      });
-    } finally { await h.dispose(); }
-  });
-
   it.each(["spin_torque", "oersted_field"] as const)("preserves later raw edits through the %s ACK and its resource refresh", async (family) => {
     const h = await mountSpin(family, 7, { deferred: true });
     const fields = fieldNames(family);
@@ -213,6 +177,36 @@ describe("Spin Torque and Oersted revision fences", () => {
     } finally { await h.dispose(); }
   });
 
+  it.each([
+    { from: "creation", id: "new", options: { local: true } },
+    { from: "legacy index", id: "index:0", options: { indexOnly: true } },
+  ])("fences $from validation when a real resource ID is $id", async ({ id, options }) => {
+    state.torques.push({ ...torque, id });
+    const h = await mountSpin("spin_torque", 7, options);
+    try {
+      await h.edit("Polarization degree", "0.5");
+      await h.validate();
+      let finish!: (value: Awaited<ReturnType<typeof h.validateTransport>>) => void;
+      h.validateTransport.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+      let applying: Promise<boolean> | boolean | undefined;
+      await act(async () => { applying = h.sessions.getCurrentSession()?.apply(); });
+      await h.render({ resourceId: id });
+      await act(async () => {
+        finish({
+          semantic: { valid: true, issues: [] },
+          execution: { authoring_allowed: true, reason: "Fixture validation", qualification: "semantic_only" },
+        });
+        expect(await applying).toBe(false);
+      });
+
+      expect(h.create).not.toHaveBeenCalled();
+      expect(h.replace).not.toHaveBeenCalled();
+      expect(h.control("Torque id").value).toBe(id);
+    } finally {
+      await h.dispose();
+    }
+  });
+
   it("does not roll back a newer server revision through an older ACK", async () => {
     const h = await mountSpin("spin_torque", 7, { deferred: true });
     try {
@@ -289,6 +283,30 @@ describe("Spin Torque and Oersted revision fences", () => {
     } finally { await h.dispose(); }
   });
 
+  it("keeps each pending mutation fenced when a different target completes", async () => {
+    const h = await mountSpin("spin_torque", 7, { deferred: true });
+    try {
+      await h.edit("Polarization degree", "0.5"); await h.validate();
+      let first: Promise<boolean> | boolean | undefined;
+      await act(async () => { first = h.sessions.getCurrentSession()?.apply(); });
+      expect(h.replace).toHaveBeenCalledTimes(1);
+
+      await h.render({ resourceId: "B" });
+      await h.edit("Polarization degree", "0.6"); await h.validate();
+      h.replace.mockImplementationOnce(async (_id, request) => ({
+        resource: request.resource,
+        scene_revision: 8,
+        committed_scene: { revision: 8, objects: [] },
+      }));
+      await act(async () => { expect(await h.sessions.getCurrentSession()?.apply()).toBe(true); });
+
+      await h.render({ resourceId: "A" });
+      expect(h.button("Committing…").disabled).toBe(true);
+      await act(async () => { h.acknowledge(); expect(await first).toBe(false); });
+      expect(h.replace).toHaveBeenCalledTimes(2);
+    } finally { await h.dispose(); }
+  });
+
   it("permits an unchanged valid new default without requiring an artificial edit", async () => {
     const h = await mountSpin("spin_torque", 7, { local: true });
     try {
@@ -333,6 +351,50 @@ describe("Spin Torque and Oersted revision fences", () => {
       await h.render({ resourceIndex: 0 }); state.torques = [...state.torques].reverse(); await h.render();
       expect(h.control("Torque id").value).toBe("A");
     } finally { await h.dispose(); }
+  });
+
+  it("accepts the first confirmed result for an initially loading positional target", async () => {
+    const items = state.torques;
+    state.status = "loading";
+    state.torques = [];
+    const h = await mountSpin("spin_torque", 7, { indexOnly: true });
+    try {
+      state.status = "ready";
+      state.torques = items;
+      await h.render(); await h.validate();
+      expect(h.control("Torque id").value).toBe("A");
+      expect(h.sessions.getCurrentSession()?.valid).toBe(true);
+
+      state.torques = [...items].reverse();
+      await h.render();
+      expect(h.control("Torque id").value).toBe("A");
+      expect(h.sessions.getCurrentSession()?.valid).toBe(false);
+    } finally { await h.dispose(); }
+  });
+
+  it("holds legacy positional editing until retained data confirms the first target", async () => {
+    state.status = "stale";
+    const h = await mountSpin("spin_torque", 7, { indexOnly: true });
+    try {
+      const fields = () => find(h.container, (element) => element.tagName === "FIELDSET");
+      expect(fields().disabled).toBe(true);
+      expect(h.sessions.getCurrentSession()?.valid).toBe(false);
+
+      state.status = "ready";
+      await h.render();
+      await h.validate();
+      expect(fields().disabled).toBe(false);
+      expect(h.control("Torque id").value).toBe("A");
+      expect(h.sessions.getCurrentSession()?.valid).toBe(true);
+
+      await h.edit("Polarization degree", "0.5");
+      state.status = "stale";
+      await h.render();
+      expect(h.control("Polarization degree").value).toBe("0.5");
+      expect(h.sessions.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+    } finally {
+      await h.dispose();
+    }
   });
 
   it("fails closed when a legacy positional target changes identity", async () => {

@@ -7,6 +7,10 @@ import {
   buildMaterialParametersPatch,
   buildUniaxialAnisotropyPatch,
   createMaterialThenAssign,
+  createMaterialAssetThenAssign,
+  materialAssetFromLibraryEntry,
+  independentMaterialAsset,
+  magneticParameterMaterialResourceFromSceneResource,
   MaterialAssignmentAfterCreateError,
   magneticParametersDraftFromResource,
   magneticParametersDraftDirty,
@@ -57,14 +61,14 @@ describe("ObjectMaterialPanelModel", () => {
     });
 
     expect(buildCreateMaterialDraft({
-      aex: "0",
+      aex: "-1e-11",
       alpha: "0.02",
       anisotropyAxis: ["0", "0", "1"],
       ku1: "",
       materialId: "mat:bad",
       name: "Bad",
       ms: "1e6",
-    })).toEqual({ error: "A must be greater than 0 J/m." });
+    })).toEqual({ error: "Aex must be zero or greater." });
     expect(buildUniaxialAnisotropyPatch("1e5", ["0", "0", "0"])).toEqual({
       error: "Anisotropy axis must be non-zero.",
     });
@@ -258,5 +262,118 @@ describe("ObjectMaterialPanelModel", () => {
         ms: "8e5",
       }),
     ).toEqual({ error: "Aex must be a finite SI value." });
+  });
+});
+
+
+describe("material database assignment", () => {
+  const entry = {
+    id: "custom:sample", revision: 7, kind: "modified" as const,
+    name: "Measured film", summary: "Measured sample",
+    properties: { Ms: 900000, Aex: 1.3e-11, alpha: 0, Dind: -0.001, Dbulk: null },
+    references: [{ label: "Sample", citation: "Film A" }, { url: "https://example.org/method" }],
+    source: {
+      catalog_id: "builtin:permalloy", catalog_revision: 1, name: "Permalloy", kind: "builtin" as const,
+      properties: { Ms: 800000, Aex: 1.3e-11, alpha: 0.01, Dind: null, Dbulk: null }, references: [],
+    },
+  };
+
+  it("pins the selected entry revision and all references with a fresh immutable identity", () => {
+    const first = materialAssetFromLibraryEntry(entry);
+    const second = materialAssetFromLibraryEntry(entry);
+    expect(first.materialId).toMatch(/^mat:[0-9a-f-]{36}$/);
+    expect(second.materialId).not.toBe(first.materialId);
+    expect(first.source).toEqual({
+      catalog_id: entry.id, catalog_revision: entry.revision,
+      name: entry.name, kind: entry.kind, properties: entry.properties, references: entry.references,
+    });
+    expect(first.source?.catalog_id).not.toBe(entry.source.catalog_id);
+    expect(first.properties).not.toBe(entry.properties);
+    expect(first.references).toEqual(entry.references);
+    expect(first.references).not.toBe(entry.references);
+    expect(first.source?.properties).not.toBe(first.properties);
+  });
+
+  it("creates and assigns atomically with the scoped base revision and no second write", async () => {
+    const asset = materialAssetFromLibraryEntry(entry);
+    const scene = { revision: 22, objects: [{ id: "body", material_ref: asset.materialId }], materials: [] };
+    const created = { committed_scene: scene, scene_revision: 22, transaction_kind: "create_material" };
+    const api = { model: { createMaterial: vi.fn(async () => created), patchObject: vi.fn() } };
+    const result = await createMaterialAssetThenAssign(api, "body", asset, 21, () => true, "session=A");
+    expect(api.model.createMaterial).toHaveBeenCalledOnce();
+    expect(api.model.createMaterial).toHaveBeenCalledWith(
+      asset.materialId, asset.name, asset.properties, entry.references,
+      { baseRevision: 21, sessionScopeKey: "session=A" },
+      { source: asset.source, assignToObjectId: "body" },
+    );
+    expect(api.model.patchObject).not.toHaveBeenCalled();
+    expect(result).toEqual({ assigned: scene, created, deferredAnisotropy: null, materialId: asset.materialId });
+  });
+
+  it("keeps incomplete coefficients null instead of bypassing model readiness with defaults", async () => {
+    const asset = materialAssetFromLibraryEntry({ ...entry, properties: { ...entry.properties, Ms: null, Aex: null } });
+    const api = { model: {
+      createMaterial: vi.fn(async () => ({ committed_scene: { revision: 2 }, scene_revision: 2 })),
+      patchObject: vi.fn(),
+    } };
+    await createMaterialAssetThenAssign(api, "body", asset, 1, () => true);
+    expect(api.model.createMaterial).toHaveBeenCalledWith(
+      asset.materialId, asset.name, expect.objectContaining({ Ms: null, Aex: null, alpha: 0 }),
+      asset.references, { baseRevision: 1 }, { source: asset.source, assignToObjectId: "body" },
+    );
+    expect(api.model.patchObject).not.toHaveBeenCalled();
+  });
+
+  it("does not issue a stale scoped request or retry a rejected atomic create", async () => {
+    const api = { model: { createMaterial: vi.fn().mockRejectedValue(new Error("revision conflict")), patchObject: vi.fn() } };
+    const asset = materialAssetFromLibraryEntry(entry);
+    await expect(createMaterialAssetThenAssign(api, "body", asset, 1, () => false)).rejects.toThrow("scope");
+    expect(api.model.createMaterial).not.toHaveBeenCalled();
+    await expect(createMaterialAssetThenAssign(api, "body", asset, 1, () => true)).rejects.toThrow("revision conflict");
+    expect(api.model.createMaterial).toHaveBeenCalledOnce();
+    expect(api.model.patchObject).not.toHaveBeenCalled();
+  });
+
+  it("copies a scene material independently while retaining its existing source baseline", () => {
+    const material = { ...entry, id: "mat:shared", scene_revision: 10 };
+    const copy = independentMaterialAsset(material);
+    expect(copy.materialId).not.toBe(material.id);
+    expect(copy.properties).toEqual(material.properties);
+    expect(copy.references).toEqual(material.references);
+    expect(copy.source).toEqual(material.source);
+    expect(copy.source?.catalog_id).toBe("builtin:permalloy");
+    expect(copy.source).not.toBe(material.source);
+  });
+
+  it("keeps source and references from the committed scene while the material resource loads", () => {
+    const scene = { revision: 12, materials: [{ ...entry, id: "mat:copy" }] };
+    const resource = magneticParameterMaterialResourceFromSceneResource("mat:copy", scene);
+    expect(resource?.source).toEqual(entry.source);
+    expect(resource?.references).toEqual(entry.references);
+    expect(resource?.scene_revision).toBe(12);
+  });
+
+  it("accepts zero exchange in manual creation and requires explicit Ms and Aex", () => {
+    const draft = {
+      materialId: "mat:new", name: "New", ms: "8e5", aex: "0", alpha: "0.01",
+      ku1: "", anisotropyAxis: ["0", "0", "1"] as const,
+    };
+    expect(buildCreateMaterialDraft(draft)).toMatchObject({ value: { properties: { Aex: 0 } } });
+    expect(buildCreateMaterialDraft({ ...draft, aex: "-1e-11" })).toHaveProperty("error");
+    expect(buildCreateMaterialDraft({ ...draft, aex: "" })).toHaveProperty("error");
+    expect(buildCreateMaterialDraft({ ...draft, ms: "" })).toHaveProperty("error");
+  });
+
+  it("rejects blank or negative damping while accepting explicit zero in create and direct edits", () => {
+    const draft = {
+      materialId: "mat:new", name: "New", ms: "8e5", aex: "1.3e-11", alpha: "",
+      ku1: "", anisotropyAxis: ["0", "0", "1"] as const,
+    };
+    expect(buildCreateMaterialDraft(draft)).toEqual({ error: "alpha is required." });
+    expect(buildCreateMaterialDraft({ ...draft, alpha: "0" })).toMatchObject({ value: { properties: { alpha: 0 } } });
+    const direct = { materialRef: "mat:new", materialName: "New", ms: "8e5", aex: "1.3e-11", alpha: "", dind: "", dbulk: "" };
+    expect(buildMaterialParametersPatch(direct)).toEqual({ error: "alpha is required." });
+    expect(buildMaterialParametersPatch({ ...direct, alpha: "-0.01" })).toHaveProperty("error");
+    expect(buildMaterialParametersPatch({ ...direct, alpha: "0" })).toMatchObject({ patch: { properties: { alpha: 0 } } });
   });
 });

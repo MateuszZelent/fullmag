@@ -389,7 +389,8 @@ pub(crate) fn finalize_native_fem_relaxation(
     });
     // Construct the one final provenance value before any terminal success
     // side effect. The same value is published to open stores and returned in
-    // ExecutedRun; no later provenance mutation is permitted.
+    // ExecutedRun. Cumulative CPU transfer diagnostics are read again after
+    // final field refreshes, without changing this scientific state identity.
     let mut final_provenance = artifacts.provenance_snapshot();
     final_provenance.fem_poisson_demag = fem_poisson_demag_provenance(plan, Some(&final_stats));
     if plan.demag_realization == Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler) {
@@ -427,7 +428,7 @@ pub(crate) fn finalize_native_fem_relaxation(
             }
         }
     }
-    artifacts.replace_provenance_synchronously(final_provenance)?;
+    artifacts.replace_provenance_synchronously(final_provenance.clone())?;
     if let Some(mut terminal_stats) = finalization.terminal_stats {
         // Retain a terminal torque-confirmation observation for final-state
         // provenance. The artifact writer marks same-step observations as
@@ -891,6 +892,18 @@ pub(crate) fn finalize_native_fem_relaxation(
     finalization_field_copy_bytes =
         finalization_field_copy_bytes.saturating_add(vector3_f64_bytes(final_magnetization.len()));
     let mut diagnostic_steps = artifacts.take_solver_steps();
+    let final_cpu_fixed_coupling = backend.cpu_fixed_coupling_telemetry()?;
+    if final_cpu_fixed_coupling.is_some() {
+        final_stats.cpu_fixed_coupling = final_cpu_fixed_coupling.clone();
+        if let Some(last) = steps.last_mut() {
+            last.cpu_fixed_coupling = final_cpu_fixed_coupling.clone();
+        }
+        if let Some(last) = diagnostic_steps.last_mut() {
+            last.cpu_fixed_coupling = final_cpu_fixed_coupling.clone();
+        }
+        final_provenance.cpu_fixed_coupling = final_cpu_fixed_coupling;
+        artifacts.replace_provenance_synchronously(final_provenance)?;
+    }
     let (mut field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let mut auxiliary_artifacts = Vec::new();
     let node_map_bytes = serde_json::to_vec(&final_node_map).map_err(|error| RunError {

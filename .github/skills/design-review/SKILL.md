@@ -5,6 +5,6 @@ description: Run a sharp, prioritized design critique of a UI — a URL, a scree
 
 # design-review
 
-Use the [canonical design-review instructions](../../../.agents/skills/design-review/SKILL.md).
-Resolve its references and relative paths against that canonical skill directory.
-This entry preserves the GitHub skill mirror without duplicating the skill package.
+Read and follow the canonical [design-review skill](../../../.agents/skills/design-review/SKILL.md).
+Resolve its references and scripts relative to that canonical directory.
+This entrypoint shares the existing implementation without duplicating it.

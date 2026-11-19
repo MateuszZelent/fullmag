@@ -379,7 +379,6 @@ function planarFrameFromDraft(draft: CrossSectionDraft, positionM: number) {
 export interface CrossSectionWorkspaceState {
   activePlotId: string | null;
   draft: CrossSectionDraft | null;
-  draftGeneration: number;
   planarMonitorDraft: PlanarMonitorDraft | null;
   plots: readonly CrossSectionPlot[];
 }
@@ -420,7 +419,6 @@ const DEFAULT_PLANAR_MONITOR: PlanarMonitor = {
 const INITIAL_STATE: CrossSectionWorkspaceState = {
   activePlotId: null,
   draft: null,
-  draftGeneration: 0,
   planarMonitorDraft: null,
   plots: [],
 };
@@ -442,12 +440,6 @@ const AXIS_BY_PLANE: Record<CrossSectionPlane, ClipAxis> = {
 };
 
 let plotSequence = 0;
-let crossSectionDraftGenerationSequence = 0;
-
-function nextCrossSectionDraftGeneration(): number {
-  crossSectionDraftGenerationSequence += 1;
-  return crossSectionDraftGenerationSequence;
-}
 
 class CrossSectionWorkspaceStore {
   private readonly listeners = new Set<CrossSectionWorkspaceListener>();
@@ -468,10 +460,7 @@ class CrossSectionWorkspaceStore {
 
   reset(): void {
     plotSequence = 0;
-    this.setState({
-      ...INITIAL_STATE,
-      draftGeneration: nextCrossSectionDraftGeneration(),
-    });
+    this.setState(INITIAL_STATE);
   }
 
   private notify(): void {
@@ -564,7 +553,6 @@ export function beginCrossSectionDraft(
   crossSectionWorkspaceStore.setState({
     ...state,
     draft,
-    draftGeneration: nextCrossSectionDraftGeneration(),
   });
   return draft;
 }
@@ -580,7 +568,6 @@ export function beginCrossSectionDraftFromPlot(
   crossSectionWorkspaceStore.setState({
     ...state,
     draft,
-    draftGeneration: nextCrossSectionDraftGeneration(),
   });
   return draft;
 }
@@ -606,11 +593,7 @@ export function updateCrossSectionDraft(
 export function discardCrossSectionDraft(): void {
   const state = crossSectionWorkspaceStore.getSnapshot();
   if (!state.draft) return;
-  crossSectionWorkspaceStore.setState({
-    ...state,
-    draft: null,
-    draftGeneration: nextCrossSectionDraftGeneration(),
-  });
+  crossSectionWorkspaceStore.setState({ ...state, draft: null });
 }
 
 export function commitCrossSectionDraft(): CrossSectionPlot | null {
@@ -621,7 +604,6 @@ export function commitCrossSectionDraft(): CrossSectionPlot | null {
   crossSectionWorkspaceStore.setState({
     activePlotId: plot.id,
     draft: null,
-    draftGeneration: nextCrossSectionDraftGeneration(),
     planarMonitorDraft: state.planarMonitorDraft,
     plots: [...state.plots, plot],
   });
@@ -816,7 +798,6 @@ function nextPlotName(): string {
 function sanitizeDraft(draft: CrossSectionDraft): CrossSectionDraft {
   return {
     ...draft,
-    edgeWidth: clamp(draft.edgeWidth, 0.5, 4),
     filterExpression: draft.filterExpression.trim(),
     name: draft.name,
     positionPercent: clamp(draft.positionPercent, 0, 100),

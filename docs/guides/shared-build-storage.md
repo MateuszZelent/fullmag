@@ -1,0 +1,292 @@
+# Współdzielenie zasobów builda pomiędzy grupami DEV
+
+Globalne shared volumes dla Cargo/pnpm/packages nadal podlegają temu przewodnikowi.
+Topologię prywatnego storage daily DEV zastępuje [ADR 0076](../adr/0076-single-private-volume-per-dev-group.md):
+jeden stabilny `BuildControl.volume` na worktree/grupę. To zmiana kontraktu,
+nie potwierdzenie implementacji; Compose, mounty i runtime są **NOT VERIFIED**
+dopóki nie istnieje receipt z docelowego hosta.
+
+## Granice
+
+| Dane | Właściciel / współdzielenie | Zapis i blokada |
+| --- | --- | --- |
+| Obraz toolchaina | zgodne wejścia i immutable image ID | warstwy BuildKit |
+| Cargo registry/git | projekt, named volume `fullmag-shared-cargo-v1-*` | Cargo zarządza blokadami swojego cache; bez hostowych credentials/config |
+| Store pnpm | projekt, `fullmag-shared-pnpm-v1-*` | flock tylko podczas instalacji; import `copy` |
+| Gotowy pakiet backendu | dokładny klucz wejść, `fullmag-shared-packages-v1-*` | jeden publisher na klucz; atomowa publikacja i walidacja SHA-256 |
+| Bieżący pakiet / rollback | `groups/<unit_key>` w wolumenie pakietów | regularne, zapieczętowane hardlinki do payloadu; prywatne receipty |
+| Workspace, CMake, compiler outputs | grupa / worktree | `private/backend` w stabilnym `BuildControl.volume`, montowany jako `/build`; lifecycle `.fullmag-build` określa ADR 0076; Cargo registry/git pozostają shared |
+| node_modules, `.next`, frontend workspace | grupa / dependency seed | `private/frontend` w tym samym prywatnym volume |
+| Control i lock/namespace | grupa | dotychczasowy root `BuildControl.volume`, bez wymaganego `control/` |
+| Ledger grupy | grupa | `private/ledger` w tym samym prywatnym volume; mount `/host-ledger` |
+| Sesje, wyniki | użytkownik | skonfigurowany storage hosta; poza cache |
+
+Globalne shared volumes nie zmieniają tożsamości prywatnego volume grupy:
+`BuildControl.volume` jest stabilny względem toolchaina, profilu, dependency
+hash i próby. Starsze obrazy oraz zachowane konfiguracje mogą nadal wymagać
+starego układu do odczytu i recovery. Nie kopiuj ani nie usuwaj automatycznie
+starych wolumenów. Migruj pojedynczą, zatrzymaną i drained grupę z przypiętą
+konfiguracją; zachowaj stare cele do archiwizacji, nowego proof mountu i osobnej
+kontroli referencji. Wdrożenie nowej topologii pozostaje **NOT VERIFIED**.
+
+Grupy należą do jednego zaufanego użytkownika/zespołu lokalnego. Cały mount
+magazynu pakietów jest zapisywalny dla publishera; to protokół współpracy, a nie
+izolacja od wrogiego kodu w innym worktree. Nie współdzielić między tenantami.
+
+## Zgodność i współbieżność
+
+Klucz pakietu obejmuje runtime digest rzeczywistych źródeł, commit i pełną native
+source identity, toolchain/dependency manifest, profil i features, rozwiązane
+architektury CUDA, helpery buildera oraz jawne flagi kompilatora. Nie obejmuje
+nazwy agenta ani katalogu worktree. Binaria zawierają commit: nie wolno przedstawiać
+pakietu z innego commita jako nowej kompilacji. Dlatego różne commity mogą
+współdzielić zależności, ale nie muszą trafić w cache gotowego backendu.
+
+`Store.claim` utrzymuje blokadę konkretnego klucza przez build/publication.
+Druga grupa o identycznych wejściach czeka i sprawdza opublikowany wynik; inne
+klucze budują równolegle. Istniejąca blokada control/grupy nadal chroni dwa
+wątki pracujące na tym samym masterze/worktree.
+
+Linki powstają przez jeden root mount wolumenu: `/opt/fullmag/shared-backend`.
+Prywatny mount `/opt/fullmag/package` jest sprawdzanym aliasem katalogu grupy.
+Nie tworzymy hardlinków między odrębnymi mountami (możliwe `EXDEV`). Payload ma
+tryb bez bitów zapisu. Cache hit zapisuje własny receipt z kluczem i hashem
+receiptu producenta; nie udaje lokalnego uruchomienia Make.
+
+Przy porównywaniu zapieczętowanych artefaktów walidacja uwzględnia inode,
+rozmiar, mtime, tryb i hash. Samo ctime zmienia się również wskutek link/unlink
+innej grupy. Mutowalne pliki źródeł nadal mają rygorystyczną kontrolę ctime.
+
+Przerwany restore ma trwały intent przed pierwszym hardlinkiem. Recovery może
+usunąć tylko zapisane w nim, zweryfikowane pliki. Gotowy shared kandydat jest
+najpierw zachowany w cache, a potem zwalniany; następny start ponownie dobiera
+pakiet do aktualnych źródeł. Nie wymaga fikcyjnego Make attempt. Ostatni receipt
+recovery i diagnostyka (do 64 MiB) zostają w control grupy.
+
+Store pnpm jest wspólny, ale `node_modules` nie: `--package-import-method=copy`
+chroni grupy przed modyfikacją wspólnych plików przez skrypty instalacyjne.
+Blokada pnpm pozostaje zajęta przy niepewnym zakończeniu procesu aż do dowodu,
+że jego grupa procesów jest pusta. Next działa już bez tej blokady.
+
+## Retencja i zakończenie pracy
+
+Historyczny helper ograniczał prywatny Cargo incremental. Ta reguła nie uzasadnia już
+zachowywania `.fullmag-build` po udanej publikacji; bieżącą retencję compiler
+outputs, cache-hit i jednej nieudanej generacji określa [ADR 0076](../adr/0076-single-private-volume-per-dev-group.md).
+Zachowanie pakietu current plus jednego rollbacku oraz globalnych shared volumes
+pozostaje częścią tego przewodnika. Nowa automatyka jest **NOT VERIFIED** bez
+receiptu i dowodu z docelowego runtime.
+
+Poniższy opis automatycznego `FULLMAG_AUTO_CACHE_MAINTENANCE` i limitu 8 GiB
+dokumentuje starszy helper. Jego prywatna retencja Cargo incremental nie jest
+obecnym kontraktem `.fullmag-build`; retencja pakietu current/rollback i shared
+packages opisana niżej pozostaje odrębną regułą.
+
+Kontener backendu z `FULLMAG_AUTO_CACHE_MAINTENANCE=1` automatycznie uruchamia
+retencję po zapisaniu gotowości API/runtime. Obejmuje to również zwykły Start lub
+Restart w Docker Desktop. Nadzorowany proces działa z niskim priorytetem; API
+pozostaje dostępne, a launcher nie uruchamia drugiej kopii sprzątania.
+Pod nieblokującą blokadą buildu zachowuje current oraz
+bezpośredni rollback, usuwa starszy zweryfikowany łańcuch i ogranicza prywatny
+Cargo incremental do 8 GiB zaalokowanych bloków plików. Usuwa najstarsze całe
+katalogi cache crate; następny build może odtworzyć brakujący incremental.
+Nie usuwa `deps`, native CMake ani źródeł. Zmiana układu Cargo, symlink lub obcy
+owner zatrzymuje operację zamiast rozszerzać zakres kasowania. Wynik trafia do
+`runtime-service/cache-maintenance.json` w technicznym runtime control.
+Receipt zawiera identyfikator próby, PID API, klucz cache i rzeczywisty wynik;
+hostowy receipt zawiera odwołanie, nie deklaruje zakończenia przed workerem.
+Zajęta blokada grupy oznacza `deferred-busy`, błąd oznacza `failed`. Kolejny start
+ponawia próbę. Zatrzymanie kontenera najpierw zamyka admission API, następnie
+kończy maintenance w ograniczonym czasie i wykonuje zwykły native drain.
+Przerwane usuwanie historycznego backupu jest wznawiane z trwałego intentu;
+obce pliki lub zmieniona tożsamość zatrzymują sprzątanie. Bieżący pakiet i
+bezpośredni rollback pozostają nietknięte.
+
+Ta funkcja wymaga nowego obrazu oraz konfiguracji kontenera. `docker restart`
+nie zmienia obrazu, zmiennych ani mountów istniejącego kontenera. Stare grupy
+muszą przejść zarządzaną migrację; w szczególności działającej grupy nie wolno
+odtwarzać w trakcie pracy innego wątku.
+
+Wspólny cache gotowych pakietów zachowuje domyślnie do 8 wpisów i 64 GiB
+logicznych payloadów. Aktywna publikacja/użycie przez inną grupę odkłada globalny
+GC (`deferred-busy` w receipcie); kolejny start kontenera ponawia próbę.
+Usunięcie wpisu cache nie usuwa hardlinków current/rollback innych grup. Te
+limity nie są kwotą całego dysku Docker ani całego Cargo target.
+
+Ręczne uruchomienie tej samej retencji na przypiętej zdrowej grupie:
+
+```sh
+just docker-dev-maintain-cache <attempt> <config_sha256> <source_root>
+```
+
+Przed usunięciem zakończonego worktree zatrzymaj z drain i usuń dokładnie jego
+kontenery. Następnie, jeszcze z istniejącego worktree, uruchom:
+
+```sh
+just worktree-finish <task_id> <owner> <powód_i_dowód_integracji> completed
+```
+
+`finish` wymaga dokładnego właściciela z rejestru i działa pod lease grupy.
+Może usunąć wyłącznie zakwalifikowane cache `private/backend` i
+`private/frontend` oraz dokładny namespace `groups/<unit_key>` po kontroli
+odbiorców. Nie usuwa całego `BuildControl.volume`: zachowuje root control,
+`private/ledger`, receipts i provenance, dopóki osobna archiwizacja nie
+potwierdzi ich retencji. Aktywny/zachowany kontener, obcy konsument, nieznana
+tożsamość albo błąd Dockera blokują `completed`. Trwały plan i znacznik
+zamykania blokują nowe zarządzane starty. Receipt ma potwierdzić dokładnie
+usunięte podścieżki i namespace. Dopiero potem usuń worktree i zintegrowany
+branch, a wynik zapisz w rekordzie.
+
+Jeśli próba została przerwana podczas czyszczenia prywatnego cache i helper
+nadal trzyma lease, przypnij identyfikator próby i SHA-256 surowych bajtów
+`cache-retirement/attempts/<attempt>/receipt.json` z kontrolnego wolumenu
+tego worktree. Z istniejącego worktree użyj:
+
+```sh
+just worktree-finish <task_id> <owner> <powód_i_dowód_integracji> completed <attempt>@<receipt_sha256>
+```
+
+Wznowienie wymaga tego samego planu, znacznika zamykania, właściciela, profilu
+i braku innych konsumentów usuwanego cache. Oryginalny helper musi zakończyć
+logowanie. Komenda zachowuje pierwotny receipt i zapisuje terminal
+przerwanej próby, po którym jej helper zwalnia lease. Nowa próba ponownie
+sprawdza plan i mounty przed usuwaniem pozostałych podścieżek. Stan po
+rozpoczęciu retencji wspólnego namespace’u wymaga osobnej diagnozy.
+
+Przed usunięciem worktree wykonaj niezależny inventory z użyciem
+zarejestrowanego source/worktree, storage root oraz bieżących i dawnych Compose
+project IDs/etykiet. Receipt potwierdza wyłącznie zasoby objęte planem. Jeśli
+inventory znajdzie należące do grupy bajty wymagające wycofania, cleanup nie
+jest zakończony: zachowaj checkout, zapisz `blocked` z dokładnymi celami i
+dokończ kwalifikowaną retencję przed usunięciem worktree i zamknięciem zadania.
+
+**Nigdy nie usuwaj całego `fullmag-shared-*` razem z pojedynczym worktree.**
+Wspólne pakiety, Cargo/pnpm, control, ledger, sesje i wyniki pozostają.
+Nie ma automatycznej migracji ani zbiorczego kasowania dawnych, nieznanych grup.
+Zidentyfikowane i kwalifikowane stare namespace'y nadal wymagają usunięcia;
+nierozpoznana tożsamość blokuje closeout zamiast pozostawiać je po cichu.
+Cargo registry/git i pnpm store są współdzielone, ale ta zmiana nie ustanawia
+ich wspólnego limitu bajtowego. Kwalifikowane zakończenie worktree usuwa jego
+prywatny pełny target; niezależny inventory potwierdza, że żaden starszy
+namespace nie został pominięty. Długotrwały master nadal wymaga obserwacji
+pozostałych części target i BuildKit.
+
+### Wymagane zastosowanie retencji i kontrola historycznych grup
+
+Po każdej publikacji pakietu, zakończeniu etapu builda (również błędem lub
+anulowaniem), zwykłym zatrzymaniu po drain oraz domknięciu zadania uzgodnij
+receipt dokładnej próby i zastosuj kwalifikowaną retencję. Automatyczny worker
+po gotowości API może już wykonać część pracy: przyjmij go tylko na podstawie
+receiptu z właściwym attempt, image/config i source identity. Jeśli receipt nie
+potwierdza pełnego zakresu albo zdarzenie nie ma wspieranej ścieżki apply,
+użyj istniejącej kwalifikowanej procedury. Preview/dry-run nie zamyka etapu.
+Brak obsługi lub nierozstrzygnięty owner oznacza `blocked` z dokładnymi
+pozostałymi celami i następnym krokiem; nie omijaj blokad i nie kończ zadania
+z przemilczanym cleanupem.
+
+Dla grupy pozostającej w użyciu zachowaj tylko zweryfikowany pakiet `current`
+i jeden bezpośredni `rollback`. Starsze pakiety i kopie rotacji usuń po
+sprawdzeniu pełnego, niecyklicznego łańcucha receipt/rotation oraz braku
+aktywnych referencji, lease i pinów. `.development/backups` w pakiecie jest
+technicznym materiałem do rollbacku; sama nazwa nie czyni go wynikiem
+naukowym. Nie usuwaj bieżącego pakietu, bezpośredniego rollbacku, aktywnego
+kandydata ani artefaktu wskazywanego przez uruchomionego konsumenta.
+
+Scaloną i nieużywaną grupę wycofaj po potwierdzonym drain, braku kontenerów i
+braku innych konsumentów przez `worktree-finish ... completed`. Oczekiwany
+zakres obejmuje jej prywatne backend build/package i frontend namespace, także
+pozostałe po wcześniejszej konfiguracji, oraz tylko jej wpisy `groups/<unit_key>`.
+Zachowaj współdzielone Cargo/pnpm i payloady innych grup, control, ledger,
+receipty/provenance, wyniki, sesje, ustawienia i aktywne piny/referencje.
+Kwalifikowane prywatne pakiety starszej generacji nie mają pozostawać tylko
+dlatego, że pochodzą ze starego worktree.
+
+Inwentarz musi łączyć zarejestrowany worktree/source root i rozwiązany storage
+root z bieżącym oraz historycznym Compose project ID i etykietami wolumenów.
+Stare i nowe schematy należy uzgodnić przed kwalifikacją; filtr wyłącznie po
+aktualnym project ID nie wykrywa namespace'ów z poprzedniej tożsamości.
+Zestaw kandydatów w planie/receipcie porównaj z niezależnym inventory po
+identity i nazwach namespace. Receipt `succeeded` z pustą listą kandydatów nie
+zamyka cleanupu, gdy niezależny inventory nadal znajduje należące do grupy
+bajty. Obecność polecenia lub receipt nie dowodzi, że wdrożona implementacja
+obejmuje każdą historyczną tożsamość. Zweryfikuj zakres apply po pełnej
+inwentaryzacji; jeśli pozostają kwalifikowane bajty, cleanup nie jest zakończony.
+
+Każdy checkpoint cleanupu zapisuje fizyczny pomiar przed i po na filesystemie
+backing Docker oraz na C: oddzielnie; jeżeli backing image leży na innym dysku,
+zmierz i ten wolumen. Zapisz użyte/zajęte bajty, wolne bajty i źródło pomiaru.
+`docker system df` pozostaje oddzielną księgowością logiczną — nie sumuj
+obrazów i BuildKit jako niezależnych fizycznych bajtów. Bez pomiaru po apply
+odzyskane miejsce jest `NOT VERIFIED`.
+
+Stare grupy nie dziedziczą nowego obrazu ani konfiguracji; `docker restart` ich
+nie migruje. Wykonaj kwalifikację przez aktualną, przypiętą procedurę i ponów
+niezależny inventory. Jeżeli tożsamości lub odbiór starej grupy nie są
+rozstrzygalne, pozostaw ją nietkniętą i zapisz `blocked` z dokładnymi nazwami
+celów, etykietami/ID oraz warunkiem bezpiecznego wznowienia. Wiek, rozmiar, nazwa,
+zakończenie procesu lub brak uruchomionego kontenera same w sobie nie dowodzą
+zbędności. Nie używaj globalnego prune ani `compose down -v`.
+
+## Aktualizacja istniejącej grupy ze starszego worktree
+
+Opisane dalej recepty mogą odtwarzać historyczny układ wielu wolumenów.
+Zachowaj je do odczytu/recovery; nowa migracja do ADR 0076 odbywa się wyłącznie
+dla jednej zatrzymanej/drained grupy, po archiwizacji receipts i kontroli
+wszystkich mountów. Nie twórz ani nie usuwaj starych volume’ów automatycznie.
+
+Kod aplikacji i wersja narzędzi operacyjnych mają osobne tożsamości. Przy
+zarządzanym `recreate-volume` można wskazać `--helper-source-root` oraz
+`--helper-source-commit` jako parę. Launcher musi pochodzić z tego przypiętego
+checkoutu helperów; pliki infrastruktury muszą odpowiadać jego commitowi,
+indeksowi Git i bajtom na dysku. Oba checkouty należą do tego samego Git common
+directory i korzystają z właściwego adaptera hosta: Windows lub Linux/WSL.
+
+```sh
+python <helpers>/scripts/docker_dev.py --repo-root <main-checkout> recreate-volume \
+  --source-root <app-worktree> --attempt <retained-attempt> \
+  --config-sha256 <retained-compose-sha256> --port <retained-port> \
+  --helper-source-root <helpers> --helper-source-commit <full-commit-sha>
+```
+
+Wskazanie helperów zmienia tylko obraz narzędzi oraz szablon Compose. Live
+source, Git aplikacji, jej tożsamość, toolchain, sesje i wybór cache nadal
+pochodzą z `--source-root`. Pin trafia do trwałych receipts przed usunięciem
+starych kontenerów i jest ponownie sprawdzany przy starcie oraz wznowieniu.
+Nie znosi żadnej bramki stopped/drain, kontroli ID i konfiguracji ani recovery.
+Nieobsługiwane kombinacje recovery są odrzucane przed mutacją.
+
+Nowy obraz przypina również bajty pary helperów aktywacji. Późniejsze operacje
+aktualnym launcherem mogą odczytać je ze wskazanego niezmiennego obrazu; nie
+wymagają zachowania tymczasowego worktree helperów. Zwykły restart kontenera
+używa wyłącznie już zainstalowanego obrazu i konfiguracji. Dalsze operacje
+hostowe na starym worktree wykonuj aktualnym launcherem: jego stara lokalna
+kopia nie otrzymuje nowych funkcji przez samą zmianę obrazu.
+
+Migracja jest sekwencyjna. Przed każdym krokiem ponownie sprawdź aktywność:
+inny wątek może uruchomić grupę po inwentaryzacji. Działającą grupę odłóż do
+naturalnego zatrzymania. Osierocony lease, brak potwierdzonego drain, niezgodne
+ID, niedostępny ledger lub brak receipts wymagają właściwego recovery;
+nie oznaczają zgody na `--fresh-state`, kasowanie markerów ani powtórzenie Solve.
+`recreate-volume` uruchamia nowe usługi i czeka na kwalifikację. Zachowanie
+grupy offline wymaga późniejszego zarządzanego zatrzymania z drain.
+
+Stare prywatne wolumeny pozostają do czasu kwalifikacji nowej grupy. Nie
+deklaruj odzyskanego miejsca ani współdzielenia na podstawie samego planu:
+sprawdź rzeczywiste mounty, nowy receipt, wynik retencji i konsumentów starych
+wolumenów przed ich oddzielnym kwalifikowanym usunięciem.
+
+## Weryfikacja
+
+Testy interpreted obejmują pojedynczego publishera przy równoległych żądaniach,
+niezależne klucze, przerwanie procesu, niekompletną publikację, błędne ścieżki,
+zmieniony payload, prywatny receipt, recovery building/ready, zmianę źródeł,
+GC z zachowaniem hardlinków current/rollback i współbieżną rotację pakietu.
+Testy host adaptera sprawdzają dokładne etykiety, subpath, inne grupy i blokowanie
+własnych lub nieznanych konsumentów. Rzeczywiste mounty/UID muszą zostać sprawdzone
+na Dockerze osobno. Pomiar przyspieszenia wymaga tego samego źródła/toolchaina,
+zimnego i ciepłego uruchomienia; nie wynika z liczby przechodzących testów.
+
+Dokumentacja pnpm: [store na różnych filesystemach](https://pnpm.io/faq),
+[metoda importu pakietów](https://pnpm.io/settings#packageimportmethod).
+
+Dokumentacja Cargo: [profile incremental](https://doc.rust-lang.org/cargo/reference/profiles.html#incremental), [target i miejsce na dysku](https://doc.rust-lang.org/cargo/faq.html).

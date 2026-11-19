@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useReducer,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import type { ExecutionProfile } from "@/kernel/api/apiTypes";
 import { useExecutionProfilesResource } from "@/kernel/resources/useExecutionProfilesResource";
@@ -91,9 +84,7 @@ type EditorAction =
   | {
       type: "applied";
       assignment: StudyExecutionProfileAssignment;
-      latestDraft: StudyExecutionProfileDraft;
       revision: number | string | null;
-      submittedDraft: StudyExecutionProfileDraft;
     }
   | { type: "staleConflict"; message: string }
   | { type: "message"; message: EditorState["message"] };
@@ -170,22 +161,14 @@ function editorReducer(state: EditorState, action: EditorAction): EditorState {
           execution_layers: action.assignment.execution_layers,
         },
       });
-      const draft = reconcileAcknowledgedDraft(
-        canonical,
-        action.submittedDraft,
-        action.latestDraft,
-      );
-      const hasLaterEdits = studyExecutionProfileDraftIsDirty(draft, canonical);
       return {
         baseline: canonical,
         baselineRevision: action.revision,
-        draft,
+        draft: canonical,
         latestCanonical: { draft: canonical, revision: action.revision },
         message: {
           kind: "success",
-          text: hasLaterEdits
-            ? "The submitted execution profile was saved. Edits made while it was saving remain in the draft."
-            : "Execution profile intent was saved to the scene.",
+          text: "Execution profile intent was saved to the scene.",
         },
         stale: false,
       };
@@ -208,57 +191,6 @@ function numericRevision(value: number | string | null): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function reconcileAcknowledgedDraft(
-  acknowledged: StudyExecutionProfileDraft,
-  submitted: StudyExecutionProfileDraft,
-  latest: StudyExecutionProfileDraft,
-): StudyExecutionProfileDraft {
-  const profileChanged = !sameStudyExecutionProfile(
-    latest.profile,
-    submitted.profile,
-  );
-  const restoreLegacyLayerContext =
-    profileChanged && submitted.profile === null && latest.profile !== null;
-  const overrideKeys: readonly StudyExecutionProfileOverrideKey[] = [
-    "backend",
-    "cpuThreads",
-    "device",
-    "mode",
-    "precision",
-  ];
-  const overrides = profileChanged
-    ? { ...latest.overrides }
-    : { ...acknowledged.overrides };
-  if (!profileChanged) {
-    for (const key of overrideKeys) {
-      if (latest.overrides[key] !== submitted.overrides[key]) {
-        overrides[key] = latest.overrides[key];
-      }
-    }
-  }
-
-  const touched = overrideKeys.filter(
-    (key) => overrides[key] !== acknowledged.overrides[key],
-  );
-  return {
-    ...acknowledged,
-    invalidLayerData:
-      profileChanged || latest.invalidLayerData !== submitted.invalidLayerData
-        ? latest.invalidLayerData
-        : acknowledged.invalidLayerData,
-    invalidProfile:
-      profileChanged || latest.invalidProfile !== submitted.invalidProfile
-        ? latest.invalidProfile
-        : acknowledged.invalidProfile,
-    layers: restoreLegacyLayerContext
-      ? structuredClone(latest.layers)
-      : acknowledged.layers,
-    overrides,
-    profile: profileChanged ? latest.profile : acknowledged.profile,
-    touched,
-  };
-}
-
 function profileLabel(profile: ExecutionProfile): string {
   return `${profile.profile_id} · ${profile.version}`;
 }
@@ -268,18 +200,10 @@ export function StudyExecutionProfileSection(
 ) {
   const resource = useExecutionProfilesResource();
   const editorKey = `${props.sessionScopeKey ?? "no-session"}:${resource.scope}`;
-  return (
-    <StudyExecutionProfileEditor
-      key={editorKey}
-      identityKey={editorKey}
-      resource={resource}
-      {...props}
-    />
-  );
+  return <StudyExecutionProfileEditor key={editorKey} resource={resource} {...props} />;
 }
 
 function StudyExecutionProfileEditor({
-  identityKey,
   authoringBusy,
   otherAuthoringDirty,
   onApply,
@@ -289,12 +213,9 @@ function StudyExecutionProfileEditor({
   sceneStatus,
   stages,
   resource,
-}: StudyExecutionProfileSectionProps & {
-  identityKey: string;
-  resource: ProfileResource;
-}) {
+}: StudyExecutionProfileSectionProps & { resource: ProfileResource }) {
   const [applying, setApplying] = useState(false);
-  const [state, reactDispatch] = useReducer(
+  const [state, dispatch] = useReducer(
     editorReducer,
     { scene, revision: sceneRevision },
     ({ scene: initialScene, revision }) =>
@@ -303,22 +224,6 @@ function StudyExecutionProfileEditor({
         revision,
       }),
   );
-  const stateRef = useRef(state);
-  const activeIdentityRef = useRef<string | null>(null);
-  const dispatch = useCallback((action: EditorAction) => {
-    stateRef.current = editorReducer(stateRef.current, action);
-    reactDispatch(action);
-  }, []);
-
-  useLayoutEffect(() => {
-    activeIdentityRef.current = identityKey;
-    return () => {
-      if (activeIdentityRef.current === identityKey) {
-        activeIdentityRef.current = null;
-      }
-    };
-  }, [identityKey]);
-
   const inflight = useRef(false);
   const dirty = studyExecutionProfileDraftIsDirty(state.draft, state.baseline);
   const validationError = validateStudyExecutionProfileDraft(state.draft);
@@ -377,11 +282,11 @@ function StudyExecutionProfileEditor({
         revision: sceneRevision,
       },
     });
-  }, [dispatch, scene, sceneReady, sceneRevision]);
+  }, [scene, sceneReady, sceneRevision]);
 
   const resetDraft = useCallback(() => {
     dispatch({ type: "reset" });
-  }, [dispatch]);
+  }, []);
 
   const applyDraft = useCallback(async (): Promise<boolean> => {
     if (!dirty || applying || inflight.current || applyBlockReason || !sceneReady || state.stale) return false;
@@ -399,9 +304,8 @@ function StudyExecutionProfileEditor({
     }
 
     let assignment: StudyExecutionProfileAssignment;
-    const submittedDraft = state.draft;
     try {
-      assignment = buildStudyExecutionProfileAssignment(submittedDraft);
+      assignment = buildStudyExecutionProfileAssignment(state.draft);
     } catch (error) {
       dispatch({
         type: "message",
@@ -415,10 +319,8 @@ function StudyExecutionProfileEditor({
 
     inflight.current = true;
     setApplying(true);
-    const requestIdentity = identityKey;
     try {
       const result = await onApply(assignment, baseRevision);
-      if (activeIdentityRef.current !== requestIdentity) return false;
       if (!result.success) {
         if (result.stale) {
           dispatch({
@@ -438,29 +340,13 @@ function StudyExecutionProfileEditor({
         });
         return false;
       }
-      const latestDraft = stateRef.current.draft;
-      const acknowledgedDraft = createStudyExecutionProfileDraft({
-        study: {
-          execution_profile: assignment.execution_profile,
-          execution_layers: assignment.execution_layers,
-        },
-      });
-      const hasLaterEdits = studyExecutionProfileDraftIsDirty(
-        reconcileAcknowledgedDraft(acknowledgedDraft, submittedDraft, latestDraft),
-        acknowledgedDraft,
-      );
       dispatch({
         type: "applied",
         assignment,
-        latestDraft,
         revision: result.revision ?? baseRevision,
-        submittedDraft,
       });
-      // The write was acknowledged, but the selection guard must retain the
-      // editor while newer, unsaved changes remain in its draft.
-      return !hasLaterEdits;
+      return true;
     } catch (error) {
-      if (activeIdentityRef.current !== requestIdentity) return false;
       dispatch({
         type: "message",
         message: {
@@ -471,16 +357,12 @@ function StudyExecutionProfileEditor({
       return false;
     } finally {
       inflight.current = false;
-      if (activeIdentityRef.current === requestIdentity) {
-        setApplying(false);
-      }
+      setApplying(false);
     }
   }, [
     applyBlockReason,
     applying,
     dirty,
-    dispatch,
-    identityKey,
     onApply,
     resourceReady,
     sceneReady,

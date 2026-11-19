@@ -6,7 +6,6 @@ export type StageAutosaveFormat = "zarr" | "hdf5" | "txt";
 export interface StageAutosaveFieldDraft {
   cadence: string;
   quantity: string;
-  rowKey: string;
 }
 
 export interface StageAutosaveDraft {
@@ -43,13 +42,12 @@ export function stageAutosaveDraftFromValue(
   const fields = Array.isArray(record.fields) ? record.fields : [];
   return {
     enabled: true,
-    fields: fields.flatMap((value, index) => {
+    fields: fields.flatMap((value) => {
       const field = asRecord(value);
       if (!field || typeof field.quantity !== "string") return [];
       return [{
         cadence: scalarText(owner === "relax" ? field.every_steps : field.every_seconds),
         quantity: field.quantity,
-        rowKey: `original-${index}`,
       }];
     }),
     format: isFormat(record.format) ? record.format : "zarr",

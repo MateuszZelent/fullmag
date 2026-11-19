@@ -11,7 +11,6 @@ import {
   useSolverStatusResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { Button } from "@/shared/ui/Button";
-import { useClipboardCopy } from "@/shared/browser/useClipboardCopy";
 import { DraggablePanel } from "@/shared/ui/DraggablePanel";
 
 import {
@@ -64,6 +63,7 @@ export function DataPreviewDialog({
   const [quantityId, setQuantityId] = useState("m");
   const [component, setComponent] = useState("full");
   const [sampleCountInput, setSampleCountInput] = useState("17");
+  const [copied, setCopied] = useState(false);
   const sampleCount = normalizeDataPreviewSampleCount(sampleCountInput);
   const resolvedQuantityId = quantityId.trim() || "m";
   const solverStatus = useSolverStatusResource({ enabled: open });
@@ -139,11 +139,7 @@ export function DataPreviewDialog({
     [solverStatus.data],
   );
 
-  const { copy: copyPreviewLog, status: copyStatus, error: copyError } = useClipboardCopy(
-    JSON.stringify([open, resourceKey, resource.revision ?? resourceRevision, resource.status, resource.error?.message, previewField?.pointCount, resolvedQuantityId, resolvedComponent, signature, stepSignature, stepTimestamp, sampleCountInput]),
-  );
-  const copied = copyStatus === "success";
-  const handleCopy = useCallback(async () => {
+  const handleCopy = useCallback(() => {
     const metaLines = [
       `Quantity: ${resolvedQuantityId}`,
       `Component: ${resolvedComponent}`,
@@ -188,9 +184,12 @@ export function DataPreviewDialog({
       .filter(Boolean)
       .join("\n");
 
-    await copyPreviewLog(formattedLog);
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(formattedLog);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   }, [
-    copyPreviewLog,
     resolvedQuantityId,
     resolvedComponent,
     sampleCountInput,
@@ -220,12 +219,11 @@ export function DataPreviewDialog({
           <Button
             aria-label="Copy data preview log"
             className="fm-data-preview__icon-btn"
-            disabled={copyStatus === "pending"}
             size="icon"
-            title={copyStatus === "pending" ? "Copying…" : copied ? "Copied!" : "Copy log to clipboard"}
+            title={copied ? "Copied!" : "Copy log to clipboard"}
             type="button"
             variant="ghost"
-            onClick={() => void handleCopy()}
+            onClick={handleCopy}
           >
             {copied ? (
               <Check size={14} aria-hidden="true" />
@@ -247,7 +245,6 @@ export function DataPreviewDialog({
         </>
       }
     >
-      {copyError ? <p className="fm-help-text" role="alert">{copyError}</p> : null}
       <div className="fm-data-preview__controls">
         <label>
           <span>Quantity</span>

@@ -1,5 +1,6 @@
 "use client";
 
+
 import type { ThreeEvent } from "@react-three/fiber";
 import { useEffect, useLayoutEffect, useMemo } from "react";
 import { BufferAttribute, BufferGeometry, SphereGeometry } from "three";
@@ -20,7 +21,6 @@ import {
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
-import { buildSurfaceEdgeGeometryFromBufferGeometry } from "../viewport3dSurfaceEdges";
 import { buildViewport3DPrimitiveFrameKey } from "../viewport3dPrimitiveModel";
 import type {
   Viewport3DPrimitiveObject,
@@ -28,11 +28,13 @@ import type {
 } from "../viewport3dPrimitiveModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+import { resolvePrimitiveObjectSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import {
   wireframeColorFromSettings,
   pointColorFromSettings,
 } from "./viewport3DLayerSettings";
 import { resolveViewport3DTargetRenderPlan } from "./viewport3DTargetRenderPlan";
+import { buildPrimitiveWireframeGeometry } from "./primitiveWireframeGeometry";
 import {
   buildPrimitiveTransformGizmoSegments,
   releasePrimitiveObjectGeometry,
@@ -42,6 +44,7 @@ import {
   shouldRenderPrimitiveTransformGizmo,
   trackPrimitiveObjectGeometry,
 } from "./PrimitiveObjectLayerModel";
+import { createAntennaPrimitiveTextures } from "./antennaPrimitiveTextures";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
 
 export function PrimitiveObjectLayer({
@@ -120,8 +123,10 @@ export function PrimitiveObjectLayer({
           materialProfile={materialProfile}
           hasRealizedObjectGeometry={realizedObjectIds?.has(object.objectId) ?? false}
           allowMeshReadyPreview={
-            isFerromagneticPrimitiveRole(object.role) &&
-            (meshReadyFallbackObjectIds?.has(object.objectId) ?? false)
+            object.kind === "imported-surface" ||
+            object.role === "antenna" ||
+            (isFerromagneticPrimitiveRole(object.role) &&
+              (meshReadyFallbackObjectIds?.has(object.objectId) ?? false))
           }
           settings={getObjectSettings(object)}
           tracker={tracker}
@@ -194,6 +199,22 @@ function RenderablePrimitiveObject({
   settings: VisualizationTargetSettings;
   tracker: Viewport3DResourceTracker;
 }) {
+  const antennaTextures = useMemo(() => {
+    if (object.role !== "antenna") return null;
+    const textures = createAntennaPrimitiveTextures();
+    tracker.track("texture", textures.matcap);
+    tracker.track("texture", textures.brush);
+    return textures;
+  }, [object.role, tracker]);
+  useEffect(() => () => {
+    if (!antennaTextures) return;
+    tracker.release("texture", antennaTextures.matcap);
+    tracker.release("texture", antennaTextures.brush);
+  }, [antennaTextures, tracker]);
+  const surfaceMaterialPlan = resolvePrimitiveObjectSurfaceMaterialPlan({
+    hasAntennaMatcap: Boolean(antennaTextures),
+    materialProfile,
+  });
   const renderSettings = resolvePrimitiveObjectRenderSettings(
     object,
     settings,
@@ -205,20 +226,27 @@ function RenderablePrimitiveObject({
   );
 
   useLayoutEffect(() => {
-    if (!materialProfile.uniformGeometry.lit || geometry.getAttribute("normal")) {
+    if (
+      (!materialProfile.uniformGeometry.lit && !materialProfile.uniformGeometry.pbr) ||
+      geometry.getAttribute("normal")
+    ) {
       return;
     }
     geometry.computeVertexNormals();
-  }, [geometry, materialProfile.uniformGeometry.lit]);
+  }, [
+    geometry,
+    materialProfile.uniformGeometry.lit,
+    materialProfile.uniformGeometry.pbr,
+  ]);
 
   useEffect(
     () => () => releasePrimitiveObjectGeometry(tracker, geometry),
     [geometry, tracker],
   );
   const edgeGeometry = useMemo(() => {
-    const next = buildSurfaceEdgeGeometryFromBufferGeometry(geometry);
+    const next = buildPrimitiveWireframeGeometry(object, geometry);
     return next ? tracker.track("geometry", next) : null;
-  }, [geometry, tracker]);
+  }, [geometry, object, tracker]);
 
   useEffect(
     () => () => tracker.release("geometry", edgeGeometry),
@@ -258,7 +286,9 @@ function RenderablePrimitiveObject({
     >
       {renderPlan.primitive.visible ? (
         <mesh
+          castShadow={surfaceMaterialPlan.castShadow}
           onPointerDown={handlePointerDown}
+          receiveShadow={surfaceMaterialPlan.receiveShadow}
           renderOrder={
             surfaceMaterialPolicyProps(opacity).transparent
               ? RENDER_POLICIES.contextSurface.renderOrder
@@ -271,21 +301,39 @@ function RenderablePrimitiveObject({
           }}
         >
           <primitive attach="geometry" object={geometry} />
-          {materialProfile.uniformGeometry.lit ? (
-            <meshLambertMaterial
+          {antennaTextures ? (
+            <meshMatcapMaterial
               color={shaderColor}
-              opacity={opacity}
-              toneMapped={materialProfile.primitivePreview.toneMapped}
-              {...surfaceMaterialPolicyProps(opacity)}
-            />
-          ) : (
-            <meshBasicMaterial
-              color={shaderColor}
+              map={antennaTextures.brush}
+              matcap={antennaTextures.matcap}
               opacity={opacity}
               {...materialProfile.primitivePreview}
               {...surfaceMaterialPolicyProps(opacity)}
             />
-          )}
+          ) : surfaceMaterialPlan.kind === "standard" ? (
+            <meshStandardMaterial
+              color={shaderColor}
+              metalness={surfaceMaterialPlan.metalness}
+              opacity={opacity}
+              roughness={surfaceMaterialPlan.roughness}
+              toneMapped={surfaceMaterialPlan.toneMapped}
+              {...surfaceMaterialPolicyProps(opacity)}
+            />
+          ) : surfaceMaterialPlan.kind === "lambert" ? (
+            <meshLambertMaterial
+              color={shaderColor}
+              opacity={opacity}
+              toneMapped={surfaceMaterialPlan.toneMapped}
+              {...surfaceMaterialPolicyProps(opacity)}
+            />
+          ) : surfaceMaterialPlan.kind === "basic" ? (
+            <meshBasicMaterial
+              color={shaderColor}
+              opacity={opacity}
+              toneMapped={surfaceMaterialPlan.toneMapped}
+              {...surfaceMaterialPolicyProps(opacity)}
+            />
+          ) : null}
         </mesh>
       ) : null}
       {renderPlan.wireframe.visible && edgeGeometry ? (

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -7,6 +7,7 @@ import {
   MODEL_STUDY_PATH,
 } from "@/kernel/api/apiPaths";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+import { allInteractionSpecs } from "@/shared/domain/physics/interactions";
 
 import { commitObjectInteractionMutation } from "./PhysicsInteractionPanel";
 import { interactionIdFromSelection } from "./PhysicsInteractionPanelModel";
@@ -106,5 +107,24 @@ describe("PhysicsInteractionPanel lane contract", () => {
         resources: { invalidate: vi.fn() },
       }),
     ).rejects.toThrow("Authoring mutation ACK omitted the scene revision.");
+  });
+
+  it("links every physics interaction help dialog to an existing documentation source page", () => {
+    for (const spec of allInteractionSpecs()) {
+      expect(spec.docsPage, spec.id).toMatch(/^physics\/interactions\/.+\.html$/);
+      const mdRelPath = spec.docsPage!.replace(/\.html$/, ".md");
+      const mdUrl = new URL(
+        `../../../../../../public_docs/site/${mdRelPath}`,
+        import.meta.url,
+      );
+      expect(existsSync(mdUrl), `${spec.id} -> ${mdRelPath}`).toBe(true);
+    }
+
+    const source = readFileSync(
+      new URL("./PhysicsInteractionPanel.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain("homeView.openDocs(spec.docsPage)");
+    expect(source).toContain("Open in documentation");
   });
 });

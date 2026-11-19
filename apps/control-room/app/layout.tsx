@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
-import { DEFAULT_THEME_MODE } from "@/design/theme/themePreference";
+import {
+  DEFAULT_THEME_MODE,
+  DEFAULT_THEME_PREFERENCE,
+  THEME_BOOTSTRAP_SCRIPT,
+} from "@/design/theme/themePreference";
 import { ThemeProvider } from "@/design/theme/ThemeProvider";
 
 export const metadata: Metadata = {
@@ -19,7 +23,26 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" data-theme={DEFAULT_THEME_MODE} suppressHydrationWarning>
+    <html
+      lang="en"
+      data-theme={DEFAULT_THEME_MODE}
+      data-theme-preference={DEFAULT_THEME_PREFERENCE}
+      suppressHydrationWarning
+    >
+      <head>
+        <script
+          id="fm-theme-prepaint"
+          suppressHydrationWarning
+          dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }}
+        />
+        <link
+          rel="preload"
+          href="/fonts/InterVariable-v4.1.woff2"
+          as="font"
+          type="font/woff2"
+          crossOrigin="anonymous"
+        />
+      </head>
       <body suppressHydrationWarning>
         <a href="#fm-main-content" className="fm-skip-link">
           Skip to main content

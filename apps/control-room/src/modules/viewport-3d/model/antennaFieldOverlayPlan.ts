@@ -1,6 +1,6 @@
 import type { AntennaFieldSolutionResource, AntennaStageOutputCatalogResource } from "@/kernel/api/apiTypes";
 import { antennaFieldPayloadEtag } from "@/kernel/resources/antennaResources";
-import type { ResourceState } from "@/kernel/resources/resourceState";
+import { isDisplayableResourceStatus, type ResourceState } from "@/kernel/resources/resourceState";
 import type { AntennaFieldIntent } from "@/kernel/visualization/antennaFieldIntent";
 
 import { antennaDisplayShape } from "./antennaFieldOverlayModel";
@@ -10,7 +10,7 @@ export function resolveAntennaBasisOverlayPlan(
   solution: Pick<ResourceState<AntennaFieldSolutionResource>, "data" | "status">,
   catalog: Pick<ResourceState<AntennaStageOutputCatalogResource>, "data" | "status">,
 ) {
-  if (!intent || intent.kind !== "basis" || solution.status !== "ready" || catalog.status !== "ready") return null;
+  if (!intent || intent.kind !== "basis" || !isDisplayableResourceStatus(solution.status) || !isDisplayableResourceStatus(catalog.status)) return null;
   const data = solution.data;
   const stage = catalog.data;
   const outputs = stage?.outputs.filter((item) => item.output_id === intent.solutionId);

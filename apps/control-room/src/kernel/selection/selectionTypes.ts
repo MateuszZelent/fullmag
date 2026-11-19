@@ -48,6 +48,7 @@ type ObjectSelectionKind =
   | "object.region.diagnostics"
   | "object.region-magnetic-texture"
   | "object.magnetic-parameters"
+  | "object.absorbing-boundary"
   | "object.magnetic-texture"
   | "object.magnetic-texture.asset"
   | "object.magnetic-texture.load"
@@ -551,6 +552,8 @@ export type SelectionRef =
       /** Explicit source geometry for a newly authored regional field. */
       sourceObjectId?: string;
       fieldDriveId?: string;
+      /** Hand-written mask antenna; absent for a regional field drive. */
+      fieldDriveKind?: "mask";
       kind: "physics.field-drives" | "physics.field-drive";
       nodeId: string;
       type: "physics-field-drive";
@@ -1123,6 +1126,10 @@ export function selectionRefEquals(
         right.type === "airbox" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
+        left.availability === right.availability &&
+        nullableStringEquals(left.contractGap, right.contractGap) &&
+        left.executionState === right.executionState &&
+        left.resourceState === right.resourceState &&
         nullableStringEquals(left.carrierPartId, right.carrierPartId) &&
         (left.boundaryFaceIndex ?? null) ===
           (right.boundaryFaceIndex ?? null) &&
@@ -1276,6 +1283,7 @@ export function selectionRefEquals(
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.fieldDriveId === right.fieldDriveId &&
+        left.fieldDriveKind === right.fieldDriveKind &&
         left.draft === right.draft &&
         left.sourceObjectId === right.sourceObjectId
       );

@@ -10,8 +10,15 @@ owner: fullmag-public-docs
 # Runtime
 
 The runtime selects and executes a backend and device for the study. This family covers runtime
-selection, backend policy, the simulation lifecycle, result reading, published artifacts, and
-provenance records that keep requested intent separated from resolved execution.
+selection, backend policy, the batch simulation lifecycle, interactive live sessions (`fm.connect()`),
+result reading, published artifacts, and provenance records that keep requested intent separated
+from resolved execution.
+
+- **Batch / stage-first execution**: Author `fm.study(...)` and `study.stages.add_*`, lower to
+  `ProblemIR`, and run reproducibly via the container CLI or {doc}`simulation`.
+- **Interactive live execution**: Attach directly to a running FullMag instance via {doc}`live-session`
+  (`fm.connect()`, `fm.relax()`, `fm.run()`, `fm.field()`, `fm.sweep()`, `fm.export_script()`) while
+  Control Room inspects the shared session live.
 
 ```{toctree}
 :maxdepth: 1
@@ -19,18 +26,8 @@ provenance records that keep requested intent separated from resolved execution.
 runtime-selection
 backend-policy
 simulation
+live-session
 results
 artifacts
 provenance
 ```
-## Control Room crosswalk
-
-Runtime metadata and published results are available for inspection through the runtime/result views. Direct runtime selection, backend policy authoring, and artifact publication controls are `TODO: frontend support` unless a child page names a specific live control. See {doc}`/frontend/capability-register`.
-
-## API and source scope
-
-This index does not define a standalone runtime function. Terminal pages own exact calls, lifecycle semantics, limitations, bibliography, and source-code indexes.
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

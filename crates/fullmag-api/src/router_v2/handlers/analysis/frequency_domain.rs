@@ -3797,6 +3797,79 @@ fn frequency_domain_field_content_digest(
     Ok(Some(format!("sha256:{:x}", digest.finalize())))
 }
 
+pub(crate) fn response_field_content_digest_from_bytes(
+    artifact_dir: &std::path::Path,
+    frequency_point_artifact_path: &str,
+    payload_artifact_path: &str,
+    payload: &[u8],
+    generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
+) -> Result<String, ApiError> {
+    let metadata = response_field_payload_metadata(
+        artifact_dir,
+        frequency_point_artifact_path,
+        generation,
+    )?;
+    if let Some(generation) = generation {
+        let member = generation.commit.content.members.get(payload_artifact_path)
+            .ok_or_else(|| ApiError::conflict("frequency_domain_artifact_generation_member_missing"))?;
+        if member.byte_length != payload.len() as u64
+            || member.sha256 != fullmag_session::frequency_domain_artifact_generation::digest(payload)
+        {
+            return Err(ApiError::conflict(
+                "frequency_domain_artifact_generation_member_mismatch",
+            ));
+        }
+        // Reuse the canonical committed digest and its current-generation fence.
+        return frequency_domain_field_content_digest(
+            artifact_dir,
+            payload_artifact_path,
+            &metadata,
+            Some(generation),
+        )?.ok_or_else(|| ApiError::conflict("frequency_domain_artifact_generation_member_missing"));
+    }
+    frequency_domain_field_content_digest_from_bytes(payload_artifact_path, &metadata, payload)
+}
+
+fn frequency_domain_field_content_digest_from_bytes(
+    artifact_path: &str,
+    metadata: &FrequencyDomainFieldMetadata,
+    payload: &[u8],
+) -> Result<String, ApiError> {
+    let metadata = serde_json::to_vec(metadata).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to serialize frequency-domain field metadata '{}': {error}",
+            artifact_path
+        ))
+    })?;
+    let mut digest = Sha256::new();
+    digest.update((metadata.len() as u64).to_le_bytes());
+    digest.update(metadata);
+    digest.update((payload.len() as u64).to_le_bytes());
+    digest.update(payload);
+    Ok(format!("sha256:{:x}", digest.finalize()))
+}
+
+#[cfg(test)]
+mod field_content_digest_tests {
+    use super::{frequency_domain_field_content_digest_from_bytes, FrequencyDomainFieldMetadata};
+
+    #[test]
+    fn same_length_payload_and_metadata_mutations_change_source_identity() {
+        let mut metadata = FrequencyDomainFieldMetadata::default();
+        let first = [0u8; 16];
+        let mut second = first;
+        second[..8].copy_from_slice(&1.0f64.to_le_bytes());
+        let digest = |metadata: &FrequencyDomainFieldMetadata, payload: &[u8]| {
+            frequency_domain_field_content_digest_from_bytes("field", metadata, payload).unwrap()
+        };
+        let initial = digest(&metadata, &first);
+        assert_eq!(initial, digest(&metadata, &first));
+        assert_ne!(initial, digest(&metadata, &second));
+        metadata.default_phase_rad = Some(0.5);
+        assert_ne!(initial, digest(&metadata, &first));
+    }
+}
+
 impl Default for FrequencyDomainFieldMetadata {
     fn default() -> Self {
         Self {

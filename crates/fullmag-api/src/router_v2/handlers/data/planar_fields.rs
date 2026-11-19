@@ -12,12 +12,15 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     error::ApiError,
-    field_render_png::{encode_scalar_png, AutoScaleMode},
+    field_render_png::{encode_direction_png, encode_scalar_png, AutoScaleMode, DIRECTION_COLORMAP},
     field_store::serialize_field_vector_binary_v2,
     planar_sampling::{
-        resolve_authored_planar_source, resolve_default_planar_source, resolve_spatial_target,
-        sample_resolved_target, Occupancy, PlanarComponent, PlanarSampleIdentity,
-        PlanarSampleResult, ResolvedPlanarSampleRequest, ResolvedPlanarSourceIdentity,
+        resolve_authored_planar_source, resolve_default_planar_source_at_position,
+        resolve_spatial_target, FemNodePlaneStops,
+        evaluate_point_component, sample_resolved_target_cached, Occupancy, PlanarComponent,
+        PlanarNearestNode, PlanarSampleIdentity,
+        PlanarSampleResult, ResolvedPlanarSampleRequest, ResolvedPlanarSection,
+        ResolvedPlanarSourceIdentity,
         ResolvedSpatialScope, ResolvedSpatialTarget, MAX_PLANAR_SAMPLE_POINTS,
     },
     preview::quantity_unit,
@@ -26,6 +29,7 @@ use crate::{
             is_fdm_multilayer_snapshot, load_fdm_multilayer_airbox_carrier_for_quantity, persisted_hysteresis_magnetization_values,
             resolved_fdm_multilayer_airbox_field, validate_hysteresis_snapshot_stage_scope,
         },
+        data::fdm_multilayer_composite::resolve_fdm_multilayer_composite,
         data::resolved_spatial_field::{
             resolve_current_spatial_field, resolve_fdm_multilayer_native_layer_field,
             resolve_spatial_field_from_values, SpatialFieldProvenance, SpatialFieldSourceKind,
@@ -35,7 +39,8 @@ use crate::{
     schemas::{
         PlanarFieldFrameResource, PlanarFieldLinksResource, PlanarFieldMetaResource,
         PlanarFieldOccupancyResource, PlanarFieldProbeQuery, PlanarFieldProbeResource,
-        PlanarFieldQuery, PlanarMeshOverlayDescriptor, PlanarSampleSourceResource,
+        PlanarFieldQuery, PlanarMeshOverlayDescriptor, PlanarProbeNodeResource,
+        PlanarSampleSourceResource, PlanarSectionResource,
     },
     types::AppState,
 };
@@ -44,6 +49,10 @@ const DEFAULT_RESOLUTION: u32 = 128;
 const MIN_RESOLUTION: u32 = 16;
 const MAX_RESOLUTION: u32 = 2048;
 
+#[path = "planar_profile.rs"]
+pub mod planar_profile;
+pub use planar_profile::*;
+
 #[derive(Debug, Clone)]
 enum PlanarDataSource {
     Default,
@@ -51,10 +60,12 @@ enum PlanarDataSource {
 }
 
 struct BuiltPlanarField {
+    observation_frame: Option<crate::schemas::common::AcceptedObservationFrameRef>,
     result: Arc<PlanarSampleResult>,
     target: Arc<ResolvedSpatialTarget>,
     request: ResolvedPlanarSampleRequest,
     source: ResolvedPlanarSourceIdentity,
+    section: Option<ResolvedPlanarSection>,
     frame: PlanarFrameIR,
     operator: PlanarOperatorIR,
     scene_revision: u64,
@@ -75,6 +86,14 @@ struct BuiltPlanarField {
     source_entity_kind: &'static str,
     scope_kind: String,
     scope_id: Option<String>,
+    scope_region_id: Option<String>,
+    /// Default-source position override (multislice panel), echoed into links.
+    position_fraction: Option<f64>,
+    position_m: Option<f64>,
+    /// Full u/v bounds of the resolved frame, before the sampling window.
+    full_bounds_uv_m: [f64; 4],
+    /// Resolved sampling window, echoed into links; `None` samples the frame.
+    window_uv_m: Option<[f64; 4]>,
     etag: String,
     sample_token: String,
 }
@@ -482,9 +501,24 @@ async fn build_planar_field_from_source(
     source: PlanarDataSource,
     query: &PlanarFieldQuery,
 ) -> Result<BuiltPlanarField, ApiError> {
+    if query.position_m.is_some() && query.position_fraction.is_some() {
+        return Err(ApiError::bad_request("invalid_planar_position: position_m and position_fraction are mutually exclusive"));
+    }
+    if query.position_m.is_some_and(|position| !position.is_finite()) {
+        return Err(ApiError::bad_request("invalid_planar_position: position_m must be finite"));
+    }
+    // Planar readers are live spatial consumers just like the 3D field routes.
+    // Keep the advisory demand bounded by the existing recent-request policy.
+    crate::live_field_demand::note_live_field_request(quantity_id);
     let request_context = crate::capture_current_live_request_context(state).await?;
     let resolution = resolve_resolution(query)?;
     validate_auxiliary_query(query)?;
+    let requested_window = planar_window_from_query(
+        query.window_u_min_m,
+        query.window_u_max_m,
+        query.window_v_min_m,
+        query.window_v_max_m,
+    )?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
@@ -500,10 +534,83 @@ async fn build_planar_field_from_source(
     let planar_state = presentation
         .visualization_planar
         .unwrap_or_else(crate::schemas::visualization_state::default_planar_visualization_state);
+    let default_airbox_scope = matches!(&source, PlanarDataSource::Default)
+        && query.scope_kind.as_deref() == Some("airbox");
+    let default_multilayer_airbox_scope = default_airbox_scope
+        && query.snapshot_id.is_none()
+        && is_fdm_multilayer_snapshot(snapshot);
+    let scope_validated_early = default_multilayer_airbox_scope;
+    if scope_validated_early {
+        validate_scope(snapshot, query)?;
+    }
+    let spec = fullmag_quantities::quantity_spec(quantity_id);
+    if default_multilayer_airbox_scope && spec.is_none() {
+        return Err(ApiError::not_found(format!(
+            "quantity_unavailable: quantity '{quantity_id}' is unknown"
+        )));
+    }
+    let mut airbox_carrier = None;
+    // Ok(None) unless the plan is an FDM multilayer; Airbox requests use their
+    // target-only carrier below while applicable other scopes use the composite.
+    let multilayer_composite = resolve_fdm_multilayer_composite(snapshot);
     let resolved_source = match &source {
         PlanarDataSource::Default => {
-            let domain = super::domain::domain_meta_for_snapshot(snapshot);
-            resolve_default_planar_source(&domain, &planar_state.default_slice)?
+            let mut domain = super::domain::domain_meta_for_snapshot(snapshot);
+            if default_multilayer_airbox_scope {
+                airbox_carrier =
+                    load_fdm_multilayer_airbox_carrier_for_quantity(snapshot, quantity_id)
+                        .map_err(|reason| {
+                            ApiError::not_found(format!(
+                                "multilayer FDM Airbox carrier unavailable: {reason}"
+                            ))
+                        })?;
+                let carrier = airbox_carrier.as_ref().ok_or_else(|| {
+                    ApiError::not_found(format!(
+                        "quantity_not_materialized: Airbox field '{quantity_id}' is not published"
+                    ))
+                })?;
+                domain.discretization = "fdm".to_string();
+                domain.bounds.min = carrier.origin_m;
+                domain.bounds.max = [
+                    carrier.origin_m[0] + f64::from(carrier.cells[0]) * carrier.cell_size_m[0],
+                    carrier.origin_m[1] + f64::from(carrier.cells[1]) * carrier.cell_size_m[1],
+                    carrier.origin_m[2] + f64::from(carrier.cells[2]) * carrier.cell_size_m[2],
+                ];
+                domain.counts.cells =
+                    Some(carrier.cells.into_iter().map(u64::from).product::<u64>());
+                domain.grid = Some(crate::schemas::domain::StructuredGridDescriptor {
+                    shape: carrier.cells,
+                    origin: carrier.origin_m,
+                    spacing: carrier.cell_size_m,
+                });
+            } else if let Ok(Some(composite)) = &multilayer_composite {
+                composite.apply_to_domain(&mut domain);
+            }
+            let stops = if airbox_carrier.is_some() {
+                None
+            } else {
+                snapshot
+                    .fem_mesh
+                    .as_ref()
+                    .and_then(|mesh| mesh.build_report.as_ref())
+                    .and_then(FemNodePlaneStops::from_build_report)
+            };
+            let mut default_slice = planar_state.default_slice.clone();
+            if let Some(position_fraction) = query.position_fraction {
+                // Multislice panel: same plane and operator, its own position.
+                default_slice.position_fraction = position_fraction;
+            }
+            resolve_default_planar_source_at_position(&domain, &default_slice, stops.as_ref(), query.position_m)?
+        }
+        PlanarDataSource::Monitor(_) if query.position_m.is_some() => {
+            return Err(ApiError::bad_request(
+                "planar_position_m_requires_default_source: authored monitors retain their physical frame",
+            ));
+        }
+        PlanarDataSource::Monitor(_) if query.position_fraction.is_some() => {
+            return Err(ApiError::bad_request(
+                "planar_position_fraction_requires_default_source: position_fraction applies only to the default source",
+            ));
         }
         PlanarDataSource::Monitor(monitor_id) => {
             let scene = snapshot
@@ -521,7 +628,7 @@ async fn build_planar_field_from_source(
         .as_ref()
         .map(|scene| scene.revision)
         .unwrap_or(0);
-    let spec = fullmag_quantities::quantity_spec(quantity_id).ok_or_else(|| {
+    let spec = spec.ok_or_else(|| {
         ApiError::not_found(format!(
             "quantity_unavailable: quantity '{quantity_id}' is unknown"
         ))
@@ -535,7 +642,9 @@ async fn build_planar_field_from_source(
     let current_field_revision = field_quantity_revision(snapshot, quantity_id);
     let generation_id = domain_generation_id(snapshot);
     let mesh_revision = snapshot.mesh_revision;
-    validate_scope(snapshot, query)?;
+    if !scope_validated_early {
+        validate_scope(snapshot, query)?;
+    }
 
     let snapshot_values = if let Some(snapshot_id) = query.snapshot_id.as_deref() {
         let stage_id = query.stage_id.as_deref().ok_or_else(|| {
@@ -586,11 +695,16 @@ async fn build_planar_field_from_source(
                 )
             })?
     } else if query.scope_kind.as_deref() == Some("airbox") {
-        match load_fdm_multilayer_airbox_carrier_for_quantity(snapshot, quantity_id).map_err(|reason| {
-            ApiError::not_found(format!(
-                "multilayer FDM Airbox carrier unavailable: {reason}"
-            ))
-        })? {
+        let carrier = match airbox_carrier.take() {
+            Some(carrier) => Some(carrier),
+            None => load_fdm_multilayer_airbox_carrier_for_quantity(snapshot, quantity_id)
+                .map_err(|reason| {
+                    ApiError::not_found(format!(
+                        "multilayer FDM Airbox carrier unavailable: {reason}"
+                    ))
+                })?,
+        };
+        match carrier {
             Some(carrier) => {
                 resolved_fdm_multilayer_airbox_field(snapshot, quantity_id, n_comp, &carrier)?
             }
@@ -614,6 +728,31 @@ async fn build_planar_field_from_source(
             ))
         })?
     };
+    let resolved_field = if matches!(
+        query.scope_kind.as_deref().unwrap_or("monitor_target"),
+        "monitor_target" | "object" | "region"
+    ) {
+        match multilayer_composite {
+            Ok(Some(composite)) => composite.embed(resolved_field)?,
+            Ok(None) => resolved_field,
+            Err(error) => return Err(error),
+        }
+    } else {
+        resolved_field
+    };
+    // The accepted Airbox layout is attached to the same publication as the
+    // magnetic carrier. Historical artifact manifests do not prove that clock.
+    let observation_frame = if query.snapshot_id.is_some() {
+        None
+    } else if query.scope_kind.as_deref() == Some("airbox") && is_fdm_multilayer_snapshot(snapshot) {
+        snapshot.latest_fields.get(quantity_id)
+            .filter(|raw| crate::session::latest_field_source_is_qualified(snapshot, quantity_id, raw))
+            .filter(|raw| raw.get("accepted_airbox").is_some())
+            .and_then(|raw| raw.get("observation_frame"))
+            .and_then(|frame| serde_json::from_value(frame.clone()).ok())
+    } else {
+        crate::session::resolved_current_field_observation_frame(snapshot, quantity_id, n_comp)
+    };
     let field_revision = resolved_field.quantity_revision;
     let source_revision = resolved_source.identity.source_revision;
     let carrier_revision = resolved_field.mesh_or_grid_revision;
@@ -628,6 +767,9 @@ async fn build_planar_field_from_source(
     )?;
     let scope = match query.scope_kind.as_deref().unwrap_or("monitor_target") {
         "monitor_target" => ResolvedSpatialScope::MonitorTarget,
+        "object" => ResolvedSpatialScope::Object {
+            object_id: query.scope_id.clone().expect("validated object scope"),
+        },
         "mesh_part" => ResolvedSpatialScope::MeshPart {
             scope_id: query.scope_id.clone().expect("validated mesh-part scope"),
         },
@@ -637,10 +779,31 @@ async fn build_planar_field_from_source(
         "layer" => ResolvedSpatialScope::FdmNativeLayer {
             layer_id: query.scope_id.clone().expect("validated layer scope"),
         },
+        "region" => ResolvedSpatialScope::Region {
+            object_id: query.scope_id.clone().expect("validated region scope"),
+            region_id: query.scope_region_id.clone().expect("validated region scope"),
+        },
         _ => unreachable!("scope validated before target resolution"),
     };
     let target = resolve_spatial_target(&resolved_field, &target_definition, scope, &operator)?;
     target.resolve_dynamic_extent(&mut frame)?;
+    // The sampling window replaces the sampled extent, so the raster, mask,
+    // overlay and their identity all describe the window at full resolution
+    // (`eq-planar-sampling-window`); the full bounds stay published.
+    let full_bounds_uv_m = explicit_frame_bounds(&frame)?;
+    let window_uv_m = match requested_window {
+        Some(window) => {
+            let resolved = resolve_planar_window(full_bounds_uv_m, Some(window))?;
+            frame.extent = fullmag_ir::PlanarExtentIR::Explicit {
+                u_min_m: resolved[0],
+                u_max_m: resolved[1],
+                v_min_m: resolved[2],
+                v_max_m: resolved[3],
+            };
+            Some(resolved)
+        }
+        None => None,
+    };
     let session_id = snapshot.session.session_id.clone();
     let target_fingerprint = target.fingerprint().to_string();
     let target_kind = target.target_kind().to_string();
@@ -685,6 +848,16 @@ async fn build_planar_field_from_source(
             "magnitude".to_string()
         }
     });
+    // Geometry identity of the cached plane operator: everything that decides
+    // which element and weights serve a pixel, but no field values. The
+    // operator additionally verifies the carrier topology fingerprint.
+    let geometry_key = format!(
+        "planar-operator:{session_id}:{generation_id}:{scene_revision}:{target_fingerprint}:\
+         {scope_kind}:{scope_id:?}:{scope_region_id:?}:{carrier_revision}:{resolution:?}:{frame:?}:{operator:?}:{}",
+        crate::planar_sampling::PLANAR_SAMPLER_VERSION,
+        scope_id = query.scope_id,
+        scope_region_id = query.scope_region_id,
+    );
     let sample_token = PlanarSampleIdentity {
         session_id,
         source_kind: resolved_source.identity.source_kind.clone(),
@@ -699,6 +872,7 @@ async fn build_planar_field_from_source(
         target_entity_count,
         scope_kind: scope_kind.clone(),
         scope_id: query.scope_id.clone(),
+        scope_region_id: query.scope_region_id.clone(),
         quantity_id: quantity_id.to_string(),
         component: component_label.clone(),
         quantity_revision: field_revision,
@@ -710,6 +884,7 @@ async fn build_planar_field_from_source(
         source_device: source_device.clone(),
         source_precision: source_precision.clone(),
         frame: frame.clone(),
+        window_uv_m,
         operator: operator.clone(),
         resolution,
         quality: query
@@ -730,13 +905,40 @@ async fn build_planar_field_from_source(
     let target = Arc::new(target);
     let sampling_target = Arc::clone(&target);
     let sampling_request = request.clone();
+    let operator_cache = Arc::clone(&state.quantity_data_plane.planar_operator_cache);
+    let fence_state = Arc::clone(state);
+    let fence_context = request_context.clone();
     let result = state
         .quantity_data_plane
         .get_or_sample_planar(&sample_token, || async move {
-            Ok(Arc::new(sample_resolved_target(
-                &sampling_target,
-                &sampling_request,
-            )?))
+            // Sampling is CPU-bound; keep it off the async executor.
+            let sampled = tokio::task::spawn_blocking(move || {
+                sample_resolved_target_cached(
+                    &sampling_target,
+                    &sampling_request,
+                    &operator_cache,
+                    &geometry_key,
+                )
+            })
+            .await
+            .map_err(|error| ApiError::internal(format!("planar sampling task failed: {error}")))??;
+            // Fence before the sample enters the shared cache, so a session
+            // switch during sampling cannot publish a stale entry.
+            {
+                let _transition = fence_state.current_live_session_transition.lock().await;
+                let current = fence_state.current_live_state.read().await;
+                let current = current
+                    .as_ref()
+                    .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+                crate::ensure_current_live_request_context(
+                    current,
+                    &fence_context,
+                    fence_state
+                        .current_live_session_epoch
+                        .load(std::sync::atomic::Ordering::Acquire),
+                )?;
+            }
+            Ok(Arc::new(sampled))
         })
         .await?;
     {
@@ -757,11 +959,16 @@ async fn build_planar_field_from_source(
         "\"fm-planar-sha256:{:x}\"",
         Sha256::digest(sample_token.as_bytes())
     );
+    let section = resolved_source
+        .section
+        .map(|section| section.with_fem_section_extent(result.section_extent));
     Ok(BuiltPlanarField {
+        observation_frame,
         result,
         target,
         request,
         source: resolved_source.identity,
+        section,
         frame,
         operator,
         scene_revision,
@@ -785,9 +992,86 @@ async fn build_planar_field_from_source(
         source_entity_kind,
         scope_kind,
         scope_id: query.scope_id.clone(),
+        scope_region_id: query.scope_region_id.clone(),
+        position_fraction: query.position_fraction,
+        position_m: query.position_m,
+        full_bounds_uv_m,
+        window_uv_m,
         etag,
         sample_token,
     })
+}
+
+/// All four window parameters or none (`invalid_planar_window` otherwise);
+/// each must be finite with `min < max` per axis.
+pub(crate) fn planar_window_from_query(
+    u_min_m: Option<f64>,
+    u_max_m: Option<f64>,
+    v_min_m: Option<f64>,
+    v_max_m: Option<f64>,
+) -> Result<Option<[f64; 4]>, ApiError> {
+    match (u_min_m, u_max_m, v_min_m, v_max_m) {
+        (None, None, None, None) => Ok(None),
+        (Some(u_min), Some(u_max), Some(v_min), Some(v_max)) => {
+            let window = [u_min, u_max, v_min, v_max];
+            if window.iter().any(|value| !value.is_finite()) || u_min >= u_max || v_min >= v_max
+            {
+                return Err(ApiError::bad_request(
+                    "invalid_planar_window: window bounds must be finite with min < max",
+                ));
+            }
+            Ok(Some(window))
+        }
+        _ => Err(ApiError::bad_request(
+            "invalid_planar_window: window_u_min_m, window_u_max_m, window_v_min_m and window_v_max_m must be given together",
+        )),
+    }
+}
+
+/// Sampled u/v bounds: the full frame bounds without a window, otherwise the
+/// window clipped to them. An empty intersection is rejected rather than
+/// sampled as an empty raster.
+pub(crate) fn resolve_planar_window(
+    full_bounds_uv_m: [f64; 4],
+    window: Option<[f64; 4]>,
+) -> Result<[f64; 4], ApiError> {
+    let Some(window) = window else {
+        return Ok(full_bounds_uv_m);
+    };
+    if window.iter().any(|value| !value.is_finite())
+        || window[0] >= window[1]
+        || window[2] >= window[3]
+    {
+        return Err(ApiError::bad_request(
+            "invalid_planar_window: window bounds must be finite with min < max",
+        ));
+    }
+    let resolved = [
+        window[0].max(full_bounds_uv_m[0]),
+        window[1].min(full_bounds_uv_m[1]),
+        window[2].max(full_bounds_uv_m[2]),
+        window[3].min(full_bounds_uv_m[3]),
+    ];
+    if resolved[0] >= resolved[1] || resolved[2] >= resolved[3] {
+        return Err(ApiError::bad_request(
+            "invalid_planar_window: window does not intersect the frame",
+        ));
+    }
+    Ok(resolved)
+}
+
+fn explicit_frame_bounds(frame: &PlanarFrameIR) -> Result<[f64; 4], ApiError> {
+    match frame.extent {
+        fullmag_ir::PlanarExtentIR::Explicit {
+            u_min_m,
+            u_max_m,
+            v_min_m,
+            v_max_m,
+        } => Ok([u_min_m, u_max_m, v_min_m, v_max_m]),
+        _ => Err(ApiError::internal(
+            "planar frame extent was not resolved before sampling",
+        )),
+    }
 }
 
 async fn planar_meta_response(
@@ -899,11 +1183,25 @@ async fn planar_probe_response(
             "invalid_planar_probe: coordinates must be finite",
         ));
     }
+    let nearest_requested = match probe.nearest.as_deref() {
+        None => false,
+        Some("node") => true,
+        Some(other) => {
+            return Err(ApiError::bad_request(format!(
+                "invalid_planar_probe: nearest must be 'node', got '{other}'"
+            )));
+        }
+    };
     let query = PlanarFieldQuery {
+        window_u_min_m: probe.window_u_min_m,
+        window_u_max_m: probe.window_u_max_m,
+        window_v_min_m: probe.window_v_min_m,
+        window_v_max_m: probe.window_v_max_m,
         sample_token: probe.sample_token.clone(),
         component: probe.component.clone(),
         scope_kind: probe.scope_kind.clone(),
         scope_id: probe.scope_id.clone(),
+        scope_region_id: probe.scope_region_id.clone(),
         stage_id: probe.stage_id.clone(),
         snapshot_id: probe.snapshot_id.clone(),
         resolution_x: probe.resolution_x,
@@ -917,50 +1215,109 @@ async fn planar_probe_response(
         expected_mesh_revision: probe.expected_mesh_revision,
         expected_carrier_revision: probe.expected_carrier_revision,
         expected_field_revision: probe.expected_field_revision,
+        position_fraction: probe.position_fraction,
+        position_m: probe.position_m,
     };
     let built = build_planar_field_from_source(state, quantity_id, source, &query).await?;
-    let bounds = built.result.meta.bounds_uv_m;
-    let x = (((probe.u_m - bounds[0]) / (bounds[1] - bounds[0])
-        * built.result.meta.resolution[0] as f64)
-        .floor() as i64)
-        .clamp(0, built.result.meta.resolution[0] as i64 - 1) as u32;
-    let y = (((probe.v_m - bounds[2]) / (bounds[3] - bounds[2])
-        * built.result.meta.resolution[1] as f64)
-        .floor() as i64)
-        .clamp(0, built.result.meta.resolution[1] as i64 - 1) as u32;
-    let index = (y * built.result.meta.resolution[0] + x) as usize;
-    let occupancy = built.result.occupancy[index];
-    let source_entity_id = built.result.source_entity_ids[index];
+    // A sampling window narrows the raster, not the probe: any point of the
+    // full frame is evaluated exactly.
+    let bounds = built.full_bounds_uv_m;
     let frame = &built.frame;
+    // The probe is a point evaluation at the exact requested position: never
+    // clamped to the raster edge, and position and value refer to one point.
     let world_m = [
         frame.origin_m[0] + probe.u_m * frame.u_axis[0] + probe.v_m * frame.v_axis[0],
         frame.origin_m[1] + probe.u_m * frame.u_axis[1] + probe.v_m * frame.v_axis[1],
         frame.origin_m[2] + probe.u_m * frame.u_axis[2] + probe.v_m * frame.v_axis[2],
     ];
+    let inside_frame = probe.u_m >= bounds[0]
+        && probe.u_m <= bounds[1]
+        && probe.v_m >= bounds[2]
+        && probe.v_m <= bounds[3];
+    let point = if inside_frame {
+        built.target.evaluate_point(world_m)
+    } else {
+        None
+    };
+    let (scalar, vector, entity_id) = match &point {
+        Some((entity_id, values)) => {
+            let (scalar, vector) = evaluate_point_component(values, &built.request)?;
+            (scalar, vector, Some(*entity_id))
+        }
+        None => (None, None, None),
+    };
+    let occupancy = match (inside_frame, &point) {
+        (false, _) => "outside",
+        (true, None) => "empty",
+        (true, Some(_)) => "occupied",
+    };
+    let (nearest_node, nearest_node_status) = if !nearest_requested {
+        (None, "not_requested")
+    } else if !matches!(built.operator, PlanarOperatorIR::PlaneSample) {
+        // A slab or depth reduction has no single source node (W9).
+        (None, "unsupported_operator")
+    } else {
+        match &point {
+            None => (None, "empty"),
+            Some((entity_id, _)) => {
+                match built.target.nearest_node(world_m, *entity_id) {
+                    None => (None, "empty"),
+                    Some(node) if node.values.iter().any(|value| !value.is_finite()) => {
+                        (None, "unsupported_quantity")
+                    }
+                    Some(node) => (
+                        Some(probe_node_resource(&node, frame, [probe.u_m, probe.v_m], &built.request)?),
+                        "ok",
+                    ),
+                }
+            }
+        }
+    };
     Ok(Json(PlanarFieldProbeResource {
+        nearest_node,
+        nearest_node_status: nearest_node_status.to_string(),
         source: source_resource(&built.source),
         quantity_id: quantity_id.to_string(),
         u_m: probe.u_m,
         v_m: probe.v_m,
         world_m,
-        scalar: built.result.scalar_values[index]
-            .is_finite()
-            .then_some(built.result.scalar_values[index]),
-        vector: built
-            .result
-            .vector_values
-            .as_ref()
-            .map(|vectors| vectors[index])
-            .filter(|vector| vector.iter().all(|value| value.is_finite())),
+        scalar,
+        vector,
         cell_id: (built.source_entity_kind == "cell")
-            .then_some(source_entity_id)
+            .then_some(entity_id)
             .flatten(),
         element_id: (built.source_entity_kind == "element")
-            .then_some(source_entity_id)
+            .then_some(entity_id)
             .flatten(),
-        occupancy: occupancy_label(occupancy).to_string(),
-        sampling_method: built.result.meta.sampling_method.to_string(),
+        occupancy: occupancy.to_string(),
+        sampling_method: "point_probe".to_string(),
     }))
+}
+
+/// Projects a nearest node onto the frame and evaluates the requested
+/// component of its raw values (`eq-planar-nearest-node`).
+pub(crate) fn probe_node_resource(
+    node: &PlanarNearestNode,
+    frame: &PlanarFrameIR,
+    probe_uv_m: [f64; 2],
+    request: &ResolvedPlanarSampleRequest,
+) -> Result<PlanarProbeNodeResource, ApiError> {
+    let delta = [0, 1, 2].map(|axis| node.world_m[axis] - frame.origin_m[axis]);
+    let along = |axis: [f64; 3]| delta[0] * axis[0] + delta[1] * axis[1] + delta[2] * axis[2];
+    let u_m = along(frame.u_axis);
+    let v_m = along(frame.v_axis);
+    let (scalar, vector) = evaluate_point_component(&node.values, request)?;
+    Ok(PlanarProbeNodeResource {
+        kind: node.kind.to_string(),
+        node_id: node.node_id,
+        world_m: node.world_m,
+        u_m,
+        v_m,
+        in_plane_distance_m: (u_m - probe_uv_m[0]).hypot(v_m - probe_uv_m[1]),
+        normal_offset_m: along(frame.normal),
+        scalar,
+        vector,
+    })
 }
 
 async fn planar_render_png_response(
@@ -970,24 +1327,81 @@ async fn planar_render_png_response(
     query: &PlanarFieldQuery,
 ) -> Result<Response<Body>, ApiError> {
     let built = build_planar_field_from_source(state, quantity_id, source, query).await?;
+    let planar = state
+        .current_display_presentation
+        .read()
+        .await
+        .visualization_planar
+        .clone()
+        .unwrap_or_else(crate::schemas::visualization_state::default_planar_visualization_state);
+    let style = PlanarPngStyle::from_state(&planar);
     let mask = built
         .result
         .occupancy
         .iter()
         .map(|occupancy| u8::from(*occupancy == Occupancy::Empty))
         .collect::<Vec<_>>();
-    let png = encode_scalar_png(
-        built.result.meta.resolution[0],
-        built.result.meta.resolution[1],
-        &built.result.scalar_values,
-        &mask,
-        "viridis",
-        AutoScaleMode::Slice,
-        None,
-        None,
-        true,
-    )?;
-    binary_response(png, "image/png", &built.etag)
+    let png = match (&built.result.vector_values, style.colormap.as_str()) {
+        // The direction wheel needs the full vector; a scalar field falls
+        // back to viridis exactly as the Control Room legend does.
+        (Some(vectors), DIRECTION_COLORMAP) => encode_direction_png(
+            built.result.meta.resolution[0],
+            built.result.meta.resolution[1],
+            vectors,
+            &mask,
+        )?,
+        (_, colormap) => encode_scalar_png(
+            built.result.meta.resolution[0],
+            built.result.meta.resolution[1],
+            &built.result.scalar_values,
+            &mask,
+            if colormap == DIRECTION_COLORMAP { "viridis" } else { colormap },
+            style.auto_scale,
+            style.vmin,
+            style.vmax,
+            true,
+        )?,
+    };
+    binary_response(png, "image/png", &planar_png_etag(&built.etag, &style))
+}
+
+/// Presentation applied to the exported PNG: the session planar colormap and
+/// SI color range, so the export matches the 2D view's legend.
+#[derive(Debug, Clone, PartialEq)]
+struct PlanarPngStyle {
+    colormap: String,
+    auto_scale: AutoScaleMode,
+    vmin: Option<f64>,
+    vmax: Option<f64>,
+}
+
+impl PlanarPngStyle {
+    fn from_state(planar: &crate::schemas::visualization_state::PlanarVisualizationState) -> Self {
+        use crate::schemas::visualization_state::PlanarColorRangeMode;
+        let range = &planar.range;
+        let (auto_scale, vmin, vmax) = match (range.mode, range.min, range.max) {
+            (PlanarColorRangeMode::Manual, Some(min), Some(max))
+                if min.is_finite() && max.is_finite() && min < max =>
+            {
+                (AutoScaleMode::Manual, Some(min), Some(max))
+            }
+            (PlanarColorRangeMode::Symmetric, _, _) => (AutoScaleMode::SymmetricZero, None, None),
+            _ => (AutoScaleMode::Slice, None, None),
+        };
+        Self {
+            colormap: planar.colormap.clone(),
+            auto_scale,
+            vmin,
+            vmax,
+        }
+    }
+}
+
+fn planar_png_etag(sample_etag: &str, style: &PlanarPngStyle) -> String {
+    format!(
+        "\"fm-planar-png:{:x}\"",
+        Sha256::digest(format!("{sample_etag}:{style:?}").as_bytes())
+    )
 }
 
 async fn planar_mesh_overlay_response(
@@ -1105,12 +1519,24 @@ fn validate_scope(
     snapshot: &crate::types::SessionStateResponse,
     query: &PlanarFieldQuery,
 ) -> Result<(), ApiError> {
+    if query.scope_region_id.is_some() && query.scope_kind.as_deref() != Some("region") {
+        return Err(ApiError::bad_request(
+            "invalid_planar_scope: scope_region_id is only valid for region scope",
+        ));
+    }
     match query.scope_kind.as_deref().unwrap_or("monitor_target") {
         "monitor_target" => {
             if query.scope_id.is_some() {
                 return Err(ApiError::bad_request(
                     "invalid_planar_scope: monitor_target does not accept scope_id",
                 ));
+            }
+        }
+        "object" => {
+            let scope_id = query.scope_id.as_deref().filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| ApiError::bad_request("invalid_planar_scope: object requires scope_id"))?;
+            if !snapshot.scene_document.as_ref().is_some_and(|scene| scene.objects.iter().any(|object| object.id == scope_id)) {
+                return Err(ApiError::conflict(format!("stale_object_scope: object '{scope_id}' is absent from the current scene")));
             }
         }
         "mesh_part" => {
@@ -1131,6 +1557,18 @@ fn validate_scope(
             if query.scope_id.is_some() {
                 return Err(ApiError::bad_request(
                     "invalid_planar_scope: airbox does not accept scope_id",
+                ));
+            }
+        }
+        "region" => {
+            let object_id = query.scope_id.as_deref().filter(|id| !id.trim().is_empty());
+            let region_id = query
+                .scope_region_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty());
+            if object_id.is_none() || region_id.is_none() {
+                return Err(ApiError::bad_request(
+                    "invalid_planar_scope: region requires scope_id (object) and scope_region_id",
                 ));
             }
         }
@@ -1229,11 +1667,15 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
     let bounds = built.result.meta.bounds_uv_m;
     let base = source_base_path(built);
     let query = canonical_sample_query(built);
+    // Extrema describe occupied support only; empty bins serialized as zero
+    // (`include_air_as_zero`) must not widen the scientific range (PM-N05).
     let (scalar_min, scalar_max) = built
         .result
         .scalar_values
         .iter()
-        .filter(|value| value.is_finite())
+        .zip(&built.result.occupancy)
+        .filter(|(value, occupancy)| value.is_finite() && **occupancy != Occupancy::Empty)
+        .map(|(value, _)| value)
         .fold((None::<f64>, None::<f64>), |(min, max), value| {
             (
                 Some(min.map_or(*value, |current| current.min(*value))),
@@ -1241,7 +1683,8 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
             )
         });
     PlanarFieldMetaResource {
-        schema_version: "planar_sample_meta.v4".to_string(),
+        observation_frame: built.observation_frame.clone(),
+        schema_version: "planar_sample_meta.v7".to_string(),
         sample_token: built.sample_token.clone(),
         scene_revision: built.scene_revision,
         source: source_resource(&built.source),
@@ -1258,13 +1701,16 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
         field_precision: built.field_precision.clone(),
         scope_kind: built.scope_kind.clone(),
         scope_id: built.scope_id.clone(),
+        scope_region_id: built.scope_region_id.clone(),
         frame: PlanarFieldFrameResource {
             origin_m: built.frame.origin_m,
             u_axis: built.frame.u_axis,
             v_axis: built.frame.v_axis,
             normal: built.frame.normal,
             bounds_uv_m: bounds,
+            full_bounds_uv_m: built.full_bounds_uv_m,
         },
+        section: built.section.as_ref().map(section_resource),
         operator: (&built.operator).into(),
         resolution: built.result.meta.resolution,
         pixel_size_m: [
@@ -1331,7 +1777,7 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
 
 fn fdm_grid_overlay_available(built: &BuiltPlanarField) -> bool {
     built.source_entity_kind == "cell"
-        && matches!(built.scope_kind.as_str(), "monitor_target" | "layer")
+        && matches!(built.scope_kind.as_str(), "monitor_target" | "object" | "layer")
         && !matches!(built.operator, PlanarOperatorIR::SurfaceProjection { .. })
 }
 
@@ -1371,6 +1817,24 @@ fn canonical_sample_query(built: &BuiltPlanarField) -> String {
     if let Some(scope_id) = &built.scope_id {
         entries.push(("scope_id", scope_id.clone()));
     }
+    if let Some(scope_region_id) = &built.scope_region_id {
+        entries.push(("scope_region_id", scope_region_id.clone()));
+    }
+    if let Some(position_fraction) = built.position_fraction {
+        // Shortest round-trip decimal, so the link names the same slice.
+        entries.push(("position_fraction", position_fraction.to_string()));
+    }
+    if let Some(position_m) = built.position_m {
+        entries.push(("position_m", position_m.to_string()));
+    }
+    if let Some(window) = built.window_uv_m {
+        // The resolved window: clipping is idempotent, so a link replays the
+        // same sample identity.
+        entries.push(("window_u_min_m", window[0].to_string()));
+        entries.push(("window_u_max_m", window[1].to_string()));
+        entries.push(("window_v_min_m", window[2].to_string()));
+        entries.push(("window_v_max_m", window[3].to_string()));
+    }
     if let Some(stage_id) = &built.stage_id {
         entries.push(("stage_id", stage_id.clone()));
     }
@@ -1402,6 +1866,26 @@ fn source_base_path(built: &BuiltPlanarField) -> String {
             )
         ),
         other => panic!("unsupported resolved planar source kind: {other}"),
+    }
+}
+
+fn section_resource(section: &ResolvedPlanarSection) -> PlanarSectionResource {
+    PlanarSectionResource {
+        plane: section.plane.to_string(),
+        normal_axis: section.normal_axis.to_string(),
+        requested_fraction: section.requested_fraction,
+        requested_coordinate_m: section.requested_coordinate_m,
+        resolved_coordinate_m: section.resolved_coordinate_m,
+        stops_kind: section.stops_kind.to_string(),
+        layer_index: section.layer_index,
+        layer_count: section.layer_count,
+        layer_spacing_m: section.layer_spacing_m,
+        normal_min_m: section.normal_min_m,
+        normal_max_m: section.normal_max_m,
+        navigation_step_m: section.navigation_step_m,
+        navigation_step_kind: section.navigation_step_kind.to_string(),
+        cut_element_count: section.cut_element_count,
+        layer_stops_m: section.layer_stops_m.clone(),
     }
 }
 
@@ -1441,16 +1925,6 @@ fn finite_payload(values: &[f64]) -> Vec<f64> {
         .iter()
         .map(|value| if value.is_finite() { *value } else { 0.0 })
         .collect()
-}
-
-fn occupancy_label(occupancy: Occupancy) -> &'static str {
-    match occupancy {
-        Occupancy::Occupied => "occupied",
-        Occupancy::Empty => "empty",
-        Occupancy::Partial => "partial",
-        Occupancy::UndefinedOrientation => "undefined_orientation",
-        Occupancy::OverlapAmbiguous => "overlap_ambiguous",
-    }
 }
 
 fn etag_matches(headers: &HeaderMap, etag: &str) -> bool {

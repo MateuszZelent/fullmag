@@ -12,83 +12,8 @@ import type {
 } from "@/kernel/workspace/crossSectionWorkspace";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
-import {
-  QuantityField,
-  useQuantityFieldDraftKeys,
-  type QuantityFieldParseResult,
-} from "../primitives/QuantityField";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
-
-const POSITION_DRAFT_KEY = "cross-section.position-percent";
-const ROTATION_DRAFT_KEY = "cross-section.rotation-degrees";
-
-const NUMBER_TEXT_PATTERN = /^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?$/;
-const INCOMPLETE_NUMBER_TEXT_PATTERNS = [
-  /^[+-]?$/,
-  /^[+-]?\.$/,
-  /^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))[eE][+-]?$/,
-];
-
-function parseCrossSectionNumber(
-  text: string,
-  minimum: number,
-  maximum: number,
-): QuantityFieldParseResult<number> {
-  if (
-    text === "" ||
-    INCOMPLETE_NUMBER_TEXT_PATTERNS.some((pattern) => pattern.test(text))
-  ) {
-    return { ok: false, status: "incomplete", message: "Complete the numeric value." };
-  }
-  if (!NUMBER_TEXT_PATTERN.test(text)) {
-    return { ok: false, status: "invalid", message: "Enter a finite decimal number." };
-  }
-
-  const parsed = Number(text);
-  if (!Number.isFinite(parsed)) {
-    return { ok: false, status: "invalid", message: "Enter a finite decimal number." };
-  }
-  if (parsed < minimum || parsed > maximum) {
-    return {
-      ok: false,
-      status: "invalid",
-      message: `Enter a value between ${minimum} and ${maximum}.`,
-    };
-  }
-  return { ok: true, value: parsed };
-}
-
-function CrossSectionNumberField({
-  draftKey,
-  label,
-  maximum,
-  minimum,
-  onCommit,
-  unit,
-  value,
-}: {
-  draftKey: string;
-  label: string;
-  maximum: number;
-  minimum: number;
-  onCommit: (value: number) => void;
-  unit?: string;
-  value: number;
-}) {
-  return (
-    <QuantityField<number>
-      draftKey={draftKey}
-      format={(current) => String(current)}
-      invalidMessage="Enter a finite value within the allowed range."
-      label={label}
-      parse={(text) => parseCrossSectionNumber(text, minimum, maximum)}
-      unit={unit}
-      value={value}
-      onCommit={onCommit}
-    />
-  );
-}
 
 interface CrossSectionSettingsValue {
   colorScale: CrossSectionDraft["colorScale"];
@@ -115,9 +40,6 @@ export function CrossSectionSettingsEditor({
   value,
   onChange,
 }: CrossSectionSettingsEditorProps) {
-  const positionDraft = useQuantityFieldDraftKeys([POSITION_DRAFT_KEY]);
-  const rotationDraft = useQuantityFieldDraftKeys([ROTATION_DRAFT_KEY]);
-
   return (
     <>
       <InspectorGroup title="Cut Frame">
@@ -174,17 +96,21 @@ export function CrossSectionSettingsEditor({
           </Tabs>
         </div>
         <div className="fm-inspector-form-field">
-          <CrossSectionNumberField
-            draftKey={POSITION_DRAFT_KEY}
+          <FormField
             label="Position"
-            maximum={100}
-            minimum={0}
-            value={value.positionPercent}
+            max={100}
+            min={0}
+            step={0.5}
+            type="number"
             unit="%"
-            onCommit={(positionPercent) => onChange({ positionPercent })}
+            value={value.positionPercent}
+            onChange={(event) =>
+              onChange({ positionPercent: Number(event.target.value) })
+            }
           />
           <input
             aria-label="Position slider"
+            aria-valuetext={`${value.positionPercent}%`}
             className="fm-inspector-range-slider"
             max={100}
             min={0}
@@ -192,24 +118,27 @@ export function CrossSectionSettingsEditor({
             type="range"
             value={value.positionPercent}
             style={{ "--pct": `${value.positionPercent}%` } as React.CSSProperties}
-            onChange={(event) => {
-              positionDraft.remove();
-              onChange({ positionPercent: Number(event.target.value) });
-            }}
+            onChange={(event) =>
+              onChange({ positionPercent: Number(event.target.value) })
+            }
           />
         </div>
         <div className="fm-inspector-form-field">
-          <CrossSectionNumberField
-            draftKey={ROTATION_DRAFT_KEY}
+          <FormField
             label="Rotation"
-            maximum={180}
-            minimum={-180}
-            value={value.rotationDegrees}
+            max={180}
+            min={-180}
+            step={1}
+            type="number"
             unit="deg"
-            onCommit={(rotationDegrees) => onChange({ rotationDegrees })}
+            value={value.rotationDegrees}
+            onChange={(event) =>
+              onChange({ rotationDegrees: Number(event.target.value) })
+            }
           />
           <input
             aria-label="Rotation slider"
+            aria-valuetext={`${value.rotationDegrees} degrees`}
             className="fm-inspector-range-slider"
             max={180}
             min={-180}
@@ -221,10 +150,9 @@ export function CrossSectionSettingsEditor({
                 "--pct": `${((value.rotationDegrees + 180) / 360) * 100}%`,
               } as React.CSSProperties
             }
-            onChange={(event) => {
-              rotationDraft.remove();
-              onChange({ rotationDegrees: Number(event.target.value) });
-            }}
+            onChange={(event) =>
+              onChange({ rotationDegrees: Number(event.target.value) })
+            }
           />
         </div>
       </InspectorGroup>
@@ -282,21 +210,27 @@ export function CrossSectionSettingsEditor({
             onChange({ includeWireframe: event.target.checked })
           }
         />
-        <CrossSectionNumberField
-          draftKey="cross-section.edge-width"
+        <FormField
           label="Edge width"
-          maximum={4}
-          minimum={0.5}
+          max={4}
+          min={0.5}
+          step={0.25}
+          type="number"
           value={value.edgeWidth}
-          onCommit={(edgeWidth) => onChange({ edgeWidth })}
+          onChange={(event) =>
+            onChange({ edgeWidth: Number(event.target.value) })
+          }
         />
-        <CrossSectionNumberField
-          draftKey="cross-section.shrink-factor"
+        <FormField
           label="Shrink"
-          maximum={1}
-          minimum={0.5}
+          max={1}
+          min={0.5}
+          step={0.05}
+          type="number"
           value={value.shrinkFactor}
-          onCommit={(shrinkFactor) => onChange({ shrinkFactor })}
+          onChange={(event) =>
+            onChange({ shrinkFactor: Number(event.target.value) })
+          }
         />
         <div className="fm-inspector-toolbar">{action}</div>
       </InspectorGroup>

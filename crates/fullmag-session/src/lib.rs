@@ -77,12 +77,12 @@ pub use fms::{
     unpack_fms_for_visualization, unpack_fms_staged, unpack_fms_staged_readonly,
 };
 pub use store::{
-    ACCEPTED_RUN_START_POLICY_KEY, AcceptedRunStartRelease, CheckpointStillReferenced, GcPlan,
-    RunBacklogFull, SessionStore,
+    ACCEPTED_RUN_START_POLICY_KEY, AcceptedRunStartRelease, LiveComputeRequestReceipt, CheckpointStillReferenced, GcPlan,
+    RunBacklogFull, SessionStore, accepted_run_start_policy_is_manual,
 };
 pub use task_cancellation::{
     FMS_TASK_CANCELLATION_INTENT_SCHEMA, FmsTaskCancellationIntent,
     TaskCancellationIntentCommitDisposition, TaskCancellationIntentConflict,
 };
 pub use types::*;
-pub use writer::{StoreWriterBusy, WriteTransaction};
+pub use writer::{ReadTransaction, StoreWriterBusy, WriteTransaction};

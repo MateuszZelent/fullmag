@@ -14,6 +14,14 @@ FullMag presents one launcher and one control room even when implementation uses
 packs. Lightweight CPU paths may be bundled; CUDA FDM and MFEM, hypre and libCEED FEM paths may
 require managed runtimes.
 
+## Two-Plane Transport and Live Python Integration
+
+Runtime interaction splits cleanly into two planes served over OpenAPI v2 and companion HTTP/WS channels:
+
+1. **JSON Control Plane & WebSocket Invalidation**: Session lifecycle, authoring mutations fenced by `scene_revision`, readiness checks, solver command queues, and capability/provenance metadata travel as lightweight revisioned JSON resources (`ControlRoomApi`). `RealtimeClient` and `RealtimeInvalidationBridge` emit compact invalidation notifications on state changes without pushing dense field arrays over WebSockets.
+2. **Binary Data Plane**: Spatial vector/scalar fields (`FMVP`), FEM topology connectivity and markers (`FMMT`), FDM active/region masks (`FMRM`, `FMBM`), 2D cross-section payloads (`FMCS`, `FMQS`), mesh quality distributions (`FMMQ`), periodic facet maps (`FMPP`), and sampled chart tables (`FMTB`) stream over HTTP range/binary endpoints with typed `ArrayBuffer` validation.
+3. **Live Python Client Presence (`fullmag.live`)**: Interactive scripts using `fm.connect()` share the same session API via `LiveSession` (`packages/fullmag-py/src/fullmag/live/_session.py`). Each live script registers a unique `python-<hex>` `client_id` and transmits `10 s` presence heartbeats to `/v2/sessions/current/clients/{client_id}` (`30 s` API expiry TTL), keeping browser tabs and Python scripts synchronized on the active session.
+
 Every published result must make these values inspectable:
 
 - requested backend and runtime,
@@ -24,18 +32,12 @@ Every published result must make these values inspectable:
 - artifact revision and reproducibility metadata.
 
 Compilation on a host is not proof of executed GPU work. Public pages use the strongest evidence
-available and label lower-tier evidence explicitly.
-## Control Room crosswalk
+available and label lower-tier evidence explicitly. In the Control Room, session and runtime
+provenance are exposed read-only in `RuntimeResourceInspectorPanel` (`Model Explorer -> Runtime`),
+`StudyInspectorPanel`, `StatusBarModule`, and the Footer Dock (`Telemetry`, `Engine`, `Operations`,
+`Problems`), keeping requested intent (`auto` vs. pinned `cpu`/`gpu`) separate from resolved
+execution without silent CPU fallback when GPU is forced.
 
-This architecture page has no direct authoring screen. Use the object, material, physics, mesh, or stage editor named by the relevant terminal API page; architecture concepts are currently `inspection-only` unless a concrete UI owner is listed. `TODO: frontend support` applies to architecture capabilities without a corresponding control. See {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-This page documents architecture rather than a standalone Python callable. Exact constructors, arguments, validation, and examples belong to the linked Python API pages; do not infer a public function from an internal architecture term.
-
-## Physics and bibliography scope
-
-No independent physical model is introduced here. Scientific equations are owned by the applicable physics or numerical-methods page. Bibliography: not applicable to this architecture overview; implementation ownership is recorded in the source-code references on the terminal page.
 ## Source-code index
 
 | Repository path | Stable symbol | Responsibility |

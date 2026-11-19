@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import type { ControlRoomApi } from "../api/ControlRoomApi";
+import type { RuntimeCommandPrecondition } from "../api/apiTypes";
 import type { LayoutController } from "../layout/LayoutController";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import type { SelectionController } from "../selection/SelectionController";
@@ -43,6 +44,8 @@ export interface CommandContext {
   chartViewportHandoff?: ChartViewportHandoffController;
   cameraRegistry?: CameraRegistryController;
   input?: unknown;
+  /** Original scene, mesh and run behind a compound Build + Study request. */
+  meshBuildPin?: Pick<RuntimeCommandPrecondition, "scene_revision" | "mesh_revision" | "current_run">;
   layout?: LayoutController;
   objectMoveTool?: ObjectMoveToolController;
   projectDocument?: ProjectDocumentController;
@@ -100,6 +103,10 @@ export function defaultCommandFeedbackOwner(
 export interface CommandResult {
   status: "completed" | "failed" | "cancelled" | "pending";
   commandId?: string;
+  /** Stable API intent used to reconcile an ambiguous submission. */
+  clientIntentId?: string;
+  /** Backend command kind paired with clientIntentId for exact reconciliation. */
+  clientIntentKind?: string;
   observation?: "waiting" | "disconnected" | "publication-unconfirmed";
   message?: string;
 }

@@ -6,13 +6,16 @@ mod builder;
 mod execution_input;
 mod geometry;
 mod geometry_features;
+mod imported_surface;
 mod material_requirements;
+mod material_source;
 mod physics_graph;
 mod region_revisions;
 mod scene;
 mod scene_study_plan;
 mod spin_transport;
 mod study_contract;
+mod universe_state;
 mod validation;
 
 pub use adapters::{
@@ -34,7 +37,9 @@ pub use execution_input::{
 };
 pub use geometry::*;
 pub use geometry_features::*;
+pub use imported_surface::{parse_stl_surface, ImportedTriangleSurface};
 pub use material_requirements::*;
+pub use material_source::*;
 pub use physics_graph::*;
 pub use region_revisions::*;
 pub use scene::*;
@@ -44,3 +49,6 @@ pub use study_contract::*;
 pub use validation::{
     validate_scene_document, validate_scene_document_for_authoring, SceneDocumentValidationError,
 };
+
+mod imported_geometry;
+pub use imported_geometry::{imported_stl_parameters, ImportedStlParameters};

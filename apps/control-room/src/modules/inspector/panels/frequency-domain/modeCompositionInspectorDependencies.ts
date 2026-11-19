@@ -4,7 +4,6 @@ import type {
 } from "@/kernel/api/apiTypes";
 import type {
   ModeCompositionController,
-  ModeCompositionControllerSnapshot,
   ModeCompositionResource,
 } from "@/kernel/visualization/ModeCompositionController";
 
@@ -24,9 +23,7 @@ export interface ModeCompositionInspectorResourceInputs {
   readonly controller: Pick<
     ModeCompositionController,
     "assign" | "mutate" | "remove" | "setPhaseClock" | "updateLayer"
-  > & Partial<Pick<ModeCompositionController, "getSnapshot">>;
-  readonly controllerState?: ModeCompositionControllerSnapshot;
-  readonly sessionScopeKey?: string | null;
+  >;
   readonly composition: ModeCompositionResource | null;
   readonly scene: SceneResource | null;
   readonly spectrumArtifact: FrequencyDomainJsonArtifactResource | null;
@@ -40,8 +37,6 @@ export interface ModeCompositionInspectorResourceInputs {
 export function modeCompositionInspectorDependenciesFromResources({
   composition,
   controller,
-  controllerState,
-  sessionScopeKey,
   scene,
   spectrumArtifact,
 }: ModeCompositionInspectorResourceInputs): ModeCompositionInspectorDependencies {
@@ -53,8 +48,6 @@ export function modeCompositionInspectorDependenciesFromResources({
     controller: composition ? controller : null,
     resource: composition,
     spectrum,
-    ...(controllerState ? { controllerState } : {}),
-    ...(sessionScopeKey !== undefined ? { sessionScopeKey } : {}),
   };
 }
 

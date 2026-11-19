@@ -1,6 +1,6 @@
 ---
 title: Installation
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -10,21 +10,64 @@ owner: fullmag-public-docs
 # Installation
 
 FullMag separates the **Python authoring layer** from the **solver runtime**. The Python package
-defines the `fm.study(...)` workflow and lowers it to the canonical `ProblemIR`; a compiled
-backend then executes the solve. This page installs both from a source checkout.
+defines the `fm.study(...)` and `fm.connect()` workflows and lowers models to the canonical
+`ProblemIR`; a container-backed or compiled backend executes the solve. This page installs the
+published Python package from PyPI (or from source) and sets up the daily Docker Compose DEV
+workspace.
 
 ## Requirements
 
 - Python 3.10 or newer.
-- `pip` with network access to install runtime wheels and the Python dependencies.
-- A Cargo/Rust toolchain is **not** required for Python authoring alone, but the repository build
-  tooling uses it to produce the native FDM/FEM solver bundle.
-- Finite-element meshing with the geometry workflow additionally needs the optional `meshing`
-  extras (`gmsh`, `manifold3d`, `meshio`, `scipy`, `trimesh`).
+- `pip` or `uv` to install `fullmag` and its Python dependencies.
+- Git and Docker (Docker Desktop Linux engine on Windows PowerShell, or Linux/WSL2 Docker
+  integration) for running the solver runtime and Control Room. `just` is recommended for the
+  repository recipes (`just docker-dev`, `just docker-dev-toolchain`).
+- Host Cargo/Rust and CMake are **not** required: the backend container builds Rust and native
+  FEM/FDM solvers inside Docker using isolated named volumes.
+- Finite-element geometry and meshing require the optional `meshing` extra (`gmsh`, `manifold3d`,
+  `meshio`, `scipy`, `trimesh`).
 
 ## Install the Python DSL
 
-Clone the repository and install the embedded Python package:
+### From PyPI
+
+The public Python authoring package and live HTTP/WebSocket client are published on
+[PyPI (`fullmag`)](https://pypi.org/project/fullmag/):
+
+```console
+pip install fullmag
+```
+
+With [uv](https://docs.astral.sh/uv/):
+
+```console
+uv add fullmag            # in a uv project
+uv pip install fullmag    # in an existing environment
+```
+
+Optional extras install additional authoring and interactive capabilities:
+
+| Extra | Included dependencies | Intended workflow |
+|---|---|---|
+| `meshing` | `gmsh`, `manifold3d`, `meshio`, `scipy`, `trimesh` | FEM geometry and conformal domain meshing |
+| `figures` | `Pillow` | Image-based material and texture authoring |
+| `jupyter` | `ipython`, `matplotlib` | Interactive notebooks and `fullmag.live.jupyter.monitor()` |
+
+Combine extras as needed, for example:
+
+```console
+pip install "fullmag[meshing,figures,jupyter]"
+```
+
+The PyPI distribution is pure Python. It provides model authoring, `ProblemIR` serialization, and
+the live API client ({ref}`fm.connect() <public-docs-getting-started-interactive-python>`), which
+drives a running FullMag Docker DEV group over HTTP and WebSocket. It does not bundle the native
+FDM/FEM solver libraries: without a connected server session or repository runtime, `fm.relax()`
+and `fm.run()` return a `Result` with `status="not-executable"`.
+
+### From a source checkout
+
+To install the editable or development Python package straight from a repository checkout:
 
 ```console
 git clone https://github.com/MateuszZelent/fullmag
@@ -32,10 +75,10 @@ cd fullmag
 python -m pip install ./packages/fullmag-py
 ```
 
-Install the optional meshing dependencies when you author FEM geometry:
+Install optional extras in the same way when authoring FEM meshes or Jupyter notebooks:
 
 ```console
-python -m pip install "./packages/fullmag-py[meshing]"
+python -m pip install "./packages/fullmag-py[meshing,jupyter]"
 ```
 
 Verify that the module imports:
@@ -44,78 +87,92 @@ Verify that the module imports:
 python -c "import fullmag; print(fullmag.__file__)"
 ```
 
-## Prepare a solver runtime
+## Prepare the Docker Compose DEV runtime
 
-The `fm.study(...)` API is solver-agnostic, but execution needs a compiled backend. The repository
-owns a `justfile` that wraps the container and host build paths. Before a repository build, configure `FULLMAG_PROJECT_STORAGE_ROOT` in the main
-checkout's local `.env`, using `.env.example`. Worktrees inherit that configuration;
-do not copy an unrelated host's storage paths. On a host enrolled with
-`Fullmag_build_runner`, submit full builds through its queue with an explicit source
-checkout and snapshot or commit. The following is the repository recipe for hosts
-using the local build route:
+Daily FullMag development runs inside a per-checkout Docker Compose group (`fullmag-master` for the
+main checkout, or `fullmag-worktree-<worktree_id>` for a registered Git worktree). Each group
+contains two permanent services: `backend` (which compiles changed Rust/C++ targets incrementally and
+serves the API + native FDM/FEM runtime) and `frontend` (Next.js Control Room dev server with HMR).
 
-```console
-just build fullmag
-```
+### 1. Recommended checkout location (WSL2 ext4 vs Windows)
 
-This stages the launcher and the finite-difference library under `.fullmag/local`. The easiest
-headless run is then:
+Because containers run in the Linux VM, checkout filesystem speed governs source capture and HMR
+responsiveness:
 
-```console
-just run-headless examples/fdm_cpu_relax_smoke.py
-```
+- **WSL2 ext4 (recommended)**: Keep your main checkout and worktrees on ext4 inside WSL (for
+  example `~/git/fullmag/fullmag`), with Docker Desktop WSL integration enabled. Containers read
+  sources over a direct bind mount with native `inotify` watching. If the container user (UID
+  `65532`) needs read-only access to the main `.git` metadata directory for worktrees, run:
 
-For a first interactive launch, `just fullmag build=True fdm cpu <script>` builds on first use and
-then runs the script with the Control Room.
+  ```bash
+  cd ~/git/fullmag/fullmag
+  setfacl -R -m u:65532:rX .git
+  find .git -path .git/modules -prune -o -type d -print0 | xargs -0 setfacl -d -m u:65532:rX
+  ```
 
-The finite-element runtime uses MFEM, hypre, libCEED and (on GPU) CUDA. It is built and executed
-through the repository's managed container recipes rather than ad-hoc host commands:
+- **Windows NTFS**: Checkouts under a Windows path work with Docker Desktop (`desktop-linux`
+  context), though frontend hot-reload uses 9p polling across the VM boundary.
 
-```console
-just ensure-managed-fem-runtime
-```
+### 2. Configure host storage once
 
-FDM CUDA and FEM GPU paths additionally require a managed CUDA runtime. GPU execution must be
-qualified with device identity recorded in the result; compiling on a host is not proof that GPU
-code executed.
-
-## Native Windows workspace
-
-For the native Windows development route, use the managed launcher recipes:
+Before starting any build, configure `FULLMAG_PROJECT_STORAGE_ROOT` in the main checkout's local
+`.env` (worktrees inherit it automatically from the main checkout via Git):
 
 ```console
-just windows-workspace-build dev dev 3197 auto
-just windows-ui dev
+python -B scripts/setup_docker.py
+python -B scripts/setup_docker.py --check
 ```
 
-The first command prepares the dev package without launching the UI. The second
-starts an empty workspace on port 3197 with frontend HMR and a backend source watcher.
-`auto` checks source/package identity; it is not a request to reuse an arbitrary old
-binary. A completed background backend build does not restart an active simulation.
-The native route does not establish FEM/MFEM support; FEM uses its separate managed
-container runtime and must satisfy the selected device requirements.
+Use `python3` in Linux/WSL shells. This wizard writes only the storage root, checkout selection, and
+default frontend port into `.env` and never starts or deletes containers. User sessions, Zarr
+results, projects, and settings stay in the configured host storage; build caches, Cargo/pnpm
+packages, and compilation artifacts live in Docker named volumes and BuildKit (with **ADR 0076**
+defining the single group-private named volume architecture splitting `private/backend`,
+`private/frontend`, and `private/ledger` alongside shared `fullmag-shared-*` caches).
+
+### 3. Build the toolchain and start services
+
+Run from the root of the main checkout or registered worktree you want to work in:
+
+```console
+just docker-dev-toolchain
+just docker-dev "$PWD"
+```
+
+- `just docker-dev-toolchain` builds the pinned container dependency image (`docker/fem-gpu/Dockerfile`,
+  including CMake, MFEM, hypre, libCEED, and CUDA headers). This step is only slow on the first
+  host setup.
+- `just docker-dev "$PWD"` validates mounts and storage, builds the backend inside the permanent
+  `backend` container, and starts both the API runtime and Control Room on `http://127.0.0.1:3197`
+  (or the next free port printed by the launcher).
+- To run a single checkout script non-interactively once the group is running with an empty
+  workspace, call `just docker-dev-script examples/fdm_cpu_relax_smoke.py`; to ensure services are
+  up and execute a script in one step, run `just fullmag-dev-container examples/fdm_cpu_relax_smoke.py`.
+
+Do **not** invoke plain `docker compose up`, host `cargo`/`cmake`, or retired host-runner commands:
+the managed launcher records source, package, storage, and startup provenance before starting any
+service.
+
+Both FDM CUDA and FEM GPU lanes run inside the container runtime when NVIDIA GPU access is enabled
+(`--gpu-access auto` or explicit GPU selection). Executed GPU evidence still requires the resolved
+device identity to be recorded in the simulation provenance; host build completion alone does not
+qualify GPU parity.
 
 ## Checking the installation
 
-Bare imports validate the Python layer only. A complete check is to run one of the repository's
-small stage-first smoke scripts headlessly and confirm that a result artifact is produced. The
-{ref}`first FDM simulation <public-docs-getting-started-first-fdm-simulation>` and
-{ref}`first FEM simulation <public-docs-getting-started-first-fem-simulation>` pages use the same
-workflow.
-## Control Room crosswalk
+Bare imports verify the Python layer only. Confirm end-to-end execution by running one of the
+tracked stage-first smoke scripts through your DEV group, or by connecting a live session with
+`fm.connect()` and running the {ref}`first FDM simulation <public-docs-getting-started-first-fdm-simulation>`
+or {ref}`first FEM simulation <public-docs-getting-started-first-fem-simulation>` tutorials.
 
-Use the authoring path stated in this guide, normally `Model Explorer -> Objects` followed by the relevant Geometry, Material, Physics, Mesh, or Stage panel. Any parameter shown in Python but not shown in that path is `TODO: frontend support`; do not describe it as configurable in the UI. See {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked {doc}`/python-api/index` page rather than duplicating an unverified signature.
-
-## Physics, limitations, and bibliography
-
-Use the linked physics or numerical-methods page for governing equations and assumptions. This onboarding page does not add a new physical model. Bibliography: see the linked terminal API or physics page; no additional source is claimed here.
 ## Source-code index
 
-- `packages/fullmag-py/pyproject.toml` — `[project]`, `[project.optional-dependencies]`: Python requirement and meshing extras.
-- `justfile` — `build`, `run-headless`, `ensure-managed-fem-runtime`, `windows-workspace-build`, `windows-ui`: repository launch/build entry points.
-- `scripts/fullmag_storage.py` — `resolve_layout`: project/worktree/storage identity and path validation.
-- `scripts/windows/run_fullmag.ps1`: native Windows launcher; see the recipe argument mapping before overriding a runtime.
+- `packages/fullmag-py/pyproject.toml` — `[project]`, `[project.optional-dependencies]`: Python
+  requirement and `[meshing]`, `[figures]`, `[jupyter]` extras.
+- `justfile` — `docker-dev-toolchain`, `docker-dev`, `docker-dev-script`, `fullmag-dev-container`:
+  managed Docker Compose DEV launcher recipes.
+- `scripts/setup_docker.py` — interactive/check setup wizard for `.env` storage and port bindings.
+- `scripts/docker_dev.py` and `scripts/bootstrap_docker_toolchain.py` — Docker Compose group
+  bootstrap, mount/storage preflight, backend build/start, and script execution.
+- `scripts/fullmag_storage.py` — `resolve_layout`: project/worktree/storage identity and path
+  validation.

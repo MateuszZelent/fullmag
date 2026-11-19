@@ -1,5 +1,5 @@
 //! Signed closed-loop field publication. Raw inspection is not scientific qualification.
-use super::direct_quadrature::DirectOerstedSnapshot;
+use super::closed_loop_field_evidence::{ClosedLoopFieldEvidence, ClosedLoopFieldSnapshot};
 use super::{AntennaFieldSolutionSignatures, AntennaSampleCarrier};
 use crate::types::{AuxiliaryArtifact, RunError};
 use serde::{Deserialize, Serialize};
@@ -93,7 +93,7 @@ pub(crate) struct ClosedLoopFieldSolutionInputV2 {
     pub sample_carrier: AntennaSampleCarrier,
     pub sample_positions_xyz_m: Vec<[f64; 3]>,
     pub sample_cells: Vec<[u32; 4]>,
-    pub direct_snapshot: DirectOerstedSnapshot,
+    pub field_snapshot: ClosedLoopFieldSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,7 +170,7 @@ pub(crate) fn field_signature(
     carrier: &AntennaSampleCarrier,
     positions: &[[f64; 3]],
     cells: &[[u32; 4]],
-    direct: &super::direct_quadrature_v2::DirectQuadratureEvidenceV2,
+    evidence: &ClosedLoopFieldEvidence,
 ) -> Result<String, RunError> {
     if !is_digest(source_digest) || positions.is_empty() || positions.len() > 1_000_000 {
         return Err(invalid("field signature source digest or target bound"));
@@ -183,7 +183,7 @@ pub(crate) fn field_signature(
     }
     let carrier_bytes =
         serde_json::to_vec(carrier).map_err(|_| invalid("field signature carrier encoding"))?;
-    let evidence_bytes = direct.encode()?;
+    let evidence_bytes = evidence.encode()?;
     let mut hash = Sha256::new();
     hash.update(b"antenna_closed_loop_native_field.v2");
     for bytes in [source.as_slice(), carrier_bytes.as_slice()] {
@@ -307,7 +307,7 @@ fn metadata_valid(m: &ManifestV2) -> Result<(), RunError> {
     path_identifier(&m.solution_id)?;
     if m.schema_version != SCHEMA
         || m.status != "inspection_only"
-        || m.direct_evidence_schema != super::direct_quadrature_v2::SCHEMA
+        || !matches!(m.direct_evidence_schema.as_str(), super::direct_quadrature_v2::SCHEMA | super::surface_rt0_evidence_v1::SCHEMA)
         || !super::signatures_are_valid(&m.signatures)
         || m.signatures.current_solution_signature
             != format!("sha256:{}", m.source.accepted_source_state_digest)
@@ -511,13 +511,8 @@ pub(crate) fn build(
         s.metadata.source_current_a,
         s.metadata.source_absolute_flux_a,
     )?;
-    let evidence = super::direct_quadrature_v2::DirectQuadratureEvidenceV2 {
-        snapshot: input.direct_snapshot.clone(),
-        signed_normalization_a: s.metadata.source_current_a,
-        source_absolute_flux_a: s.metadata.source_absolute_flux_a,
-        scale_per_a: scale,
-        current_balance_certificate_digest: s.metadata.current_balance_certificate_digest.clone(),
-    };
+    let evidence = ClosedLoopFieldEvidence::new(input.field_snapshot.clone(), &s.metadata)?;
+    evidence.verify_policy_binding(&input.requested_intent, &input.resolved_execution)?;
     if input.signatures.field_solution_signature
         != field_signature(
             &s.metadata.accepted_source_state_digest,
@@ -555,7 +550,7 @@ pub(crate) fn build(
         sample_cell_count: input.sample_cells.len(),
         signed_normalization_a: s.metadata.source_current_a,
         scale_per_a: scale,
-        direct_evidence_schema: super::direct_quadrature_v2::SCHEMA.into(),
+        direct_evidence_schema: evidence.schema().into(),
         payloads: BTreeMap::new(),
     };
     metadata_valid(&m)?;
@@ -610,19 +605,12 @@ pub(crate) fn build(
             unit,
         );
     }
-    let raw_h = input
-        .direct_snapshot
-        .targets
-        .iter()
-        .map(|t| t.h_xyz_apm)
-        .collect::<Vec<_>>();
+    let raw_h = evidence.raw_h();
     let per_h = raw_h
         .iter()
         .map(|h| h.map(|v| v * scale))
         .collect::<Vec<_>>();
-    if evidence.snapshot.source_view_identity_digest != s.metadata.view_identity_digest {
-        return Err(invalid("H source owner differs"));
-    }
+    evidence.verify_source_binding(&s.metadata, s.cells.len(), input.sample_positions_xyz_m.len())?;
     evidence.verify_binding(&input.sample_positions_xyz_m, &raw_h, &per_h)?;
     for (name, values, layout, raw_unit, per_unit) in [
         (
@@ -715,7 +703,7 @@ pub(crate) fn build(
         (
             "direct_evidence",
             evidence.encode()?,
-            super::direct_quadrature_v2::SCHEMA,
+            evidence.schema(),
             "SI",
         ),
     ] {
@@ -843,8 +831,8 @@ fn expected(m: &ManifestV2) -> Vec<(&'static str, usize, &'static str, &'static 
         ("authoring_receipt", 0, "utf8_json_input.v1", "1"),
         (
             "direct_evidence",
-            296 + m.target_count * 96,
-            super::direct_quadrature_v2::SCHEMA,
+            if m.direct_evidence_schema == super::direct_quadrature_v2::SCHEMA { 296 + m.target_count * 96 } else { 0 },
+            if m.direct_evidence_schema == super::direct_quadrature_v2::SCHEMA { super::direct_quadrature_v2::SCHEMA } else { super::surface_rt0_evidence_v1::SCHEMA },
             "SI",
         ),
     ]
@@ -1039,18 +1027,9 @@ pub(crate) fn verify(
         equal(values.iter().copied(), get(&format!("{name}_raw")), 1.0)?;
         equal(values, get(&format!("{name}_per_a")), m.scale_per_a)?;
     }
-    let evidence =
-        super::direct_quadrature_v2::DirectQuadratureEvidenceV2::decode(get("direct_evidence"))?;
-    if evidence.signed_normalization_a.to_bits() != m.signed_normalization_a.to_bits()
-        || evidence.scale_per_a.to_bits() != m.scale_per_a.to_bits()
-        || evidence.source_absolute_flux_a.to_bits() != m.source.source_absolute_flux_a.to_bits()
-        || evidence.current_balance_certificate_digest
-            != m.source.current_balance_certificate_digest
-        || evidence.snapshot.source_view_identity_digest != m.source.view_identity_digest
-        || evidence.snapshot.source_target_pairs != (m.cell_count as u64) * (m.target_count as u64)
-    {
-        return Err(invalid("direct evidence source or normalization mismatch"));
-    }
+    let evidence = ClosedLoopFieldEvidence::decode(&m.direct_evidence_schema, get("direct_evidence"))?;
+    evidence.verify_policy_binding(&m.requested_intent, &m.resolved_execution)?;
+    evidence.verify_source_binding(&m.source, m.cell_count, m.target_count)?;
     if m.signatures.field_solution_signature
         != field_signature(
             &m.source.accepted_source_state_digest,

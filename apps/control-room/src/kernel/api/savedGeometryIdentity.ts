@@ -1,6 +1,10 @@
 import type { MaterializedDatasetResource, SavedFieldGeometryResource } from "./apiTypes";
 
+// FMMT topology decode/output and count-derived shape budget.
 export const MAX_SAVED_TOPOLOGY_BYTES = 64 * 1024 * 1024;
+export const MAX_SAVED_GEOMETRY_MANIFEST_BYTES = 1024 * 1024;
+// Persisted JSON CAS payload budget; this does not raise the binary topology limit.
+export const MAX_SAVED_GEOMETRY_JSON_PAYLOAD_BYTES = 256 * 1024 * 1024;
 const MAX_U64 = BigInt("18446744073709551615");
 const ZERO = BigInt(0);
 
@@ -119,14 +123,16 @@ export function validateSavedGeometry(
       counter(value.geometry_decode_budget_bytes) !== BigInt(MAX_SAVED_TOPOLOGY_BYTES)) {
     throw new Error("Saved geometry extents or owner revision are invalid.");
   }
-  if (counter(value.geometry_manifest.byte_length) > BigInt(1024 * 1024)) {
+  const manifestLength = counter(value.geometry_manifest.byte_length);
+  const payloadLength = counter(value.geometry_payload.byte_length);
+  if (manifestLength > BigInt(MAX_SAVED_GEOMETRY_MANIFEST_BYTES)) {
     throw new Error("Saved geometry manifest exceeds its metadata budget.");
   }
-  for (const artifact of [value.geometry_manifest, value.geometry_payload]) {
-    if (!/^[a-f0-9]{64}$/.test(artifact.object_ref) || counter(artifact.byte_length) === ZERO ||
-        counter(artifact.byte_length) > BigInt(MAX_SAVED_TOPOLOGY_BYTES)) {
-      throw new Error("Saved geometry CAS identity or byte budget is invalid.");
-    }
+  if (!/^[a-f0-9]{64}$/.test(value.geometry_manifest.object_ref) ||
+      !/^[a-f0-9]{64}$/.test(value.geometry_payload.object_ref) ||
+      manifestLength === ZERO || payloadLength === ZERO ||
+      payloadLength > BigInt(MAX_SAVED_GEOMETRY_JSON_PAYLOAD_BYTES)) {
+    throw new Error("Saved geometry CAS identity or byte budget is invalid.");
   }
   return value;
 }

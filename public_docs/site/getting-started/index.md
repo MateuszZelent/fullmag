@@ -1,6 +1,6 @@
 ---
 title: Getting started
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -16,18 +16,23 @@ criteria, and expected artifacts.
 
 ## Recommended sequence
 
-1. **{doc}`Installation <installation>`** — install the Python package and prepare an executable
-   runtime.
+1. **{doc}`Installation <installation>`** — install `fullmag` from PyPI or source and start the
+   Docker Compose DEV runtime.
 2. **{doc}`First FDM simulation <first-fdm-simulation>`** — run a structured-grid relaxation through
    the CPU FDM lane.
 3. **{doc}`First FEM simulation <first-fem-simulation>`** — run the corresponding physical workflow
    on an unstructured FEM mesh with an airbox demagnetization solve.
 4. **{doc}`Choosing a solver <choosing-a-solver>`** — select FDM or FEM and CPU or GPU from the
    documented capability and validation scope.
-5. **{doc}`Control Room <control-room>`** — author, launch, monitor, and inspect a study through the
+5. **{doc}`Interactive Live Python & REPL <interactive-python>`** — connect a terminal, script, or
+   Jupyter notebook directly to a running Control Room session via `fm.connect()`.
+6. **{doc}`Control Room <control-room>`** — author, launch, monitor, and inspect a study through the
    browser interface.
+6. **{doc}`Live control from Python and Jupyter <../python-api/runtime/live-session>`** — drive the
+   current session of a running instance with `fm.connect()` from a script, an interpreter, or a
+   Jupyter notebook; runnable `.py` and `.ipynb` examples are in `examples/live/`.
 
-## Public authoring contract
+## Stage-first script structure
 
 A public script constructs a study, declares its numerical lane and physical domain, assigns
 material and magnetization data, registers interactions, and appends ordered stages:
@@ -93,11 +98,16 @@ scientific qualification.
 
 ## Running a tracked example
 
-After completing the installation page, execute the repository-owned FDM smoke scenario:
+After configuring the Docker DEV workspace on the installation page, execute the repository-owned
+FDM smoke scenario inside your checkout's Compose group:
 
 ```console
-just run-headless examples/fdm_cpu_relax_smoke.py
+just fullmag-dev-container examples/fdm_cpu_relax_smoke.py
 ```
+
+If your `just docker-dev` group is already running with an empty workspace, run
+`just docker-dev-script examples/fdm_cpu_relax_smoke.py` instead, or attach interactively from
+Python with {doc}`interactive-python`.
 
 Use the FDM and FEM tutorials for complete copyable studies, expected outputs, and stated limits.
 
@@ -108,24 +118,6 @@ installation
 first-fdm-simulation
 first-fem-simulation
 choosing-a-solver
+interactive-python
 control-room
 ```
-## Control Room crosswalk
-
-Use the authoring path stated in this guide, normally `Model Explorer -> Objects` followed by the relevant Geometry, Material, Physics, Mesh, or Stage panel. Any parameter shown in Python but not shown in that path is `TODO: frontend support`; do not describe it as configurable in the UI. See {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked {doc}`/python-api/index` page rather than duplicating an unverified signature.
-
-## Physics, limitations, and bibliography
-
-Use the linked physics or numerical-methods page for governing equations and assumptions. This onboarding page does not add a new physical model. Bibliography: see the linked terminal API or physics page; no additional source is claimed here.
-
-## Bibliography
-
-No independent scientific model is introduced by this navigation page. Use the bibliography on the selected terminal page; this statement is an explicit applicability boundary, not an omitted reference.
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

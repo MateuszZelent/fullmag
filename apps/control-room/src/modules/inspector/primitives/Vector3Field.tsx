@@ -34,6 +34,7 @@ export function Vector3Field({
         <div className="fm-inspector-vector3">
           {(["x", "y", "z"] as const).map((axis, index) => {
             const elementId = `${fieldId}-${axis}`;
+            const errorId = errors?.[index] ? `${elementId}-error` : undefined;
             return (
               <div
                 key={axis}
@@ -50,19 +51,21 @@ export function Vector3Field({
                 <input
                   id={elementId}
                   aria-label={`${label} ${axis.toUpperCase()}`}
+                  aria-describedby={errorId}
+                  aria-errormessage={errorId}
                   aria-invalid={Boolean(errors?.[index]) || undefined}
-                  aria-describedby={errors?.[index] ? `${elementId}-error` : undefined}
                   className="fm-inspector-input"
                   disabled={disabled}
                   type="text"
                   value={values[index] ?? ""}
+                  onChange={(event) => onChange(index as 0 | 1 | 2, event.target.value)}
                   onInput={(event) => onChange(index as 0 | 1 | 2, event.currentTarget.value)}
                 />
                 {unitControls?.[index]}
                 {errors?.[index] ? (
                   <span
-                    id={`${elementId}-error`}
                     className="fm-inspector-form-field__hint fm-inspector-form-field__hint--error"
+                    id={errorId}
                     role="alert"
                   >
                     {errors[index]}

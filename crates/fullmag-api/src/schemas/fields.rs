@@ -54,6 +54,10 @@ impl ArtifactSampleIndexing {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct ArtifactFieldLocatorResource {
+    /// Verified producer sampling provenance, independent of the source conductor.
+    /// Absence preserves legacy inspection and provides no Universe mesh-adoption proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_carrier: Option<crate::router_v2::handlers::data::antenna::AntennaSampleCarrierResource>,
     pub owner: ArtifactFieldOwnerBinding,
     pub carrier_scope_kind: String,
     pub carrier_scope_id: Option<String>,

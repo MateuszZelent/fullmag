@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 
 use super::accepted_antenna_inspection::{
     load_accepted_antenna_inspection, AcceptedAntennaInspectionIdentity,
-    AcceptedAntennaPublicationPin,
+    AcceptedAntennaPublicationPin, AcceptedAntennaInspectionData,
 };
 use crate::error::ApiError;
 use crate::types::AppState;
@@ -88,9 +88,13 @@ pub async fn get_accepted_antenna_payload(
         .map_err(|e| ApiError::bad_request(format!("invalid project_id: {e}")))?;
     let run_id =
         RunId::parse(run_id).map_err(|e| ApiError::bad_request(format!("invalid run_id: {e}")))?;
-    super::antenna_inspection::validate_payload_kind(&payload_kind)?;
+    super::antenna_inspection::validate_family_payload_kind(&payload_kind)?;
     validate_publication_query(&step_id, &query)?;
+    let permit = Arc::clone(&state.quantity_data_plane.accepted_inspection_admission)
+        .acquire_owned().await
+        .map_err(|_| ApiError::internal("accepted inspection reader admission closed"))?;
     let (etag, bytes) = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         let root = state
             .submit_store_root
             .as_ref()
@@ -101,8 +105,14 @@ pub async fn get_accepted_antenna_payload(
         let inspection =
             load_accepted_antenna_inspection(root, &run_id, &project_id, &step_id, &query)?;
         validate_pin(&inspection.identity, &query)?;
-        let (descriptor, bytes) =
-            super::antenna_inspection::select_payload(inspection.loaded, &payload_kind)?;
+        let (payload_sha256, bytes) = match inspection.loaded {
+            AcceptedAntennaInspectionData::ExternalLead(loaded) => {
+                let (descriptor, bytes) = super::antenna_inspection::select_payload(loaded, &payload_kind)?;
+                (descriptor.sha256, bytes)
+            }
+            AcceptedAntennaInspectionData::ClosedLoop { loaded, .. } =>
+                super::antenna_inspection::select_closed_payload(loaded, &payload_kind)?,
+        };
         // The cache identity includes ownership, not just numerical content.
         let token = serde_json::to_vec(&(
             project_id.as_str(),
@@ -116,7 +126,7 @@ pub async fn get_accepted_antenna_payload(
             &inspection.identity.artifact_id,
             &inspection.identity.package_object_ref,
             &payload_kind,
-            &descriptor.sha256,
+            &payload_sha256,
         ))
         .map_err(|e| ApiError::internal(e.to_string()))?;
         let digest = format!("{:x}", Sha256::digest(&token));

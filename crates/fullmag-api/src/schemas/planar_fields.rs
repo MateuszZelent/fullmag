@@ -13,10 +13,15 @@ use super::planar_monitors::{
 #[derive(Debug, Clone, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct PlanarFieldQuery {
+    /// Default source only: exact world coordinate in meters along the plane's
+    /// normal axis, without grid/node snapping. Exclusive with position_fraction.
+    pub position_m: Option<f64>,
     pub sample_token: Option<String>,
     pub component: Option<String>,
     pub scope_kind: Option<String>,
     pub scope_id: Option<String>,
+    /// Region id within the `scope_id` object when `scope_kind=region`.
+    pub scope_region_id: Option<String>,
     pub stage_id: Option<String>,
     pub snapshot_id: Option<String>,
     pub resolution_x: Option<u32>,
@@ -24,6 +29,17 @@ pub struct PlanarFieldQuery {
     pub quality: Option<String>,
     pub vector_budget: Option<u32>,
     pub include_mesh: Option<bool>,
+    /// Default source only: position fraction along the plane normal for this
+    /// request instead of the session's `default_slice.position_fraction`
+    /// (multislice panels, note 0970). The source hash, and with it the sample
+    /// identity, follows the overridden slice.
+    pub position_fraction: Option<f64>,
+    /// Sampling window (crop) in the frame's u/v axes, meters. All four or
+    /// none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+    pub window_u_min_m: Option<f64>,
+    pub window_u_max_m: Option<f64>,
+    pub window_v_min_m: Option<f64>,
+    pub window_v_max_m: Option<f64>,
     #[serde(default, with = "crate::schemas::decimal_u64::optional")]
     #[param(value_type = String)]
     pub expected_scene_revision: Option<u64>,
@@ -47,8 +63,16 @@ pub struct PlanarFieldQuery {
 #[derive(Debug, Clone, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct PlanarFieldProbeQuery {
+    /// Default-source fractional position override.
+    pub position_fraction: Option<f64>,
+    /// Default source only: exact world coordinate in meters along the plane's
+    /// normal axis, without grid/node snapping. Exclusive with position_fraction.
+    pub position_m: Option<f64>,
     pub u_m: f64,
     pub v_m: f64,
+    /// `node` additionally returns the nearest FEM node or FDM cell centre
+    /// (`eq-planar-nearest-node`); any other value is rejected.
+    pub nearest: Option<String>,
     pub sample_token: Option<String>,
     pub component: Option<String>,
     pub resolution_x: Option<u32>,
@@ -56,8 +80,16 @@ pub struct PlanarFieldProbeQuery {
     pub quality: Option<String>,
     pub scope_kind: Option<String>,
     pub scope_id: Option<String>,
+    /// Region id within the `scope_id` object when `scope_kind=region`.
+    pub scope_region_id: Option<String>,
     pub stage_id: Option<String>,
     pub snapshot_id: Option<String>,
+    /// Sampling window (crop) in the frame's u/v axes, meters. All four or
+    /// none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+    pub window_u_min_m: Option<f64>,
+    pub window_u_max_m: Option<f64>,
+    pub window_v_min_m: Option<f64>,
+    pub window_v_max_m: Option<f64>,
     #[serde(default, with = "crate::schemas::decimal_u64::optional")]
     #[param(value_type = String)]
     pub expected_scene_revision: Option<u64>,
@@ -84,7 +116,10 @@ pub struct PlanarFieldFrameResource {
     pub u_axis: [f64; 3],
     pub v_axis: [f64; 3],
     pub normal: [f64; 3],
+    /// Sampled u/v window; equals `full_bounds_uv_m` without a window.
     pub bounds_uv_m: [f64; 4],
+    /// Full u/v bounds of the resolved frame.
+    pub full_bounds_uv_m: [f64; 4],
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -135,8 +170,43 @@ pub struct PlanarMeshOverlayDescriptor {
     pub geometry_source: String,
 }
 
+/// Requested vs. resolved position of the session `Default` slice along its
+/// normal. A snap to an FDM cell centre is published, never hidden.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PlanarSectionResource {
+    /// `xy`, `xz` or `yz`.
+    pub plane: String,
+    /// World axis of the slice normal: `x`, `y` or `z`.
+    pub normal_axis: String,
+    pub requested_fraction: f64,
+    pub requested_coordinate_m: f64,
+    pub resolved_coordinate_m: f64,
+    /// `fdm_cell_layers` (snapped to a cell centre), `fem_node_planes` (on a
+    /// swept-mesh node plane), `fem_node_planes_between` (between planes) or
+    /// `continuous`.
+    pub stops_kind: String,
+    pub layer_index: Option<u32>,
+    pub layer_count: Option<u32>,
+    pub layer_spacing_m: Option<f64>,
+    pub normal_min_m: f64,
+    pub normal_max_m: f64,
+    /// Distance moved by one layer or navigation step along the normal.
+    pub navigation_step_m: f64,
+    /// `fdm_cell`, `fem_node_plane_spacing`, `median_element_height` (median
+    /// normal extent of the cut FEM elements; a navigation aid, not a data
+    /// layer) or `extent_fraction`.
+    pub navigation_step_kind: String,
+    /// Target elements cut by the sampled FEM plane, when known.
+    pub cut_element_count: Option<u32>,
+    /// Discrete stops along the normal (FEM node planes); empty otherwise.
+    pub layer_stops_m: Vec<f64>,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PlanarFieldMetaResource {
+    /// Accepted source observation, when the exact selected carrier proves it.
+    /// Null means cross-quantity temporal coherence cannot be established.
+    pub observation_frame: Option<super::common::AcceptedObservationFrameRef>,
     pub schema_version: String,
     pub sample_token: String,
     #[serde(with = "crate::schemas::decimal_u64")]
@@ -165,7 +235,11 @@ pub struct PlanarFieldMetaResource {
     pub field_precision: Option<String>,
     pub scope_kind: String,
     pub scope_id: Option<String>,
+    /// Region within the `scope_id` object for `region` scopes.
+    pub scope_region_id: Option<String>,
     pub frame: PlanarFieldFrameResource,
+    /// Section of the session `Default` slice; null for authored monitors.
+    pub section: Option<PlanarSectionResource>,
     pub operator: PlanarOperatorSchema,
     pub resolution: [u32; 2],
     pub pixel_size_m: [f64; 2],
@@ -186,6 +260,93 @@ pub struct PlanarFieldMetaResource {
     pub links: PlanarFieldLinksResource,
 }
 
+/// Segment of a line profile in the frame of one planar sample
+/// (`eq-planar-line-profile`).
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct PlanarFieldProfileQuery {
+    /// Default-source fractional position override.
+    pub position_fraction: Option<f64>,
+    /// Default source only: exact world coordinate in meters along the plane's
+    /// normal axis, without grid/node snapping. Exclusive with position_fraction.
+    pub position_m: Option<f64>,
+    pub u0_m: f64,
+    pub v0_m: f64,
+    pub u1_m: f64,
+    pub v1_m: f64,
+    /// Uniform samples along the segment (2..=4096, default 256); FEM
+    /// profiles add every in-plane element-face crossing.
+    pub samples: Option<u32>,
+    pub sample_token: Option<String>,
+    pub component: Option<String>,
+    pub resolution_x: Option<u32>,
+    pub resolution_y: Option<u32>,
+    pub quality: Option<String>,
+    pub scope_kind: Option<String>,
+    pub scope_id: Option<String>,
+    /// Region id within the `scope_id` object when `scope_kind=region`.
+    pub scope_region_id: Option<String>,
+    pub stage_id: Option<String>,
+    pub snapshot_id: Option<String>,
+    /// Sampling window (crop) in the frame's u/v axes, meters. All four or
+    /// none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+    pub window_u_min_m: Option<f64>,
+    pub window_u_max_m: Option<f64>,
+    pub window_v_min_m: Option<f64>,
+    pub window_v_max_m: Option<f64>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
+    pub expected_scene_revision: Option<u64>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
+    pub expected_monitor_revision: Option<u64>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
+    pub expected_source_revision: Option<u64>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
+    pub expected_mesh_revision: Option<u64>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
+    pub expected_carrier_revision: Option<u64>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
+    pub expected_field_revision: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PlanarProfilePointResource {
+    /// Arc length from the segment start.
+    pub s_m: f64,
+    pub u_m: f64,
+    pub v_m: f64,
+    /// `uniform` or `element_face` (a FEM element face inside the plane).
+    pub kind: String,
+    /// `occupied`, `empty` (outside the target) or `outside` (outside the frame).
+    pub occupancy: String,
+    pub scalar: Option<f64>,
+    pub vector: Option<[f64; 3]>,
+    /// Cell or element id, per `source_entity_kind`.
+    pub entity_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PlanarFieldProfileResource {
+    pub source: PlanarSampleSourceResource,
+    pub quantity_id: String,
+    pub component: String,
+    /// Identity of the planar sample the profile was evaluated on.
+    pub sample_token: String,
+    pub source_entity_kind: String,
+    pub u0_m: f64,
+    pub v0_m: f64,
+    pub u1_m: f64,
+    pub v1_m: f64,
+    pub length_m: f64,
+    pub sampling_method: String,
+    pub points: Vec<PlanarProfilePointResource>,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PlanarFieldProbeResource {
     pub source: PlanarSampleSourceResource,
@@ -199,6 +360,32 @@ pub struct PlanarFieldProbeResource {
     pub element_id: Option<u32>,
     pub occupancy: String,
     pub sampling_method: String,
+    /// Nearest FEM node or FDM cell centre when `nearest=node` was requested
+    /// and `nearest_node_status` is `ok`.
+    pub nearest_node: Option<PlanarProbeNodeResource>,
+    /// `not_requested`, `ok`, `empty`, `unsupported_operator` or
+    /// `unsupported_quantity`.
+    pub nearest_node_status: String,
+}
+
+/// Nearest discretization node of a probe point (`eq-planar-nearest-node`):
+/// the closest vertex of the containing FEM element, or the containing FDM
+/// cell centre, with its value without interpolation.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PlanarProbeNodeResource {
+    /// `fem_node` or `fdm_cell_center`.
+    pub kind: String,
+    /// Mesh node index or cell index.
+    pub node_id: u32,
+    pub world_m: [f64; 3],
+    /// Projection of the node onto the frame.
+    pub u_m: f64,
+    pub v_m: f64,
+    pub in_plane_distance_m: f64,
+    /// Signed distance of the node from the plane along the frame normal.
+    pub normal_offset_m: f64,
+    pub scalar: Option<f64>,
+    pub vector: Option<[f64; 3]>,
 }
 
 impl From<&PlanarOperatorIR> for PlanarOperatorSchema {

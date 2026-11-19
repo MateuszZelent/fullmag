@@ -1,0 +1,354 @@
+{
+  "document": {
+    "path": "docs/physics/0951-sushruth-2020-forward-volume-reference.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Niezależny wzorzec równań publikacji, nie realizacja solvera Fullmaga."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Niezależny wzorzec równań publikacji, nie realizacja solvera Fullmaga."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Niezależny wzorzec równań publikacji, nie realizacja solvera Fullmaga."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Niezależny wzorzec równań publikacji, nie realizacja solvera Fullmaga."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-sushruth-film-reference",
+      "symbols": [
+        "omega",
+        "gammaB",
+        "be",
+        "bm",
+        "alpha",
+        "k",
+        "t",
+        "n",
+        "wk",
+        "dw",
+        "chi"
+      ],
+      "sources": [
+        "sushruth-susceptibility",
+        "sushruth-response-tests"
+      ]
+    },
+    {
+      "id": "eq-sushruth-inductive-reference",
+      "symbols": [
+        "k",
+        "chi",
+        "h",
+        "r",
+        "R",
+        "T",
+        "D"
+      ],
+      "sources": [
+        "sushruth-response",
+        "sushruth-source-spectrum",
+        "sushruth-response-tests"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "omega",
+      "latex": "\\omega",
+      "meaning": "częstotliwość kołowa pobudzenia",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "gammaB",
+      "latex": "\\gamma_B",
+      "meaning": "współczynnik żyromagnetyczny dla pól μ0H w teslach",
+      "si_unit": "\\mathrm{rad\\,s^{-1}\\,T^{-1}}"
+    },
+    {
+      "id": "be",
+      "latex": "b_e",
+      "meaning": "μ0 H_eff, całkowite statyczne pole efektywne",
+      "si_unit": "\\mathrm T"
+    },
+    {
+      "id": "bm",
+      "latex": "b_M",
+      "meaning": "μ0 Ms",
+      "si_unit": "\\mathrm T"
+    },
+    {
+      "id": "alpha",
+      "latex": "\\alpha",
+      "meaning": "tłumienie Gilberta",
+      "si_unit": "1"
+    },
+    {
+      "id": "k",
+      "latex": "k",
+      "meaning": "podpisany wektor falowy",
+      "si_unit": "\\mathrm{rad\\,m^{-1}}"
+    },
+    {
+      "id": "t",
+      "latex": "t",
+      "meaning": "grubość warstwy magnetycznej",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "n",
+      "latex": "n(k)",
+      "meaning": "dynamiczny czynnik odmagnesowania",
+      "si_unit": "1"
+    },
+    {
+      "id": "wk",
+      "latex": "\\omega_k",
+      "meaning": "częstotliwość kołowa swobodnego modu",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "dw",
+      "latex": "\\Delta\\omega_k",
+      "meaning": "szerokość linii",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "chi",
+      "latex": "\\chi_{xx}",
+      "meaning": "przybliżona podatność poprzeczna",
+      "si_unit": "1"
+    },
+    {
+      "id": "h",
+      "latex": "h(k)",
+      "meaning": "widmo źródła o arbitralnej wspólnej amplitudzie",
+      "si_unit": "1"
+    },
+    {
+      "id": "r",
+      "latex": "r",
+      "meaning": "podpisana odległość anten",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "R",
+      "latex": "\\widetilde R",
+      "meaning": "unormowany wkład indukcyjny własny",
+      "si_unit": "1"
+    },
+    {
+      "id": "T",
+      "latex": "\\widetilde T",
+      "meaning": "unormowany wkład indukcyjny wzajemny",
+      "si_unit": "1"
+    },
+    {
+      "id": "D",
+      "latex": "D",
+      "meaning": "normalizator widma",
+      "si_unit": "\\mathrm{m^{-1}}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "sushruth-susceptibility",
+      "path": "scripts/reference_sushruth_2020_response.py",
+      "symbol": "film_susceptibility",
+      "responsibility": "Równania 1–3 z jawnymi jednostkami; model przybliżony."
+    },
+    {
+      "id": "sushruth-response",
+      "path": "scripts/reference_sushruth_2020_response.py",
+      "symbol": "inductive_response",
+      "responsibility": "Unormowane całki 9–10; złożona kwadratura Simpsona."
+    },
+    {
+      "id": "sushruth-response-sweep",
+      "path": "scripts/reference_sushruth_2020_response.py",
+      "symbol": "figure3_reference",
+      "responsibility": "Jawne parametry Table I/Fig3, JSON bez claimu Fullmag/BORIS."
+    },
+    {
+      "id": "sushruth-response-tests",
+      "path": "scripts/test_reference_sushruth_2020_response.py",
+      "symbol": "class SushruthResponseReferenceTests",
+      "responsibility": "Granice analityczne, niezależna kwadratura i zbieżność."
+    },
+    {
+      "id": "sushruth-source-spectrum",
+      "path": "scripts/reference_sushruth_2020_antenna_spectrum.py",
+      "symbol": "antenna_spectra",
+      "responsibility": "Istniejący wzorzec widma cienkich pasków Eq6–8."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "inductive_response.frequencies_hz",
+        "type": "Sequence[float]",
+        "default": "wymagany",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "niepusta tablica 1D skończonych liczb",
+        "meaning": "częstotliwości pobudzenia",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "inductive_response.antenna",
+        "type": "str",
+        "default": "GSG",
+        "si_unit": "$1$",
+        "validation": "S, GS albo GSG",
+        "meaning": "rodzaj identycznej pary anten",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "inductive_response.width_m",
+        "type": "float",
+        "default": "200e-9",
+        "si_unit": "$\\mathrm m$",
+        "validation": "skończony > 0",
+        "meaning": "szerokość każdego paska",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "inductive_response.gap_m",
+        "type": "float",
+        "default": "250e-9",
+        "si_unit": "$\\mathrm m$",
+        "validation": "skończony ≥ 0",
+        "meaning": "szczelina między paskami",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "inductive_response.spacing_m",
+        "type": "float",
+        "default": "30e-9",
+        "si_unit": "$\\mathrm m$",
+        "validation": "skończony ≥ 0",
+        "meaning": "odstęp pionowy modelu cienkiej anteny",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "inductive_response.distance_m",
+        "type": "float",
+        "default": "2e-6",
+        "si_unit": "$\\mathrm m$",
+        "validation": "skończony ze znakiem",
+        "meaning": "odległość środków anten",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "inductive_response.alpha",
+        "type": "float",
+        "default": "0.01",
+        "si_unit": "$1$",
+        "validation": "skończony > 0",
+        "meaning": "tłumienie Gilberta; przybliżenie słabego tłumienia",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "inductive_response.mu0_h_eff_t",
+        "type": "float",
+        "default": "0.25",
+        "si_unit": "$\\mathrm T$",
+        "validation": "skończony > 0",
+        "meaning": "μ0 razy całkowite statyczne pole efektywne",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "inductive_response.mu0_ms_t",
+        "type": "float",
+        "default": "0.89",
+        "si_unit": "$\\mathrm T$",
+        "validation": "skończony > 0",
+        "meaning": "μ0 razy magnetyzacja nasycenia",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "inductive_response.film_thickness_m",
+        "type": "float",
+        "default": "20e-9",
+        "si_unit": "$\\mathrm m$",
+        "validation": "skończony ≥ 0",
+        "meaning": "grubość warstwy; zero tylko jako granica matematyczna",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "inductive_response.gamma_hz_per_t",
+        "type": "float",
+        "default": "30e9",
+        "si_unit": "$\\mathrm{Hz\\,T^{-1}}$",
+        "validation": "skończony > 0",
+        "meaning": "γ_B/(2π), bez dodatkowego μ0",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "inductive_response.intervals",
+        "type": "int",
+        "default": "16384",
+        "si_unit": "$1$",
+        "validation": "dokładny parzysty int ≥ 2, bez bool",
+        "meaning": "liczba przedziałów Simpsona",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "inductive_response.max_kl",
+        "type": "float",
+        "default": "80.0",
+        "si_unit": "$1$",
+        "validation": "skończony > 0",
+        "meaning": "górny limit q = |k|L",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "film_susceptibility.k_rad_per_m",
+        "type": "float lub ndarray",
+        "default": "wymagany",
+        "si_unit": "$\\mathrm{rad\\,m^{-1}}$",
+        "validation": "skończone liczby rzeczywiste",
+        "meaning": "wektor falowy ze znakiem",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "film_susceptibility.frequency_hz",
+        "type": "float",
+        "default": "wymagany",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "skończona liczba rzeczywista",
+        "meaning": "częstotliwość do obliczenia χ",
+        "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      }
+    ]
+  }
+}

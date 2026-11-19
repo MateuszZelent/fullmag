@@ -201,8 +201,8 @@ describe("ObjectVisualizationPanel performance contracts", () => {
 
   it("renders target quantity selection inside the visualization inspector", () => {
     expect(panelSource).toContain("VisualizationQuantitySection");
-    expect(panelSource).toContain('label="Quantity Source"');
-    expect(panelSource).toContain("quantitySourcePatch(settings, event.target.value)");
+    expect(panelSource).toContain('label="Quantity source"');
+    expect(panelSource).toContain("quantitySourcePatch(settings, quantityId)");
     expect(panelSource).toContain("onFieldCatalogRequest()");
   });
 
@@ -213,8 +213,8 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).not.toContain(
       "disabled={pending || !settings.visible || fieldCatalogLoading}",
     );
-    expect(panelSource).toContain(
-      "visualizationQuantityItems(\n        settings.activeQuantityId,\n        targetKind,\n        fieldCatalog,",
+    expect(panelSource).toMatch(
+      /visualizationQuantityItems\(\s*settings\.activeQuantityId,\s*targetKind,\s*fieldCatalog,/,
     );
   });
 
@@ -247,7 +247,7 @@ describe("ObjectVisualizationPanel performance contracts", () => {
   });
 
   it("uses target capabilities and one geometry extent control", () => {
-    expect(panelSource).toContain("visualizationTargetCapabilities(target)");
+    expect(panelSource).toContain("visualizationTargetCapabilities(target, panel.artifactInspection)");
     expect(panelSource).toContain("targetKind={target.kind}");
     expect(panelSource.match(/<VisualizationGeometryScopeSection/g)).toHaveLength(1);
     expect(panelSource).not.toContain('label="Arrow extent"');

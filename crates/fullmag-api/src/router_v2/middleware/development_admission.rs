@@ -31,7 +31,7 @@ struct AdmissionState {
     mutations: Arc<RwLock<()>>,
     runtime_failure_fence_path: OnceLock<Result<Option<PathBuf>, ()>>,
     runtime_failure_fenced: AtomicBool,
-    runtime_failure_reason: OnceLock<&'static str>,
+    runtime_failure_reason: OnceLock<String>,
 }
 
 impl Default for AdmissionState {
@@ -53,13 +53,22 @@ pub(crate) struct DevelopmentAdmission(Arc<AdmissionState>);
 /// evaluation. Keep this explicit when adding resources to diagnostic mode.
 fn retained_result_observation(path: &str) -> bool {
     if matches!(path,
-        "/v2/sessions/current/data/domain/meta"
+        "/v2/sessions"
+        | "/v2/sessions/current/data/domain/meta"
         | "/v2/sessions/current/data/domain/topology"
+        | "/v2/sessions/current/data/domain/fdm-multilayer-layout"
         | "/v2/sessions/current/data/fields"
         | "/v2/sessions/current/data/scalars"
         | "/v2/sessions/current/meshing/meshes/shared-domain/manifest"
         | "/v2/sessions/current/meshing/meshes/shared-domain/topology"
         | "/v2/sessions/current/diagnostics/engine-log"
+        | "/v2/sessions/current/simulation/stages/execution"
+        | "/v2/sessions/current/visualization/state"
+        | "/v2/sessions/current/events/communication-policy"
+        // The shared scene loader returns only its retained snapshot under
+        // the runtime-failure fence; a cache miss cannot invoke Python.
+        | "/v2/sessions/current/model/scene"
+        | "/v2/sessions/current/model/universe"
     ) {
         return true;
     }
@@ -70,6 +79,32 @@ fn retained_result_observation(path: &str) -> bool {
         return false;
     };
     !quantity.is_empty() && matches!(resource, "availability" | "meta" | "samples/vector")
+}
+
+/// Published vector reads take typed query parameters for component, scope,
+/// and generation pins. Their handler reads the accepted snapshot/CAS result;
+/// it does not enqueue field materialization or invoke the solver.
+fn retained_field_vector_observation(path: &str) -> bool {
+    let Some(relative) = path.strip_prefix("/v2/sessions/current/data/fields/") else {
+        return false;
+    };
+    let Some((quantity, resource)) = relative.split_once('/') else {
+        return false;
+    };
+    !quantity.is_empty() && resource == "samples/vector"
+}
+
+/// A single native-layer ID followed by the exact active-mask resource.
+fn retained_fdm_active_mask_observation(path: &str) -> bool {
+    let Some(relative) = path.strip_prefix(
+        "/v2/sessions/current/data/domain/fdm-multilayer-layers/",
+    ) else {
+        return false;
+    };
+    let Some((layer_id, resource)) = relative.split_once('/') else {
+        return false;
+    };
+    !layer_id.is_empty() && resource == "active-mask"
 }
 
 /// Current accepted-run status and preparation are immutable/read-model
@@ -93,17 +128,27 @@ impl DevelopmentAdmission {
     /// This is an in-memory latch only; the supervisor remains the owner of
     /// the on-disk failure marker.
     pub(crate) fn latch_runtime_failure(&self, reason: &'static str) {
-        let _ = self.0.runtime_failure_reason.set(reason);
+        let summary = match self.0.runtime_failure_fence_path.get_or_init(read_runtime_failure_fence_path) {
+            Ok(Some(path)) => public_runtime_failure_summary(path),
+            _ => None,
+        };
+        let _ = self.0.runtime_failure_reason.set(summary.unwrap_or_else(|| reason.to_owned()));
         self.0.runtime_failure_fenced.store(true, Ordering::Release);
     }
 
     /// Fixed application messages only; raw owner data and host paths remain
-    /// in the backend log. Keep the first initialization failure visible.
-    pub(crate) fn runtime_failure_reason(&self) -> Option<&'static str> {
+    /// in the backend log. The fence is diagnostic input, never permission to
+    /// reopen admission. Keep the first initialization failure visible.
+    pub(crate) fn runtime_failure_reason(&self) -> Option<&str> {
         self.observe_runtime_failure_fence().then(|| {
-            self.0.runtime_failure_reason.get().copied().unwrap_or(
-                "Runtime execution is unavailable. API diagnostics remain available; inspect the backend log for the failing stage. No task was restarted.",
-            )
+            self.0.runtime_failure_reason.get_or_init(|| {
+                let summary = match self.0.runtime_failure_fence_path.get() {
+                    Some(Ok(Some(path))) => public_runtime_failure_summary(path),
+                    _ => None,
+                };
+                summary.unwrap_or_else(||
+                    "Runtime execution is unavailable. API diagnostics remain available; inspect the backend log for the failing stage. No task was restarted.".to_owned())
+            }).as_str()
         })
     }
 
@@ -206,6 +251,64 @@ impl DevelopmentAdmission {
     }
 }
 
+/// Interpret only known failure categories for presentation. Never expose raw
+/// exception text, tokens, process paths, or arbitrary next_action strings.
+/// Missing/malformed metadata leaves the separate existence-based fence closed.
+fn public_runtime_failure_summary(path: &std::path::Path) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct SummaryInput {
+        schema: String,
+        stage: String,
+        reason: String,
+        #[serde(default)]
+        api_pid: Option<u32>,
+    }
+    let root = path.parent()?;
+    let name = path.file_name()?.to_str()?;
+    let bytes = fullmag_session::repository_path::read_bounded_regular_file(root, name, 16 * 1024).ok()?;
+    let input: SummaryInput = serde_json::from_slice(&bytes).ok()?;
+    if input.schema != "fullmag.api-runtime-failure-fence.v1"
+        || input.reason.len() > 4096
+        || input.api_pid.is_some_and(|pid| pid != std::process::id())
+    {
+        return None;
+    }
+    let stage = match input.stage.as_str() {
+        "runtime_startup" => "runtime startup",
+        "runtime_supervision" if input.api_pid.is_some() => "runtime supervision",
+        _ => return None,
+    };
+    let (cause, action) = if input.reason.contains(
+        "stored host resource policy differs from explicit ledger configuration",
+    ) {
+        (
+            "The configured CPU/RAM budget differs from this group's stored resource policy.",
+            "Restore this group's saved resource budget before an explicit managed restart.",
+        )
+    } else if input.reason.contains("session store writer is busy") {
+        (
+            "The runtime reported an unavailable session-store writer.",
+            "Inspect the writer and task diagnostics before explicitly continuing.",
+        )
+    } else if input.reason.contains("exited unexpectedly") {
+        (
+            "A supervised runtime process exited unexpectedly.",
+            "Inspect the backend runtime log for its exit and failing stage before restarting.",
+        )
+    } else if input.reason.contains("runtime service owner is not ready") {
+        (
+            "The runtime owner stopped reporting a ready state.",
+            "Inspect the runtime log and the separate task outcome before restarting.",
+        )
+    } else {
+        (
+            "Runtime initialization or supervision failed; details are retained in the backend log.",
+            "Inspect the backend runtime log and correct the cause before restarting.",
+        )
+    };
+    Some(format!("Failure stage: {stage}. Cause: {cause} Next action: {action} No task was restarted."))
+}
+
 fn read_runtime_failure_fence_path() -> Result<Option<PathBuf>, ()> {
     let Some(value) = std::env::var_os(RUNTIME_FAILURE_FENCE_ENV) else {
         return Ok(None);
@@ -278,7 +381,13 @@ pub(crate) async fn mutation_admission_middleware(
             request.uri().path(),
             "/v2/platform/health" | "/v2/platform/runtime-service"
         ) || (request.uri().query().is_none()
-            && retained_result_observation(request.uri().path())))
+            && (retained_result_observation(request.uri().path())
+                || retained_fdm_active_mask_observation(request.uri().path())))
+            || (*request.method() == Method::GET
+                && (retained_field_vector_observation(request.uri().path())
+                    // Read-only replay/heartbeat stream; inbound messages
+                    // cannot submit commands. Keep after_seq reconnects live.
+                    || request.uri().path() == "/v2/sessions/current/events/ws")))
         || (request.method() == Method::GET
             && request.uri().query().is_none()
             && runtime_failure_snapshot_observation(request.uri().path()));
@@ -287,6 +396,12 @@ pub(crate) async fn mutation_admission_middleware(
             request.uri().path(),
             "/healthz"
                 | "/v2/platform/openapi.json"
+                // These bounded read-only process/catalog observations are
+                // also used by the supervisor during a normal workspace
+                // freeze. A temporary mutation fence is not a failed API.
+                | "/v2/platform/health"
+                | "/v2/platform/runtime-service"
+                | "/v2/platform/compute/profiles"
                 | "/v1/internal/live/current/control/wait"
         ))
         || (runtime_failure && read_only_diagnostic);

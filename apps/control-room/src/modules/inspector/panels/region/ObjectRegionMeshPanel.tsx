@@ -29,10 +29,6 @@ import {
   resolveFdmObjectMeshInspectorModel,
   type FdmObjectMeshInspectorResources,
 } from "../fdmMeshInspectorModel";
-import {
-  RegionIntegerField,
-  objectRegionMeshOrderDraftKey,
-} from "./RegionIntegerField";
 
 export function ObjectRegionMeshPanel({
   model,
@@ -49,7 +45,6 @@ export function ObjectRegionMeshPanel({
   meshLane = "unknown",
   couplingDependencies,
   updateMeshPolicy,
-  removeQuantityFieldDraftKeys,
   applyRegion,
   revert,
   duplicateRegion,
@@ -200,15 +195,7 @@ export function ObjectRegionMeshPanel({
           label="Enable mesh policy"
           type="checkbox"
           checked={draft.meshPolicy.enabled}
-          onChange={(event: ChangeEvent<HTMLInputElement>) => {
-            const enabled = event.target.checked;
-            if (!enabled) {
-              removeQuantityFieldDraftKeys?.([
-                objectRegionMeshOrderDraftKey(model.objectId, model.regionId),
-              ]);
-            }
-            updateMeshPolicy({ enabled });
-          }}
+          onChange={(event: ChangeEvent<HTMLInputElement>) => updateMeshPolicy({ enabled: event.target.checked })}
         />
         <PhysicalScalarField
           label="Max element size"
@@ -231,13 +218,13 @@ export function ObjectRegionMeshPanel({
           disabled={!draft.meshPolicy.enabled}
           onValueChange={(next) => updateMeshPolicy({ transitionDistance: next })}
         />
-        <RegionIntegerField
-          draftKey={objectRegionMeshOrderDraftKey(model.objectId, model.regionId)}
+        <FormField
           label="Order"
+          type="number"
+          step={1}
+          value={String(draft.meshPolicy.order)}
           disabled={!draft.meshPolicy.enabled}
-          minimum={1}
-          value={draft.meshPolicy.order}
-          onValueChange={(order) => updateMeshPolicy({ order })}
+          onChange={(event: ChangeEvent<HTMLInputElement>) => updateMeshPolicy({ order: Number(event.target.value) })}
         />
       </InspectorGroup>
 

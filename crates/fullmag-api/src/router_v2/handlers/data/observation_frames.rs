@@ -117,9 +117,31 @@ fn load_observation_frames(
         }
         let manifest_bytes = store
             .cas()
-            .get(manifest_ref)
+            .get_bounded(manifest_ref,fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES)
             .map_err(|error| ApiError::internal(error.to_string()))?
             .ok_or_else(|| ApiError::internal("observation manifest CAS object is missing"))?;
+        let header: serde_json::Value = serde_json::from_slice(&manifest_bytes)
+            .map_err(|error|ApiError::internal(format!("invalid observation manifest: {error}")))?;
+        if header.get("schema_version").and_then(serde_json::Value::as_str) == Some(fullmag_session::FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V4) {
+            let terminal: fullmag_session::FmsStudyOutputManifestV4 = serde_json::from_slice(&manifest_bytes)
+                .map_err(|error|ApiError::internal(format!("invalid terminal observation manifest: {error}")))?;
+            terminal.validate().map_err(|error|ApiError::internal(error.to_string()))?;
+            if terminal.run_id != run_id || terminal.task_id != task.task_id || terminal.attempt_id != attempt_id
+                || terminal.ownership_epoch != ownership_epoch { return Err(ApiError::internal("terminal observation owner differs")); }
+            let verified = fullmag_runtime_control::load_study_observation_runtime_v2(&store,&terminal.accepted_state_ref)
+                .map_err(|error|ApiError::unprocessable(format!("unsupported_missing_primary_state: {error}")))?;
+            let descriptor = verified.descriptor;
+            let frame_id = observation_frame_id(&descriptor.accepted_state_ref)?;
+            frames.push(LoadedObservationFrame {resource:ObservationFrameResource {
+                schema_version:OBSERVATION_FRAME_SCHEMA.into(),frame_id:frame_id.clone(),status:ObservationFrameStatus::Complete,
+                run_id:run_id.clone(),task_id:task.task_id.clone(),stage_id:terminal.step_id,attempt_id:attempt_id.into(),ownership_epoch,
+                accepted_state_ref:(&descriptor.accepted_state_ref).into(),adapter_id:descriptor.adapter_id,
+                grid_cells:descriptor.grid_cells,quantity_ids:descriptor.quantity_ids,state_codec_id:descriptor.state_codec_id,
+                state_codec_version:descriptor.state_codec_version,
+                magnetization_href:format!("/v2/sessions/current/data/observation-frames/{frame_id}/magnetization"),
+            },accepted_state_ref:descriptor.accepted_state_ref});
+            continue;
+        }
         let manifest: fullmag_session::FmsStudyOutputManifest =
             serde_json::from_slice(&manifest_bytes).map_err(|error| {
                 ApiError::internal(format!("invalid observation manifest: {error}"))
@@ -332,15 +354,13 @@ pub async fn get_observation_frame_magnetization(
                 .ok_or_else(|| ApiError::not_found("observation frame was not found"))?;
             let store = fullmag_session::SessionStore::open_existing(store_root)
                 .map_err(|error| ApiError::internal(error.to_string()))?;
-            let mut loaded = fullmag_runtime_control::load_study_observation_runtime(
-                &store,
-                &frame.accepted_state_ref,
-            )
-            .map_err(|error| {
-                ApiError::unprocessable(format!("unsupported_missing_primary_state: {error}"))
-            })?;
-            let batch = loaded
-                .runtime
+            let mut runtime = match frame.resource.adapter_id.as_str() {
+                "fdm_cpu_observation.v2" => fullmag_runtime_control::load_study_observation_runtime_v2(&store,&frame.accepted_state_ref)
+                    .map(|loaded|loaded.runtime),
+                _ => fullmag_runtime_control::load_study_observation_runtime(&store,&frame.accepted_state_ref)
+                    .map(|loaded|loaded.runtime),
+            }.map_err(|error|ApiError::unprocessable(format!("unsupported_missing_primary_state: {error}")))?;
+            let batch = runtime
                 .compute_quantities(&frame.accepted_state_ref.id, &[QuantityId::M])
                 .map_err(|error| {
                     ApiError::unprocessable(format!("unsupported_missing_primary_state: {error}"))

@@ -6,7 +6,10 @@ import {
   scientificTrustLabel,
   type ChartScientificTrust,
 } from "./chartScientificTrust";
-import type { ChartDataPresentationState } from "./chartPresentationState";
+import {
+  chartPresentationStatusDisplay,
+  type ChartDataPresentationState,
+} from "./chartPresentationState";
 import type { ChartSeriesSourceIdentity } from "@/shared/domain/analysis/chartSeries";
 
 export type { ChartScientificTrust } from "./chartScientificTrust";
@@ -170,38 +173,5 @@ export function ChartSection({
 function presentationStatus(status: ChartSectionStatus | undefined) {
   const presentation = status?.presentation;
   if (!presentation) return status;
-  switch (presentation.kind) {
-    case "ready":
-      return { ...status, primary: "Live", revision: presentation.revision };
-    case "refreshing":
-      return {
-        ...status,
-        primary: "Updating",
-        requestedRevision: presentation.requestedRevision,
-        revision: presentation.visibleRevision,
-      };
-    case "paused":
-      return {
-        ...status,
-        primary: "Paused",
-        requestedRevision: presentation.latestKnownRevision,
-        revision: presentation.visibleRevision,
-      };
-    case "stale":
-      return {
-        ...status,
-        detail: presentation.error.message,
-        isAlert: true,
-        primary: "Refresh failed",
-        revision: presentation.visibleRevision,
-      };
-    case "error":
-      return { ...status, detail: presentation.error.message, isAlert: true, primary: "Error" };
-    case "unsupported":
-      return { ...status, detail: presentation.reason, primary: "Unavailable" };
-    case "empty":
-      return { ...status, primary: "No table data", revision: presentation.revision };
-    case "initial-loading":
-      return { ...status, primary: "Loading…" };
-  }
+  return { ...status, ...chartPresentationStatusDisplay(presentation) };
 }

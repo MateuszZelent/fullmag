@@ -191,18 +191,9 @@ CPU and GPU must share the tensor convention, sign and energy definition. They m
 library, storage layout, precision, reductions and residency.
 
 (numerical-methods-demag-fdm-implementation-mapping)=
-## Where this is implemented
+## Implementation mapping
 
-| Claim | Repository path | Stable symbol | Responsibility | Lane |
-|---|---|---|---|---|
-| Python policy | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L50) | [`class FDMDemag`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L50) | strategy, mode and common-grid validation | public API |
-| Mesh authoring | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L1498) | [`class GeometryMeshHandle`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L1498) | canonical object-owned cell-size authoring | public API |
-| CPU kernel spectra | [`crates/fullmag-engine/src/fdm/cpu/fft.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/fft.rs#L644) | [`compute_newell_kernel_spectra`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/fft.rs#L644) | CPU FFT kernel spectra | CPU/reference |
-| Stage lowering | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L3123) | [`relax_stage`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L3123) | stage-first example lowering | public API |
-| Newell tensor | [`crates/fullmag-fdm-demag/src/newell.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-fdm-demag/src/newell.rs#L542) | [`compute_newell_kernels`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-fdm-demag/src/newell.rs#L542) | cell-averaged tensor construction | CPU/reference |
-| Tensor convolution | [`crates/fullmag-fdm-demag/src/multiply.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-fdm-demag/src/multiply.rs#L25) | [`accumulate_tensor_convolution`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-fdm-demag/src/multiply.rs#L25) | symmetric tensor-vector product | CPU/reference |
-| CPU field | [`crates/fullmag-engine/src/fdm/cpu/fields/demag.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/fields/demag.rs#L8) | [`demag_field_from_vectors`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/fields/demag.rs#L8) | CPU field realization | FDM CPU |
-| GPU field | [`backends/fdm/gpu/cuda/interactions/demag_fp64.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L644) | [`launch_demag_field_fp64`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fdm/gpu/cuda/interactions/demag_fp64.cu#L644) | CUDA FP64 field dispatch | FDM GPU |
+Public `Demag` policy normalization, per-magnet grid configuration, Rust CPU Newell kernel construction and tensor convolution, and CUDA FP64 field evaluation are owned across distinct layers listed in {ref}`numerical-methods-demag-fdm-source-code-index`.
 
 (numerical-methods-demag-fdm-validation)=
 ## Validation
@@ -227,11 +218,6 @@ and validation-dependent.
 - Canonical physics owner: {doc}`../../physics/interactions/demagnetization/fdm-convolution`.
 
 (numerical-methods-demag-fdm-source-code-index)=
-
-## Control Room workflow
-
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
-
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence |

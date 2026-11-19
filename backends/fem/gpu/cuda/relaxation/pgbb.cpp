@@ -11,6 +11,8 @@
 #include "gpu/cuda/relaxation/pgbb.hpp"
 
 #include "context.hpp"
+
+#include <cstring>
 #include "gpu/cuda/runtime/nvtx_ranges.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
@@ -40,6 +42,89 @@
 #endif
 
 namespace fullmag::fem {
+
+bool gpu_relax_pgbb_field_reuse_key(
+    const Context &ctx, FemGpuPgbbFieldKey &key) noexcept
+{
+    key = {};
+#if FULLMAG_HAS_MFEM_STACK
+    const auto &gpu = ctx.gpu_state.device;
+    // Start with the static SP4 operator family. Other interactions and
+    // projections remain fresh until their exact endpoint identity is covered.
+    if (!ctx.demag.enabled ||
+        ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+        ctx.state.current_time != 0.0 ||
+        ctx.stage_completion.relax_torque_confirmation_count != 0 ||
+        ctx.thermal_brown.temperature > 0.0 ||
+        ctx.oersted.has_stage_callback || ctx.oersted.has_cylinder ||
+        ctx.oersted.has_explicit_field || ctx.stage_transport.has_stage_callback ||
+        !ctx.zeeman.regional_drives.empty() || ctx.frozen_spins.enabled() ||
+        gpu.mesh_regions.has_periodic_reduced_nodes ||
+        ctx.anisotropy.uniaxial_enabled || ctx.anisotropy.cubic_enabled ||
+        ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled ||
+        ctx.dmi.bulk_enabled || ctx.magnetoelastic.enabled) {
+        return false;
+    }
+    auto number = [](auto value) { return static_cast<uint64_t>(value); };
+    auto bits = [](double value) {
+        uint64_t result = 0;
+        static_assert(sizeof(result) == sizeof(value));
+        std::memcpy(&result, &value, sizeof(result));
+        return result;
+    };
+    // Aggregate initialization provides a compile-time bound on the key size.
+    key.values = {
+        number(gpu.relaxation.state_generation),
+        number(ctx.state.step_count),
+        number(ctx.relaxation.accepted_steps),
+        number(ctx.stage_completion.relax_stop.has_torque_tolerance_apm),
+        bits(ctx.stage_completion.relax_stop.torque_tolerance_apm),
+        number(ctx.stage_completion.relax_torque_confirmation_count),
+        bits(ctx.state.current_time),
+        number(ctx.base_plan.precision),
+        number(ctx.demag.realization),
+        number(ctx.poisson_demag.gpu_demag_mode),
+        number(ctx.poisson_demag.boundary_marker),
+        number(ctx.poisson_demag.robin_beta_mode),
+        bits(ctx.poisson_demag.robin_beta_factor),
+        bits(ctx.poisson_demag.robin_effective_beta),
+        number(ctx.demag.solver.solver),
+        number(ctx.demag.solver.preconditioner),
+        bits(ctx.demag.solver.relative_tolerance),
+        number(ctx.demag.solver.has_absolute_tolerance),
+        bits(ctx.demag.solver.absolute_tolerance),
+        number(ctx.demag.solver.max_iterations),
+        number(ctx.demag.solver.print_level),
+        number(ctx.demag.amg_policy.relax_type),
+        number(ctx.demag.amg_policy.coarsening),
+        number(ctx.demag.amg_policy.interpolation),
+        number(ctx.demag.amg_policy.aggressive_coarsening),
+        bits(ctx.demag.amg_policy.strength_threshold),
+        number(ctx.demag.amg_policy.strength_threshold_is_set),
+        number(ctx.demag.amg_policy.max_levels),
+        number(ctx.demag.amg_policy.max_levels_is_set),
+        number(ctx.demag.field_refresh.has_demag_interval_s),
+        bits(ctx.demag.field_refresh.demag_interval_s),
+        bits(ctx.demag.cached_robin_boundary_energy),
+        number(ctx.zeeman.has_external_field),
+        bits(ctx.zeeman.external_field_am[0]),
+        bits(ctx.zeeman.external_field_am[1]),
+        bits(ctx.zeeman.external_field_am[2]),
+        number(ctx.zeeman.regional_drive_revision),
+        bits(ctx.zeeman.stage_start_time_s),
+        number(ctx.exchange.enabled),
+        number(ctx.exchange.mfem.use_consistent_mass),
+        number(ctx.exchange.mfem.ready),
+        number(gpu.legacy_exchange.nnz),
+        number(gpu.lifecycle.node_count),
+        number(gpu.lifecycle.dof_len),
+    };
+    return true;
+#else
+    (void)ctx;
+    return false;
+#endif
+}
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 namespace {
@@ -260,14 +345,23 @@ bool gpu_relax_compute_current_metrics(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    if (!gpu_rk_compute_effective_field_for_magnetization_fresh_demag(
+    FemGpuPgbbFieldKey key{};
+    const bool eligible = gpu_relax_pgbb_field_reuse_key(ctx, key);
+    const bool reused_field = gpu_relax_consume_pgbb_field(
+        gpu.relaxation.pgbb_accepted_field, key, eligible);
+    if (reused_field) {
+        gpu.relaxation.accepted_evaluation_cache_hits_current_step += 1;
+    } else {
+        gpu.relaxation.accepted_evaluation_cache_misses_current_step += 1;
+    }
+    if ((!reused_field && !gpu_rk_compute_effective_field_for_magnetization_fresh_demag(
             ctx,
             gpu.magnetization.m,
             stream,
             n,
             ctx.state.current_time,
             "launch GPU projected-gradient BB h_eff accumulation",
-            reason) ||
+            reason)) ||
         !gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
         return false;
     }
@@ -365,6 +459,7 @@ bool gpu_relax_restore_previous_magnetization(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
+    gpu_relax_invalidate_accepted_evaluation(gpu.relaxation);
     if (!gpu_rk_copy_component_device(
             gpu.rk.m_backup,
             gpu.magnetization.m,
@@ -549,6 +644,7 @@ int gpu_relax_projected_gradient_bb_step(
     }
 
     auto &gpu = ctx.gpu_state.device;
+    gpu_relax_reset_step_diagnostics(gpu.relaxation);
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream);
     const int n = static_cast<int>(gpu.lifecycle.node_count);
     const int blocks = (n + kBlockSize - 1) / kBlockSize;
@@ -574,6 +670,7 @@ int gpu_relax_projected_gradient_bb_step(
     }
 
     GpuPgbbCurrentMetrics current_metrics{};
+    const double field_evaluation_time_s = ctx.state.current_time;
     if (!gpu_relax_compute_current_metrics(
             ctx,
             stream,
@@ -989,6 +1086,17 @@ int gpu_relax_projected_gradient_bb_step(
     // field reductions. Its finalizer only reads those control scalars, unlike
     // the RK finalizer that both evaluates and records the reductions.
     gpu_rk_note_completed_final_reductions(ctx);
+    // Refinement restores the ordinary solver configuration, but leaves fields
+    // evaluated at the refined tolerance. Never publish those as ordinary.
+    FemGpuPgbbFieldKey accepted_key{};
+    const auto &stop = ctx.stage_completion.relax_stop;
+    const bool torque_confirmation_due = stop.has_torque_tolerance_apm != 0 &&
+        out_stats.max_torque_Apm <= stop.torque_tolerance_apm;
+    if (!last_refinement_attempted && !torque_confirmation_due && field_evaluation_time_s == 0.0 &&
+        gpu_relax_pgbb_field_reuse_key(ctx, accepted_key)) {
+        gpu.relaxation.pgbb_accepted_field.key = accepted_key;
+        gpu.relaxation.pgbb_accepted_field.valid = true;
+    }
     return FULLMAG_FEM_OK;
 #else
     (void)ctx;

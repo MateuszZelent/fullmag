@@ -895,27 +895,27 @@ pub(super) fn load_resolved_fdm_membership(
 fn resolved_membership_from_execution_plan(
     snapshot: &SessionStateResponse,
 ) -> Result<ResolvedFdmMembership, ApiError> {
-    let plan_value = snapshot
+    let metadata = snapshot
         .metadata
         .as_ref()
-        .and_then(|metadata| metadata.get("execution_plan"))
+        .filter(|metadata| metadata.get("execution_plan").is_some())
         .ok_or_else(|| {
             ApiError::unprocessable(
                 "planar_scope_unsupported: no realized FDM membership is published",
             )
         })?;
-    let plan: fullmag_ir::ExecutionPlanIR =
-        serde_json::from_value(plan_value.clone()).map_err(|error| {
-            ApiError::internal(format!(
-                "invalid execution plan for FDM membership: {error}"
-            ))
-        })?;
-    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+    // Field resolution reaches this per quantity and request; reuse the plan
+    // decoded once per metadata version instead of cloning and decoding its
+    // per-cell arrays every time.
+    let plan = metadata.execution_plan().ok_or_else(|| {
+        ApiError::internal("invalid execution plan for FDM membership: the plan does not decode")
+    })?;
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
         return Err(ApiError::unprocessable(
             "planar_scope_unsupported: active execution plan is not single-grid FDM",
         ));
     };
-    let certificate = fdm.grid_certificate.ok_or_else(|| {
+    let certificate = fdm.grid_certificate.clone().ok_or_else(|| {
         ApiError::unprocessable("planar_scope_unsupported: FDM plan has no grid certificate")
     })?;
     certificate.validate().map_err(|error| {
@@ -962,7 +962,8 @@ fn resolved_membership_from_execution_plan(
     }
     let cell_membership = fdm
         .region_mask
-        .into_iter()
+        .iter()
+        .copied()
         .enumerate()
         .map(|(index, region_id)| {
             if fdm

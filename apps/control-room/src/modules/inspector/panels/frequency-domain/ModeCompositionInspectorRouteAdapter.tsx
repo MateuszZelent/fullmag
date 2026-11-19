@@ -6,8 +6,6 @@ import { useKernel } from "@/kernel/KernelContext";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useModeCompositionControllerResource } from "@/kernel/resources/modeCompositionResources";
 import { useFrequencyDomainEigenSpectrumV3Resource } from "@/kernel/resources/studyRuntimeResources";
-import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
-import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import {
@@ -25,22 +23,19 @@ import { modeCompositionInspectorDependenciesFromResources } from "./modeComposi
  */
 function useModeCompositionInspectorDependencies(): ModeCompositionInspectorDependencies {
   const { modeComposition } = useKernel();
-  const { controller: controllerState } = useModeCompositionControllerResource();
-  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
+  const { resource: composition } = useModeCompositionControllerResource();
   const spectrum = useFrequencyDomainEigenSpectrumV3Resource();
   const scene = useSceneResource();
 
   return useMemo(
     () =>
       modeCompositionInspectorDependenciesFromResources({
-        composition: controllerState.resource,
+        composition: composition.data,
         controller: modeComposition,
-        controllerState,
-        sessionScopeKey,
         scene: scene.data,
         spectrumArtifact: spectrum.data,
       }),
-    [controllerState, modeComposition, scene.data, sessionScopeKey, spectrum.data],
+    [composition.data, modeComposition, scene.data, spectrum.data],
   );
 }
 

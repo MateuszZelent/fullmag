@@ -52,13 +52,17 @@ import {
   Waves,
   Zap,
 } from "lucide-react";
+import { VIEW_DIRECTION_COMMANDS } from "@/modules/viewport-3d/public";
+import { VIEWPORT_3D_QUALITY_PROFILE_LABELS } from "@/shared/viewport3dQualityLabels";
 import { PROBLEM_IR_03_RIGID_TRANSFORM_REASON } from "@/kernel/authoring/objectTranslationMutation";
 
 import {
   MESHING_CAPABILITIES_PATH,
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
+import { SCALAR_COLOR_PALETTE_ITEMS } from "@/shared/visualization/scalarColorPalette";
 import type {
+  CommandQueueStatusResource,
   FieldCatalogResource,
   LiveStatusResource,
   MeshActiveBuildResource,
@@ -77,6 +81,7 @@ import {
 } from "@/kernel/api/quantityIds";
 import type { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
+import type { CommandFeedbackNotice } from "@/kernel/commands/CommandFeedbackController";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import {
@@ -119,6 +124,7 @@ import {
   type InteractionDiscretization,
 } from "@/shared/domain/physics/interactions";
 
+import { addAbsorbingBoundaryCommand } from "./absorbingBoundaryCommand";
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
 import {
   icon,
@@ -134,6 +140,7 @@ import {
   RIBBON_ANALYSIS_SHOW_FIELD_COMMAND,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+  RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND,
   RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND,
   RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND,
   RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND,
@@ -160,10 +167,6 @@ type RibbonResourceInvalidator = Pick<
   "invalidate"
 >;
 type ClipAxis = VisualizationStateResource["clip"]["axis"];
-type SliceMeshColorScale = VisualizationStateResource["slice"]["mesh_color_scale"];
-type SliceMeshQualityMetric =
-  VisualizationStateResource["slice"]["mesh_quality_metric"];
-type SliceRenderMode = VisualizationStateResource["slice"]["render_mode"];
 
 import {
   homeTab,
@@ -186,35 +189,6 @@ const CLIP_AXIS_ITEMS: Array<{ value: ClipAxis; label: string }> = [
   { value: "y", label: "XZ plane" },
   { value: "x", label: "YZ plane" },
 ];
-const SLICE_RENDER_MODE_ITEMS: Array<{ value: SliceRenderMode; label: string }> = [
-  { value: "heatmap", label: "Heatmap" },
-  { value: "contour", label: "Contour" },
-  { value: "heatmap+contour", label: "Heatmap + contour" },
-  { value: "vectors", label: "Vectors" },
-  { value: "mesh-overlay", label: "Mesh overlay" },
-];
-const SLICE_MESH_QUALITY_ITEMS: Array<{
-  value: SliceMeshQualityMetric;
-  label: string;
-}> = [
-  { value: "skewness", label: "Skewness" },
-  { value: "gamma", label: "Gamma" },
-  { value: "sicn", label: "SICN" },
-  { value: "volume", label: "Volume" },
-  { value: "aspect_ratio", label: "Aspect ratio" },
-  { value: "max_angle", label: "Max angle" },
-  { value: "min_edge", label: "Min edge" },
-];
-const SLICE_MESH_COLOR_SCALE_ITEMS: Array<{
-  value: SliceMeshColorScale;
-  label: string;
-}> = [
-  { value: "jet", label: "Jet" },
-  { value: "viridis", label: "Viridis" },
-  { value: "hot", label: "Hot" },
-  { value: "coolwarm", label: "Coolwarm" },
-];
-
 // statusMenu and separator imported from ./ribbonCommon
 
 function physicsInteractionMenu(
@@ -231,6 +205,12 @@ function physicsInteractionMenu(
     id: "physics-global:add-field-drive",
     label: "Field Drive",
     commandId: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+  };
+  const createMaskAntennaItem: RibbonMenuNode = {
+    type: "item",
+    id: "physics-global:add-mask-antenna",
+    label: "Mask Antenna",
+    commandId: RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND,
   };
   const spinAuthoringItems: RibbonMenuNode[] = scope === "all" &&
     (discretization === "fdm" || discretization === "fem")
@@ -268,7 +248,7 @@ function physicsInteractionMenu(
         value: "Discretization unresolved; FDM/FEM controls are unavailable",
         tone: "warning",
       },
-      ...(scope === "global" ? [createFieldDriveItem] : []),
+      ...(scope === "global" ? [createFieldDriveItem, createMaskAntennaItem] : []),
     ];
   }
   return [
@@ -290,7 +270,7 @@ function physicsInteractionMenu(
         commandInput: { interactionId: spec.id, ...(scope === "global" ? { scope: "global" } : {}) },
       };
     }),
-    ...(scope === "global" ? [createFieldDriveItem] : []),
+    ...(scope === "global" ? [createFieldDriveItem, createMaskAntennaItem] : []),
   ];
 }
 
@@ -304,9 +284,9 @@ const definitionsTab: RibbonTabContent = {
       title: "Definitions",
       tone: "neutral",
       actions: [
-        { id: "definitions-parameters",  icon: icon(Binary),         label: "Parameters",  disabled: true, iconColor: "text-muted-foreground", menu: menu("definitions-parameters", "Parameters", ["Add scalar", "Add vector", "Import table"]) },
-        { id: "definitions-functions",   icon: icon(FunctionSquare), label: "Functions",   disabled: true, iconColor: "text-muted-foreground" },
-        { id: "definitions-coordinates", icon: icon(Ruler),          label: "Coordinates", disabled: true, iconColor: "text-muted-foreground" },
+        { id: "definitions-parameters",  icon: icon(Binary),         label: "Parameters",  preview: true, disabled: true, iconColor: "text-muted-foreground", menu: menu("definitions-parameters", "Parameters", ["Add scalar", "Add vector", "Import table"]) },
+        { id: "definitions-functions",   icon: icon(FunctionSquare), label: "Functions",   preview: true, disabled: true, iconColor: "text-muted-foreground" },
+        { id: "definitions-coordinates", icon: icon(Ruler),          label: "Coordinates", preview: true, disabled: true, iconColor: "text-muted-foreground" },
       ],
     },
   ],
@@ -327,18 +307,18 @@ const geometryTab: RibbonTabContent = {
         { id: "geometry.add-sphere",       icon: icon(Circle),   label: "Sphere",         iconColor: "text-violet-400" },
         { id: "geometry.add-microstrip-antenna", icon: icon(RadioTower), label: "Microstrip", iconColor: "text-rose-300" },
         { id: "geometry.add-cpw-antenna", icon: icon(RadioTower), label: "CPW", iconColor: "text-sky-400" },
-        { id: "builder-add-ellipsoid",     icon: icon(Circle),   label: "Ellipsoid",      disabled: true, iconColor: "text-purple-300" },
-        { id: "builder-add-disk",          icon: icon(Disc),     label: "Disk",           disabled: true, iconColor: "text-sky-400" },
+        { id: "builder-add-ellipsoid",     icon: icon(Circle),   label: "Ellipsoid",      preview: true, disabled: true, iconColor: "text-purple-300" },
+        { id: "builder-add-disk",          icon: icon(Disc),     label: "Disk",           preview: true, disabled: true, iconColor: "text-sky-400" },
         { id: "geometry.add-thin-film",    icon: icon(Box),      label: "Thin Film",      iconColor: "text-lime-300" },
-        { id: "builder-add-pillar",        icon: icon(Cylinder), label: "Pillar",         disabled: true, iconColor: "text-fuchsia-300" },
-        { id: "builder-add-nanowire",      icon: icon(Minus),    label: "Nanowire",       disabled: true, iconColor: "text-rose-300" },
-        { id: "builder-add-ring",          icon: icon(Circle),   label: "Ring",           disabled: true, iconColor: "text-amber-300" },
-        { id: "builder-add-triangular_prism", icon: icon(Triangle), label: "Tri. Prism",  disabled: true, iconColor: "text-orange-300" },
-        { id: "builder-add-cone",          icon: icon(Triangle), label: "Cone",           disabled: true, iconColor: "text-yellow-300" },
-        { id: "builder-add-capsule",       icon: icon(Disc),     label: "Capsule",        disabled: true, iconColor: "text-teal-300" },
-        { id: "builder-add-tube",          icon: icon(Circle),   label: "Tube",           disabled: true, iconColor: "text-blue-300" },
-        { id: "builder-add-wedge",         icon: icon(Box),      label: "Wedge",          disabled: true, iconColor: "text-stone-300" },
-        { id: "builder-add-polygon_prism", icon: icon(Circle),   label: "Polygon Prism",  disabled: true, iconColor: "text-indigo-300" },
+        { id: "builder-add-pillar",        icon: icon(Cylinder), label: "Pillar",         preview: true, disabled: true, iconColor: "text-fuchsia-300" },
+        { id: "builder-add-nanowire",      icon: icon(Minus),    label: "Nanowire",       preview: true, disabled: true, iconColor: "text-rose-300" },
+        { id: "builder-add-ring",          icon: icon(Circle),   label: "Ring",           preview: true, disabled: true, iconColor: "text-amber-300" },
+        { id: "builder-add-triangular_prism", icon: icon(Triangle), label: "Tri. Prism",  preview: true, disabled: true, iconColor: "text-orange-300" },
+        { id: "builder-add-cone",          icon: icon(Triangle), label: "Cone",           preview: true, disabled: true, iconColor: "text-yellow-300" },
+        { id: "builder-add-capsule",       icon: icon(Disc),     label: "Capsule",        preview: true, disabled: true, iconColor: "text-teal-300" },
+        { id: "builder-add-tube",          icon: icon(Circle),   label: "Tube",           preview: true, disabled: true, iconColor: "text-blue-300" },
+        { id: "builder-add-wedge",         icon: icon(Box),      label: "Wedge",          preview: true, disabled: true, iconColor: "text-stone-300" },
+        { id: "builder-add-polygon_prism", icon: icon(Circle),   label: "Polygon Prism",  preview: true, disabled: true, iconColor: "text-indigo-300" },
       ],
     },
     // â”€â”€ Boolean â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -348,9 +328,9 @@ const geometryTab: RibbonTabContent = {
       subtitle: "Compose object geometry",
       tone: "authoring",
       actions: [
-        { id: "builder-boolean-union",     icon: icon(Combine), label: "Union",     disabled: true, iconColor: "text-emerald-400" },
-        { id: "builder-boolean-subtract",  icon: icon(Minus),   label: "Subtract",  disabled: true, iconColor: "text-amber-400" },
-        { id: "builder-boolean-intersect", icon: icon(Plus),    label: "Intersect", disabled: true, iconColor: "text-slate-400" },
+        { id: "builder-boolean-union",     icon: icon(Combine), label: "Union",     preview: true, disabled: true, iconColor: "text-emerald-400" },
+        { id: "builder-boolean-subtract",  icon: icon(Minus),   label: "Subtract",  preview: true, disabled: true, iconColor: "text-amber-400" },
+        { id: "builder-boolean-intersect", icon: icon(Plus),    label: "Intersect", preview: true, disabled: true, iconColor: "text-slate-400" },
       ],
     },
     // â”€â”€ Transform â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -360,7 +340,7 @@ const geometryTab: RibbonTabContent = {
       subtitle: "Move / Rotate / Scale",
       tone: "authoring",
       actions: [
-        { id: "builder-tool-move", commandId: "geometry.move-selected", icon: icon(Move), label: "Move", shortcut: "W", iconColor: "text-red-400" },
+        { id: "builder-tool-move", commandId: "geometry.move-selected", icon: icon(Move), label: "Move", shortcut: "W", iconColor: C.blue },
         { id: "builder-tool-rotate", icon: icon(RotateCcw), label: "Rotate", shortcut: "E", disabled: true, tooltip: PROBLEM_IR_03_RIGID_TRANSFORM_REASON, iconColor: "text-green-400" },
         { id: "builder-tool-scale", icon: icon(Maximize2), label: "Scale", shortcut: "R", disabled: true, tooltip: PROBLEM_IR_03_RIGID_TRANSFORM_REASON, iconColor: "text-blue-400" },
       ],
@@ -372,9 +352,9 @@ const geometryTab: RibbonTabContent = {
       subtitle: "Interaction mode",
       tone: "neutral",
       actions: [
-        { id: "builder-mode-camera",     icon: icon(Camera),       label: "Camera",     shortcut: "Q", disabled: true, iconColor: "text-slate-300" },
-        { id: "builder-mode-manipulate", icon: icon(MousePointer2),label: "Manipulate",               disabled: true, iconColor: "text-orange-400" },
-        { id: "builder-toggle-snap",     icon: icon(Magnet),       label: "Snap",       shortcut: "G", disabled: true, iconColor: "text-slate-400" },
+        { id: "builder-mode-camera",     icon: icon(Camera),       label: "Camera",     shortcut: "Q", preview: true, disabled: true, iconColor: "text-slate-300" },
+        { id: "builder-mode-manipulate", icon: icon(MousePointer2),label: "Manipulate",               preview: true, disabled: true, iconColor: "text-orange-400" },
+        { id: "builder-toggle-snap",     icon: icon(Magnet),       label: "Snap",       shortcut: "G", preview: true, disabled: true, iconColor: "text-slate-400" },
       ],
     },
     // â”€â”€ Lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -399,7 +379,7 @@ const geometryTab: RibbonTabContent = {
       actions: [
         { id: "geometry.focus-primitive", icon: icon(Focus), label: "Focus Selected", shortcut: "F",       iconColor: "text-slate-300" },
         { id: "builder-frame-all",      icon: icon(Maximize),label: "Frame All",      shortcut: "Shift+F", commandId: "viewport-3d.fit", iconColor: "text-slate-300" },
-        { id: "builder-show-universe",  icon: icon(Eye),     label: "Show Universe",                       disabled: true, iconColor: "text-cyan-400" },
+        { id: "builder-show-universe",  icon: icon(Eye),     label: "Show Universe", preview: true, disabled: true, iconColor: "text-cyan-400" },
       ],
     },
   ],
@@ -414,9 +394,9 @@ const materialsTab: RibbonTabContent = {
       subtitle: "materials",
       tone: "authoring",
       actions: [
-        { id: "mat-params", icon: icon(FlaskConical), label: "Parameters", disabled: true, iconColor: "text-emerald-400", menu: menu("materials-params", "Material parameters", ["Ms", "Aex", "alpha", "gamma", "initial m"]) },
-        { id: "mat-dmi",    icon: icon(Sparkles),     label: "Add DMI",    disabled: true, iconColor: "text-violet-400", menu: radioMenu("materials-dmi", "DMI type", "none", [["none", "None"], ["bulk", "Bulk"], ["interfacial", "Interfacial"]]) },
-        { id: "mat-ku",     icon: icon(Binary),       label: "Add Ku",     disabled: true, iconColor: "text-rose-400",   menu: menu("materials-anisotropy", "Anisotropy", ["Uniaxial", "Cubic", "Surface anisotropy"]) },
+        { id: "mat-params", icon: icon(FlaskConical), label: "Parameters", preview: true, disabled: true, iconColor: "text-emerald-400", menu: menu("materials-params", "Material parameters", ["Ms", "Aex", "alpha", "gamma", "initial m"]) },
+        { id: "mat-dmi",    icon: icon(Sparkles),     label: "Add DMI",    preview: true, disabled: true, iconColor: "text-violet-400", menu: radioMenu("materials-dmi", "DMI type", "none", [["none", "None"], ["bulk", "Bulk"], ["interfacial", "Interfacial"]]) },
+        { id: "mat-ku",     icon: icon(Binary),       label: "Add Ku",     preview: true, disabled: true, iconColor: "text-rose-400",   menu: menu("materials-anisotropy", "Anisotropy", ["Uniaxial", "Cubic", "Surface anisotropy"]) },
       ],
     },
     {
@@ -425,12 +405,12 @@ const materialsTab: RibbonTabContent = {
       subtitle: "initial state",
       tone: "authoring",
       actions: [
-        { id: "mat-texture-inspector", icon: icon(Eye),      label: "Inspector",    disabled: true, iconColor: "text-sky-400",     menu: menu("mat-texture-inspector", "Texture inspector", ["View texture", "Texture history", "Reset texture"]) },
+        { id: "mat-texture-inspector", icon: icon(Eye),      label: "Inspector",    preview: true, disabled: true, iconColor: "text-sky-400",     menu: menu("mat-texture-inspector", "Texture inspector", ["View texture", "Texture history", "Reset texture"]) },
         { id: "magnetization-texture.assign-uniform", icon: icon(Magnet), label: "Uniform", iconColor: "text-amber-400" },
         { id: "magnetization-texture.assign-random-seeded", icon: icon(Sparkles), label: "Random", iconColor: "text-emerald-400" },
         { id: "magnetization-texture.assign-vortex", icon: icon(Circle), label: "Vortex", iconColor: "text-cyan-400" },
-        { id: "mat-texture-bloch-sky", icon: icon(Disc),     label: "Bloch Sky",    iconColor: "text-violet-400", disabled: true },
-        { id: "mat-texture-neel-sky",  icon: icon(Disc),     label: "NĂ©el Sky",     iconColor: "text-purple-300", disabled: true },
+        { id: "mat-texture-bloch-sky", icon: icon(Disc),     label: "Bloch Sky",    preview: true, iconColor: "text-violet-400", disabled: true },
+        { id: "mat-texture-neel-sky",  icon: icon(Disc),     label: "Néel Sky",     preview: true, iconColor: "text-purple-300", disabled: true },
       ],
     },
     {
@@ -443,6 +423,7 @@ const materialsTab: RibbonTabContent = {
           id: "mat-transform-scope",
           icon: icon(Target),
           label: "Scope",
+          preview: true,
           disabled: true,
           iconColor: "text-sky-400",
           menu: [
@@ -463,6 +444,7 @@ const materialsTab: RibbonTabContent = {
           id: "mat-transform-tool",
           icon: icon(Move3D),
           label: "Tool",
+          preview: true,
           disabled: true,
           iconColor: "text-fuchsia-300",
           menu: [
@@ -504,6 +486,14 @@ const physicsTab: RibbonTabContent = {
       tone: "compose",
       actions: [
         {
+          id: addAbsorbingBoundaryCommand.id,
+          icon: icon(Waves),
+          label: "Add ABL",
+          iconColor: "text-teal-400",
+          commandId: addAbsorbingBoundaryCommand.id,
+          tooltip: "Add or open the selected magnetic object's absorbing boundary",
+        },
+        {
           id: "physics-add-frozen-spins",
           icon: icon(Magnet),
           label: "Frozen Spins",
@@ -511,8 +501,8 @@ const physicsTab: RibbonTabContent = {
           iconColor: "text-amber-400",
           tooltip: "Freeze the selected ferromagnet or region",
         },
-        { id: "physics-add-dmi", icon: icon(Sparkles), label: "DMI",         disabled: true, iconColor: "text-cyan-400",  menu: radioMenu("physics-dmi-type", "DMI type", "bulk", [["bulk", "Bulk DMI"], ["interfacial", "Interfacial DMI"]]) },
-        { id: "physics-add-ku",  icon: icon(Binary),   label: "Uniaxial Ku", disabled: true, iconColor: "text-rose-400" },
+        { id: "physics-add-dmi", icon: icon(Sparkles), label: "DMI",         preview: true, disabled: true, iconColor: "text-cyan-400",  menu: radioMenu("physics-dmi-type", "DMI type", "bulk", [["bulk", "Bulk DMI"], ["interfacial", "Interfacial DMI"]]) },
+        { id: "physics-add-ku",  icon: icon(Binary),   label: "Uniaxial Ku", preview: true, disabled: true, iconColor: "text-rose-400" },
       ],
     },
     {
@@ -520,9 +510,7 @@ const physicsTab: RibbonTabContent = {
       title: "RF / Antennas",
       subtitle: "sources",
       actions: [
-        { id: "manage-rf",      icon: icon(RadioTower), label: "RF Sources",  disabled: true, iconColor: "text-cyan-400",    menu: menu("physics-rf", "RF source", ["Add microstrip", "Add CPW", "List sources"]) },
-        { id: "add-microstrip", icon: icon(Plus),       label: "Microstrip",  commandId: "geometry.add-microstrip-antenna", iconColor: "text-teal-400" },
-        { id: "add-cpw",        icon: icon(Plus),       label: "CPW",         commandId: "geometry.add-cpw-antenna", iconColor: "text-sky-400" },
+        { id: "manage-rf", icon: icon(RadioTower), label: "RF Sources", preview: true, disabled: true, iconColor: "text-cyan-400", menu: menu("physics-rf", "RF source", ["Add microstrip", "Add CPW", "List sources"]) },
       ],
     },
   ],
@@ -614,12 +602,12 @@ const studyTab: RibbonTabContent = {
       subtitle: "multi-stage",
       tone: "compose",
       actions: [
-        { id: "study-sweep-relax",    icon: icon(BarChart3), label: "Sweep+Relax",   disabled: true, iconColor: "text-violet-400" },
-        { id: "study-sweep-snap",     icon: icon(Camera),    label: "Sweep+Snap",    disabled: true, iconColor: "text-sky-400" },
-        { id: "study-relax-run",      icon: icon(Play),      label: "Relax → Run",     disabled: true, iconColor: "text-emerald-400" },
-        { id: "study-relax-eigen",    icon: icon(Sigma),     label: "Relax → Eigen",   iconColor: "text-amber-400",  disabled: true },
-        { id: "study-param-sweep",    icon: icon(BarChart3), label: "Param Sweep",   disabled: true, iconColor: "text-cyan-400" },
-        { id: "study-current-sweep",  icon: icon(Zap),       label: "Current Sweep", disabled: true, iconColor: "text-yellow-400" },
+        { id: "study-sweep-relax",    icon: icon(BarChart3), label: "Sweep+Relax",   preview: true, disabled: true, iconColor: "text-violet-400" },
+        { id: "study-sweep-snap",     icon: icon(Camera),    label: "Sweep+Snap",    preview: true, disabled: true, iconColor: "text-sky-400" },
+        { id: "study-relax-run",      icon: icon(Play),      label: "Relax → Run",     preview: true, disabled: true, iconColor: "text-emerald-400" },
+        { id: "study-relax-eigen",    icon: icon(Sigma),     label: "Relax → Eigen", preview: true, iconColor: "text-amber-400",  disabled: true },
+        { id: "study-param-sweep",    icon: icon(BarChart3), label: "Param Sweep",   preview: true, disabled: true, iconColor: "text-cyan-400" },
+        { id: "study-current-sweep",  icon: icon(Zap),       label: "Current Sweep", preview: true, disabled: true, iconColor: "text-yellow-400" },
       ],
     },
     {
@@ -628,9 +616,9 @@ const studyTab: RibbonTabContent = {
       subtitle: "manage stages",
       tone: "selection",
       actions: [
-        { id: "study-duplicate", icon: icon(Columns2), label: "Duplicate",      iconColor: "text-sky-400",     disabled: true },
+        { id: "study-duplicate", icon: icon(Columns2), label: "Duplicate",      preview: true, iconColor: "text-sky-400",     disabled: true },
         { id: "study.remove-selected-stage", icon: icon(Trash2), label: "Remove", iconColor: "text-red-400" },
-        { id: "study-toggle",    icon: icon(Eye),      label: "Enable/Disable", iconColor: "text-amber-400",   disabled: true },
+        { id: "study-toggle",    icon: icon(Eye),      label: "Enable/Disable", preview: true, iconColor: "text-amber-400",   disabled: true },
       ],
     },
     {
@@ -639,7 +627,7 @@ const studyTab: RibbonTabContent = {
       subtitle: "script",
       tone: "sync",
       actions: [
-        { id: "study-sync", icon: icon(RefreshCw), label: "Sync Script", disabled: true, iconColor: "text-emerald-400", menu: [...statusMenu("study-sync-status", "Script sync", "Local only"), separator("study-sync-sep"), ...menu("study-sync", "Sync", ["Review diff", "Apply to model", "Export canonical script"])] },
+        { id: "study-sync", icon: icon(RefreshCw), label: "Sync Script", preview: true, disabled: true, iconColor: "text-emerald-400", menu: [...statusMenu("study-sync-status", "Script sync", "Local only"), separator("study-sync-sep"), ...menu("study-sync", "Sync", ["Review diff", "Apply to model", "Export canonical script"])] },
       ],
     },
     {
@@ -651,6 +639,8 @@ const studyTab: RibbonTabContent = {
         { id: "study.compute-fields", icon: icon(Activity), label: "Compute Fields", iconColor: C.sapphire, tooltip: "Compute Fields: materialize field quantities for the current magnetization without running the study" },
         { id: "study.compute-energies", icon: icon(Sigma), label: "Compute Energies", iconColor: C.lavender, tooltip: "Compute Energies: evaluate energy terms for the current magnetization without running the study" },
         { id: "study.prepare-live", icon: icon(Layers3), label: "Prepare", iconColor: C.blue, tooltip: "Materialize the current Live scene preparation receipt without starting the solver" },
+        { id: "study.build-and-run", icon: icon(Zap), label: "Build + Study", iconColor: C.green, tooltip: "Build the saved model's domain and start the whole Study after verifying its publication." },
+        { id: "study.cancel-build-and-run", icon: icon(Square), label: "Cancel Build + Study", iconColor: C.red },
         { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, iconColor: C.green, tooltip: "Compute Study: run the study stages on the solver (same as Study > Compute Study, F5)" },
         { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
         { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
@@ -660,7 +650,7 @@ const studyTab: RibbonTabContent = {
         { id: "study.export-state", icon: icon(Download), label: "Export State", commandId: "study.export-state", iconColor: C.sapphire },
         { id: "study.discard-paused-state", icon: icon(Scissors), label: "Discard", iconColor: C.red },
         { id: "study.stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   iconColor: C.red },
-        { id: "study.skip",  icon: icon(SkipForward),                           label: "Skip",                   iconColor: C.peach },
+        { id: "study.skip",  icon: icon(SkipForward),                           label: "Skip stage",              iconColor: C.peach },
       ],
     },
   ],
@@ -675,7 +665,7 @@ const resultsTab: RibbonTabContent = {
       subtitle: "resources",
       tone: "neutral",
       actions: [
-        { id: "res-m",          icon: icon(Magnet),    label: "M",         active: true, iconColor: "text-pink-400",    menu: radioMenu("results-quantity", "Result quantity", "m", [["m", "Magnetization / m"], ["H_eff", "H_eff"], ["H_demag", "H_demag"], ["H_ex", "H_ex"], ["H_ani", "H_ani"], ["H_ant", "H_ant"], ["torque", "torque"], ["eden_total", "Îµ_total"], ["eden_ex", "Îµ_ex"], ["eden_demag", "Îµ_demag"], ["eden_ext", "Îµ_ext"], ["eden_ani", "Îµ_ani"], ["eden_dmi", "Îµ_dmi"], ["mat_ms", "M_sat"], ["mat_aex", "A_ex"], ["mat_alpha", "Î±"], ["mat_dind", "D_ind"], ["mat_dbulk", "D_bulk"]]) },
+        { id: "res-m",          icon: icon(Magnet),    label: "M",         active: true, iconColor: "text-pink-400",    menu: radioMenu("results-quantity", "Result quantity", "m", [["m", "Magnetization / m"], ["H_eff", "H_eff"], ["H_demag", "H_demag"], ["H_ex", "H_ex"], ["H_ani", "H_ani"], ["H_ant", "H_ant"], ["torque", "torque"], ["eden_total", "ε_total"], ["eden_ex", "ε_ex"], ["eden_demag", "ε_demag"], ["eden_ext", "ε_ext"], ["eden_ani", "ε_ani"], ["eden_dmi", "ε_dmi"], ["mat_ms", "M_sat"], ["mat_aex", "A_ex"], ["mat_alpha", "α"], ["mat_dind", "D_ind"], ["mat_dbulk", "D_bulk"]]) },
         { id: "res-heff",       icon: icon(Zap),       label: "H_eff",                   iconColor: "text-yellow-400" },
         { id: "res-demag",      icon: icon(Sigma),     label: "H_demag",                 iconColor: "text-violet-300" },
         { id: "res-exchange",   icon: icon(Zap),       label: "H_ex",                    iconColor: "text-amber-400" },
@@ -690,8 +680,8 @@ const resultsTab: RibbonTabContent = {
       subtitle: "charts",
       tone: "neutral",
       actions: [
-        { id: "results-chart",    icon: icon(BarChart3), label: "Chart",    disabled: true, iconColor: "text-emerald-400", menu: menu("results-chart",   "Chart",    ["Magnetization vs time", "Energy vs time", "Spectrum", "Dispersion", "Mode map"]) },
-        { id: "results-snapshot", icon: icon(Camera),    label: "Snapshot", disabled: true, iconColor: "text-violet-400" },
+        { id: "results-chart",    icon: icon(BarChart3), label: "Chart",    preview: true, disabled: true, iconColor: "text-emerald-400", menu: menu("results-chart",   "Chart",    ["Magnetization vs time", "Energy vs time", "Spectrum", "Dispersion", "Mode map"]) },
+        { id: "results-snapshot", icon: icon(Camera),    label: "Snapshot", preview: true, disabled: true, iconColor: "text-violet-400" },
       ],
     },
     {
@@ -710,11 +700,11 @@ const resultsTab: RibbonTabContent = {
       subtitle: "post-process",
       tone: "compose",
       actions: [
-        { id: "results-spectrum",     icon: icon(BarChart3), label: "Spectrum",      disabled: true, iconColor: "text-violet-400" },
-        { id: "results-vortex-add",   icon: icon(Circle),    label: "Vortex",        disabled: true, iconColor: "text-cyan-400" },
-        { id: "results-add-spectrum", icon: icon(Plus),      label: "Add Spectrum",  disabled: true, iconColor: "text-violet-400" },
-        { id: "results-dispersion",   icon: icon(BarChart3), label: "Add Dispersion",disabled: true, iconColor: "text-sky-400" },
-        { id: "results-modes",        icon: icon(Sigma),     label: "Add Modes",     disabled: true, iconColor: "text-teal-400" },
+        { id: "results-spectrum",     icon: icon(BarChart3), label: "Spectrum",      preview: true, disabled: true, iconColor: "text-violet-400" },
+        { id: "results-vortex-add",   icon: icon(Circle),    label: "Vortex",        preview: true, disabled: true, iconColor: "text-cyan-400" },
+        { id: "results-add-spectrum", icon: icon(Plus),      label: "Add Spectrum",  preview: true, disabled: true, iconColor: "text-violet-400" },
+        { id: "results-dispersion",   icon: icon(BarChart3), label: "Add Dispersion", preview: true, disabled: true, iconColor: "text-sky-400" },
+        { id: "results-modes",        icon: icon(Sigma),     label: "Add Modes",     preview: true, disabled: true, iconColor: "text-teal-400" },
       ],
     },
     {
@@ -722,10 +712,10 @@ const resultsTab: RibbonTabContent = {
       title: "Time Domain",
       subtitle: "traces",
       actions: [
-        { id: "add-time-traces",icon: icon(BarChart3),  label: "Add Time Traces",  disabled: true, iconColor: "text-rose-400" },
-        { id: "add-fft",        icon: icon(FunctionSquare), label: "Add FFT / PSD", disabled: true, iconColor: "text-violet-400" },
-        { id: "add-trajectory", icon: icon(Move3D),     label: "Add Trajectory",   disabled: true, iconColor: "text-fuchsia-300" },
-        { id: "add-orbit",      icon: icon(Circle),     label: "Add Orbit",         disabled: true, iconColor: "text-sky-400" },
+        { id: "add-time-traces",icon: icon(BarChart3),  label: "Add Time Traces",  preview: true, disabled: true, iconColor: "text-rose-400" },
+        { id: "add-fft",        icon: icon(FunctionSquare), label: "Add FFT / PSD", preview: true, disabled: true, iconColor: "text-violet-400" },
+        { id: "add-trajectory", icon: icon(Move3D),     label: "Add Trajectory",   preview: true, disabled: true, iconColor: "text-fuchsia-300" },
+        { id: "add-orbit",      icon: icon(Circle),     label: "Add Orbit",       preview: true, disabled: true, iconColor: "text-sky-400" },
       ],
     },
     {
@@ -733,8 +723,8 @@ const resultsTab: RibbonTabContent = {
       title: "Workspaces",
       subtitle: "tables",
       actions: [
-        { id: "add-quantity-ws", icon: icon(Plus), label: "Add Quantity", disabled: true, iconColor: "text-teal-400" },
-        { id: "add-table-ws",    icon: icon(ListChecks), label: "Add Table",    disabled: true, iconColor: "text-sky-400" },
+        { id: "add-quantity-ws", icon: icon(Plus), label: "Add Quantity", preview: true, disabled: true, iconColor: "text-teal-400" },
+        { id: "add-table-ws",    icon: icon(ListChecks), label: "Add Table", preview: true, disabled: true, iconColor: "text-sky-400" },
       ],
     },
   ],
@@ -749,7 +739,7 @@ const automationTab: RibbonTabContent = {
       subtitle: "round trip",
       tone: "sync",
       actions: [
-        { id: "automation-sync-script", icon: icon(RefreshCw), label: "Sync Script", disabled: true, iconColor: "text-emerald-400", menu: [...statusMenu("automation-sync-status", "Script sync", "Local only"), separator("automation-sync-sep"), ...menu("automation-sync", "Sync", ["Review diff", "Apply to model", "Export canonical script"])] },
+        { id: "automation-sync-script", icon: icon(RefreshCw), label: "Sync Script", preview: true, disabled: true, iconColor: "text-emerald-400", menu: [...statusMenu("automation-sync-status", "Script sync", "Local only"), separator("automation-sync-sep"), ...menu("automation-sync", "Sync", ["Review diff", "Apply to model", "Export canonical script"])] },
       ],
     },
   ],
@@ -760,7 +750,7 @@ type RibbonSessionStatus = {
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
     LiveStatusResource["resources"],
-    "field_revision" | "fields_revision"
+    "field_revision" | "fields_revision" | "scene_revision"
   > & Partial<
     Pick<
       LiveStatusResource["resources"],
@@ -774,6 +764,8 @@ export interface RibbonBuildContext {
   activeAnalysisField?: { fieldId: string; label: string } | null;
   api?: { visualization: RibbonVisualizationApi };
   commandContext?: CommandContext;
+  commandFeedback?: readonly CommandFeedbackNotice[];
+  commandQueue?: CommandQueueStatusResource | null;
   fieldCatalog?: FieldCatalogResource | null;
   quantityCatalog?: QuantityCatalogResource | null;
   commands?: CommandRegistry;
@@ -953,6 +945,11 @@ function buildResultsQuantityGroup(
                 ...node,
                 value: activeQuantityId,
                 commandId: RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
+                items: node.items.map((item) => ({
+                  ...item,
+                  preview: false,
+                  disabled: false,
+                })),
                 commandInput: (value: string) =>
                   resultsQuantityCommandInput(value),
               }
@@ -1006,8 +1003,6 @@ export function buildRibbonTabContent(
             ? buildViewOrientationGroup(group, context)
           : group.id === "view-manipulate"
             ? buildViewManipulateGroup(group, context)
-          : group.id === "view-slice-2d"
-            ? buildViewSlice2DGroup(group, context)
           : group.id === "view-display"
             ? buildViewDisplayGroup(group, context)
           : group.id === "view-selected-display"
@@ -1042,9 +1037,7 @@ export function buildRibbonTabContent(
     ? applyCommandState(resolvedContent, context)
     : resolvedContent;
 
-  return isProductionRibbonBuild()
-    ? stripProductionRibbonPlaceholders(withCommandState, context?.commands)
-    : withCommandState;
+  return stripRibbonPlaceholders(withCommandState, context?.commands);
 }
 
 /**
@@ -1081,79 +1074,88 @@ export function buildAnalysisContextTabContent(context?: RibbonBuildContext): Ri
     ],
   };
   const withCommandState = context?.commands ? applyCommandState(content, context) : content;
-  return isProductionRibbonBuild()
-    ? stripProductionRibbonPlaceholders(withCommandState, context?.commands)
-    : withCommandState;
+  return stripRibbonPlaceholders(withCommandState, context?.commands);
 }
 
-function isProductionRibbonBuild(): boolean {
-  return process.env.NODE_ENV === "production";
+/**
+ * A tab is offered only while at least one action survives placeholder
+ * removal, so a tab whose actions are all `preview` stays out of the strip
+ * until it gains a working command.
+ */
+export function ribbonTabHasContent(tabId: string, commands?: CommandRegistry): boolean {
+  const content = ALL_TAB_CONTENT[tabId];
+  return Boolean(content) && stripRibbonPlaceholders(content, commands).groups.length > 0;
 }
 
-function hasRegisteredRibbonCommand(
-  commands: CommandRegistry | undefined,
-  commandId: string,
-): boolean {
-  return Boolean(commands && commands.get(commandId));
-}
-
-function stripProductionMenuPlaceholders(
+function stripMenuPlaceholders(
   nodes: RibbonMenuNode[],
-  commands: CommandRegistry | undefined,
 ): RibbonMenuNode[] {
-  if (!commands) return nodes;
-
   const result: RibbonMenuNode[] = [];
   for (const node of nodes) {
+    if (node.preview) continue;
+
     if (node.type === "submenu") {
-      const children = stripProductionMenuPlaceholders(node.nodes, commands);
-      if (children.length > 0) result.push({ ...node, nodes: children });
+      const children = stripMenuPlaceholders(node.nodes);
+      if (hasMenuContent(children)) {
+        result.push({ ...node, nodes: children });
+      }
       continue;
     }
 
     if (node.type === "radio-group") {
-      const items = node.items.filter((item) =>
-        hasRegisteredRibbonCommand(
-          commands,
-          item.commandId ?? node.commandId ?? node.id,
-        ),
-      );
+      const items = node.items.filter((item) => !item.preview);
       if (items.length > 0) result.push({ ...node, items });
       continue;
     }
 
-    if (node.type === "label" || node.type === "separator" || node.type === "status") {
-      result.push(node);
+    if (node.type === "separator") {
+      // Collapse separators left adjacent or trailing by removed placeholders.
+      if (result.length > 0 && result[result.length - 1].type !== "separator") result.push(node);
       continue;
     }
 
-    if (hasRegisteredRibbonCommand(commands, node.commandId ?? node.id)) {
-      result.push(node);
-    }
+    result.push(node);
   }
+  while (result.length > 0 && result[result.length - 1].type === "separator") result.pop();
   return result;
 }
 
-export function stripProductionRibbonPlaceholders(
+function hasMenuContent(nodes: RibbonMenuNode[]): boolean {
+  return nodes.some((node) => {
+    if (node.type === "label" || node.type === "separator") return false;
+    if (node.type === "submenu") return hasMenuContent(node.nodes);
+    if (node.type === "radio-group") return node.items.length > 0;
+    return true;
+  });
+}
+
+/**
+ * Removes actions and menu entries explicitly marked `preview` in every build,
+ * so development and production render the same set of working commands.
+ */
+export function stripRibbonPlaceholders(
   content: RibbonTabContent,
   commands?: CommandRegistry,
 ): RibbonTabContent {
-  if (!commands) return content;
-
   return {
     ...content,
     groups: content.groups.flatMap((group) => {
       const actions = group.actions.flatMap((action) => {
-        const actionCommandId = action.commandId ?? action.id;
-        const menu = stripProductionMenuPlaceholders(action.menu ?? [], commands);
-        const hasActionCommand = hasRegisteredRibbonCommand(commands, actionCommandId);
-        const hasInformationalMenu = Boolean(action.menu) && menu.length > 0;
+        if (action.preview) return [];
+        const strippedMenu = stripMenuPlaceholders(action.menu ?? []);
+        const menu = hasMenuContent(strippedMenu) ? strippedMenu : [];
+        const hadMenu = Boolean(action.menu?.length);
+        const hasNoMenuAction = hadMenu && menu.length === 0;
+        const hasActionCommand = Boolean(
+          commands?.get(action.commandId ?? action.id),
+        );
+        if (hasNoMenuAction && !action.splitButton && !hasActionCommand) return [];
 
-        if (!hasActionCommand && !hasInformationalMenu) {
-          return [];
-        }
-
-        return [{ ...action, menu: action.menu ? menu : action.menu }];
+        return [
+          hasNoMenuAction && hasActionCommand && !action.splitButton
+            ? { ...action, menu: undefined }
+            : { ...action, menu: action.menu ? menu : action.menu },
+        ];
       });
 
       return actions.length > 0 ? [{ ...group, actions }] : [];
@@ -1170,29 +1172,9 @@ function buildHomeWorkspaceGroup(
     actions: group.actions.map((action) =>
       action.id === "home-camera-rotation"
         ? buildCameraRotationModeAction(context)
-        : action.id === "viewport-3d.open"
-          ? {
-              ...action,
-              menu: action.menu?.map((node) =>
-                node.type === "radio-group" && node.id === "home-workspace:radio"
-                  ? {
-                      ...node,
-                      value: activeViewportMainModuleValue(context),
-                    }
-                  : node,
-              ),
-            }
         : action,
     ),
   };
-}
-
-function activeViewportMainModuleValue(context: RibbonBuildContext): string {
-  const activeModuleId =
-    context.commandContext?.layout?.get().activeViewportMainModuleId;
-  if (activeModuleId === "field-map") return "field-map";
-  if (activeModuleId === "analysis-plots") return "analysis";
-  return "3d";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -1597,8 +1579,19 @@ function applyCommandState(
           : disabledByCommand
             ? command?.disabledReason?.(commandContext) ??
               `Command unavailable: ${action.label}`
-            : null;
+            : action.disabled
+              ? action.tooltip ?? "This action is unavailable in the current context."
+              : null;
         const activeResource = command?.activeResource?.(commandContext) ?? null;
+        const feedbackNotice = [...(context.commandFeedback ?? [])]
+          .reverse()
+          .find((entry) => entry.commandId === cmdId);
+        const status = resolveRibbonActionStatus(
+          action,
+          cmdId,
+          context,
+          activeResource?.kind === "command",
+        );
 
         return {
           ...action,
@@ -1609,15 +1602,91 @@ function applyCommandState(
             activeResource?.kind === "command"
               ? activeResource.commandId
               : action.activeCommandId,
+          status,
           disabled: action.disabled || disabledByMissingCommand || disabledByCommand,
           menu: action.menu?.map((node) =>
             applyCommandStateToMenuNode(node, context, commandContext),
           ),
-          tooltip: disabledReason ?? action.tooltip,
+          tooltip:
+            disabledReason ??
+            (status === "pending" || status === "failed"
+              ? feedbackNotice?.message
+              : undefined) ??
+            action.tooltip,
         };
       }),
     })),
   };
+}
+
+function resolveRibbonActionStatus(
+  action: RibbonTabContent["groups"][number]["actions"][number],
+  commandId: string,
+  context: RibbonBuildContext,
+  commandIsActive: boolean,
+): RibbonTabContent["groups"][number]["actions"][number]["status"] {
+  if (action.status) return action.status;
+
+  const notice = [...(context.commandFeedback ?? [])]
+    .reverse()
+    .find((entry) => entry.commandId === commandId);
+  if (notice?.status === "pending") {
+    if (hasMatchingRunningCommand(notice, context.commandQueue)) return "running";
+    return "pending";
+  }
+  if (notice?.status === "failed") return "failed";
+
+  if (commandIsActive) return "running";
+  if (
+    (commandId === "mesh.build-selected" || commandId === "mesh.build-shared-domain") &&
+    (context.meshBuildCurrent?.last_build_error || context.meshBuildLatest?.last_build_error)
+  ) {
+    return "failed";
+  }
+  if (
+    (commandId === "mesh.build-selected" || commandId === "mesh.build-shared-domain") &&
+    lastSuccessfulMeshIsStale(context)
+  ) {
+    return "stale";
+  }
+  return undefined;
+}
+
+function hasMatchingRunningCommand(
+  notice: CommandFeedbackNotice,
+  queue: CommandQueueStatusResource | null | undefined,
+): boolean {
+  if (!queue) return false;
+  const records = notice.backendCommandId
+    ? queue.commands.filter((record) => record.command_id === notice.backendCommandId)
+    : notice.clientIntentId
+      ? queue.commands.filter((record) =>
+          record.client_intent_id === notice.clientIntentId &&
+          record.kind === notice.clientIntentKind,
+        )
+      : [];
+  if (records.length !== 1) return false;
+  const [record] = records;
+  if (
+    (notice.clientIntentKind && record.kind !== notice.clientIntentKind) ||
+    (notice.clientIntentId && record.client_intent_id != null &&
+      record.client_intent_id !== notice.clientIntentId)
+  ) {
+    return false;
+  }
+  return record.status === "running";
+}
+
+function lastSuccessfulMeshIsStale(context: RibbonBuildContext): boolean {
+  const builtFrom = context.meshBuildLatest?.source_scene_revision;
+  const currentScene = context.sessionStatus?.resources.scene_revision;
+  return (
+    builtFrom !== null &&
+    builtFrom !== undefined &&
+    currentScene !== null &&
+    currentScene !== undefined &&
+    builtFrom !== currentScene
+  );
 }
 
 function isCommandDisabled(
@@ -1691,6 +1760,14 @@ function applyCommandStateToMenuNode(
     const command = context.commands?.get(cmdId);
     const disabledByMissingCommand = shouldDisableMissingCommand(cmdId, context);
     const disabledByCommand = isCommandDisabled(cmdId, context, commandContext);
+    const disabledReason = disabledByMissingCommand
+      ? `Command unavailable: ${node.label}`
+      : disabledByCommand
+        ? command?.disabledReason?.({ ...commandContext, input: node.checked }) ??
+          `Command unavailable: ${node.label}`
+        : node.disabled
+          ? node.tooltip ?? "This option is unavailable in the current context."
+          : null;
 
     if (command) {
       return {
@@ -1699,12 +1776,14 @@ function applyCommandStateToMenuNode(
           ? context.commands?.isActive(cmdId, commandContext) ?? node.checked
           : node.checked,
         disabled: node.disabled || disabledByMissingCommand || disabledByCommand,
+        tooltip: disabledReason ?? node.tooltip,
       };
     }
 
     return {
       ...node,
       disabled: node.disabled || disabledByMissingCommand || disabledByCommand,
+      tooltip: disabledReason ?? node.tooltip,
     };
   }
 
@@ -1725,7 +1804,9 @@ function applyCommandStateToMenuNode(
       : disabledByCommand
         ? context.commands?.get(cmdId)?.disabledReason?.(nodeCommandContext) ??
           `Command unavailable: ${node.label}`
-        : null;
+        : node.disabled
+          ? node.tooltip ?? "This option is unavailable in the current context."
+          : null;
 
     return {
       ...node,
@@ -1738,26 +1819,37 @@ function applyCommandStateToMenuNode(
   if (node.type === "radio-group") {
     return {
       ...node,
-      items: node.items.map((item) => ({
-        ...item,
-        disabled:
-          item.disabled ||
-          shouldDisableMissingCommand(
-            item.commandId ?? node.commandId ?? node.id,
-            context,
-          ) ||
-          isCommandDisabled(
-            item.commandId ?? node.commandId ?? node.id,
-            context,
-            commandContext,
-          ),
-      })),
+      items: node.items.map((item) => {
+        const cmdId = item.commandId ?? node.commandId ?? node.id;
+        const itemContext = {
+          ...commandContext,
+          input: item.commandInput ?? item.value,
+        };
+        const missing = shouldDisableMissingCommand(cmdId, context);
+        const disabledByCommand = isCommandDisabled(cmdId, context, itemContext);
+        const reason = missing
+          ? `Command unavailable: ${item.label}`
+          : disabledByCommand
+            ? context.commands?.get(cmdId)?.disabledReason?.(itemContext) ??
+              `Command unavailable: ${item.label}`
+            : item.disabled || node.disabled
+              ? item.tooltip ?? node.tooltip ?? "This option is unavailable in the current context."
+              : null;
+        return {
+          ...item,
+          disabled: item.disabled || missing || disabledByCommand,
+          tooltip: reason ?? item.tooltip,
+        };
+      }),
     };
   }
 
   if (node.type === "submenu") {
     return {
       ...node,
+      tooltip: node.disabled
+        ? node.tooltip ?? "This option is unavailable in the current context."
+        : node.tooltip,
       nodes: node.nodes.map((child) =>
         applyCommandStateToMenuNode(child, context, commandContext),
       ),
@@ -1766,49 +1858,72 @@ function applyCommandStateToMenuNode(
 
   if (node.type === "slider") {
     const cmdId = node.commandId ?? node.id;
+    const missing = shouldDisableMissingCommand(cmdId, context);
     const disabledByCommand = isCommandDisabled(
       cmdId,
       context,
-      commandContext,
+      { ...commandContext, input: node.value },
     );
+    const reason = missing
+      ? `Command unavailable: ${node.label}`
+      : disabledByCommand
+        ? context.commands?.get(cmdId)?.disabledReason?.({ ...commandContext, input: node.value }) ??
+          `Command unavailable: ${node.label}`
+        : node.disabled
+          ? node.tooltip ?? "This option is unavailable in the current context."
+          : null;
     return {
       ...node,
-      disabled:
-        node.disabled ||
-        shouldDisableMissingCommand(cmdId, context) ||
-        disabledByCommand,
+      disabled: node.disabled || missing || disabledByCommand,
+      tooltip: reason ?? node.tooltip,
     };
   }
 
   if (node.type === "color") {
     const cmdId = node.commandId ?? node.id;
+    const missing = shouldDisableMissingCommand(cmdId, context);
+    const nodeContext = { ...commandContext, input: node.value };
     const disabledByCommand = isCommandDisabled(
       cmdId,
       context,
-      commandContext,
+      nodeContext,
     );
+    const reason = missing
+      ? `Command unavailable: ${node.label}`
+      : disabledByCommand
+        ? context.commands?.get(cmdId)?.disabledReason?.(nodeContext) ??
+          `Command unavailable: ${node.label}`
+        : node.disabled
+          ? node.tooltip ?? "This option is unavailable in the current context."
+          : null;
     return {
       ...node,
-      disabled:
-        node.disabled ||
-        shouldDisableMissingCommand(cmdId, context) ||
-        disabledByCommand,
+      disabled: node.disabled || missing || disabledByCommand,
+      tooltip: reason ?? node.tooltip,
     };
   }
 
   if (node.type === "text") {
     const cmdId = node.commandId ?? node.id;
+    const missing = shouldDisableMissingCommand(cmdId, context);
+    const nodeContext = { ...commandContext, input: node.value };
     const disabledByCommand = isCommandDisabled(
       cmdId,
       context,
-      commandContext,
+      nodeContext,
     );
+    const reason = missing
+      ? `Command unavailable: ${node.label}`
+      : disabledByCommand
+        ? context.commands?.get(cmdId)?.disabledReason?.(nodeContext) ??
+          `Command unavailable: ${node.label}`
+        : node.disabled
+          ? node.tooltip ?? "This option is unavailable in the current context."
+          : null;
     return {
       ...node,
-      disabled:
-        node.disabled ||
-        shouldDisableMissingCommand(cmdId, context) ||
-        disabledByCommand,
+      disabled: node.disabled || missing || disabledByCommand,
+      tooltip: reason ?? node.tooltip,
     };
   }
 
@@ -1870,22 +1985,22 @@ function buildRenderQualityAction({
         items: [
           {
             commandId: "viewport-3d.profile-interactive-lite",
-            label: "Interactive Lite",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS["interactive-lite"],
             value: "interactive-lite",
           },
           {
             commandId: "viewport-3d.profile-interactive",
-            label: "Interactive",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.interactive,
             value: "interactive",
           },
           {
             commandId: "viewport-3d.profile-balanced",
-            label: "Balanced",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.balanced,
             value: "balanced",
           },
           {
             commandId: "viewport-3d.profile-figure",
-            label: "Figure",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.figure,
             value: "figure",
           },
           {
@@ -1917,204 +2032,6 @@ function buildViewOrientationGroup(
         ? buildHslReferenceAction(context)
         : action,
     ),
-  };
-}
-
-function buildViewSlice2DGroup(
-  group: RibbonTabContent["groups"][number],
-  context: RibbonBuildContext,
-): RibbonTabContent["groups"][number] {
-  return {
-    ...group,
-    actions: group.actions.map((action) =>
-      action.id === "view-slice-plane"
-        ? buildSlicePlaneAction(action, context)
-      : action.id === "view-slice-layers"
-        ? buildSliceLayersAction(action, context)
-      : action.id === "view-slice-quality"
-        ? buildSliceQualityAction(action, context)
-        : action,
-    ),
-  };
-}
-
-function buildSlicePlaneAction(
-  action: RibbonTabContent["groups"][number]["actions"][number],
-  context: RibbonBuildContext,
-): RibbonTabContent["groups"][number]["actions"][number] {
-  const slice = context.visualizationState?.slice;
-  return {
-    ...action,
-    active: Boolean(slice),
-    disabled: !context.api,
-    menu: [
-      {
-        type: "label",
-        id: "slice:plane:header",
-        label: "Slice plane",
-        badge: slice?.axis.toUpperCase() ?? "XY",
-      },
-      {
-        type: "radio-group",
-        id: "slice:plane:axis",
-        label: "Plane",
-        value: slice?.axis ?? "z",
-        items: CLIP_AXIS_ITEMS,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (axis: string) =>
-          visualizationStateCommandInput({
-            slice: { axis: axis as ClipAxis },
-          }),
-      },
-      {
-        type: "radio-group",
-        id: "slice:plane:mode",
-        label: "Mode",
-        value: slice?.render_mode ?? "heatmap",
-        items: SLICE_RENDER_MODE_ITEMS,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (renderMode: string) =>
-          visualizationStateCommandInput({
-            slice: { render_mode: renderMode as SliceRenderMode },
-          }),
-      },
-      {
-        type: "slider",
-        id: "slice:plane:position",
-        label: "Position",
-        value: Math.min(100, Math.max(0, slice?.position_percent ?? 50)),
-        min: 0,
-        max: 100,
-        step: 0.5,
-        unit: "%",
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (positionPercent: number) =>
-          visualizationStateCommandInput({
-            slice: { position_percent: positionPercent },
-          }),
-      },
-    ],
-  };
-}
-
-function buildSliceLayersAction(
-  action: RibbonTabContent["groups"][number]["actions"][number],
-  context: RibbonBuildContext,
-): RibbonTabContent["groups"][number]["actions"][number] {
-  const slice = context.visualizationState?.slice;
-  return {
-    ...action,
-    active: Boolean(slice?.show_mesh || slice?.show_quantity || slice?.show_vectors),
-    disabled: !context.api,
-    menu: [
-      {
-        type: "checkbox",
-        id: "slice:mesh:wireframe",
-        label: "Mesh wireframe",
-        checked: slice?.show_mesh ?? false,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (showMesh: boolean) =>
-          visualizationStateCommandInput({
-            slice: { show_mesh: showMesh },
-          }),
-      },
-      {
-        type: "checkbox",
-        id: "slice:layers:quantity",
-        label: "Quantity overlay",
-        checked: slice?.show_quantity ?? true,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (showQuantity: boolean) =>
-          visualizationStateCommandInput({
-            slice: { show_quantity: showQuantity },
-          }),
-      },
-      {
-        type: "checkbox",
-        id: "slice:layers:auto-contrast",
-        label: "Auto-scale range",
-        checked: slice?.auto_contrast ?? true,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (autoContrast: boolean) =>
-          visualizationStateCommandInput({
-            slice: { auto_contrast: autoContrast },
-          }),
-      },
-    ],
-  };
-}
-
-function buildSliceQualityAction(
-  action: RibbonTabContent["groups"][number]["actions"][number],
-  context: RibbonBuildContext,
-): RibbonTabContent["groups"][number]["actions"][number] {
-  const slice = context.visualizationState?.slice;
-  return {
-    ...action,
-    active: Boolean(slice),
-    disabled: !context.api,
-    menu: [
-      {
-        type: "radio-group",
-        id: "slice:quality:metric",
-        label: "Quality metric",
-        value: slice?.mesh_quality_metric ?? "skewness",
-        items: SLICE_MESH_QUALITY_ITEMS,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (metric: string) =>
-          visualizationStateCommandInput({
-            slice: { mesh_quality_metric: metric as SliceMeshQualityMetric },
-          }),
-      },
-      {
-        type: "radio-group",
-        id: "slice:quality:color-scale",
-        label: "Color scale",
-        value: slice?.mesh_color_scale ?? "jet",
-        items: SLICE_MESH_COLOR_SCALE_ITEMS,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (colorScale: string) =>
-          visualizationStateCommandInput({
-            slice: { mesh_color_scale: colorScale as SliceMeshColorScale },
-          }),
-      },
-      {
-        type: "text",
-        id: "slice:quality:filter",
-        label: "Element filter",
-        value: slice?.mesh_filter_expression ?? "",
-        placeholder: "quality < 0.3",
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (filterExpression: string) =>
-          visualizationStateCommandInput({
-            slice: { mesh_filter_expression: filterExpression },
-          }),
-      },
-      {
-        type: "slider",
-        id: "slice:quality:shrink",
-        label: "Shrink",
-        value: Math.min(1, Math.max(0.5, slice?.mesh_shrink_factor ?? 1)),
-        min: 0.5,
-        max: 1,
-        step: 0.05,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (shrinkFactor: number) =>
-          visualizationStateCommandInput({
-            slice: { mesh_shrink_factor: shrinkFactor },
-          }),
-      },
-    ],
   };
 }
 
@@ -2213,7 +2130,7 @@ function buildCameraRotationModeAction({
   return {
     id: "home-camera-rotation",
     icon: icon(Camera),
-    label: "Camera",
+    label: "Rotation mode",
     active: rotationMode === "camera",
     iconColor: "text-sky-300",
     menu: [
@@ -2252,7 +2169,7 @@ function buildViewCameraAction({
   return {
     id: "view-camera",
     icon: icon(Camera),
-    label: "Camera",
+    label: "Camera settings",
     active: rotationMode === "camera",
     iconColor: "text-sky-300",
     menu: [
@@ -2280,9 +2197,20 @@ function buildViewCameraAction({
           },
         ],
       },
+      {
+        type: "submenu",
+        id: "camera:view-direction",
+        label: "View direction",
+        nodes: VIEW_DIRECTION_COMMANDS.map((command) => ({
+          type: "item" as const,
+          id: `camera:${command.id}`,
+          label: command.label,
+          commandId: command.id,
+        })),
+      },
       { type: "separator", id: "camera:rotation-separator" },
-      { type: "item", id: "camera:focus", label: "Focus selected", disabled: true },
-      { type: "item", id: "camera:frame-all", label: "Frame all", disabled: true },
+      { type: "item", id: "camera:focus", label: "Focus selected", preview: true, disabled: true },
+      { type: "item", id: "camera:frame-all", label: "Frame all", preview: true, disabled: true },
     ],
   };
 }
@@ -2652,13 +2580,7 @@ function buildQuantityAction(
             id: "quantity:shader",
             label: "Colormap",
             value: colormap,
-            items: [
-              { value: "viridis", label: "Viridis" },
-              { value: "inferno", label: "Inferno" },
-              { value: "magma", label: "Magma" },
-              { value: "coolwarm", label: "Coolwarm" },
-              { value: "jet", label: "Jet" },
-            ],
+            items: SCALAR_COLOR_PALETTE_ITEMS,
             commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
             commandInput: (value: string) =>
               visualizationStateCommandInput({
@@ -2996,6 +2918,7 @@ function buildMeshViewAction(
         type: "submenu",
         id: "layers:trim",
         label: "3D trim",
+          preview: true,
         nodes: [
           { type: "checkbox", id: "trim:enabled", label: "TRIM enabled", checked: false },
           { type: "separator", id: "trim:s0" },
@@ -3572,7 +3495,9 @@ function buildSelectedVisualizationGroup(
   const { selection, visualizationSnapshot } = context;
   const target = resolveRibbonVisualizationTarget(context);
   const targetCapabilities = target
-    ? visualizationTargetCapabilities(target)
+    ? visualizationTargetCapabilities(target, target.kind === "airbox" &&
+        visualizationSnapshot.artifactFieldSelection?.quantityId === "H_ant" &&
+        visualizationSnapshot.artifactFieldSelection.carrierScopeKind === "full")
     : null;
   const isAirboxLikeTarget =
     target?.kind === "airbox" ||

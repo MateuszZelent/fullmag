@@ -1,6 +1,5 @@
 "use client";
 
-import { parseQuantityInput } from "@/kernel/authoring/object-edit/quantityInput";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -22,7 +21,7 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
     props.pipelineDrafts ?? [],
     props.draftIndex,
   );
-  const durationS = positiveDurationSeconds(draft?.untilSeconds);
+  const durationS = positiveNumber(draft?.untilSeconds);
   const samplePeriodS = workflow.tableAutosave?.samplePeriodS ?? null;
   const solverDtS = regionalFieldDriveSamplingContext(
     props.scene ?? null,
@@ -206,9 +205,7 @@ function findPrecedingActiveDrive(
   return null;
 }
 
-function positiveDurationSeconds(value: string | number | null | undefined): number | null {
-  const parsed = parseQuantityInput(value == null ? "" : String(value), "time");
-  return parsed.parseStatus === "valid" && parsed.parsedSI !== null && parsed.parsedSI > 0
-    ? parsed.parsedSI
-    : null;
+function positiveNumber(value: string | number | null | undefined): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }

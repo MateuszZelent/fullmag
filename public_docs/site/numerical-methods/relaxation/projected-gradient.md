@@ -5,7 +5,7 @@ doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
-source_of_truth: docs/physics/0500-fdm-relaxation-algorithms.md, docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md
+source_of_truth: /physics/foundations/micromagnetic-energy, /physics/foundations/effective-field
 ---
 
 (public-docs-numerical-methods-relaxation-projected-gradient)=
@@ -327,9 +327,7 @@ qualification. It has no physical-time interpretation.
 
 - J. Barzilai and J. M. Borwein, “Two-point step size gradient methods,” *IMA Journal of Numerical Analysis* 8 (1988), DOI: [10.1093/imanum/8.1.141](https://doi.org/10.1093/imanum/8.1.141).
 - J. Nocedal and S. J. Wright, *Numerical Optimization*, 2nd ed., Springer, 2006, DOI: [10.1007/978-0-387-40065-5](https://doi.org/10.1007/978-0-387-40065-5).
-- Fullmag: [`0500-fdm-relaxation-algorithms.md`](https://github.com/MateuszZelent/fullmag/blob/master/docs/physics/0500-fdm-relaxation-algorithms.md) and [`0510-fem-relaxation-algorithms-mfem-gpu.md`](https://github.com/MateuszZelent/fullmag/blob/master/docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md).
-
-(numerical-methods-relaxation-pgbb-source-code-index)=
+- Fullmag public physics contracts: {doc}`/physics/foundations/micromagnetic-energy` and {doc}`/physics/foundations/effective-field`.
 
 ## Control Room workflow
 
@@ -337,15 +335,7 @@ Use the stage editor to select `projected_gradient_bb` and configure direct-mini
 Inspect resolved algorithm, lane and completion telemetry; LLG integrator and physical-time fields
 are not authorable controls for this stage.
 
-## Control Room crosswalk
-
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
-
-## Where this is implemented
-
-The source-code index below records the shared policy, FDM reference path, native FEM CPU/GPU steps,
-Python stage lowering and completion policy used by this page.
-
+(numerical-methods-relaxation-pgbb-source-code-index)=
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence |

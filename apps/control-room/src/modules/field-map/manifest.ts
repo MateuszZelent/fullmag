@@ -1,6 +1,9 @@
 import type { ModuleManifest } from "@/kernel/types";
 
 import { fieldMapCommands } from "./fieldMapCommands";
+import { fieldMapToolCommands } from "./fieldMapToolCommands";
+import { fieldMapPlaneCommands } from "./fieldMapPlaneCommands";
+import { fieldMapViewCommands } from "./fieldMapViewCommands";
 
 export const fieldMapManifest: ModuleManifest = {
   id: "field-map",
@@ -8,5 +11,5 @@ export const fieldMapManifest: ModuleManifest = {
   version: "1.0.0",
   slots: ["viewport-main"],
   component: () => import("./FieldMapModule"),
-  contributes: { commands: fieldMapCommands },
+  contributes: { commands: [...fieldMapCommands, ...fieldMapViewCommands, ...fieldMapPlaneCommands, ...fieldMapToolCommands] },
 };

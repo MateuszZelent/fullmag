@@ -345,6 +345,12 @@ fn require_owner_binding(
         bail!("native service owner preparation pool does not match configuration");
     }
 
+    // Terminal metadata can legitimately outlive the binary that wrote it.
+    // Report that historical outcome without claiming live ownership. Ready
+    // (and in-progress) owners still require the current build before probing.
+    if matches!(owner.state, RuntimeServiceState::Drained | RuntimeServiceState::Failed) {
+        return Ok(());
+    }
     let identity = fullmag_build_info::identity();
     if owner
         .build_commit

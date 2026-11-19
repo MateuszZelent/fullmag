@@ -6,7 +6,7 @@ advanced use.
 """
 from __future__ import annotations
 
-from .client import DEFAULT_URL, Client, resolve_url
+from .client import DEFAULT_URL, URL_ENV as URL_ENV_NAME, Client, resolve_url
 from .commands import CommandHandle, Target, new_intent_id
 from .errors import (
     ApiError,
@@ -31,6 +31,7 @@ __all__ = [
     "CommandHandle",
     "CommandTimeoutError",
     "DEFAULT_URL",
+    "URL_ENV_NAME",
     "DevelopmentRestartError",
     "FullmagClientError",
     "FullmagConnectionError",

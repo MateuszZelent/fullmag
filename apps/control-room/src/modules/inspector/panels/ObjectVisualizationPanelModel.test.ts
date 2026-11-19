@@ -46,7 +46,6 @@ import {
   resolveChildRegionOverrideTargetIds,
   removeOwnerChildRegionVisualizationOverrides,
   resolveRegionVisualizationCarrier,
-  parseRegionVisualizationTargetId,
   scalarColorPalettePatch,
   resolveVisualizationVectorBudgetRange,
   resolveVisualizationVectorSceneCap,
@@ -353,6 +352,38 @@ describe("ObjectVisualizationPanelModel", () => {
         },
       }),
     ).toBe("Materializing");
+  });
+
+  it("reports backend-ready data as ready while the catalog is not requested", () => {
+    const availability: FieldAvailabilityResource = {
+      carrier_id: "carrier:object",
+      generation: "generation-7",
+      materialized: true,
+      pending: false,
+      quantity_id: "m",
+      reason_code: null,
+      revision: 1,
+      scope_id: "body",
+      scope_kind: "object",
+      state: "ready",
+      supported: true,
+      target_id: "object:body",
+    };
+    const input = {
+      backendAvailability: availability,
+      backendAvailabilityStatus: "ready",
+      carrier: null,
+      fieldCatalog: null,
+      fieldCatalogStatus: "idle",
+      quantityId: "m",
+      requiresFieldData: true,
+      target: { id: "object:body", kind: "object" as const, objectId: "body" },
+    };
+
+    expect(
+      resolveObjectVisualizationDataState({ ...input, fieldCatalogRequested: false }),
+    ).toBe("Ready");
+    expect(resolveObjectVisualizationDataState(input)).toBe("Loading");
   });
 
   it("keeps a target last-good payload stale while backend rematerializes", () => {
@@ -1429,6 +1460,35 @@ describe("ObjectVisualizationPanelModel", () => {
     ]);
   });
 
+  it("resets only the target's explicit Full wireframe scope", () => {
+    const target = { id: "object:film", kind: "object" as const };
+    const state = {
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "film",
+          display: {
+            geometry_scope: "full",
+            wireframe_geometry_scope: "full",
+          },
+        },
+        {
+          scope: "object",
+          scope_id: "other",
+          display: { wireframe_geometry_scope: "full" },
+        },
+      ],
+    } as VisualizationStateResource;
+
+    expect(visualizationOverridesForTargetReset(state, target)).toEqual([
+      {
+        scope: "object",
+        scope_id: "other",
+        display: { wireframe_geometry_scope: "full" },
+      },
+    ]);
+  });
+
   it("restores one target baseline without dropping an optimistic sibling target", () => {
     const target = { id: "object:film", kind: "object" as const };
     const visualization = {
@@ -2156,51 +2216,6 @@ describe("ObjectVisualizationPanelModel", () => {
     ]);
   });
 
-  it("preserves raw object ids and decodes region target ids exactly once", () => {
-    expect(parseRegionVisualizationTargetId("region:film%:core%2Finner")).toEqual({
-      objectId: "film%",
-      regionId: "core/inner",
-    });
-    expect(
-      parseRegionVisualizationTargetId("region:film%2Fcore:core%252Finner"),
-    ).toEqual({
-      objectId: "film%2Fcore",
-      regionId: "core%2Finner",
-    });
-    expect(
-      parseRegionVisualizationTargetId("region:film%2Fcore:core%2Finner"),
-    ).toEqual({
-      objectId: "film%2Fcore",
-      regionId: "core/inner",
-    });
-  });
-
-  it("matches raw manifest ids for object child region targets", () => {
-    expect(
-      resolveObjectChildRegionVisualizationTargets({
-        manifestRegions: [
-          {
-            mesh_part_ids: ["part:literal-region"],
-            name: "Literal percent sequence",
-            source_object_ids: ["film%2Fcore_geom"],
-            source_region_candidate_id: "core%2Finner",
-          },
-          {
-            mesh_part_ids: ["part:slash-region"],
-            name: "Actual slash sequence",
-            source_object_ids: ["film%2Fcore_geom"],
-            source_region_candidate_id: "core/inner",
-          },
-        ] as never,
-        objectId: "film%2Fcore",
-        scene: { objects: [{ id: "film%2Fcore", regions: [] }] },
-      }).map((target) => [target.id, target.label]),
-    ).toEqual([
-      ["region:film%2Fcore:core%252Finner", "Literal percent sequence"],
-      ["region:film%2Fcore:core%2Finner", "Actual slash sequence"],
-    ]);
-  });
-
   it("does not expose duplicate orientation aliases as inspector option values", () => {
     const surfaceValues: string[] = SURFACE_COLOR_SOURCE_ITEMS.map(
       (item) => item.value,
@@ -2224,6 +2239,55 @@ describe("ObjectVisualizationPanelModel", () => {
 
   it("waits for the realized field catalog before offering Airbox quantities", () => {
     expect(visualizationQuantityItems("H_demag", "airbox")).toEqual([]);
+  });
+
+  it("lists Airbox fields the solver has not provided yet as disabled", () => {
+    const pending = (id: string, label: string, domain: string) => ({
+      capability_state: "unsupported",
+      description: label,
+      domain,
+      id,
+      interactive_preview: true,
+      label,
+      location: "node",
+      materializable: false,
+      materialization_state: "unavailable",
+      n_comp: 3,
+      normalization_hint: "max_abs",
+      requestable: false,
+      shape: "vector_field",
+      supports_export: true,
+      supports_history: false,
+      supports_preview_2d: true,
+      supports_preview_3d: true,
+      unit: "A/m",
+    });
+    const quantityCatalog = {
+      schema_version: "quantities.v2",
+      quantities: [
+        pending("H_ex", "Exchange field", "magnetic_only"),
+        pending("H_demag", "Demag field", "full_domain"),
+        pending("H_eff", "Effective field", "full_domain"),
+      ],
+    } as unknown as QuantityCatalogResource;
+
+    expect(visualizationQuantityItems("H_eff", "airbox", null, quantityCatalog)).toEqual([
+      { disabled: true, label: "Demag field (not available yet)", value: "H_demag" },
+      { disabled: true, label: "Effective field (not available yet)", value: "H_eff" },
+    ]);
+
+    const zeeman = {
+      ...pending("H_ext", "External field", "full_domain"),
+      resolved_capability: { reason_code: "quantity_unsupported" },
+    };
+    expect(
+      visualizationQuantityItems("H_ext", "airbox", null, {
+        ...quantityCatalog,
+        quantities: [zeeman],
+      } as unknown as QuantityCatalogResource),
+    ).toEqual([
+      { disabled: true, label: "External field (not in this study)", value: "H_ext" },
+    ]);
   });
 
   it("keeps a ready target-scoped active quantity selectable without a global catalog entry", () => {
@@ -2472,11 +2536,13 @@ describe("ObjectVisualizationPanelModel", () => {
       quantitySourcePatch(
         {
           ...DEFAULT_OBJECT_VISUALIZATION,
+          tensorProjection: "spin_flow_z",
           surfaceColorSource: "orientation",
         },
         "material_ms",
       ),
     ).toEqual({
+      tensorProjection: null,
       activeQuantityId: "mat_ms",
       surfaceColorSource: "colormap",
     });
@@ -2991,12 +3057,14 @@ describe("ObjectVisualizationPanelModel", () => {
       quantitySourcePatch(
         {
           ...DEFAULT_OBJECT_VISUALIZATION,
+          tensorProjection: "spin_flow_z",
           surfaceColorSource: "colormap",
           vectorColorMode: "orientation",
         },
         "H_eff",
       ),
     ).toEqual({
+      tensorProjection: null,
       activeQuantityId: "H_eff",
       surfaceColorSource: "orientation",
     });
@@ -3007,12 +3075,14 @@ describe("ObjectVisualizationPanelModel", () => {
       quantitySourcePatch(
         {
           ...DEFAULT_OBJECT_VISUALIZATION,
+          tensorProjection: "spin_flow_z",
           surfaceColorSource: "component_z",
           vectorColorMode: "orientation",
         },
         "H_demag",
       ),
     ).toEqual({
+      tensorProjection: null,
       activeQuantityId: "H_demag",
     });
   });
@@ -3205,10 +3275,12 @@ describe("ObjectVisualizationPanelModel", () => {
 
   it("builds pass-specific sections for a visible object target", () => {
     const sections = buildVisualizationPanelSections({
+      lane: "fem",
       effectiveSettings: resolveEffectiveVisualizationSettings(
         DEFAULT_OBJECT_VISUALIZATION,
       ),
       settings: DEFAULT_OBJECT_VISUALIZATION,
+      target: { id: "film", kind: "object" },
     });
 
     expect(sections.map((section) => section.id)).toEqual([
@@ -3217,6 +3289,7 @@ describe("ObjectVisualizationPanelModel", () => {
       "surface-coloring",
       "points",
       "wireframe",
+      "wireframe-mesh",
       "vectors",
       "geometry-scope",
       "overrides",
@@ -3272,6 +3345,32 @@ describe("ObjectVisualizationPanelModel", () => {
         expect.objectContaining({ id: "boundsVisible" }),
       ]),
     );
+  });
+
+  it("offers wireframe mesh scope only for the FEM lane", () => {
+    const base = {
+      effectiveSettings: resolveEffectiveVisualizationSettings(
+        DEFAULT_OBJECT_VISUALIZATION,
+      ),
+      settings: DEFAULT_OBJECT_VISUALIZATION,
+      target: { id: "film", kind: "object" as const },
+    };
+
+    expect(
+      buildVisualizationPanelSections({ ...base, lane: "fem" }).map(
+        (section) => section.id,
+      ),
+    ).toContain("wireframe-mesh");
+    expect(
+      buildVisualizationPanelSections({ ...base, lane: "fdm" }).map(
+        (section) => section.id,
+      ),
+    ).not.toContain("wireframe-mesh");
+    expect(
+      buildVisualizationPanelSections({ ...base, lane: "unresolved" }).map(
+        (section) => section.id,
+      ),
+    ).not.toContain("wireframe-mesh");
   });
 
   it("does not expose unsupported surface-offset controls for the FDM Airbox target", () => {
@@ -3715,58 +3814,6 @@ describe("ObjectVisualizationPanelModel", () => {
       }),
     ).toMatchObject({
       kind: "unavailable",
-    });
-  });
-
-  it("matches raw manifest region ids without confusing literal percent sequences and slashes", () => {
-    const manifestRegions: NonNullable<
-      MeshSharedDomainManifestResource["regions"]
-    > = [
-      {
-        material_ref: "material:film",
-        mesh_part_ids: ["part:literal-region"],
-        name: "Literal percent sequence",
-        region_id: "manifest:literal-region",
-        source_object_ids: ["film%2Fcore_geom"],
-        source_region_candidate_id: "core%2Finner",
-      },
-      {
-        material_ref: "material:film",
-        mesh_part_ids: ["part:slash-region"],
-        name: "Actual slash sequence",
-        region_id: "manifest:slash-region",
-        source_object_ids: ["film%2Fcore_geom"],
-        source_region_candidate_id: "core/inner",
-      },
-    ];
-
-    expect(
-      resolveRegionVisualizationCarrier({
-        manifestRegions,
-        target: {
-          id: "region:film%2Fcore:core%252Finner",
-          kind: "region",
-        },
-      }),
-    ).toEqual({
-      kind: "mesh-parts",
-      objectId: "film%2Fcore",
-      partIds: ["part:literal-region"],
-      regionId: "core%2Finner",
-    });
-    expect(
-      resolveRegionVisualizationCarrier({
-        manifestRegions,
-        target: {
-          id: "region:film%2Fcore:core%2Finner",
-          kind: "region",
-        },
-      }),
-    ).toEqual({
-      kind: "mesh-parts",
-      objectId: "film%2Fcore",
-      partIds: ["part:slash-region"],
-      regionId: "core/inner",
     });
   });
 

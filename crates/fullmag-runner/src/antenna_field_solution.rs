@@ -1,11 +1,13 @@
 use crate::antenna_spectrum::FieldTetraBvh;
 pub(crate) mod direct_quadrature;
 pub(crate) mod closed_loop_v2;
+mod closed_loop_field_evidence;
 mod closed_loop_public_inspection;
 pub use closed_loop_public_inspection::{load_antenna_closed_loop_inspection_bytes, load_published_antenna_closed_loop_inspection, verify_antenna_closed_loop_inspection_bytes, LoadedAntennaClosedLoopInspection};
 pub(crate) mod closed_loop_execution;
-pub use closed_loop_execution::execute_antenna_closed_loop_inspection;
+pub use closed_loop_execution::{execute_antenna_closed_loop_inspection, execute_antenna_closed_loop_inspection_typed, execute_antenna_closed_loop_inspection_profiled_typed, execute_antenna_closed_loop_inspection_observed_typed, ClosedLoopExecutionError, KnownNativeCallFailure};
 pub(crate) mod direct_quadrature_v2;
+pub(crate) mod surface_rt0_evidence_v1;
 pub(crate) mod closed_loop_identity_v2;
 pub(crate) mod closed_loop_balance_v2;
 pub use direct_quadrature::AntennaQuadratureEvidenceRef;
@@ -2366,6 +2368,7 @@ mod tests {
             conservative_current_view_ref: Some("current_1:rt0".into()),
             model: fullmag_ir::AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
             oersted_realization: fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature,
+            surface_field_policy: None,
             conductor_mesh_policy: "authored_shared_domain".into(),
             field_sampling_domain: FieldTargetIR::Global {},
             target_refs: vec![FieldTargetIR::Global {}],

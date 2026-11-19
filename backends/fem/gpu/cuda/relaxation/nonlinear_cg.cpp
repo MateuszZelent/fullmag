@@ -30,6 +30,7 @@
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/integrators/rk/rk_energy_reductions.hpp"
+#include "gpu/cuda/integrators/rk/rk_field_metric_reductions.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
@@ -249,6 +250,7 @@ struct GpuRelaxNcgRollbackState {
     uint64_t poisson_step_energy_wall_time_ns = 0;
     bool poisson_last_solver_setup_reused = false;
     uint32_t poisson_solves_current_step = 0;
+    uint32_t poisson_linear_iterations_current_step = 0;
     uint32_t poisson_setup_count_current_step = 0;
     uint32_t poisson_fresh_zero_guess_count_current_step = 0;
     uint32_t poisson_event_wait_count_current_step = 0;
@@ -277,6 +279,7 @@ GpuRelaxNcgRollbackState capture_gpu_relax_ncg_rollback_state(
         ctx.poisson_demag.step_energy_wall_time_ns,
         ctx.poisson_demag.last_solver_setup_reused,
         ctx.poisson_demag.solves_current_step,
+        ctx.poisson_demag.linear_iterations_current_step,
         ctx.poisson_demag.setup_count_current_step,
         ctx.poisson_demag.fresh_zero_guess_count_current_step,
         ctx.poisson_demag.event_wait_count_current_step,
@@ -330,6 +333,8 @@ void restore_gpu_relax_ncg_metadata(
         rollback.poisson_last_solver_setup_reused;
     ctx.poisson_demag.solves_current_step =
         rollback.poisson_solves_current_step;
+    ctx.poisson_demag.linear_iterations_current_step =
+        rollback.poisson_linear_iterations_current_step;
     ctx.poisson_demag.setup_count_current_step =
         rollback.poisson_setup_count_current_step;
     ctx.poisson_demag.fresh_zero_guess_count_current_step =
@@ -649,6 +654,10 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
 
     double scalars[4] = {0.0, 0.0, 0.0, 0.0};
     if (evaluate_fields) {
+        if (!gpu_rk_reduce_final_field_metric_terms(
+                ctx, stream, n, blocks, reason)) {
+            return false;
+        }
         std::array<double, FEM_GPU_SCALAR_RESULT_SLOTS> packed_scalars{};
         if (!gpu_rk_read_control_scalar_results(
                 ctx,
@@ -1861,6 +1870,19 @@ int gpu_relax_nonlinear_cg_step(
         accepted_energy_delta_upper_j;
     ctx.relaxation.accepted_energy_proof.armijo_rhs_j =
         armijo_increment_rhs_j;
+    if (!accepted_refined) {
+        // The Armijo trial reduces energy terms only. The next step reuses
+        // this snapshot without re-evaluating fields, and its torque
+        // confirmation gate reads MaxTorque. The stats finalizer above has
+        // just reduced the field metrics of the accepted state that h_eff
+        // still holds, so copy them instead of reducing them again.
+        accepted_snapshot.terms_j[static_cast<size_t>(GpuFinalScalarSlot::MaxHEff)] =
+            out_stats.max_effective_field_amplitude;
+        accepted_snapshot.terms_j[static_cast<size_t>(GpuFinalScalarSlot::MaxHDemag)] =
+            out_stats.max_demag_field_amplitude;
+        accepted_snapshot.terms_j[static_cast<size_t>(GpuFinalScalarSlot::MaxTorque)] =
+            out_stats.max_torque_Apm;
+    }
     publish_ncg_accepted_evaluation(
         ctx, accepted_step, accepted_snapshot, accepted_refined);
     gpu.fields.accepted_observables_valid = true;

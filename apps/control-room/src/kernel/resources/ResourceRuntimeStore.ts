@@ -30,9 +30,13 @@ function sessionScopeKeyFromResourceKey(resourceKey: ResourceKey): string | unde
 export interface ResourceRetryPolicy {
   deadlineMs?: number;
   maxAttempts?: number;
+  /** Retry cap for explicitly allowlisted transient conflicts only. */
+  maxConflictAttempts?: number;
   retryAfterMs?: number;
   retry_after_ms?: number;
   retryableReasonCodes?: readonly string[];
+  /** Explicit transient 409 codes; all other conflicts remain non-retryable. */
+  retryableConflictReasonCodes?: readonly string[];
 }
 
 export interface ResourceRetryDecision {
@@ -65,6 +69,8 @@ interface ResourceRuntimeEntry<TData> {
   controller: AbortController | null;
   inflight: Promise<ResourceRuntimeSnapshot<TData>> | null;
   inflightExternalRevision: ResourceRevision | null;
+  /** Request of the running load, kept so a predicate pause can replay it. */
+  inflightRequest: ResourceRuntimeLoadRequest<TData> | null;
   lastSettledAtMs: number;
   listeners: Set<ResourceRuntimeListener>;
   pendingRequest: ResourceRuntimeLoadRequest<TData> | null;
@@ -108,6 +114,7 @@ function createEntry<TData>(): ResourceRuntimeEntry<TData> {
     controller: null,
     inflight: null,
     inflightExternalRevision: null,
+    inflightRequest: null,
     lastSettledAtMs: 0,
     listeners: new Set<ResourceRuntimeListener>(),
     pendingRequest: null,
@@ -214,15 +221,22 @@ export function resolveResourceRetryDecision(
     status === 503 ||
     status === 504;
   const transientNotFound = status === 404 && reasonCode !== null && reasonAllowed;
-  const retryable =
+  const transientConflict =
+    status === 409 && reasonCode !== null &&
+    policy.retryableConflictReasonCodes?.includes(reasonCode) === true;
+  const retryable = transientConflict || (
     status !== 409 &&
     reasonAllowed &&
-    (transientNotFound || (status !== 404 && retryableStatus));
+    (transientNotFound || (status !== 404 && retryableStatus))
+  );
   if (!retryable) {
     return { delayMs: 0, reasonCode, retry: false };
   }
 
-  const maxAttempts = boundedPositiveNumber(policy.maxAttempts, 3);
+  const maxAttempts = boundedPositiveNumber(
+    transientConflict ? policy.maxConflictAttempts : undefined,
+    boundedPositiveNumber(policy.maxAttempts, 3),
+  );
   if (attempt >= maxAttempts) {
     return { delayMs: 0, reasonCode, retry: false };
   }
@@ -409,6 +423,7 @@ export class ResourceRuntimeStore<TData = unknown> {
     entry.controller = null;
     entry.inflight = null;
     entry.inflightExternalRevision = null;
+    entry.inflightRequest = null;
     entry.pendingRequest = null;
     entry.pendingTimer = null;
   }
@@ -422,9 +437,19 @@ export class ResourceRuntimeStore<TData = unknown> {
   }
 
   pauseMatching(predicate: (resourceKey: ResourceKey) => boolean): void {
-    for (const resourceKey of this.entries.keys()) {
+    for (const [resourceKey, stored] of this.entries) {
       if (predicate(resourceKey)) {
+        const entry = stored as unknown as ResourceRuntimeEntry<unknown>;
+        // A predicate pause (camera gesture, inactive module) interrupts a
+        // running load; keep its request so releasing the pause replays it
+        // instead of waiting for the next invalidation.
+        const interrupted =
+          entry.pendingRequest ??
+          (entry.inflight && entry.inflightRequest
+            ? { ...entry.inflightRequest, force: false, retrying: false }
+            : null);
         this.pauseLoad(resourceKey);
+        entry.pendingRequest = interrupted;
       }
     }
   }
@@ -565,12 +590,21 @@ export class ResourceRuntimeStore<TData = unknown> {
         resolveRevision,
         resourceKey,
       };
-      entry.snapshot = {
-        ...markResourceLoading(entry.snapshot, externalRevision),
-        settledExternalRevision: entry.snapshot.settledExternalRevision,
-        settledResourceKey: entry.snapshot.settledResourceKey,
-      };
-      this.notify(entry);
+      const loadingSnapshot = markResourceLoading(entry.snapshot, externalRevision);
+      if (
+        entry.snapshot.data !== loadingSnapshot.data ||
+        entry.snapshot.error !== loadingSnapshot.error ||
+        entry.snapshot.refreshError !== loadingSnapshot.refreshError ||
+        entry.snapshot.revision !== loadingSnapshot.revision ||
+        entry.snapshot.status !== loadingSnapshot.status
+      ) {
+        entry.snapshot = {
+          ...loadingSnapshot,
+          settledExternalRevision: entry.snapshot.settledExternalRevision,
+          settledResourceKey: entry.snapshot.settledResourceKey,
+        };
+        this.notify(entry);
+      }
       return entry.inflight;
     }
 
@@ -586,6 +620,16 @@ export class ResourceRuntimeStore<TData = unknown> {
     entry.pendingRequest = null;
     entry.sequence = sequence;
     entry.inflightExternalRevision = externalRevision;
+    entry.inflightRequest = {
+      abortStaleInflight,
+      externalRevision,
+      force,
+      load,
+      minRefetchIntervalMs,
+      retryPolicy,
+      resolveRevision,
+      resourceKey,
+    };
     if (retryPolicy) {
       if (
         entry.retryDeadlineAtMs <= 0 ||
@@ -613,6 +657,41 @@ export class ResourceRuntimeStore<TData = unknown> {
           return;
         }
         entry.deadlineTimer = null;
+        // A slow response is not a failed one: while attempts remain, abort
+        // this request and retry with a longer window instead of settling an
+        // error that the hook would never reload for this revision.
+        const nextAttempt = entry.retryAttempt + 1;
+        if (retryPolicy && nextAttempt < boundedPositiveNumber(retryPolicy.maxAttempts, 3)) {
+          const retryAfterMs = boundedPositiveNumber(retryPolicy.retryAfterMs, 250);
+          entry.retryAttempt = nextAttempt;
+          entry.retryDeadlineAtMs =
+            Date.now() +
+            retryAfterMs +
+            boundedPositiveNumber(retryPolicy.deadlineMs, 5_000) * (nextAttempt + 1);
+          controller.abort();
+          const retryRequest: ResourceRuntimeLoadRequest<TLoadData> = {
+            abortStaleInflight,
+            externalRevision,
+            force: true,
+            load,
+            minRefetchIntervalMs,
+            retryPolicy,
+            retrying: true,
+            resolveRevision,
+            resourceKey,
+          };
+          entry.retryExternalRevision = externalRevision;
+          entry.retryRequest = retryRequest;
+          const timer = setTimeout(() => {
+            if (entry.retryTimer !== timer) return;
+            entry.retryTimer = null;
+            entry.retryRequest = null;
+            if (!this.loadPaused(resourceKey)) void this.ensureLoad(retryRequest);
+          }, retryAfterMs);
+          entry.retryTimer = timer;
+          this.notify(entry);
+          return;
+        }
         const timeoutError = new Error("Resource load deadline exceeded");
         timeoutError.name = "TimeoutError";
         entry.snapshot = {
@@ -702,6 +781,7 @@ export class ResourceRuntimeStore<TData = unknown> {
         entry.controller = null;
         entry.inflight = null;
         entry.inflightExternalRevision = null;
+        entry.inflightRequest = null;
         this.notify(entry);
         if (
           pendingRequest &&
@@ -735,7 +815,27 @@ export class ResourceRuntimeStore<TData = unknown> {
 
   private notify<TEntryData>(entry: ResourceRuntimeEntry<TEntryData>): void {
     for (const listener of entry.listeners) {
-      listener();
+      try {
+        listener();
+      } catch (error) {
+        try {
+          const resourceKey = entry.inflightRequest?.resourceKey
+            ?? entry.pendingRequest?.resourceKey
+            ?? entry.snapshot.settledResourceKey;
+          if (error instanceof Error && typeof resourceKey === "string" && resourceKey) {
+            const boundedKey = resourceKey.length > 160
+              ? `${resourceKey.slice(0, 48)}…${resourceKey.slice(-111)}`
+              : resourceKey;
+            const suffix = `\nResourceRuntimeStore resourceKey=${boundedKey}`;
+            if (typeof error.stack === "string" && !error.stack.includes(suffix)) {
+              error.stack += suffix;
+            }
+          }
+        } catch {
+          // Diagnostic enrichment must not replace the original subscriber error.
+        }
+        throw error;
+      }
     }
   }
 

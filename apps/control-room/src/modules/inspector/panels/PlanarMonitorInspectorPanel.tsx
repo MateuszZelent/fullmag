@@ -24,7 +24,10 @@ import {
   type PlanarMonitor,
   type PlanarMonitorDraft,
 } from "@/kernel/workspace/crossSectionWorkspace";
-import { planarMonitorFramePreviewStore } from "@/kernel/workspace/planarMonitorFramePreview";
+import {
+  planarMonitorFramePreviewStore,
+  usePlanarMonitorPickFaceArmed,
+} from "@/kernel/workspace/planarMonitorFramePreview";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -33,7 +36,6 @@ import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { VisualizationContextSwitch } from "../visualization/VisualizationContextSwitch";
 import { PlanarVisualizationSection } from "../visualization/PlanarVisualizationSection";
-import { PlanarPresentationDraftOwner, usePlanarPresentationDraftState } from "../visualization/PlanarPresentationDraftOwner";
 import {
   PlanarMonitorDefinitionEditor,
   planarMonitorDefinitionAvailabilityErrors,
@@ -42,7 +44,6 @@ import { usePlanarMonitorDefinitionAvailability } from "./usePlanarMonitorDefini
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 
 export function PlanarMonitorInspectorPanel({ selection }: InspectorPanelProps) {
-  const sessionScope = sessionRequestScopeKey(useSessionResourceIdentity());
   const definitionAvailability = usePlanarMonitorDefinitionAvailability();
   const monitorId = selection.ref?.type === "planar-monitor" ? selection.ref.monitorId : "";
   const resource = usePlanarMonitorResource(monitorId, { enabled: monitorId.length > 0 });
@@ -60,16 +61,14 @@ export function PlanarMonitorInspectorPanel({ selection }: InspectorPanelProps) 
   }
 
   return (
-    <PlanarPresentationDraftOwner identityKey={JSON.stringify([sessionScope, monitor.id])}>
-      <CommittedPlanarMonitorEditor
+    <CommittedPlanarMonitorEditor
       key={monitor.id}
       monitor={monitor}
       sceneRevision={sceneRevision}
       selection={selection}
       refetch={resource.refetch}
       definitionAvailability={definitionAvailability}
-      />
-    </PlanarPresentationDraftOwner>
+    />
   );
 }
 
@@ -89,7 +88,6 @@ function CommittedPlanarMonitorEditor({
   const kernel = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const visualizationState = useVisualizationStateResource();
-  const planarDrafts = usePlanarPresentationDraftState();
   const [acknowledgedBaseline, setAcknowledgedBaseline] = useState<{
     monitor: PlanarMonitor;
     revision: number;
@@ -125,6 +123,7 @@ function CommittedPlanarMonitorEditor({
     ...planarMonitorDefinitionAvailabilityErrors(draft.monitor, definitionAvailability),
   ];
   const dirty = JSON.stringify(draft.monitor) !== JSON.stringify(baseline.monitor);
+  const pickFaceArmed = usePlanarMonitorPickFaceArmed();
   const incomingDefinitionConflict =
     sceneRevision > acknowledgedBaseline.revision &&
     JSON.stringify(monitor) !== JSON.stringify(baselineState.monitor) &&
@@ -167,6 +166,25 @@ function CommittedPlanarMonitorEditor({
     planarMonitorFramePreviewStore.setDraft(dirty ? draft : null);
     return () => planarMonitorFramePreviewStore.clearDraft();
   }, [dirty, draft]);
+  // The 3D normal handle edits this draft through the same update as the fields.
+  useEffect(() => planarMonitorFramePreviewStore.registerDraftEditor({
+    monitorId: monitor.id,
+    proposeFrame: (frame) => {
+      const current = draftRef.current;
+      const next = {
+        ...current,
+        monitor: {
+          ...current.monitor,
+          frame: {
+            ...current.monitor.frame,
+            ...Object.fromEntries(Object.entries(frame).map(([key, value]) => [key, [...value]])),
+          },
+        },
+      };
+      draftRef.current = next;
+      setDraft(next);
+    },
+  }), [monitor.id]);
   const run = (commandId: string, input?: Record<string, unknown>) =>
     kernel.commands.execute(
       commandId,
@@ -180,8 +198,6 @@ function CommittedPlanarMonitorEditor({
     );
 
   const resetDraft = () => {
-    if (applyInFlight.current) return;
-    planarDrafts.store?.clear();
     const reset = planarMonitorDraftFromMonitor(
       baseline.monitor,
       draft.ui.displayLengthUnit,
@@ -193,10 +209,6 @@ function CommittedPlanarMonitorEditor({
   };
 
   const apply = async (): Promise<boolean> => {
-    if (planarDrafts.store?.getSummary().pendingCount) {
-      setFeedback("Complete or discard the pending 2D inputs before applying changes.");
-      return false;
-    }
     if (applyInFlight.current || hasConflict || !dirty || errors.length > 0) return false;
     const acknowledgeDraft = acknowledgeCommittedDraftRef.current;
     const submittedDraft = draft;
@@ -341,7 +353,7 @@ function CommittedPlanarMonitorEditor({
       </InspectorGroup>
       <div className="fm-inspector-toolbar">
         <Button
-          disabled={pending || (!dirty && !planarDrafts.pending)}
+          disabled={pending || !dirty}
           size="sm"
           type="button"
           variant="ghost"
@@ -350,7 +362,7 @@ function CommittedPlanarMonitorEditor({
           Discard
         </Button>
         <Button
-          disabled={pending || planarDrafts.pending || hasConflict || !dirty || errors.length > 0}
+          disabled={pending || hasConflict || !dirty || errors.length > 0}
           size="sm"
           type="button"
           variant="primary"
@@ -361,7 +373,7 @@ function CommittedPlanarMonitorEditor({
       </div>
       {errors.length > 0 ? (
         <div className="fm-help-text" role="alert">
-          {errors.map((error) => <p key={error}>{error}</p>)}
+          {[...new Set(errors)].map((error) => <p key={error}>{error}</p>)}
         </div>
       ) : null}
       {feedback ? <p role="alert">{feedback}</p> : null}
@@ -381,6 +393,16 @@ function CommittedPlanarMonitorEditor({
           </Button>
           <Button size="sm" type="button" variant="ghost" onClick={() => void run("planar-monitor.show-frame-3d")}>
             Show frame in 3D
+          </Button>
+          <Button
+            aria-pressed={pickFaceArmed}
+            size="sm"
+            title="Click an object face in the 3D view to place this monitor on it"
+            type="button"
+            variant={pickFaceArmed ? "primary" : "ghost"}
+            onClick={() => planarMonitorFramePreviewStore.setPickFaceArmed(!pickFaceArmed)}
+          >
+            Pick face in 3D
           </Button>
           <Button disabled={pending || !visualizationState.data?.planar} size="sm" type="button" variant="ghost" onClick={() => void duplicate()}>
             Duplicate

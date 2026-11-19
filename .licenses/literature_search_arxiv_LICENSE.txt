@@ -1,0 +1,4 @@
+arXiv API Terms of Use & License Notification
+Timestamp: 2026-11-16T12:40:20+01:00
+Terms URL: https://info.arxiv.org/help/api/index.html
+Notice: Always check the terms at https://info.arxiv.org/help/api/index.html and always check the license of individual preprints/papers retrieved via arXiv for any reuse or distribution restrictions.

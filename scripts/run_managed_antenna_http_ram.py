@@ -11,10 +11,13 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 import os
 import re
 from pathlib import Path
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import time
@@ -44,6 +47,178 @@ NONMAGNETIC_SHA = "e3ce550d020ca3e2c811b87f3686890a671b6bf592521a8af5ecfdff06986
 
 
 CLOSEDLOOP_SHA = "16904540d169037480b563ec05e4cdb786c772caefba8c3e5a9b66365aa22a62"
+BROWSER_SECONDS = 600
+BROWSER_RUN_SECONDS = 1800
+BROWSER_JSON_BOUND = 64 << 10
+BROWSER_UNITS = {"V": "V", **{name: "A/m^2" for name in ("Jx", "Jy", "Jz", "|J|")},
+                 **{name: "A/m" for name in ("Hx", "Hy", "Hz", "|H|")}}
+
+
+def browser_port(value):
+    if value is not None and (type(value) is not int or not 1024 <= value <= 65535 or value == 3197):
+        raise ValueError("Invalid browser inspection port; the user workspace port 3197 is forbidden")
+    return value
+
+
+def browser_file(root, relative, limit):
+    if not isinstance(relative, str) or not relative or "\\" in relative or ":" in relative:
+        raise ValueError("Invalid browser evidence path")
+    parts = relative.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise ValueError("Browser evidence must remain inside its owned export")
+    path = Path(root)
+    for part in parts:
+        path = path / part
+        if path.is_symlink() or getattr(path.lstat(), "st_file_attributes", 0) & 0x400:
+            raise ValueError("Browser evidence must not contain links or reparse points")
+    if not path.is_file() or not 0 < path.stat().st_size <= limit:
+        raise ValueError("Browser evidence is absent or oversized")
+    return path
+
+
+def browser_json(root, name, limit=BROWSER_JSON_BOUND):
+    return json.loads(browser_file(root, name, limit).read_text(encoding="utf-8"))
+
+
+def check_browser_mode(mode, port):
+    if mode is None and port is None:
+        return
+    if not isinstance(mode, dict) or set(mode) != {"port", "nonce", "compose_sha256"} \
+            or browser_port(mode.get("port")) != port or port is None \
+            or not re.fullmatch(r"[0-9a-f]{32}", str(mode.get("nonce", ""))) \
+            or not re.fullmatch(r"[0-9a-f]{64}", str(mode.get("compose_sha256", ""))):
+        raise ValueError("Pinned browser inspection mode differs")
+
+
+def write_browser_json(root, name, value):
+    raw = (json.dumps(value, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
+    if len(raw) > BROWSER_JSON_BOUND:
+        raise ValueError("Browser control document exceeds its bound")
+    path = Path(root) / name
+    if path.exists() or path.is_symlink():
+        browser_file(root, name, BROWSER_JSON_BOUND)
+    temporary = path.with_name("." + path.name + "." + uuid.uuid4().hex + ".tmp")
+    with temporary.open("xb") as stream:
+        stream.write(raw)
+    os.replace(temporary, path)
+
+
+def browser_binding(metadata, mode, archive_sha256, tools_sha256, api_pid):
+    if type(api_pid) is not int or api_pid <= 0:
+        raise ValueError("Missing cold browser API process identity")
+    binding = {key: metadata.get(key) for key in
+               ("session_id", "run_id", "request_scope_epoch", "record_content_digest")}
+    if any(not isinstance(value, str) or not value for value in binding.values()):
+        raise ValueError("Missing cold browser scientific identity")
+    return {**binding, **mode, "archive_sha256": archive_sha256,
+            "tool_manifest_sha256": tools_sha256, "cold_api_pid": api_pid}
+
+
+def check_browser_ready(export, mode, tools_sha256, *, terminal=False):
+    ready = browser_json(export, "browser-ready.json")
+    metadata = browser_json(export, "cold-inspection-metadata.json", MAX_JSON)
+    archive = browser_file(export, "snapshot.fms", MAX_ARCHIVE)
+    binding = ready.get("binding", {})
+    if ready.get("schema") != "fullmag.antenna-cold-browser-ready.v1" or ready.get("state") != "browser_ready" \
+            or ready.get("terminal") is not False or ready.get("browser_checked") is not False \
+            or ready.get("session_storage") != "disposable_tmpfs" \
+            or ready.get("physics_qualified") is not False or ready.get("durable_session_storage_qualified") is not False \
+            or binding != browser_binding(metadata, mode, sha(archive), tools_sha256, binding.get("cold_api_pid")) \
+            or ready.get("window_seconds") != BROWSER_SECONDS \
+            or ready.get("url") != f"http://127.0.0.1:{mode['port']}/workspace":
+        raise ValueError("Cold browser readiness identity differs")
+    started, expires = ready.get("ready_at"), ready.get("expires_at")
+    if any(type(value) not in (int, float) or not math.isfinite(value) for value in (started, expires)) \
+            or expires - started != BROWSER_SECONDS or not terminal and not started <= time.time() < expires:
+        raise ValueError("Cold browser inspection window is expired or invalid")
+    return ready
+
+
+def check_browser_proof(export, ready, expected_sha256):
+    path = browser_file(export, "browser-proof.json", BROWSER_JSON_BOUND)
+    if not isinstance(expected_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256) \
+            or sha(path) != expected_sha256:
+        raise ValueError("Browser proof hash differs")
+    proof = browser_json(export, "browser-proof.json")
+    if proof.get("schema") != "fullmag.antenna-cold-browser-proof.v1" \
+            or proof.get("scope") != "browser_inspection_only" or proof.get("status") != "pass" \
+            or proof.get("binding") != ready["binding"] \
+            or proof.get("ready_sha256") != sha(Path(export) / "browser-ready.json") \
+            or any(proof.get(key) is not False for key in ("physics_qualified", "durable_session_storage_qualified", "fixture_or_mock_used")) \
+            or proof.get("page_errors") != [] or proof.get("shader_errors") != []:
+        raise ValueError("Browser proof owner, scope or error evidence differs")
+    canvas = proof.get("canvas", {})
+    if canvas.get("visible") is not True or canvas.get("context_lost") is not False \
+            or any(type(canvas.get(key)) is not int or not 0 < canvas[key] <= 16384 for key in ("width", "height")) \
+            or proof.get("camera_rotation_checked") is not True \
+            or type(proof.get("solve_count_before")) is not int or proof["solve_count_before"] < 0 \
+            or proof.get("solve_count_after") != proof["solve_count_before"] \
+            or any(type(proof.get(key)) is not int or not 0 <= proof[key] <= limit
+                   for key, limit in (("request_count", 512), ("idle_request_count", 4))):
+        raise ValueError("Browser canvas, solve-count or bounded-idle evidence is missing")
+    screenshots = proof.get("screenshots")
+    if not isinstance(screenshots, list) or not 1 <= len(screenshots) <= 16:
+        raise ValueError("Browser proof needs at most 16 retained screenshots")
+    pictures, total = {}, 0
+    for entry in screenshots:
+        relative = entry.get("path")
+        if not isinstance(relative, str) or not relative.startswith("browser/") or relative in pictures:
+            raise ValueError("Browser screenshot path is not owned or is duplicated")
+        picture = browser_file(export, relative, 32 << 20)
+        with picture.open("rb") as stream:
+            signature = stream.read(8)
+        if not (picture.suffix == ".png" and signature == b"\x89PNG\r\n\x1a\n" or
+                picture.suffix in (".jpg", ".jpeg") and signature.startswith(b"\xff\xd8\xff")) \
+                or type(entry.get("size_bytes")) is not int or entry["size_bytes"] != picture.stat().st_size \
+                or entry.get("sha256") != sha(picture):
+            raise ValueError("Browser screenshot bytes, size or hash differ")
+        total += picture.stat().st_size
+        pictures[relative] = entry["sha256"]
+    frames = proof.get("quantities")
+    if total > 32 << 20 or not isinstance(frames, list) or len(frames) != len(BROWSER_UNITS) \
+            or {entry.get("quantity") for entry in frames} != set(BROWSER_UNITS) \
+            or len({entry.get("screenshot") for entry in frames}) != len(frames) \
+            or any(entry.get("unit") != BROWSER_UNITS[entry["quantity"]] or entry.get("screenshot") not in pictures for entry in frames) \
+            or sha(path) != expected_sha256:
+        raise ValueError("Browser V/J/H frames, SI units or total screenshot bound differ")
+    # This validates an observer's browser evidence, not scientific correctness.
+    return {"scope": "browser_inspection_only", "status": "pass",
+            "proof_sha256": expected_sha256, "screenshots": pictures}
+
+
+def browser_window(api, export, mode, result, cold):
+    with build_opener(ProxyHandler({})).open(ORIGIN + "/workspace", timeout=5) as response:
+        document = response.read(MAX_JSON + 1)
+        if response.status != 200 or not document or len(document) > MAX_JSON \
+                or "text/html" not in response.headers.get("Content-Type", ""):
+            raise ValueError("Packaged cold workspace HTML is unavailable")
+    result["browser_workspace_html_sha256"] = hashlib.sha256(document).hexdigest()
+    started = time.time()
+    ready = {"schema": "fullmag.antenna-cold-browser-ready.v1", "state": "browser_ready",
+        "terminal": False, "browser_checked": False, "window_seconds": BROWSER_SECONDS,
+        "session_storage": "disposable_tmpfs", "physics_qualified": False, "durable_session_storage_qualified": False,
+        "ready_at": started, "expires_at": started + BROWSER_SECONDS,
+        "url": f"http://127.0.0.1:{mode['port']}/workspace",
+        "binding": browser_binding(cold, mode, result["archive_sha256"], result["tool_manifest_sha256"], api.pid)}
+    write_browser_json(export, "browser-ready.json", ready)
+    deadline = time.monotonic() + BROWSER_SECONDS
+    while time.monotonic() < deadline:
+        if api.poll() is not None:
+            raise ValueError("Owned cold API exited during browser inspection")
+        if (export / "browser-completion.json").exists():
+            completion = browser_json(export, "browser-completion.json")
+            if completion.get("schema") != "fullmag.antenna-cold-browser-completion.v1" \
+                    or completion.get("binding") != ready["binding"] \
+                    or completion.get("ready_sha256") != sha(export / "browser-ready.json"):
+                raise ValueError("Browser completion belongs to another cold window")
+            summary = check_browser_proof(export, ready, completion.get("proof_sha256"))
+            current = get_json("/v2/sessions/current/data/antenna/stages/stage-000/external-lead-inspection")
+            if browser_binding(current, mode, sha(export / "snapshot.fms"), result["tool_manifest_sha256"], api.pid) != ready["binding"]:
+                raise ValueError("Cold scientific owner changed during browser inspection")
+            return {**summary, "ready_sha256": sha(export / "browser-ready.json"),
+                    "completion_sha256": sha(export / "browser-completion.json"), "completed_at": time.time()}
+        time.sleep(0.25)
+    raise ValueError("Browser inspection timed out after its fixed 600 second window")
 
 
 def fixture_contract(fixture="magnetic"):
@@ -387,7 +562,7 @@ def check_standalone_read_model():
             "transition_from_magnetic_session_qualified": False}
 
 
-def execute_in_container(verify_cold_import=False, standalone=False):
+def execute_in_container(verify_cold_import=False, standalone=False, browser_inspection_port=None):
     export, tools = Path("/export"), Path("/tools")
     expected = json.loads((tools / "manifest.json").read_text())
     check_tools(tools, expected["tools_sha256"])
@@ -395,6 +570,13 @@ def execute_in_container(verify_cold_import=False, standalone=False):
     sys.path.insert(0, str(tools))
     from antenna_standalone_fixture import SCRIPT_NAME
     fixture = expected.get("fixture", "magnetic")
+    port = browser_port(browser_inspection_port)
+    mode = expected.get("browser_inspection")
+    check_browser_mode(mode, port)
+    if port is not None and (fixture != "closedloop" or standalone or verify_cold_import) \
+            or port is None and mode is not None \
+            or port is not None and (not isinstance(mode, dict) or mode.get("port") != port):
+        raise ValueError("Browser inspection requires its explicit pinned closed-loop mode")
     if fixture not in ("magnetic", "nonmagnetic", "closedloop") or standalone and fixture != "magnetic":
         raise ValueError("Unsupported antenna fixture combination")
     if fixture == "closedloop" and verify_cold_import:
@@ -432,6 +614,12 @@ def execute_in_container(verify_cold_import=False, standalone=False):
         "qualification": "NOT VERIFIED", "session_storage": "disposable_tmpfs",
         "tool_manifest_sha256": sha(tools / "manifest.json"),
         "native_canonical_bundle_redecoded": False, "cold_archive_import": "NOT VERIFIED"}
+    previous_signals = {}
+    if port is not None:
+        def interrupted(signum, frame):
+            raise ValueError("Owned browser inspection was interrupted")
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_signals[signum] = signal.signal(signum, interrupted)
     try:
         with (export / "api.log").open("wb") as api_log:
             api = subprocess.Popen(["/package/bin/fullmag-api"], stdout=api_log,
@@ -518,6 +706,9 @@ def execute_in_container(verify_cold_import=False, standalone=False):
                 result.update(state="cold_http_pass", cold_archive_import="PASS",
                     archive_sha256=sha(export / "snapshot.fms"),
                     cold_process_state_root=str(cold_root), cold_solver_executed=False)
+                if port is not None:
+                    result["browser_inspection"] = browser_window(api, export, mode, result, cold)
+                    result["state"] = "cold_http_browser_pass"
 
     except Exception as error:
         result.update(state="failed", error=str(error))
@@ -535,10 +726,12 @@ def execute_in_container(verify_cold_import=False, standalone=False):
         result["ram_state_file_inventory"] = [str(path.relative_to(state_root))
             for path in sorted(state_root.rglob("*")) if path.is_file()][:2000]
         (export / "gate-result.json").write_text(json.dumps(result, sort_keys=True))
-    return 0 if result["state"] == "cold_http_pass" else 1
+        for signum, handler in previous_signals.items():
+            signal.signal(signum, handler)
+    return 0 if result["state"] in ("cold_http_pass", "cold_http_browser_pass") else 1
 
 
-def http_spec(image, source, package, inputs, export, tools, verify_cold_import=False, *, standalone=False):
+def http_spec(image, source, package, inputs, export, tools, verify_cold_import=False, *, standalone=False, browser_inspection_port=None):
     if not isinstance(verify_cold_import, bool):
         raise ValueError("Invalid cold import gate mode")
     if not isinstance(standalone, bool):
@@ -554,6 +747,11 @@ def http_spec(image, source, package, inputs, export, tools, verify_cold_import=
         service["command"].append("--verify-cold-import")
     if standalone:
         service["command"].append("--standalone")
+    port = browser_port(browser_inspection_port)
+    if port is not None:
+        service["network_mode"] = "bridge"
+        service["ports"] = [f"127.0.0.1:{port}:8081"]
+        service["command"].extend(["--browser-inspection-port", str(port)])
     return spec
 
 
@@ -564,7 +762,118 @@ def resolved(repo, job, commit, source, native):
     return storage.resolve_layout(repo, PROFILE), build, context, built, capsule, package
 
 
-def start(repo, job, commit, source_digest, native_digest, fixture="magnetic", verify_cold_import=False, *, standalone=False):
+def attest_http(container, spec, project, port=None):
+    import run_managed_antenna_ram as ram
+    if port is None:
+        return ram.attest(container, spec, project)
+    browser_port(port)
+    if not isinstance(container, str) or not re.fullmatch(r"[0-9a-f]{64}", container):
+        raise ValueError("Full owned browser container ID required")
+    observed = json.loads(ram.docker("inspect", container))[0]
+    service = spec["services"]["antenna"]
+    config, runtime = observed["HostConfig"], observed["Config"]
+    labels = runtime.get("Labels", {})
+    environment = runtime.get("Env", [])
+    mounts = observed["Mounts"]
+    if len({mount["Destination"] for mount in mounts}) != len(mounts):
+        raise ValueError("Browser HTTP container has duplicate mount destinations")
+    for mount in mounts:
+        target = mount["Destination"]
+        system_field = {"/etc/hosts": "HostsPath", "/etc/hostname": "HostnamePath", "/etc/resolv.conf": "ResolvConfPath"}.get(target)
+        if system_field and (mount["Type"] != "bind" or not observed.get(system_field)
+                or ram.host_path(mount["Source"]) != ram.host_path(observed[system_field])):
+            raise ValueError("Browser HTTP system mount differs from Docker ownership")
+        if mount["Type"] == "tmpfs" and (mount.get("RW") is not True or mount.get("Source") != ""):
+            raise ValueError("Browser HTTP tmpfs mount differs")
+    expected = {(m["target"], str(Path(m["source"]).resolve()).lower(), not m["read_only"]) for m in service["volumes"]}
+    actual = [(m["Destination"], str(ram.host_path(m["Source"])).lower(), m["RW"]) for m in mounts
+              if m["Type"] == "bind" and m["Destination"] not in ram.SYSTEM_MOUNT_TARGETS]
+    if observed.get("Id") != container or observed["Image"] != service["image"] \
+            or set(actual) != expected or len(actual) != len(expected) \
+            or any(m["Type"] not in ("bind", "tmpfs") for m in mounts) \
+            or any(m["Type"] == "tmpfs" and m["Destination"] not in ("/ram", "/tmp") for m in mounts) \
+            or runtime.get("Cmd") != service["command"] or runtime.get("Entrypoint") not in (None, []) \
+            or runtime.get("WorkingDir") != service["working_dir"] \
+            or labels.get("com.docker.compose.project") != project or labels.get("com.docker.compose.service") != "antenna" \
+            or any([item for item in environment if item.split("=", 1)[0] == key] != [f"{key}={value}"]
+                   for key, value in service["environment"].items()):
+        raise ValueError("Browser HTTP container image/mount/command/environment/owner differs")
+    bindings = {"8081/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(port)}]}
+    if config.get("NetworkMode") != "bridge" or config.get("PortBindings") != bindings \
+            or config.get("PublishAllPorts") or config.get("ReadonlyRootfs") is not True \
+            or config.get("Privileged") or config.get("CapAdd") or set(config.get("CapDrop", [])) != {"ALL"} \
+            or "no-new-privileges:true" not in config.get("SecurityOpt", []) or runtime.get("User") != "65532:65532" \
+            or config.get("Memory") != 2 * 1024**3 or config.get("NanoCpus") != 2 * 10**9 \
+            or config.get("PidsLimit") != 128 or any(config.get(key) for key in ("Devices", "DeviceRequests", "DeviceCgroupRules")) \
+            or config.get("Tmpfs") != {"/tmp": "rw,nosuid,nodev,size=64m", "/ram": "rw,nosuid,nodev,size=768m,mode=1777"}:
+        raise ValueError("Browser HTTP container isolation or loopback port differs")
+    if observed.get("State", {}).get("Running") and (observed.get("NetworkSettings", {}).get("Ports") != bindings
+            or set(observed.get("NetworkSettings", {}).get("Networks", {})) != {"bridge"}):
+        raise ValueError("Running browser HTTP network differs")
+    return observed
+
+
+def require_browser_window(layout, owned_container=None):
+    import getpass
+    from local_runner.container_client import request
+    from local_runner.build_executor import is_blocking_fullmag_container
+    from run_managed_browser import docker
+    health = request(layout, getpass.getuser(), "GET", "/health", timeout=3)
+    if health.get("service") != "fullmag-build-runner" or health.get("ok") is not True \
+            or health.get("accepting_jobs") is not False or health.get("worker_alive") is not False \
+            or health.get("stop_requested") is not True or health.get("worker_error") is not None \
+            or health.get("active_jobs") != [] or health.get("legacy_jobs") != [] \
+            or health.get("retention_busy") is not False or health.get("replacement_pending") is not False \
+            or health.get("coordinator", {}).get("state") not in ("paused", "stopped"):
+        raise ValueError("Browser inspection requires an operator-established idle/paused runner window")
+    identifiers = docker("ps", "-q", "--no-trunc").split()
+    running = json.loads(docker("inspect", *identifiers)) if identifiers else []
+    if any(item.get("Id") != owned_container and is_blocking_fullmag_container(item,
+            storage_root=layout["storage_root"], build_storage_root=layout["build_storage_root"])
+           for item in running):
+        raise ValueError("A compute or unknown Fullmag container blocks browser inspection")
+
+
+def wait_browser_terminal(repo, root, spec, receipt, layout):
+    from run_managed_browser import docker, read_json
+    deadline = time.monotonic() + BROWSER_RUN_SECONDS
+    try:
+        while time.monotonic() < deadline:
+            observed = attest_http(receipt["container_id"], spec, receipt["compose_project"], receipt["browser_inspection"]["port"])
+            if observed["State"].get("Status") == "exited" and not observed["State"].get("Running"):
+                observe(repo, root)
+                receipt.update(read_json(root / "receipt.json"))
+                return
+            require_browser_window(layout, receipt["container_id"])
+            time.sleep(1)
+        raise ValueError("Owned browser HTTP run exceeded its fixed 1800 second bound")
+    except BaseException:
+        # A port or process name never grants ownership. Reattest the exact ID.
+        observed = attest_http(receipt["container_id"], spec, receipt["compose_project"], receipt["browser_inspection"]["port"])
+        if observed["State"].get("Running"):
+            docker("stop", "--time", "10", receipt["container_id"])
+        raise
+
+
+def start(repo, job, commit, source_digest, native_digest, fixture="magnetic", verify_cold_import=False, *, standalone=False, browser_inspection_port=None):
+    port = browser_port(browser_inspection_port)
+    if port is None:
+        return start_protected(repo, job, commit, source_digest, native_digest, fixture, verify_cold_import, standalone=standalone)
+    if fixture != "closedloop" or standalone or verify_cold_import:
+        raise ValueError("Browser inspection supports only the explicit closed-loop fixture")
+    import fullmag_storage as storage
+    from local_runner.runtime_use import runtime_package_use
+    layout = storage.resolve_layout(repo, PROFILE)
+    require_browser_window(layout)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", port))
+    with runtime_package_use(layout), storage.file_lock(Path(layout["storage_root"]) / "locks/fullmag-native-windows-heavy.lock", "bounded browser inspection"), storage.build_lock(layout):
+        require_browser_window(layout)
+        return start_protected(repo, job, commit, source_digest, native_digest, fixture, verify_cold_import,
+                               standalone=standalone, browser_inspection_port=port)
+
+
+def start_protected(repo, job, commit, source_digest, native_digest, fixture="magnetic", verify_cold_import=False, *, standalone=False, browser_inspection_port=None):
     if not isinstance(standalone, bool) or not isinstance(verify_cold_import, bool):
         raise ValueError("Invalid HTTP gate mode")
     if fixture not in ("magnetic", "nonmagnetic", "closedloop") or standalone and fixture != "magnetic":
@@ -618,8 +927,13 @@ def start(repo, job, commit, source_digest, native_digest, fixture="magnetic", v
         "fixture_sha256": fixture_sha, "fixture": fixture, "fixture_script": fixture_script,
         "solver_capsule_attribution": False, "tool_manifest_version": 3, **variant})
     spec = http_spec(context["image_digest"], capsule / "tree", package, inputs, export, tools,
-                     verify_cold_import, standalone=standalone)
+                     verify_cold_import, standalone=standalone, browser_inspection_port=browser_inspection_port)
     storage.atomic_json(root / "compose.json", spec)
+    mode = None
+    if browser_inspection_port is not None:
+        mode = {"port": browser_inspection_port, "nonce": root.name, "compose_sha256": sha(root / "compose.json")}
+        manifest = json.loads((tools / "manifest.json").read_text(encoding="utf-8"))
+        storage.atomic_json(tools / "manifest.json", {**manifest, "browser_inspection": mode})
     project = "fullmag-antenna-http-ram-" + root.name
     receipt = {"schema": SCHEMA, "state": "starting", "run_root": str(root),
         "profile": PROFILE, "managed_job_id": job, "source_digest": source_digest,
@@ -633,13 +947,19 @@ def start(repo, job, commit, source_digest, native_digest, fixture="magnetic", v
         "physics_qualified": False, "durable_session_storage_qualified": False,
         "unit_tests_compiled": False}
     receipt["verify_cold_import"] = verify_cold_import
+    if mode is not None:
+        receipt["browser_inspection"] = mode
     try:
         args = ["compose", "-f", str(root / "compose.json"), "--project-name", project]
         docker(*args, "config", "--quiet")
         docker(*args, "up", "--detach", "--no-build", "--pull", "never")
         receipt["container_id"] = docker(*args, "ps", "--all", "--quiet", "antenna")
-        ram.attest(receipt["container_id"], spec, project)
+        attest_http(receipt["container_id"], spec, project, browser_inspection_port)
         receipt.update(state="launched_resources_retained", isolation="PASS")
+        if mode is not None:
+            storage.atomic_json(root / "receipt.json", receipt)
+            print(json.dumps({"state": receipt["state"], "receipt": str(root / "receipt.json"), "terminal": False}), flush=True)
+            wait_browser_terminal(repo, root, spec, receipt, layout)
     except Exception as error:
         receipt.update(state="failed_resources_retained", error=str(error))
         raise
@@ -674,6 +994,12 @@ def observe(repo, root):
     verify_cold_import = receipt.get("verify_cold_import", False)
     if not isinstance(verify_cold_import, bool):
         raise ValueError("Invalid cold import gate mode")
+    mode = receipt.get("browser_inspection")
+    port = browser_port(mode.get("port")) if isinstance(mode, dict) else None
+    check_browser_mode(mode, port)
+    if mode is not None and (fixture != "closedloop" or standalone or verify_cold_import
+            or mode["nonce"] != root.name or mode["compose_sha256"] != receipt["compose_sha256"]):
+        raise ValueError("Browser inspection owner differs from the pinned run")
     _, build, context, built, capsule, package = resolved(repo, receipt["managed_job_id"],
         native["head_commit_full"], receipt["source_digest"], native["source_snapshot_sha256"])
     tools, inputs = root / "tools", root / "input"
@@ -686,6 +1012,8 @@ def observe(repo, root):
         expected_manifest["tool_manifest_version"] = 3
     elif set(receipt["tools_sha256"]) == set(TOOLS_V2):
         expected_manifest["tool_manifest_version"] = 2
+    if mode is not None:
+        expected_manifest["browser_inspection"] = mode
     if receipt["tool_manifest_sha256"] != sha(tools / "manifest.json") \
             or manifest != expected_manifest:
         raise ValueError("Pinned host-tool manifest differs")
@@ -694,16 +1022,30 @@ def observe(repo, root):
             raise ValueError("Pinned scientific input differs")
     spec = read_json(root / "compose.json")
     if spec != http_spec(context["image_digest"], capsule / "tree", package,
-                         inputs, root / "export", tools, verify_cold_import, standalone=standalone) \
+                         inputs, root / "export", tools, verify_cold_import, standalone=standalone, browser_inspection_port=port) \
             or receipt["native_source_identity"] != built["native_source_identity"] \
             or receipt["image_digest"] != context["image_digest"] \
             or receipt["fixture_sha256"] != fixture_sha \
             or receipt["build_receipt_sha256"] != sha(build / "artifacts/build-receipt.json") \
             or receipt["compose_project"] != "fullmag-antenna-http-ram-" + root.name:
         raise ValueError("HTTP gate source/build/spec binding changed")
-    observed = ram.attest(receipt["container_id"], spec, receipt["compose_project"])
+    observed = attest_http(receipt["container_id"], spec, receipt["compose_project"], port)
     state = observed["State"]
     if state.get("Status") != "exited" or state.get("Running"):
+        if mode is not None and state.get("Running") and (root / "export/browser-ready.json").exists():
+            require_browser_window(layout, receipt["container_id"])
+            ready = check_browser_ready(root / "export", mode, receipt["tool_manifest_sha256"])
+            path = "/v2/sessions/current/data/antenna/stages/stage-000/external-lead-inspection"
+            with build_opener(ProxyHandler({})).open(f"http://127.0.0.1:{port}" + path, timeout=3) as response:
+                raw = response.read(MAX_JSON + 1)
+                if response.status != 200 or len(raw) > MAX_JSON:
+                    raise ValueError("Running cold browser metadata is unavailable or oversized")
+            if browser_binding(json.loads(raw), mode, sha(root / "export/snapshot.fms"),
+                               receipt["tool_manifest_sha256"], ready["binding"]["cold_api_pid"]) != ready["binding"]:
+                raise ValueError("Running cold browser owner differs from readiness")
+            return {"state": "browser_ready", "terminal": False, "browser_checked": False,
+                    "url": ready["url"], "run_root": str(root),
+                    "ready_sha256": sha(root / "export/browser-ready.json")}
         return {"state": "pending", "container_state": state.get("Status"), "run_root": str(root)}
     receipt.update(state="failed_resources_retained", exit_code=state["ExitCode"],
                    oom_killed=state["OOMKilled"])
@@ -712,7 +1054,7 @@ def observe(repo, root):
             raise ValueError("HTTP gate container failed; read retained logs")
         export = root / "export"
         result = read_json(export / "gate-result.json")
-        if result.get("schema") != SCHEMA or result.get("state") != "cold_http_pass" \
+        if result.get("schema") != SCHEMA or result.get("state") != ("cold_http_browser_pass" if mode else "cold_http_pass") \
                 or result.get("solver_exit_code") != 0 \
                 or result.get("native_canonical_bundle_redecoded") is not True \
                 or result.get("physics_qualified") is not False \
@@ -770,18 +1112,58 @@ def observe(repo, root):
                 raise ValueError("Retained canonical V/J/H warm/cold identity differs")
         compare_cold_metadata(read_json(export / "inspection-metadata.json"),
                               read_json(export / "cold-inspection-metadata.json"))
+        if mode is not None:
+            ready = check_browser_ready(export, mode, receipt["tool_manifest_sha256"], terminal=True)
+            browser = result.get("browser_inspection", {})
+            summary = check_browser_proof(export, ready, browser.get("proof_sha256"))
+            completion = browser_json(export, "browser-completion.json")
+            completed = browser.get("completed_at")
+            if completion != {"schema": "fullmag.antenna-cold-browser-completion.v1", "binding": ready["binding"],
+                    "ready_sha256": sha(export / "browser-ready.json"), "proof_sha256": summary["proof_sha256"]} \
+                    or type(completed) not in (int, float) or not math.isfinite(completed) \
+                    or not ready["ready_at"] <= completed <= ready["expires_at"] \
+                    or result.get("session_storage") != "disposable_tmpfs" \
+                    or ready["binding"]["cold_api_pid"] != result["cold_api_pid"] \
+                    or browser != {**summary, "ready_sha256": sha(export / "browser-ready.json"),
+                                   "completion_sha256": sha(export / "browser-completion.json"), "completed_at": completed}:
+                raise ValueError("Terminal browser proof is missing, stale or promotes its scope")
         receipt.update(state="cold_http_pass_resources_retained", startup_identity="PASS",
             gate_result_sha256=sha(export / "gate-result.json"),
             api_log_sha256=sha(export / "api.log"), solver_log_sha256=sha(export / "solver.log"),
             native_canonical_bundle_redecoded=True, cold_archive_import="PASS",
             cold_api_log_sha256=sha(export / "cold-api.log"),
             archive_sha256=sha(export / "snapshot.fms"))
+        if mode is not None:
+            receipt.update(state="cold_http_browser_pass_resources_retained", browser_inspection_result=browser,
+                           browser_scope="browser_inspection_only", browser_checked=True)
     except Exception as error:
         receipt["error"] = str(error)
         raise
     finally:
         storage.atomic_json(root / "receipt.json", receipt)
     return {"state": receipt["state"], "run_root": str(root)}
+
+
+def complete_browser(repo, root, proof_sha256):
+    import fullmag_storage as storage
+    from run_managed_browser import read_json
+    layout = storage.resolve_layout(repo, PROFILE)
+    root = storage.validate_path(root, Path(layout["build_root"]) / "runs")
+    if observe(repo, root).get("state") != "browser_ready":
+        raise ValueError("Browser completion requires a live, verified cold inspection window")
+    receipt = read_json(root / "receipt.json")
+    export = root / "export"
+    ready = check_browser_ready(export, receipt["browser_inspection"], receipt["tool_manifest_sha256"])
+    check_browser_proof(export, ready, proof_sha256)
+    completion = {"schema": "fullmag.antenna-cold-browser-completion.v1", "binding": ready["binding"],
+                  "ready_sha256": sha(export / "browser-ready.json"), "proof_sha256": proof_sha256}
+    target = export / "browser-completion.json"
+    if target.exists() or target.is_symlink():
+        if browser_json(export, target.name) != completion:
+            raise ValueError("A different browser completion already exists")
+    else:
+        write_browser_json(export, target.name, completion)
+    return {"state": "browser_completion_requested", "terminal": False, "run_root": str(root)}
 
 
 if __name__ == "__main__":
@@ -794,18 +1176,26 @@ if __name__ == "__main__":
     start_args.add_argument("--fixture", choices=("magnetic", "nonmagnetic", "closedloop"), default="magnetic")
     start_args.add_argument("--verify-cold-import", action="store_true")
     start_args.add_argument("--standalone", action="store_true")
+    start_args.add_argument("--browser-inspection-port", type=int)
     sub.add_parser("observe").add_argument("--run-root", type=Path, required=True)
+    complete_args = sub.add_parser("complete-browser")
+    complete_args.add_argument("--run-root", type=Path, required=True)
+    complete_args.add_argument("--proof-sha256", required=True)
     execute_args = sub.add_parser("execute")
     execute_args.add_argument("--verify-cold-import", action="store_true")
     execute_args.add_argument("--standalone", action="store_true")
+    execute_args.add_argument("--browser-inspection-port", type=int)
     args = parser.parse_args()
     if args.action == "execute":
-        sys.exit(execute_in_container(args.verify_cold_import, args.standalone))
+        sys.exit(execute_in_container(args.verify_cold_import, args.standalone, args.browser_inspection_port))
     if args.repo_root is None:
         parser.error("host actions require --repo-root")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     if args.action == "start":
         start(args.repo_root, args.job_id, args.commit, args.source_digest, args.native_snapshot_sha256,
-              fixture=args.fixture, verify_cold_import=args.verify_cold_import, standalone=args.standalone)
+              fixture=args.fixture, verify_cold_import=args.verify_cold_import, standalone=args.standalone,
+              browser_inspection_port=args.browser_inspection_port)
+    elif args.action == "complete-browser":
+        print(json.dumps(complete_browser(args.repo_root, args.run_root, args.proof_sha256)))
     else:
         print(json.dumps(observe(args.repo_root, args.run_root)))

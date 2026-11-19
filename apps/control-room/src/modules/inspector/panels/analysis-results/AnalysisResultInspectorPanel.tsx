@@ -25,7 +25,6 @@ import {
 import { ModeVisualizationPhaseControl } from "../ModeVisualizationInspectorPanel";
 import { ScientificInspectorTemplate } from "../../components/ScientificInspectorTemplate";
 import { FieldRow } from "../../primitives/FieldRow";
-import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { InspectorOverviewFrame } from "../../primitives/InspectorOverviewFrame";
 import type { InspectorPanelProps } from "../../inspectorTypes";
@@ -126,24 +125,14 @@ export function AnalysisResultInspectorPanel({
     sampleData?.status ??
     manifestData?.status ??
     null;
-  const selectedResources = [
-    { label: "Dataset", resource: manifest },
-    ...(sampleId ? [{ label: "Sample", resource: sample }] : []),
-    ...(resultRef.focus === "branch" && resultRef.branchId
-      ? [{ label: "Branch", resource: branch }] : []),
-    ...(resultRef.itemId ? [{ label: "Item", resource: item }] : []),
-    ...(resultRef.projectionId ? [{ label: "Projection", resource: projection }] : []),
-  ];
-  const resourceErrors = selectedResources.flatMap(({ label, resource }) => {
-    const error = resource.error ?? resource.refreshError;
-    return error ? [`${label}: ${error.message}`] : [];
-  });
-  const transportStatus = resourceErrors.length > 0 ? "error"
-    : selectedResources.some(({ resource }) => resource.status === "error") ? "error"
-      : selectedResources.some(({ resource }) => resource.status === "loading") ? "loading"
-        : selectedResources.some(({ resource }) => resource.status === "stale") ? "stale"
-          : selectedResources.some(({ resource }) => resource.status === "idle") ? "idle"
-            : "ready";
+  const transportStatus =
+    item.status !== "idle"
+      ? item.status
+      : branch.status !== "idle"
+        ? branch.status
+        : sample.status !== "idle"
+          ? sample.status
+          : manifest.status;
   const diagnostics = [
     ...(manifestData?.status.reason_code
       ? [`Result status: ${manifestData.status.reason_code}`]
@@ -152,10 +141,10 @@ export function AnalysisResultInspectorPanel({
     ...(projection.data?.unsupported_reason
       ? [`Projection unsupported: ${projection.data.unsupported_reason}`]
       : []),
-    ...(resultRef.focus === "branch" && !branchData && branch.status === "ready"
+    ...(resultRef.focus === "branch" && !branchData && branch.status !== "loading"
       ? ["Branch detail is not available for the selected result dataset."]
       : []),
-    ...(resultRef.focus === "field" && item.status === "ready" && !itemData?.field_ref
+    ...(resultRef.focus === "field" && !itemData?.field_ref
       ? ["Spatial field data is not published for the selected result item."]
       : []),
     ...(itemData?.field_ref?.status === "unsupported"
@@ -181,9 +170,7 @@ export function AnalysisResultInspectorPanel({
     { label: "Branch points", value: display(branchData?.point_count) },
     { label: "Field", mono: true, value: display(resultRef.fieldId ?? itemData?.field_ref?.field_id) },
     { label: "Projection", mono: true, value: display(resultRef.projectionId) },
-    ...(resultRef.projectionId ? [{ label: "Projection transport", value: projection.status }] : []),
     { label: "Projection point", value: display(resultRef.projectionOrdinal) },
-    { label: "Axes", value: display(manifestData?.axes.length) },
     {
       label: "Sample coordinates",
       value:
@@ -210,25 +197,16 @@ export function AnalysisResultInspectorPanel({
 
   return (
     <div className="fm-inspector-panel" data-inspector-owner="results.analysis_result">
-      {transportStatus === "error" ? (
-        <FeedbackBanner
-          kind="error"
-          message="Some result details could not be loaded. Available values may be out of date."
-          detail={resourceErrors.join(" · ") || "Refresh the selected result to try again."}
-        />
-      ) : transportStatus !== "ready" ? (
-        <p role="status">Loading current result details. Any visible values are from the last available response.</p>
-      ) : null}
       <InspectorOverviewFrame
         metrics={[
           { label: "Focus", value: focusLabel(resultRef.focus) },
           {
-            label: "Result completeness",
-            value: display(status?.completeness),
+            label: "Status",
+            value: display(status?.completeness ?? transportStatus),
             tone: status?.completeness === "complete" ? "success" : "neutral",
           },
           { label: "Residual L2", value: display(itemData?.quality.residual_relative_l2) },
-          { label: "Transport", value: transportStatus, tone: transportStatus === "error" ? "danger" : "neutral" },
+          { label: "Axes", value: display(manifestData?.axes.length) },
         ]}
         primary={properties.map((row) => <FieldRow key={row.label} {...row} />)}
         primaryIcon={<Database size={18} strokeWidth={1.5} />}
@@ -256,7 +234,7 @@ export function AnalysisResultInspectorPanel({
             defaultOpen: diagnostics.length > 0,
             content:
               diagnostics.length > 0 ? (
-                diagnostics.map((line) => <FieldRow key={line} label="Note" value={line} />)
+                [...new Set(diagnostics)].map((line) => <FieldRow key={line} label="Note" value={line} />)
               ) : (
                 <FieldRow label="Diagnostics" value="None" />
               ),

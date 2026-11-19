@@ -27,6 +27,9 @@ use std::sync::{
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+const ACTIVE_WORKER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const MAX_ACTIVE_ADMISSION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct SchedulerResourceOffer {
@@ -48,6 +51,10 @@ fn scheduler_startup_event(phase: &str, started_at: Instant) {
                 .as_millis(),
         })
     );
+}
+
+fn bounded_active_admission_interval(idle_poll_interval: Duration) -> Duration {
+    idle_poll_interval.min(MAX_ACTIVE_ADMISSION_POLL_INTERVAL)
 }
 
 struct SchedulerArgs {
@@ -89,7 +96,51 @@ struct PendingWorker {
 
 struct ActiveWorker {
     resource: SchedulerResourceOffer,
+    run_id: RunId,
+    task_id: String,
+    attempt_id: String,
+    ownership_epoch: u64,
     handle: JoinHandle<Result<CompletedWorker>>,
+}
+
+#[derive(Clone, Copy)]
+enum PendingTaskOutcomeOrigin {
+    ScheduledWorker,
+    ExitedWorkerRecovery,
+}
+
+/// A worker or recovery supervisor already returned an error; retain its exact
+/// claim identity while later scheduler passes perform read-only settlement checks.
+struct PendingTaskOutcome {
+    run_id: RunId,
+    task_id: String,
+    resource_id: String,
+    attempt_id: String,
+    ownership_epoch: u64,
+    original_error: anyhow::Error,
+    origin: PendingTaskOutcomeOrigin,
+    busy_deferred_reported: bool,
+}
+
+impl PendingTaskOutcome {
+    fn blocks_run(&self, run_id: &RunId) -> bool {
+        self.run_id == *run_id
+    }
+
+    fn fail_stop_error(self) -> anyhow::Error {
+        match self.origin {
+            PendingTaskOutcomeOrigin::ScheduledWorker => self
+                .original_error
+                .context("supervise scheduled accepted worker"),
+            PendingTaskOutcomeOrigin::ExitedWorkerRecovery => self.original_error.context(
+                format!(
+                    "recover exited worker of task `{}` in run `{}`",
+                    self.task_id,
+                    self.run_id.as_str()
+                ),
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -415,23 +466,45 @@ fn run_scheduler(
     let mut peak_queued_run_count = 0usize;
     let mut peak_backpressured_run_count = 0usize;
     let mut active_workers = ActiveWorkers::default();
+    let mut pending_task_outcomes = Vec::<PendingTaskOutcome>::new();
     let mut first_loop_reported = false;
     let mut reconciliation_deferred_detail = None::<String>;
     let mut reconciliation_stages_reported = false;
+    let active_admission_interval = bounded_active_admission_interval(args.idle_poll_interval);
+    let mut next_admission_pass_at = Instant::now();
+    let mut drain_reconciliation_pending = false;
+    let mut drain_observed = false;
     while args
         .max_tasks
         .map_or(true, |max_tasks| executed.len() < max_tasks)
         || !active_workers.is_empty()
+        || !pending_task_outcomes.is_empty()
     {
         if !first_loop_reported {
             scheduler_startup_event("firstloop", startup_started);
             first_loop_reported = true;
         }
         let draining = shutdown_requested.load(Ordering::Acquire);
-        if draining && active_workers.is_empty() {
+        if draining && !drain_observed {
+            drain_reconciliation_pending = true;
+            drain_observed = true;
+        }
+        let finished_resource_id = active_workers.iter().find_map(|(resource_id, worker)| {
+            worker.handle.is_finished().then(|| resource_id.clone())
+        });
+        if draining && active_workers.is_empty() && pending_task_outcomes.is_empty() {
             break;
         }
         let mut reconciliation_deferred = false;
+        let should_run_admission_pass = active_workers.is_empty()
+            || finished_resource_id.is_some()
+            || drain_reconciliation_pending
+            || Instant::now() >= next_admission_pass_at;
+        if !should_run_admission_pass {
+            std::thread::sleep(ACTIVE_WORKER_EXIT_POLL_INTERVAL);
+            continue;
+        }
+        resolve_pending_task_outcomes(&store, &mut pending_task_outcomes)?;
         if let Some(host_admission) = host_admission.as_ref() {
             let log_reconciliation_stages = !reconciliation_stages_reported;
             let reconciliation = (|| -> Result<()> {
@@ -500,7 +573,17 @@ fn run_scheduler(
                         .pool_id
                         .as_deref()
                         .context("dynamic resource discovery requires a scheduler pool id")?;
-                    if let Some(discovered) = store.read_scheduler_resource_pool(pool_id)? {
+                    let discovered = match defer_scheduler_writer_busy(
+                        || store.read_scheduler_resource_pool(pool_id),
+                        || "compute scheduler: read resource pool".to_owned(),
+                    )? {
+                        SchedulerOperation::Completed(discovered) => discovered,
+                        SchedulerOperation::Deferred => {
+                            scheduling_deferred = true;
+                            break 'scheduling_pass;
+                        }
+                    };
+                    if let Some(discovered) = discovered {
                         if let Some(host_admission) = host_admission.as_ref() {
                             host_admission.validate_compute_pool(&discovered)?;
                         }
@@ -566,12 +649,20 @@ fn run_scheduler(
                             break 'scheduling_pass;
                         }
                     }
-                    let mut discovered = store
-                        .list_run_intents()?
+                    let intents = match defer_scheduler_writer_busy(
+                        || store.list_run_intent_ids(),
+                        || "compute scheduler: list run intent ids".to_owned(),
+                    )? {
+                        SchedulerOperation::Completed(intents) => intents,
+                        SchedulerOperation::Deferred => {
+                            scheduling_deferred = true;
+                            break 'scheduling_pass;
+                        }
+                    };
+                    let mut discovered = intents
                         .into_iter()
-                        .map(|intent| {
-                            RunId::parse(intent.run_id)
-                                .map_err(|error| anyhow::anyhow!(error.to_string()))
+                        .map(|run_id| {
+                            RunId::parse(run_id).map_err(|error| anyhow::anyhow!(error.to_string()))
                         })
                         .collect::<Result<Vec<_>>>()?;
                     discovered.sort();
@@ -605,6 +696,34 @@ fn run_scheduler(
                         break 'scheduling_pass;
                     }
                 };
+                match defer_scheduler_writer_busy(
+                    || {
+                        recover_exited_worker_tasks(
+                            &store,
+                            &checkpoint_run_ids,
+                            &active_workers,
+                            &mut pending_task_outcomes,
+                            &worker_executable,
+                            WorkerSupervisionLimits {
+                                max_concurrency: args.max_concurrency,
+                                worker_timeout: args.worker_timeout,
+                                heartbeat_interval: args.heartbeat_interval,
+                                max_automatic_retries: args.max_automatic_retries,
+                            },
+                            host_admission.as_ref(),
+                        )
+                    },
+                    || "compute scheduler: recover exited workers".to_owned(),
+                )? {
+                    SchedulerOperation::Completed(true) => {
+                        scheduled_any = true;
+                    }
+                    SchedulerOperation::Completed(false) => {}
+                    SchedulerOperation::Deferred => {
+                        scheduling_deferred = true;
+                        break 'scheduling_pass;
+                    }
+                }
                 peak_queued_run_count = peak_queued_run_count.max(queue.queued_run_count);
                 peak_backpressured_run_count =
                     peak_backpressured_run_count.max(queue.backpressured_run_count);
@@ -622,6 +741,9 @@ fn run_scheduler(
                         break;
                     }
                     if active_workers.contains_key(&resource.resource_id)
+                        || pending_task_outcomes
+                            .iter()
+                            .any(|pending| pending.resource_id == resource.resource_id)
                         || pending_workers
                             .iter()
                             .any(|pending| pending.resource.resource_id == resource.resource_id)
@@ -631,6 +753,12 @@ fn run_scheduler(
                     if let Some(host) = host_admission.as_ref() {
                         let mut resumed = None;
                         for run_id in &checkpoint_run_ids {
+                            if pending_task_outcomes
+                                .iter()
+                                .any(|pending| pending.blocks_run(run_id))
+                            {
+                                continue;
+                            }
                             match defer_scheduler_writer_busy(
                                 || {
                                     fullmag_runtime_control::resume_next_admitted_accepted_task_with_host(
@@ -674,6 +802,12 @@ fn run_scheduler(
                     }
                     let mut selected = None;
                     for (run_index, candidate) in queue.ordered.iter().enumerate() {
+                        if pending_task_outcomes
+                            .iter()
+                            .any(|pending| pending.blocks_run(&candidate.run_id))
+                        {
+                            continue;
+                        }
                         let offer = ResourceLease::new(
                             resource.resource_id.clone(),
                             resource.kind.clone(),
@@ -745,6 +879,10 @@ fn run_scheduler(
                 }
                 for pending in pending_workers {
                     let resource_id = pending.resource.resource_id.clone();
+                    let worker_run_id = pending.run_id.clone();
+                    let worker_task_id = pending.scheduled.claim.task_id.as_str().to_owned();
+                    let worker_attempt_id = pending.scheduled.claim.attempt_id.as_str().to_owned();
+                    let worker_ownership_epoch = pending.scheduled.claim.ownership_epoch.value();
                     let handle = spawn_supervised_worker(
                         args.store_root.clone(),
                         resource_id.clone(),
@@ -762,21 +900,37 @@ fn run_scheduler(
                         resource_id,
                         ActiveWorker {
                             resource: pending.resource,
+                            run_id: worker_run_id,
+                            task_id: worker_task_id,
+                            attempt_id: worker_attempt_id,
+                            ownership_epoch: worker_ownership_epoch,
                             handle,
                         },
                     );
                 }
             }
         }
+        if draining {
+            drain_reconciliation_pending = false;
+        }
+        if !active_workers.is_empty() {
+            next_admission_pass_at = Instant::now() + active_admission_interval;
+        }
         if active_workers.is_empty() {
             if reconciliation_deferred || scheduling_deferred {
-                if shutdown_requested.load(Ordering::Acquire) {
+                if shutdown_requested.load(Ordering::Acquire)
+                    && pending_task_outcomes.is_empty()
+                {
                     break;
                 }
                 std::thread::sleep(args.idle_poll_interval);
                 continue;
             }
             if scheduled_any {
+                continue;
+            }
+            if !pending_task_outcomes.is_empty() {
+                std::thread::sleep(args.idle_poll_interval);
                 continue;
             }
             if shutdown_requested.load(Ordering::Acquire) {
@@ -790,19 +944,16 @@ fn run_scheduler(
             std::thread::sleep(args.idle_poll_interval);
             continue;
         }
-        let Some(resource_id) = active_workers.iter().find_map(|(resource_id, worker)| {
-            worker.handle.is_finished().then(|| resource_id.clone())
-        }) else {
-            std::thread::sleep(if reconciliation_deferred || scheduling_deferred {
-                args.idle_poll_interval
-            } else {
-                Duration::from_millis(10)
-            });
+        let Some(resource_id) = finished_resource_id else {
+            std::thread::sleep(ACTIVE_WORKER_EXIT_POLL_INTERVAL);
             continue;
         };
         let worker = active_workers
             .remove(&resource_id)
             .context("finished scheduler worker handle disappeared")?;
+        next_admission_pass_at = Instant::now();
+        let worker_run_id = worker.run_id.clone();
+        let worker_task_id = worker.task_id.clone();
         let completed = match worker.handle.join() {
             Ok(Ok(completed)) => completed,
             Ok(Err(error))
@@ -819,11 +970,51 @@ fn run_scheduler(
                     error = ?error,
                     "compute scheduler deferred worker launch; runtime remains available"
                 );
-                std::thread::sleep(args.idle_poll_interval);
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "schema_version": "scheduler_worker_launch_deferred.v1",
+                        "component": "accepted_compute_scheduler",
+                        "run_id": worker_run_id.as_str(),
+                        "task_id": &worker_task_id,
+                        "resource_id": &resource_id,
+                        "detail": format!("{error:#}"),
+                    })
+                );
+                if active_workers.is_empty() {
+                    std::thread::sleep(args.idle_poll_interval);
+                } else {
+                    next_admission_pass_at = Instant::now() + active_admission_interval;
+                    std::thread::sleep(ACTIVE_WORKER_EXIT_POLL_INTERVAL);
+                }
                 continue;
             }
             Ok(Err(error)) => {
-                return Err(error).context("supervise scheduled accepted worker");
+                // A failed simulation is a task outcome once it is durably
+                // settled; only an unsettled task keeps the fail-stop.
+                match check_task_outcome_settled(&store, &worker_run_id, &worker_task_id)? {
+                    TaskOutcomeCheck::Settled(true) => {
+                        report_settled_worker_error(&worker_run_id, &worker_task_id, &error);
+                    }
+                    TaskOutcomeCheck::Settled(false) => {
+                        return Err(error).context("supervise scheduled accepted worker");
+                    }
+                    TaskOutcomeCheck::WriterBusy(busy_error) => {
+                        let mut pending = PendingTaskOutcome {
+                            run_id: worker_run_id,
+                            task_id: worker_task_id,
+                            resource_id: worker.resource.resource_id,
+                            attempt_id: worker.attempt_id,
+                            ownership_epoch: worker.ownership_epoch,
+                            original_error: error,
+                            origin: PendingTaskOutcomeOrigin::ScheduledWorker,
+                            busy_deferred_reported: false,
+                        };
+                        report_pending_task_outcome_deferred(&mut pending, &busy_error);
+                        pending_task_outcomes.push(pending);
+                    }
+                }
+                continue;
             }
             Err(_) => {
                 bail!("scheduled accepted worker supervision thread panicked");
@@ -933,8 +1124,33 @@ fn build_run_queue_snapshot(
     next_run_id: Option<&RunId>,
     max_queued_runs: usize,
 ) -> Result<RunQueueSnapshot> {
+    store.retry_windows_folder_observation("build accepted scheduler run queue snapshot", || {
+        build_run_queue_snapshot_once(store, run_ids, next_run_id, max_queued_runs)
+    })
+}
+
+fn build_run_queue_snapshot_once(
+    store: &SessionStore,
+    run_ids: &[RunId],
+    next_run_id: Option<&RunId>,
+    max_queued_runs: usize,
+) -> Result<RunQueueSnapshot> {
     let mut queued = Vec::new();
     for run_id in run_ids {
+        let Some(catalog) = store.read_run_catalog(run_id.as_str())? else {
+            continue;
+        };
+        // This fresh observation only excludes runs with no possible queue
+        // candidate. Readiness and admission still reread their exact state.
+        if !catalog.tasks.iter().any(|task| {
+            matches!(
+                task.lifecycle,
+                fullmag_session::FmsTaskLifecycle::Accepted
+                    | fullmag_session::FmsTaskLifecycle::Queued
+            )
+        }) {
+            continue;
+        }
         let intent = store.read_run_intent(run_id.as_str())?.with_context(|| {
             format!(
                 "scheduler run `{}` has no immutable intent",
@@ -1071,6 +1287,13 @@ fn classify_scheduler_operation<T>(result: Result<T>) -> Result<SchedulerOperati
             );
             Ok(SchedulerOperation::Deferred)
         }
+        Err(error) if is_stale_admission_candidate(&error) => {
+            tracing::warn!(
+                error = ?error,
+                "compute scheduler deferred a stale admission candidate"
+            );
+            Ok(SchedulerOperation::Deferred)
+        }
         Err(error)
             if error.chain().any(|cause| {
                 cause.is::<fullmag_session::host_resource_ledger::TransientGpuInventoryUnavailable>()
@@ -1092,10 +1315,276 @@ fn classify_scheduler_operation<T>(result: Result<T>) -> Result<SchedulerOperati
     }
 }
 
+/// Busy writer or a transient store I/O failure: either way the pass changed
+/// nothing it cannot resume, so it is deferred to the next iteration.
 fn is_store_writer_busy(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.is::<fullmag_session::StoreWriterBusy>()
+            // The sampler refreshes the compute-node sample; admission waits.
+            || cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
+    }) || fullmag_runtime_control::is_transient_store_io(error)
+}
+
+fn is_stale_admission_candidate(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<fullmag_runtime_control::StaleTaskAdmissionCandidate>())
+}
+
+fn is_typed_store_writer_busy(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+}
+
+enum TaskOutcomeCheck {
+    Settled(bool),
+    WriterBusy(anyhow::Error),
+}
+
+fn check_task_outcome_settled(
+    store: &SessionStore,
+    run_id: &RunId,
+    task_id: &str,
+) -> Result<TaskOutcomeCheck> {
+    match task_outcome_settled(store, run_id, task_id) {
+        Ok(settled) => Ok(TaskOutcomeCheck::Settled(settled)),
+        Err(error) if is_typed_store_writer_busy(&error) => {
+            Ok(TaskOutcomeCheck::WriterBusy(error))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn resolve_pending_task_outcomes(
+    store: &SessionStore,
+    pending_task_outcomes: &mut Vec<PendingTaskOutcome>,
+) -> Result<()> {
+    let mut unresolved = Vec::with_capacity(pending_task_outcomes.len());
+    for mut pending in pending_task_outcomes.drain(..) {
+        match check_task_outcome_settled(store, &pending.run_id, &pending.task_id)? {
+            TaskOutcomeCheck::Settled(true) => {
+                report_settled_worker_error(
+                    &pending.run_id,
+                    &pending.task_id,
+                    &pending.original_error,
+                );
+            }
+            TaskOutcomeCheck::Settled(false) => {
+                return Err(pending.fail_stop_error());
+            }
+            TaskOutcomeCheck::WriterBusy(error) => {
+                report_pending_task_outcome_deferred(&mut pending, &error);
+                unresolved.push(pending);
+            }
+        }
+    }
+    *pending_task_outcomes = unresolved;
+    Ok(())
+}
+
+/// Whether a task reached a durable outcome and holds no resource lease: a
+/// terminal lifecycle, or queued again by a durable retry decision. Each read
+/// is one-shot so a final writer-busy result can be retained for a later pass.
+fn task_outcome_settled(store: &SessionStore, run_id: &RunId, task_id: &str) -> Result<bool> {
+    let Some(catalog) = store.read_run_catalog(run_id.as_str())? else {
+        return Ok(false);
+    };
+    let Some(task) = catalog.tasks.iter().find(|task| task.task_id == task_id) else {
+        return Ok(false);
+    };
+    if !matches!(
+        task.lifecycle,
+        fullmag_session::FmsTaskLifecycle::Succeeded
+            | fullmag_session::FmsTaskLifecycle::Failed
+            | fullmag_session::FmsTaskLifecycle::Cancelled
+            | fullmag_session::FmsTaskLifecycle::Queued
+    ) {
+        return Ok(false);
+    }
+    let lease = store.read_active_resource_lease_for_task(run_id.as_str(), task_id)?;
+    Ok(lease.is_none())
+}
+
+fn report_settled_worker_error(run_id: &RunId, task_id: &str, error: &anyhow::Error) {
+    tracing::warn!(
+        run_id = run_id.as_str(),
+        task_id,
+        error = ?error,
+        "accepted worker supervision reported an error after durable task settlement; scheduling continues"
+    );
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "schema_version": "scheduler_task_outcome.v1",
+            "event": "worker_error_after_task_settlement",
+            "component": "accepted_compute_scheduler",
+            "run_id": run_id.as_str(),
+            "task_id": task_id,
+            "reason": format!("{error:#}"),
+        })
+    );
+}
+
+fn report_pending_task_outcome_deferred(
+    pending: &mut PendingTaskOutcome,
+    error: &anyhow::Error,
+) {
+    if pending.busy_deferred_reported {
+        return;
+    }
+    tracing::warn!(
+        run_id = %pending.run_id.as_str(),
+        task_id = %pending.task_id,
+        resource_id = %pending.resource_id,
+        attempt_id = %pending.attempt_id,
+        ownership_epoch = pending.ownership_epoch,
+        error = ?error,
+        "compute scheduler deferred read-only task outcome settlement while the session store writer is busy"
+    );
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "schema_version": "scheduler_task_outcome_deferred.v1",
+            "component": "accepted_compute_scheduler",
+            "run_id": pending.run_id.as_str(),
+            "task_id": &pending.task_id,
+            "resource_id": &pending.resource_id,
+            "attempt_id": &pending.attempt_id,
+            "ownership_epoch": pending.ownership_epoch,
+            "detail": format!("{error:#}"),
+        })
+    );
+    pending.busy_deferred_reported = true;
+}
+
+#[derive(Clone, Copy)]
+struct WorkerSupervisionLimits {
+    max_concurrency: usize,
+    worker_timeout: Duration,
+    heartbeat_interval: Duration,
+    max_automatic_retries: usize,
+}
+
+/// Settle tasks whose worker process exited while it owned a resource.
+///
+/// Host recovery resumes only pre-launch Preparing claims; a Running or
+/// Stopping task whose worker died (it has a durable process-exit receipt)
+/// otherwise kept its resource lease forever. Its supervisor recovery path
+/// records the failure, a retry decision or the cancellation and releases the
+/// lease. Resources with an active worker in this process are skipped.
+fn recover_exited_worker_tasks(
+    store: &SessionStore,
+    run_ids: &[RunId],
+    active_workers: &ActiveWorkers,
+    pending_task_outcomes: &mut Vec<PendingTaskOutcome>,
+    worker_executable: &Path,
+    limits: WorkerSupervisionLimits,
+    host: Option<&fullmag_runtime_control::host_runtime::HostRuntimeAdmission>,
+) -> Result<bool> {
+    let mut recovered = false;
+    for run_id in run_ids {
+        if pending_task_outcomes
+            .iter()
+            .any(|pending| pending.blocks_run(run_id))
+        {
+            continue;
+        }
+        let Some(catalog) = store.read_run_catalog(run_id.as_str())? else {
+            continue;
+        };
+        for task in &catalog.tasks {
+            if pending_task_outcomes
+                .iter()
+                .any(|pending| pending.blocks_run(run_id))
+            {
+                break;
+            }
+            if !matches!(
+                task.lifecycle,
+                fullmag_session::FmsTaskLifecycle::Running
+                    | fullmag_session::FmsTaskLifecycle::Stopping
+            ) {
+                continue;
+            }
+            let Some(resource_id) = task.resource_id.as_deref() else {
+                continue;
+            };
+            if active_workers.contains_key(resource_id)
+                || pending_task_outcomes
+                    .iter()
+                    .any(|pending| pending.resource_id == resource_id)
+            {
+                continue;
+            }
+            let Some(process_exit_receipt) =
+                accepted_study_supervisor::worker_process_exit_receipt_for_current_task(
+                    store,
+                    run_id.as_str(),
+                    &task.task_id,
+                )?
+            else {
+                continue;
+            };
+            recovered = true;
+            match accepted_study_supervisor::run_supervised_accepted_worker_with_host(
+                store,
+                run_id.as_str(),
+                &task.task_id,
+                worker_executable,
+                limits.max_concurrency,
+                limits.worker_timeout,
+                limits.heartbeat_interval,
+                limits.max_automatic_retries,
+                host,
+            ) {
+                Ok(result) => eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "schema_version": "scheduler_task_outcome.v1",
+                        "event": "exited_worker_recovered",
+                        "component": "accepted_compute_scheduler",
+                        "run_id": run_id.as_str(),
+                        "task_id": task.task_id,
+                        "retry_scheduled": result.retry_scheduled,
+                        "worker_cancelled": result.worker_cancelled,
+                        "worker": result.worker_summary,
+                    })
+                ),
+                Err(error) => {
+                    match check_task_outcome_settled(store, run_id, &task.task_id)? {
+                        TaskOutcomeCheck::Settled(true) => {
+                            report_settled_worker_error(run_id, &task.task_id, &error);
+                        }
+                        TaskOutcomeCheck::Settled(false) => {
+                            return Err(error).with_context(|| {
+                                format!(
+                                    "recover exited worker of task `{}` in run `{}`",
+                                    task.task_id,
+                                    run_id.as_str()
+                                )
+                            });
+                        }
+                        TaskOutcomeCheck::WriterBusy(busy_error) => {
+                            let mut pending = PendingTaskOutcome {
+                                run_id: run_id.clone(),
+                                task_id: task.task_id.clone(),
+                                resource_id: process_exit_receipt.resource_id.clone(),
+                                attempt_id: process_exit_receipt.attempt_id.clone(),
+                                ownership_epoch: process_exit_receipt.ownership_epoch,
+                                original_error: error,
+                                origin: PendingTaskOutcomeOrigin::ExitedWorkerRecovery,
+                                busy_deferred_reported: false,
+                            };
+                            report_pending_task_outcome_deferred(&mut pending, &busy_error);
+                            pending_task_outcomes.push(pending);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(recovered)
 }
 
 fn sibling_worker_executable() -> Result<PathBuf> {

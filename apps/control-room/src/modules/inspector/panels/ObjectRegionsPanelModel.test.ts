@@ -1,66 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import type { CouplingListResource } from "@/kernel/api/apiTypes";
+import type { CouplingListResource, RegionListResource } from "@/kernel/api/apiTypes";
 
 import {
   buildObjectRegionPatch,
   clampObjectRegionDraftShapeToOwnerBounds,
   formatRegionPhysicalScalar,
-  objectRegionDraftDirty,
   objectRegionDraftFromModel,
   objectRegionDraftKey,
   parseRegionPhysicalScalar,
   resolveRegionCouplingDependencies,
-  resolveParentMaterialParameterInfo,
   resolveObjectRegionPanelModel,
   validateObjectRegionDraft,
 } from "./ObjectRegionsPanelModel";
-
-function resolveRegionModelWithPayload(
-  shape: unknown,
-  materialOverrides: unknown[] = [],
-) {
-  return resolveObjectRegionPanelModel(
-    {
-      kind: "object.region",
-      label: "Core",
-      moduleSource: "explorer",
-      nodeId: "model:object:film:regions:core",
-      objectId: "film",
-      ref: {
-        kind: "object.region",
-        nodeId: "model:object:film:regions:core",
-        objectId: "film",
-        regionId: "region:core",
-        type: "scene-object",
-        visualizationTargetId: "object:film",
-      },
-    },
-    { objects: [{ id: "film", name: "Film" }], revision: 3 } as never,
-    {
-      geometry_realization_revision: 0,
-      regions: [
-        {
-          bounds_max: [1, 1, 1],
-          bounds_min: [0, 0, 0],
-          enabled: true,
-          interaction_refs: [],
-          material_overrides: materialOverrides,
-          material_ref: "mat-film",
-          mesh_part_ids: [],
-          name: "Core",
-          owner_object_id: "film",
-          region_id: "region:core",
-          shape,
-          source: "authored_object_region",
-          source_body_ids: [],
-          source_object_ids: ["film"],
-        } as never,
-      ],
-      scene_revision: 3,
-    } as never,
-  );
-}
 
 describe("ObjectRegionsPanelModel", () => {
   it("summarizes active coupling dependencies for a selected object region", () => {
@@ -217,7 +169,6 @@ describe("ObjectRegionsPanelModel", () => {
         materialOverrides: [
           {
             conflictPolicy: "higher_priority_wins",
-            uiKey: "new:test-override",
             parameter: "ms",
             priority: 4,
             unit: "A/m",
@@ -278,251 +229,6 @@ describe("ObjectRegionsPanelModel", () => {
     });
   });
 
-  it("preserves CSG and exact zero scalar overrides through an ordinary region patch", () => {
-    const shape = {
-      expression: {
-        left: { kind: "sphere", radius: 12e-9 },
-        op: "difference",
-        right: { kind: "sphere", radius: 4e-9 },
-      },
-      kind: "csg",
-    };
-    const overrides = ["alpha", "aex", "ku1"].map((parameter) => ({
-      parameter,
-      value: { kind: "constant", value: 0 },
-    }));
-    const draft = objectRegionDraftFromModel(
-      resolveRegionModelWithPayload(shape, overrides),
-    );
-
-    expect(draft.materialOverrides.map((override) => override.value)).toEqual([
-      0,
-      0,
-      0,
-    ]);
-    expect(draft.shape.preservedShape).toEqual(shape);
-    expect(
-      validateObjectRegionDraft({
-        ...draft,
-        shape: {
-          ...draft.shape,
-          center: [Number.NaN, Number.NaN, Number.NaN],
-        },
-      }),
-    ).toEqual([]);
-    expect(
-      buildObjectRegionPatch({ ...draft, name: "Renamed core" }).shape,
-    ).toEqual(shape);
-    expect(
-      buildObjectRegionPatch({ ...draft, name: "Renamed core" })
-        .material_overrides,
-    ).toEqual(overrides);
-  });
-
-  it("omits unchanged material overrides from a metadata-only patch", () => {
-    const draft = objectRegionDraftFromModel(
-      resolveRegionModelWithPayload(
-        { center: [0, 0, 0], kind: "box", size: [10e-9, 10e-9, 10e-9] },
-        [
-          {
-            parameter: "ms",
-            value: { kind: "constant", unit: "A/m", value: 800e3 },
-          },
-        ],
-      ),
-    );
-
-    const patch = buildObjectRegionPatch(
-      { ...draft, name: "Renamed core" },
-      { baseDraft: draft },
-    );
-
-    expect(patch.name).toBe("Renamed core");
-    expect(patch).not.toHaveProperty("material_overrides");
-  });
-
-  it("ignores override UI keys in dirty and metadata-only payload comparisons", () => {
-    const draft = objectRegionDraftFromModel(
-      resolveRegionModelWithPayload(
-        { center: [0, 0, 0], kind: "box", size: [10e-9, 10e-9, 10e-9] },
-        [{ parameter: "alpha", value: { kind: "constant", unit: "1", value: 0 } }],
-      ),
-    );
-    const rekeyedDraft = {
-      ...draft,
-      materialOverrides: draft.materialOverrides.map((override) => ({
-        ...override,
-        uiKey: `replacement:${override.uiKey}`,
-      })),
-    };
-
-    expect(draft.materialOverrides[0]?.uiKey).toBe("read:0");
-    expect(objectRegionDraftDirty(rekeyedDraft, draft)).toBe(false);
-    const patch = buildObjectRegionPatch(
-      { ...rekeyedDraft, name: "Renamed core" },
-      { baseDraft: draft },
-    );
-    expect(patch.name).toBe("Renamed core");
-    expect(patch).not.toHaveProperty("material_overrides");
-  });
-
-  it("recognizes an acknowledged scalar payload without discarding later edits or metadata", () => {
-    const shape = { center: [0, 0, 0], kind: "box", size: [10e-9, 10e-9, 10e-9] };
-    const base = objectRegionDraftFromModel(resolveRegionModelWithPayload(shape, [
-      { parameter: "alpha", value: { kind: "constant", value: 0 } },
-    ]));
-    const edited = {
-      ...base,
-      materialOverrides: base.materialOverrides.map((override) => ({ ...override, value: 0.125 })),
-    };
-    const acknowledged = objectRegionDraftFromModel(resolveRegionModelWithPayload(shape,
-      buildObjectRegionPatch(edited).material_overrides ?? [],
-    ));
-
-    expect(objectRegionDraftDirty(edited, acknowledged)).toBe(false);
-    expect(buildObjectRegionPatch({ ...edited, name: "Renamed after ACK" }, { baseDraft: acknowledged }))
-      .not.toHaveProperty("material_overrides");
-    expect(objectRegionDraftDirty({
-      ...edited,
-      materialOverrides: edited.materialOverrides.map((override) => ({ ...override, value: 0.25 })),
-    }, acknowledged)).toBe(true);
-    expect(objectRegionDraftDirty({
-      ...edited,
-      materialOverrides: edited.materialOverrides.map((override) => ({
-        ...override,
-        preservedOverride: { ...override.preservedOverride!, priority: 9 },
-      })),
-    }, acknowledged)).toBe(true);
-  });
-
-  it("keeps omitted scalar override metadata omitted when its value changes", () => {
-    const draft = objectRegionDraftFromModel(
-      resolveRegionModelWithPayload(
-        { center: [0, 0, 0], kind: "box", size: [10e-9, 10e-9, 10e-9] },
-        [{ parameter: "aex", value: { kind: "constant", value: 0 } }],
-      ),
-    );
-
-    expect(
-      buildObjectRegionPatch(
-        {
-          ...draft,
-          materialOverrides: draft.materialOverrides.map((override) => ({
-            ...override,
-            value: 2e-11,
-          })),
-        },
-      ).material_overrides,
-    ).toEqual([{ parameter: "aex", value: { kind: "constant", value: 2e-11 } }]);
-  });
-
-  it("retains unsupported region overrides without validating scalar fallbacks", () => {
-    const originals = [
-      {
-        parameter: "ku2",
-        priority: 9,
-        conflict_policy: "min_mesh_size_wins",
-        value: { kind: "constant", unit: "J/m^3", value: [1, 2, 3] },
-      },
-      {
-        parameter: "aex",
-        value: { base: 2, frame: "world", gradient: [1, 2, 3], kind: "linear" },
-      },
-      {
-        parameter: "alpha",
-        value: {
-          asset_id: "field:alpha",
-          component_count: 1,
-          kind: "sampled",
-          location: "cell",
-          unit: "1",
-        },
-      },
-    ] as const;
-    const draft = objectRegionDraftFromModel(
-      resolveRegionModelWithPayload(
-        { center: [0, 0, 0], kind: "box", size: [10e-9, 10e-9, 10e-9] },
-        [...originals],
-      ),
-    );
-
-    expect(draft.materialOverrides.map((override) => override.preservedOverride)).toEqual(
-      originals,
-    );
-    expect(
-      validateObjectRegionDraft({
-        ...draft,
-        materialOverrides: draft.materialOverrides.map((override) => ({
-          ...override,
-          value: Number.NaN,
-        })),
-      }),
-    ).toEqual([]);
-    expect(buildObjectRegionPatch(draft).material_overrides).toEqual(originals);
-  });
-
-  it("fails explicitly when editing the override list would resend a FEM-only retained policy on FDM", () => {
-    const draft = objectRegionDraftFromModel(
-      resolveRegionModelWithPayload(
-        { center: [0, 0, 0], kind: "box", size: [10e-9, 10e-9, 10e-9] },
-        [
-          {
-            parameter: "ku2",
-            conflict_policy: "min_mesh_size_wins",
-            value: { kind: "constant", value: [1, 2, 3] },
-          },
-        ],
-      ),
-    );
-
-    expect(() =>
-      buildObjectRegionPatch(
-        {
-          ...draft,
-          materialOverrides: [
-            ...draft.materialOverrides,
-            {
-              conflictPolicy: "error",
-              uiKey: "new:test-override",
-              parameter: "ms",
-              priority: 0,
-              unit: "A/m",
-              value: 800e3,
-            },
-          ],
-        },
-        { baseDraft: draft, meshPolicyLane: "fdm" },
-      ),
-    ).toThrow(/FEM-only/);
-  });
-
-  it("reports inherited parameters as unavailable when the parent has no authored value", () => {
-    expect(
-      resolveParentMaterialParameterInfo("aex", "film", "mat-film", null, {
-        materials: [{ id: "mat-film", name: "Film", properties: {} }],
-      } as never),
-    ).toEqual({ available: false, unit: "J/m", value: null });
-    expect(
-      resolveParentMaterialParameterInfo(
-        "aex",
-        "film",
-        "mat-film",
-        {
-          fields: [
-            {
-              assignment_id: "field:aex-parent",
-              field: { kind: "constant", unit: "J/m", value: 0 },
-              owner_object_id: "film",
-              parameter: "aex",
-            },
-          ],
-          scene_revision: 3,
-        },
-        null,
-      ),
-    ).toEqual({ available: true, unit: "J/m", value: 0 });
-  });
-
   it("omits FEM mesh policy when an FDM region applies physical edits", () => {
     const patch = buildObjectRegionPatch(
       {
@@ -531,7 +237,6 @@ describe("ObjectRegionsPanelModel", () => {
         materialOverrides: [
           {
             conflictPolicy: "error",
-            uiKey: "new:test-override",
             parameter: "ms",
             priority: 2,
             unit: "A/m",
@@ -585,7 +290,6 @@ describe("ObjectRegionsPanelModel", () => {
         materialOverrides: [
           {
             conflictPolicy: "min_mesh_size_wins" as never,
-            uiKey: "new:test-override",
             parameter: "ms",
             priority: 2,
             unit: "A/m",
@@ -956,7 +660,6 @@ describe("ObjectRegionsPanelModel", () => {
         materialOverrides: [
           {
             conflictPolicy: "error",
-            uiKey: "new:test-override",
             parameter: "ms",
             priority: 1.5,
             unit: "A/m",
@@ -1320,5 +1023,49 @@ describe("ObjectRegionsPanelModel", () => {
         severity: "warning",
       },
     ]);
+  });
+});
+
+
+describe("material override round-trip", () => {
+  function modelFor(overrides: NonNullable<RegionListResource["regions"][number]["material_overrides"]>) {
+    return resolveObjectRegionPanelModel(
+      { kind: "object.region", label: "Core", moduleSource: "explorer", nodeId: "core", objectId: "film",
+        ref: { kind: "object.region", nodeId: "core", objectId: "film", regionId: "film:core", type: "scene-object", visualizationTargetId: "object:film" } },
+      { objects: [{ id: "film", name: "Film", visible: true, material_ref: "mat-film", magnetization_ref: "mag-film" }], revision: 1 },
+      { scene_revision: 1, geometry_realization_revision: 0, regions: [{
+        region_id: "film:core", owner_object_id: "film", name: "Core", enabled: true, priority: 0,
+        source: "authored_object_region", source_object_ids: ["film"], source_body_ids: [],
+        bounds_min: [-1,-1,-1], bounds_max: [1,1,1], mesh_part_ids: [], interaction_refs: [],
+        realization_status: "authored_pending_realization", material_overrides: overrides,
+        shape: { kind: "box", center: [0,0,0], size: [1,1,1] },
+      }] },
+    );
+  }
+
+  it.each(["alpha", "aex"] as const)("preserves an intentional zero %s when renaming a region", (parameter) => {
+    const model = modelFor([{ parameter, priority: 0, conflict_policy: "error", value: { kind: "constant", value: 0 } }]);
+    const draft = { ...objectRegionDraftFromModel(model), name: "Renamed" };
+    expect(validateObjectRegionDraft(draft)).toEqual([]);
+    expect(buildObjectRegionPatch(draft).material_overrides?.[0].value).toMatchObject({ kind: "constant", value: 0 });
+  });
+
+  it.each([
+    { kind: "constant" as const, value: [1, 0, 0] },
+    { kind: "linear" as const, gradient: [2,0,0], base: 800e3, frame: "object" as const, unit: "A/m" },
+    { kind: "radial" as const, center: [0,0,0], inside: 800e3, outside: 600e3, radius: 1, frame: "object" as const, unit: "A/m" },
+  ])("preserves $kind profiles through metadata edits", (value) => {
+    const source = { parameter: "ms" as const, priority: 3, conflict_policy: "error" as const, value };
+    const model = modelFor([source]);
+    const draft = { ...objectRegionDraftFromModel(model), name: "Renamed" };
+    expect(validateObjectRegionDraft(draft)).toEqual([]);
+    expect(buildObjectRegionPatch(draft).material_overrides).toEqual([source]);
+    expect(objectRegionDraftKey(model)).not.toEqual(objectRegionDraftKey(modelFor([{ ...source, priority: 4 }])));
+  });
+
+  it("retains parameters outside the scalar editor instead of converting them to Ms", () => {
+    const source = { parameter: "dbulk" as const, priority: 0, conflict_policy: "error" as const, value: { kind: "constant" as const, value: 0.003, unit: "J/m^2" } };
+    const draft = objectRegionDraftFromModel(modelFor([source]));
+    expect(buildObjectRegionPatch({ ...draft, name: "Renamed" }).material_overrides).toEqual([source]);
   });
 });

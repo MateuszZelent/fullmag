@@ -2243,6 +2243,11 @@ pub struct FemSharedDomainBuildReportIR {
     pub mixed_layer_topology_certificate_v2: Option<MixedLayerTopologyCertificateV2IR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mixed_topology_provenance: Option<crate::FemMixedTopologyProvenanceIR>,
+    /// Rich computed mesh-quality and geometric statistics retained from the
+    /// Python meshing producer. This remains separate from the legacy
+    /// gamma-bearing per-domain quality carrier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_statistics: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -2653,6 +2658,12 @@ pub struct DeclaredUniverseIR {
     pub airbox_growth_rate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub airbox_grading: Option<String>,
+    /// Air target `c * R` at curved magnetic surfaces (docs/physics/0107).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airbox_curvature_factor: Option<f64>,
+    /// Element-count control across air gaps (docs/physics/0107).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airbox_narrow_region_resolution: Option<f64>,
 }
 
 impl Default for DeclaredUniverseIR {
@@ -2666,6 +2677,8 @@ impl Default for DeclaredUniverseIR {
             airbox_hmin: None,
             airbox_growth_rate: None,
             airbox_grading: None,
+            airbox_curvature_factor: None,
+            airbox_narrow_region_resolution: None,
         }
     }
 }
@@ -2699,6 +2712,12 @@ impl DeclaredUniverseIR {
                 .get("airbox_grading")
                 .and_then(|candidate| candidate.as_str())
                 .map(str::to_string),
+            airbox_curvature_factor: object
+                .get("airbox_curvature_factor")
+                .and_then(|candidate| candidate.as_f64()),
+            airbox_narrow_region_resolution: object
+                .get("airbox_narrow_region_resolution")
+                .and_then(|candidate| candidate.as_f64()),
         })
     }
 }

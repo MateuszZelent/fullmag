@@ -2,11 +2,12 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { FieldCatalogResource } from "@/kernel/api/apiTypes";
+import type { FieldCatalogResource, QuantityCatalogResource } from "@/kernel/api/apiTypes";
 
 const testState = vi.hoisted(() => ({
   discretization: "fdm",
   fieldCatalog: null as FieldCatalogResource | null,
+  quantityCatalog: null as QuantityCatalogResource | null,
   fieldCatalogRequested: false,
   fieldCatalogStatus: "idle" as "idle" | "ready",
   planarActivate: null as (() => void) | null,
@@ -68,6 +69,10 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
     requested: boolean;
     targetActive: boolean;
   }) => Boolean(targetActive && (requested || testState.fieldCatalogRequested)),
+  useStageExecutionResource: ({ enabled = true }: { enabled?: boolean } = {}) => {
+    resourceCall("stage-execution", enabled);
+    return { data: null, error: null, revision: null, status: "idle" };
+  },
   useFieldCatalogResource: ({ enabled }: { enabled: boolean }) => {
     resourceCall("field-catalog", enabled);
     return {
@@ -79,7 +84,7 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   },
   useQuantityCatalogResource: ({ enabled = true }: { enabled?: boolean } = {}) => {
     resourceCall("quantity-catalog", enabled);
-    return { data: null, error: null, revision: null, status: "idle" };
+    return { data: testState.quantityCatalog, error: null, revision: null, status: testState.quantityCatalog ? "ready" : "idle" };
   },
   useFieldMetaResource: ({ enabled = true }: { enabled?: boolean }) => {
     resourceCall("field-meta", enabled);
@@ -206,11 +211,12 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
   },
   useSceneResource: ({ enabled = true }: { enabled?: boolean } = {}) => {
     resourceCall("scene", enabled);
-    return { data: { objects: [{ id: "film" }] }, error: null, revision: 1, status: "ready" };
+    return { data: { objects: [{ id: "film", magnetization_ref: "uniform" }] }, error: null, revision: 1, status: "ready" };
   },
 }));
 
 vi.mock("@/kernel/visualization/useObjectVisualization", () => ({
+  useSavedFieldPresentation: () => ({ presentation: null }),
   useObjectVisualizationController: () => ({
     clearTarget: vi.fn(),
     patchTarget: vi.fn(),
@@ -296,10 +302,14 @@ vi.mock("./ObjectVisualizationTargetSection", () => {
   const DisplayPasses = () => (
     <div data-slot="visualization-display-passes">Display passes</div>
   );
+  const WireframeGeometryScope = () => (
+    <div data-slot="visualization-wireframe-geometry-scope">Wireframe mesh</div>
+  );
   return {
     ColorField: Component,
     VisualizationDisplayPassesSection: DisplayPasses,
     VisualizationGeometryScopeSection: Component,
+    VisualizationWireframeGeometryScopeSection: WireframeGeometryScope,
     VisualizationOverridesSection: Component,
     VisualizationPointsSection: Component,
     VisualizationQuantitySection: Component,
@@ -433,6 +443,7 @@ function expectSharedVisualizationInspectorContract(
 
 afterEach(() => {
   testState.fieldCatalog = null;
+  testState.quantityCatalog = null;
   testState.fieldCatalogRequested = false;
   testState.fieldCatalogStatus = "idle";
 });
@@ -481,15 +492,15 @@ describe("ObjectVisualizationPanel lane routing", () => {
 
     const airbox = renderResolvedInspector(airboxSelection);
     expect(airbox).toContain('data-inspector-owner="airbox.visualization"');
-    expect(airbox).toContain("Airbox visualization");
-    expect(airbox).toContain("Target scope:Airbox");
+    expect(airbox).toContain("Universe visualization");
+    expect(airbox).toContain("Target scope:Universe (Airbox)");
     expect(airbox).toContain("Target ID:airbox");
     expect(airbox).toContain("Airbox-specific bounds and field support");
-    expect(airbox).toContain("Airbox extent, display passes, field quantity");
+    expect(airbox).toContain("Universe sampling mesh, computed field, and display settings");
     expectSharedVisualizationInspectorContract(
       airbox,
       "airbox.visualization",
-      "Airbox visualization",
+      "Universe visualization",
     );
 
     const meshPart = renderResolvedInspector(meshPartSelection);
@@ -642,6 +653,31 @@ describe("ObjectVisualizationPanel lane routing", () => {
     );
   });
 
+  it("offers wireframe mesh scope only for a FEM object target", () => {
+    testState.discretization = "fdm";
+    const fdmObject = renderToStaticMarkup(
+      <ObjectVisualizationPanel selection={selection} />,
+    );
+
+    testState.discretization = "fem";
+    const femObject = renderToStaticMarkup(
+      <ObjectVisualizationPanel selection={selection} />,
+    );
+    const femAirbox = renderToStaticMarkup(
+      <ObjectVisualizationPanel selection={airboxSelection} />,
+    );
+
+    expect(fdmObject).not.toContain(
+      'data-slot="visualization-wireframe-geometry-scope"',
+    );
+    expect(femObject).toContain(
+      'data-slot="visualization-wireframe-geometry-scope"',
+    );
+    expect(femAirbox).not.toContain(
+      'data-slot="visualization-wireframe-geometry-scope"',
+    );
+  });
+
   it("loads the field catalog for a FEM Airbox target before quantity interaction", () => {
     testState.discretization = "fem";
     testState.resourceCalls.length = 0;
@@ -658,6 +694,23 @@ describe("ObjectVisualizationPanel lane routing", () => {
     testState.discretization = "fem";
     testState.fieldCatalogRequested = true;
     testState.fieldCatalogStatus = "ready";
+    testState.quantityCatalog = {
+      schema_version: "1.0",
+      quantities: [{
+        id: "m", label: "Magnetization", description: "", domain: "magnetic_only",
+        shape: "vector_field", unit: "1", n_comp: 3, location: "cell",
+        normalization_hint: "none", interactive_preview: true,
+        supports_preview_2d: true, supports_preview_3d: true,
+        supports_history: false, supports_export: true, capability_state: "supported",
+        solver_capability: "supported", requestable: true, renderable: true,
+        materializable: true, materialization_state: "complete", publication_state: "interactive",
+        resolved_capability: {
+          quantity_id: "m", provider: "available", request: "field_vector",
+          materialization: "materialized", render: "renderable", publication: "interactive",
+          scope: "object", lane: "fem", precision: "double", carriers: [],
+        },
+      }],
+    };
     testState.fieldCatalog = {
       domain_generation_id: "generation-7",
       quantities: [

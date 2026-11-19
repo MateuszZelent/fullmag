@@ -1,0 +1,1690 @@
+{
+  "schema": "fullmag.fdm-cell-visual-polish.v1",
+  "base_commit": "1da5a431d976047689554d0d0bfee40ab39af184",
+  "source_root": "/home/kkingstoun/git/fullmag/worktrees/interactive-study-t8-20261108",
+  "source_sha256": {
+    "apps/control-room/src/modules/inspector/panels/fdm-grid/FdmCellPhysicsPanel.tsx": "03b74a3755585a177bfe3012b24e86ae328665233493cd1e457eb4a9edb003f6",
+    "apps/control-room/src/design/styles/inspector-fdm-cell.css": "dc88304fbd3ec7b3b16b8267d39cd68112d79fceb5731fce4542acbd4b162981",
+    "apps/control-room/scripts/docker-dev-browser-qa.mjs": "ea4448cbf158317b0b7a20d94c16c0a39fd04467e144302ca11fe25ffa3ad0a3",
+    "scripts/docker_dev_browser_qa.py": "86b005cb285cdcb3a44c5fc1ab63c66deabc714171fba4b5b6554712918a355d",
+    "scripts/docker_volume_dev.py": "676f8adf6b88c0709f4cf90a263491fd76a82fec5fe178fed6b6785fa0c5beca"
+  },
+  "browser_attempt": "eccb34a1682d4d64b257f07805264785",
+  "development_attempt": "1dd24b9d7f154589bcfbce453fe16b66",
+  "config_sha256": "09aacb430b9b7366864669a6adc304d951df6a956ee7bf12815547bebee17b8f",
+  "backend_container": "4ade9bec0c153e1c7703238864503d87f24f2382f71878e45d77fe1d3394cf09",
+  "frontend_container": "72dbedb06d24f0db474df37b548c12c8f5300255d23ed4207e1cc4677c4428ee",
+  "artifacts": {
+    "light": {
+      "path": "docs/audits/2026-11-08-fdm-cell-visual-polish-light.png",
+      "sha256": "e9830253685246a5efe05fd5b3284998cc7901f3651adf96df0b83fb2ba745a2",
+      "bytes": 45497,
+      "dimensions": [
+        380,
+        819
+      ]
+    },
+    "dark": {
+      "path": "docs/audits/2026-11-08-fdm-cell-visual-polish-dark.png",
+      "sha256": "deadf48f323e17461c16bde66abec59377bd02f70e78b4eea03e8fac86eaf20e",
+      "bytes": 46538,
+      "dimensions": [
+        380,
+        819
+      ]
+    },
+    "narrow": {
+      "path": "docs/audits/2026-11-08-fdm-cell-visual-polish-narrow.png",
+      "sha256": "e77d2b1de7d98cb810dee2a9e220032adabe1de52417191382c278cb5f35ab0e",
+      "bytes": 44623,
+      "dimensions": [
+        300,
+        819
+      ]
+    },
+    "workspace": {
+      "path": "docs/audits/2026-11-08-fdm-cell-visual-polish-workspace.png",
+      "sha256": "3328967aece3499681b8022272c509e44a2bd3d34af17744fabcb3df8c458e60",
+      "bytes": 332916,
+      "dimensions": [
+        1600,
+        1280
+      ]
+    }
+  },
+  "result": {
+    "ambiguous_command_submission": null,
+    "browser_gpu_mode": "swiftshader-webgl-requested",
+    "browser_route": {
+      "document_origin": "http://127.0.0.1:3243",
+      "private_upstream": "http://frontend:8080",
+      "proxy_failures": [],
+      "published_ports": 0
+    },
+    "canvas_after": {
+      "context_lost": false,
+      "context_type": "WebGL2RenderingContext",
+      "depth_bits": 24,
+      "drawing_buffer_height": 527,
+      "drawing_buffer_width": 617,
+      "height": 527,
+      "preserve_drawing_buffer": false,
+      "rect": {
+        "height": 527.59375,
+        "width": 617.234375
+      },
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "topology_transfers": [],
+      "vendor": "Google Inc. (Google)",
+      "width": 617
+    },
+    "canvas_before": {
+      "context_lost": false,
+      "context_type": "WebGL2RenderingContext",
+      "depth_bits": 24,
+      "drawing_buffer_height": 527,
+      "drawing_buffer_width": 617,
+      "height": 527,
+      "preserve_drawing_buffer": false,
+      "rect": {
+        "height": 527.59375,
+        "width": 617.234375
+      },
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "topology_transfers": [],
+      "vendor": "Google Inc. (Google)",
+      "width": 617
+    },
+    "canvas_only": true,
+    "canvas_screenshot": {
+      "byte_length": 41077,
+      "height": 528,
+      "image_proof": true,
+      "media_type": "image/png",
+      "state": "captured",
+      "width": 610
+    },
+    "console_errors": 0,
+    "expect_airbox_vectors": false,
+    "expect_ambiguous_compute_fields": false,
+    "expect_fdm_cell_physics": true,
+    "expect_live_field": "m",
+    "expect_planar_airbox": false,
+    "expected_console_errors": [],
+    "expected_response_drops": [],
+    "fdm_cell_physics": {
+      "canvas": {
+        "context_lost": false,
+        "context_type": "WebGL2RenderingContext",
+        "depth_bits": 24,
+        "drawing_buffer_height": 746,
+        "drawing_buffer_width": 927,
+        "height": 746,
+        "preserve_drawing_buffer": false,
+        "rect": {
+          "height": 746,
+          "width": 927.15625
+        },
+        "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+        "topology_transfers": [],
+        "vendor": "Google Inc. (Google)",
+        "width": 927
+      },
+      "keyboard_tabs": true,
+      "layout": {
+        "clipped_values": [],
+        "details_bottom": 885.5,
+        "footer_top": 952.5,
+        "inspector_width": 380,
+        "scroll_width": 358,
+        "summary_top": 362.5,
+        "tabs_bottom": 362.5,
+        "total_bottom": 840.5,
+        "width": 358
+      },
+      "narrow_layout": {
+        "clipped_values": [],
+        "details_bottom": 921,
+        "footer_top": 952.5,
+        "inspector_width": 300,
+        "scroll_width": 278,
+        "summary_top": 362.5,
+        "tabs_bottom": 362.5,
+        "total_bottom": 876,
+        "width": 278
+      },
+      "observation": {
+        "ordinal": 6,
+        "rows": [
+          {
+            "id": "mat_ms",
+            "status": "ready",
+            "values": [
+              {
+                "kind": "scalar",
+                "raw": 800000,
+                "text": "800,000"
+              }
+            ]
+          },
+          {
+            "id": "mat_aex",
+            "status": "ready",
+            "values": [
+              {
+                "kind": "scalar",
+                "raw": 1.3e-11,
+                "text": "1.300e-11"
+              }
+            ]
+          },
+          {
+            "id": "mat_alpha",
+            "status": "ready",
+            "values": [
+              {
+                "kind": "scalar",
+                "raw": 0.5,
+                "text": "0.5"
+              }
+            ]
+          },
+          {
+            "id": "m",
+            "status": "ready",
+            "values": [
+              {
+                "kind": "mx",
+                "raw": 0.986260256021403,
+                "text": "0.98626"
+              },
+              {
+                "kind": "my",
+                "raw": 0.1651989933159304,
+                "text": "0.165199"
+              },
+              {
+                "kind": "mz",
+                "raw": 0,
+                "text": "0"
+              },
+              {
+                "kind": "magnitude",
+                "raw": 1,
+                "text": "1"
+              }
+            ]
+          },
+          {
+            "id": "eden_ex",
+            "status": "ready",
+            "values": [
+              {
+                "kind": "scalar",
+                "raw": 0,
+                "text": "0"
+              },
+              {
+                "kind": "cell-energy",
+                "raw": 0,
+                "text": "0"
+              }
+            ]
+          },
+          {
+            "id": "eden_ext",
+            "status": "ready",
+            "values": [
+              {
+                "kind": "scalar",
+                "raw": -13215.919465274435,
+                "text": "-13,215.9"
+              },
+              {
+                "kind": "cell-energy",
+                "raw": -1.0572735572219551e-22,
+                "text": "-1.057e-22"
+              }
+            ]
+          },
+          {
+            "id": "eden_total",
+            "status": "ready",
+            "values": [
+              {
+                "kind": "scalar",
+                "raw": -13215.919465274435,
+                "text": "-13,215.9"
+              },
+              {
+                "kind": "cell-energy",
+                "raw": -1.0572735572219551e-22,
+                "text": "-1.057e-22"
+              }
+            ]
+          }
+        ]
+      },
+      "public_probes": [
+        {
+          "cell_id": 6,
+          "element_id": null,
+          "occupancy": "occupied",
+          "quantity_id": "eden_ex",
+          "sampling_method": "point_probe",
+          "scalar": 0,
+          "source": {
+            "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+            "default_slice_revision": "2306762730992757471",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "kind": "default"
+          },
+          "u_m": 9.999999999999999e-10,
+          "v_m": 1.0000000000000003e-09,
+          "vector": null,
+          "world_m": [
+            9.999999999999999e-10,
+            1.0000000000000003e-09,
+            0
+          ]
+        },
+        {
+          "cell_id": 6,
+          "element_id": null,
+          "occupancy": "occupied",
+          "quantity_id": "eden_ext",
+          "sampling_method": "point_probe",
+          "scalar": -13215.919465274435,
+          "source": {
+            "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+            "default_slice_revision": "2306762730992757471",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "kind": "default"
+          },
+          "u_m": 9.999999999999999e-10,
+          "v_m": 1.0000000000000003e-09,
+          "vector": null,
+          "world_m": [
+            9.999999999999999e-10,
+            1.0000000000000003e-09,
+            0
+          ]
+        },
+        {
+          "cell_id": 6,
+          "element_id": null,
+          "occupancy": "occupied",
+          "quantity_id": "eden_total",
+          "sampling_method": "point_probe",
+          "scalar": -13215.919465274435,
+          "source": {
+            "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+            "default_slice_revision": "2306762730992757471",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "kind": "default"
+          },
+          "u_m": 9.999999999999999e-10,
+          "v_m": 1.0000000000000003e-09,
+          "vector": null,
+          "world_m": [
+            9.999999999999999e-10,
+            1.0000000000000003e-09,
+            0
+          ]
+        },
+        {
+          "cell_id": 6,
+          "element_id": null,
+          "occupancy": "occupied",
+          "quantity_id": "m",
+          "sampling_method": "point_probe",
+          "scalar": 1,
+          "source": {
+            "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+            "default_slice_revision": "2306762730992757471",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "kind": "default"
+          },
+          "u_m": 9.999999999999999e-10,
+          "v_m": 1.0000000000000003e-09,
+          "vector": [
+            0.986260256021403,
+            0.1651989933159304,
+            0
+          ],
+          "world_m": [
+            9.999999999999999e-10,
+            1.0000000000000003e-09,
+            0
+          ]
+        },
+        {
+          "cell_id": 6,
+          "element_id": null,
+          "occupancy": "occupied",
+          "quantity_id": "mat_aex",
+          "sampling_method": "point_probe",
+          "scalar": 1.3e-11,
+          "source": {
+            "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+            "default_slice_revision": "2306762730992757471",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "kind": "default"
+          },
+          "u_m": 9.999999999999999e-10,
+          "v_m": 1.0000000000000003e-09,
+          "vector": null,
+          "world_m": [
+            9.999999999999999e-10,
+            1.0000000000000003e-09,
+            0
+          ]
+        },
+        {
+          "cell_id": 6,
+          "element_id": null,
+          "occupancy": "occupied",
+          "quantity_id": "mat_alpha",
+          "sampling_method": "point_probe",
+          "scalar": 0.5,
+          "source": {
+            "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+            "default_slice_revision": "2306762730992757471",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "kind": "default"
+          },
+          "u_m": 9.999999999999999e-10,
+          "v_m": 1.0000000000000003e-09,
+          "vector": null,
+          "world_m": [
+            9.999999999999999e-10,
+            1.0000000000000003e-09,
+            0
+          ]
+        },
+        {
+          "cell_id": 6,
+          "element_id": null,
+          "occupancy": "occupied",
+          "quantity_id": "mat_ms",
+          "sampling_method": "point_probe",
+          "scalar": 800000,
+          "source": {
+            "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+            "default_slice_revision": "2306762730992757471",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "kind": "default"
+          },
+          "u_m": 9.999999999999999e-10,
+          "v_m": 1.0000000000000003e-09,
+          "vector": null,
+          "world_m": [
+            9.999999999999999e-10,
+            1.0000000000000003e-09,
+            0
+          ]
+        },
+        {
+          "cell_id": 6,
+          "element_id": null,
+          "occupancy": "occupied",
+          "quantity_id": "eden_ex",
+          "sampling_method": "point_probe",
+          "scalar": 0,
+          "source": {
+            "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+            "default_slice_revision": "2306762730992757471",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "kind": "default"
+          },
+          "u_m": 9.999999999999999e-10,
+          "v_m": 1.0000000000000003e-09,
+          "vector": null,
+          "world_m": [
+            9.999999999999999e-10,
+            1.0000000000000003e-09,
+            0
+          ]
+        },
+        {
+          "cell_id": 6,
+          "element_id": null,
+          "occupancy": "occupied",
+          "quantity_id": "eden_ext",
+          "sampling_method": "point_probe",
+          "scalar": -13215.919465274435,
+          "source": {
+            "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+            "default_slice_revision": "2306762730992757471",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "kind": "default"
+          },
+          "u_m": 9.999999999999999e-10,
+          "v_m": 1.0000000000000003e-09,
+          "vector": null,
+          "world_m": [
+            9.999999999999999e-10,
+            1.0000000000000003e-09,
+            0
+          ]
+        },
+        {
+          "cell_id": 6,
+          "element_id": null,
+          "occupancy": "occupied",
+          "quantity_id": "eden_total",
+          "sampling_method": "point_probe",
+          "scalar": -13215.919465274435,
+          "source": {
+            "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+            "default_slice_revision": "2306762730992757471",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "kind": "default"
+          },
+          "u_m": 9.999999999999999e-10,
+          "v_m": 1.0000000000000003e-09,
+          "vector": null,
+          "world_m": [
+            9.999999999999999e-10,
+            1.0000000000000003e-09,
+            0
+          ]
+        },
+        {
+          "cell_id": 6,
+          "element_id": null,
+          "occupancy": "occupied",
+          "quantity_id": "m",
+          "sampling_method": "point_probe",
+          "scalar": 1,
+          "source": {
+            "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+            "default_slice_revision": "2306762730992757471",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "kind": "default"
+          },
+          "u_m": 9.999999999999999e-10,
+          "v_m": 1.0000000000000003e-09,
+          "vector": [
+            0.986260256021403,
+            0.1651989933159304,
+            0
+          ],
+          "world_m": [
+            9.999999999999999e-10,
+            1.0000000000000003e-09,
+            0
+          ]
+        },
+        {
+          "cell_id": 6,
+          "element_id": null,
+          "occupancy": "occupied",
+          "quantity_id": "mat_aex",
+          "sampling_method": "point_probe",
+          "scalar": 1.3e-11,
+          "source": {
+            "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+            "default_slice_revision": "2306762730992757471",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "kind": "default"
+          },
+          "u_m": 9.999999999999999e-10,
+          "v_m": 1.0000000000000003e-09,
+          "vector": null,
+          "world_m": [
+            9.999999999999999e-10,
+            1.0000000000000003e-09,
+            0
+          ]
+        },
+        {
+          "cell_id": 6,
+          "element_id": null,
+          "occupancy": "occupied",
+          "quantity_id": "mat_alpha",
+          "sampling_method": "point_probe",
+          "scalar": 0.5,
+          "source": {
+            "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+            "default_slice_revision": "2306762730992757471",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "kind": "default"
+          },
+          "u_m": 9.999999999999999e-10,
+          "v_m": 1.0000000000000003e-09,
+          "vector": null,
+          "world_m": [
+            9.999999999999999e-10,
+            1.0000000000000003e-09,
+            0
+          ]
+        },
+        {
+          "cell_id": 6,
+          "element_id": null,
+          "occupancy": "occupied",
+          "quantity_id": "mat_ms",
+          "sampling_method": "point_probe",
+          "scalar": 800000,
+          "source": {
+            "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+            "default_slice_revision": "2306762730992757471",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "kind": "default"
+          },
+          "u_m": 9.999999999999999e-10,
+          "v_m": 1.0000000000000003e-09,
+          "vector": null,
+          "world_m": [
+            9.999999999999999e-10,
+            1.0000000000000003e-09,
+            0
+          ]
+        }
+      ],
+      "real_pointer_pick": true,
+      "state": "passed",
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    "final_url": "http://127.0.0.1:3243/session/p22-three-relax-stages",
+    "harness_source_sha256": {
+      "algorithm": "sha256",
+      "appearance_helper_after": "32c49b926cc9a63cac53b37c9f1e8f1c0a04ee5f6df21006b463cd5aa6843583",
+      "appearance_helper_before": "32c49b926cc9a63cac53b37c9f1e8f1c0a04ee5f6df21006b463cd5aa6843583",
+      "camera_helper_after": "3a05f9927231f8af6b4271b4b9ec93115b4e6679e12c50937dcc4e092d6dec7c",
+      "camera_helper_before": "3a05f9927231f8af6b4271b4b9ec93115b4e6679e12c50937dcc4e092d6dec7c",
+      "export_helper_after": "0045c4fc94b779e6d375e68e89aac92ab9e9fe8c2942c994fa006bdd262ca7a4",
+      "export_helper_before": "0045c4fc94b779e6d375e68e89aac92ab9e9fe8c2942c994fa006bdd262ca7a4",
+      "fixture_builders_after": "0bac81566ebab86708a878f10ef47b6bb0618e9357183ab5f5b69f5738ef5893",
+      "fixture_builders_before": "0bac81566ebab86708a878f10ef47b6bb0618e9357183ab5f5b69f5738ef5893",
+      "fixture_data_after": "13c75605703a21ff563235af8a27ac505279d45ecbca57b77edfe32095615774",
+      "fixture_data_before": "13c75605703a21ff563235af8a27ac505279d45ecbca57b77edfe32095615774",
+      "fixture_helper_after": "eaad2ec84048d7014a8846e8405a8b8903049c90fbf01ae616aaf6760ca9aeff",
+      "fixture_helper_before": "eaad2ec84048d7014a8846e8405a8b8903049c90fbf01ae616aaf6760ca9aeff",
+      "layout_helper_after": "df39cfb03681a5330e9451d56d1b8db3e7e6384178f65b94a55127a70b6663cc",
+      "layout_helper_before": "df39cfb03681a5330e9451d56d1b8db3e7e6384178f65b94a55127a70b6663cc",
+      "lifecycle_helper_after": "cf9a1486b23b0cb86357c373cf9e38ca7cd7372d5245648a19156bbdb88c3b44",
+      "lifecycle_helper_before": "cf9a1486b23b0cb86357c373cf9e38ca7cd7372d5245648a19156bbdb88c3b44",
+      "loopback_proxy_after": "6436e17c79b299542ecf02ea23afa4f6e5bb230233b7db1a6b32fbad3da38db4",
+      "loopback_proxy_before": "6436e17c79b299542ecf02ea23afa4f6e5bb230233b7db1a6b32fbad3da38db4",
+      "performance_helper_after": "c2885cf333ef35b994ee2996d5f16763ab1ac4f910f36e7c3d9aea1f084f7232",
+      "performance_helper_before": "c2885cf333ef35b994ee2996d5f16763ab1ac4f910f36e7c3d9aea1f084f7232",
+      "runner_after": "ea4448cbf158317b0b7a20d94c16c0a39fd04467e144302ca11fe25ffa3ad0a3",
+      "runner_before": "ea4448cbf158317b0b7a20d94c16c0a39fd04467e144302ca11fe25ffa3ad0a3",
+      "unchanged": true
+    },
+    "home": {
+      "section": "home",
+      "session_label": "Simulation open: P22 three Relax stages",
+      "visible": true
+    },
+    "home_round_trip": true,
+    "http_errors": [],
+    "live_field_observation": {
+      "after_home": {
+        "dataset": {
+          "fdm_airbox_model_count": 0,
+          "fdm_airbox_vector_segment_count": 0,
+          "fdm_airbox_vectors_visible": false,
+          "fdm_domain_bounds": "{\"center\":[0,0,0],\"radius\":4.58257569495584e-9,\"size\":[8e-9,4e-9,2e-9]}",
+          "fdm_model_count": 8,
+          "fdm_vector_segment_count": 0
+        },
+        "field_state": "data-ready",
+        "label_visible": true,
+        "quantity_id": "m",
+        "readiness_signal": "visible quantity label data-field-state=data-ready",
+        "solver_family": "fdm"
+      },
+      "airbox_vectors_expected": false,
+      "before_home": {
+        "dataset": {
+          "fdm_airbox_model_count": 0,
+          "fdm_airbox_vector_segment_count": 0,
+          "fdm_airbox_vectors_visible": false,
+          "fdm_domain_bounds": "{\"center\":[0,0,0],\"radius\":4.58257569495584e-9,\"size\":[8e-9,4e-9,2e-9]}",
+          "fdm_model_count": 8,
+          "fdm_vector_segment_count": 0
+        },
+        "field_state": "data-ready",
+        "label_visible": true,
+        "quantity_id": "m",
+        "readiness_signal": "visible quantity label data-field-state=data-ready",
+        "solver_family": "fdm"
+      },
+      "expected_quantity_id": "m",
+      "field_data_proven": false,
+      "note": "Quantity label data-ready and viewport datasets are DOM readiness observations only; they do not prove field payload presence or values."
+    },
+    "page_errors": 0,
+    "partial_proof": {
+      "canvas_after": {
+        "context_lost": false,
+        "context_type": "WebGL2RenderingContext",
+        "depth_bits": 24,
+        "drawing_buffer_height": 527,
+        "drawing_buffer_width": 617,
+        "height": 527,
+        "preserve_drawing_buffer": false,
+        "rect": {
+          "height": 527.59375,
+          "width": 617.234375
+        },
+        "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+        "topology_transfers": [],
+        "vendor": "Google Inc. (Google)",
+        "width": 617
+      },
+      "canvas_before": {
+        "context_lost": false,
+        "context_type": "WebGL2RenderingContext",
+        "depth_bits": 24,
+        "drawing_buffer_height": 527,
+        "drawing_buffer_width": 617,
+        "height": 527,
+        "preserve_drawing_buffer": false,
+        "rect": {
+          "height": 527.59375,
+          "width": 617.234375
+        },
+        "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+        "topology_transfers": [],
+        "vendor": "Google Inc. (Google)",
+        "width": 617
+      },
+      "canvas_before_screenshot": {
+        "byte_length": 33877,
+        "height": 528,
+        "image_proof": true,
+        "media_type": "image/png",
+        "state": "captured",
+        "width": 618
+      },
+      "cleanupStarted": true,
+      "fdm_cell_physics": {
+        "canvas": {
+          "context_lost": false,
+          "context_type": "WebGL2RenderingContext",
+          "depth_bits": 24,
+          "drawing_buffer_height": 746,
+          "drawing_buffer_width": 927,
+          "height": 746,
+          "preserve_drawing_buffer": false,
+          "rect": {
+            "height": 746,
+            "width": 927.15625
+          },
+          "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+          "topology_transfers": [],
+          "vendor": "Google Inc. (Google)",
+          "width": 927
+        },
+        "keyboard_tabs": true,
+        "layout": {
+          "clipped_values": [],
+          "details_bottom": 885.5,
+          "footer_top": 952.5,
+          "inspector_width": 380,
+          "scroll_width": 358,
+          "summary_top": 362.5,
+          "tabs_bottom": 362.5,
+          "total_bottom": 840.5,
+          "width": 358
+        },
+        "narrow_layout": {
+          "clipped_values": [],
+          "details_bottom": 921,
+          "footer_top": 952.5,
+          "inspector_width": 300,
+          "scroll_width": 278,
+          "summary_top": 362.5,
+          "tabs_bottom": 362.5,
+          "total_bottom": 876,
+          "width": 278
+        },
+        "observation": {
+          "ordinal": 6,
+          "rows": [
+            {
+              "id": "mat_ms",
+              "status": "ready",
+              "values": [
+                {
+                  "kind": "scalar",
+                  "raw": 800000,
+                  "text": "800,000"
+                }
+              ]
+            },
+            {
+              "id": "mat_aex",
+              "status": "ready",
+              "values": [
+                {
+                  "kind": "scalar",
+                  "raw": 1.3e-11,
+                  "text": "1.300e-11"
+                }
+              ]
+            },
+            {
+              "id": "mat_alpha",
+              "status": "ready",
+              "values": [
+                {
+                  "kind": "scalar",
+                  "raw": 0.5,
+                  "text": "0.5"
+                }
+              ]
+            },
+            {
+              "id": "m",
+              "status": "ready",
+              "values": [
+                {
+                  "kind": "mx",
+                  "raw": 0.986260256021403,
+                  "text": "0.98626"
+                },
+                {
+                  "kind": "my",
+                  "raw": 0.1651989933159304,
+                  "text": "0.165199"
+                },
+                {
+                  "kind": "mz",
+                  "raw": 0,
+                  "text": "0"
+                },
+                {
+                  "kind": "magnitude",
+                  "raw": 1,
+                  "text": "1"
+                }
+              ]
+            },
+            {
+              "id": "eden_ex",
+              "status": "ready",
+              "values": [
+                {
+                  "kind": "scalar",
+                  "raw": 0,
+                  "text": "0"
+                },
+                {
+                  "kind": "cell-energy",
+                  "raw": 0,
+                  "text": "0"
+                }
+              ]
+            },
+            {
+              "id": "eden_ext",
+              "status": "ready",
+              "values": [
+                {
+                  "kind": "scalar",
+                  "raw": -13215.919465274435,
+                  "text": "-13,215.9"
+                },
+                {
+                  "kind": "cell-energy",
+                  "raw": -1.0572735572219551e-22,
+                  "text": "-1.057e-22"
+                }
+              ]
+            },
+            {
+              "id": "eden_total",
+              "status": "ready",
+              "values": [
+                {
+                  "kind": "scalar",
+                  "raw": -13215.919465274435,
+                  "text": "-13,215.9"
+                },
+                {
+                  "kind": "cell-energy",
+                  "raw": -1.0572735572219551e-22,
+                  "text": "-1.057e-22"
+                }
+              ]
+            }
+          ]
+        },
+        "public_probes": [
+          {
+            "cell_id": 6,
+            "element_id": null,
+            "occupancy": "occupied",
+            "quantity_id": "eden_ex",
+            "sampling_method": "point_probe",
+            "scalar": 0,
+            "source": {
+              "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+              "default_slice_revision": "2306762730992757471",
+              "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+              "kind": "default"
+            },
+            "u_m": 9.999999999999999e-10,
+            "v_m": 1.0000000000000003e-09,
+            "vector": null,
+            "world_m": [
+              9.999999999999999e-10,
+              1.0000000000000003e-09,
+              0
+            ]
+          },
+          {
+            "cell_id": 6,
+            "element_id": null,
+            "occupancy": "occupied",
+            "quantity_id": "eden_ext",
+            "sampling_method": "point_probe",
+            "scalar": -13215.919465274435,
+            "source": {
+              "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+              "default_slice_revision": "2306762730992757471",
+              "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+              "kind": "default"
+            },
+            "u_m": 9.999999999999999e-10,
+            "v_m": 1.0000000000000003e-09,
+            "vector": null,
+            "world_m": [
+              9.999999999999999e-10,
+              1.0000000000000003e-09,
+              0
+            ]
+          },
+          {
+            "cell_id": 6,
+            "element_id": null,
+            "occupancy": "occupied",
+            "quantity_id": "eden_total",
+            "sampling_method": "point_probe",
+            "scalar": -13215.919465274435,
+            "source": {
+              "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+              "default_slice_revision": "2306762730992757471",
+              "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+              "kind": "default"
+            },
+            "u_m": 9.999999999999999e-10,
+            "v_m": 1.0000000000000003e-09,
+            "vector": null,
+            "world_m": [
+              9.999999999999999e-10,
+              1.0000000000000003e-09,
+              0
+            ]
+          },
+          {
+            "cell_id": 6,
+            "element_id": null,
+            "occupancy": "occupied",
+            "quantity_id": "m",
+            "sampling_method": "point_probe",
+            "scalar": 1,
+            "source": {
+              "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+              "default_slice_revision": "2306762730992757471",
+              "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+              "kind": "default"
+            },
+            "u_m": 9.999999999999999e-10,
+            "v_m": 1.0000000000000003e-09,
+            "vector": [
+              0.986260256021403,
+              0.1651989933159304,
+              0
+            ],
+            "world_m": [
+              9.999999999999999e-10,
+              1.0000000000000003e-09,
+              0
+            ]
+          },
+          {
+            "cell_id": 6,
+            "element_id": null,
+            "occupancy": "occupied",
+            "quantity_id": "mat_aex",
+            "sampling_method": "point_probe",
+            "scalar": 1.3e-11,
+            "source": {
+              "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+              "default_slice_revision": "2306762730992757471",
+              "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+              "kind": "default"
+            },
+            "u_m": 9.999999999999999e-10,
+            "v_m": 1.0000000000000003e-09,
+            "vector": null,
+            "world_m": [
+              9.999999999999999e-10,
+              1.0000000000000003e-09,
+              0
+            ]
+          },
+          {
+            "cell_id": 6,
+            "element_id": null,
+            "occupancy": "occupied",
+            "quantity_id": "mat_alpha",
+            "sampling_method": "point_probe",
+            "scalar": 0.5,
+            "source": {
+              "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+              "default_slice_revision": "2306762730992757471",
+              "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+              "kind": "default"
+            },
+            "u_m": 9.999999999999999e-10,
+            "v_m": 1.0000000000000003e-09,
+            "vector": null,
+            "world_m": [
+              9.999999999999999e-10,
+              1.0000000000000003e-09,
+              0
+            ]
+          },
+          {
+            "cell_id": 6,
+            "element_id": null,
+            "occupancy": "occupied",
+            "quantity_id": "mat_ms",
+            "sampling_method": "point_probe",
+            "scalar": 800000,
+            "source": {
+              "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+              "default_slice_revision": "2306762730992757471",
+              "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+              "kind": "default"
+            },
+            "u_m": 9.999999999999999e-10,
+            "v_m": 1.0000000000000003e-09,
+            "vector": null,
+            "world_m": [
+              9.999999999999999e-10,
+              1.0000000000000003e-09,
+              0
+            ]
+          },
+          {
+            "cell_id": 6,
+            "element_id": null,
+            "occupancy": "occupied",
+            "quantity_id": "eden_ex",
+            "sampling_method": "point_probe",
+            "scalar": 0,
+            "source": {
+              "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+              "default_slice_revision": "2306762730992757471",
+              "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+              "kind": "default"
+            },
+            "u_m": 9.999999999999999e-10,
+            "v_m": 1.0000000000000003e-09,
+            "vector": null,
+            "world_m": [
+              9.999999999999999e-10,
+              1.0000000000000003e-09,
+              0
+            ]
+          },
+          {
+            "cell_id": 6,
+            "element_id": null,
+            "occupancy": "occupied",
+            "quantity_id": "eden_ext",
+            "sampling_method": "point_probe",
+            "scalar": -13215.919465274435,
+            "source": {
+              "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+              "default_slice_revision": "2306762730992757471",
+              "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+              "kind": "default"
+            },
+            "u_m": 9.999999999999999e-10,
+            "v_m": 1.0000000000000003e-09,
+            "vector": null,
+            "world_m": [
+              9.999999999999999e-10,
+              1.0000000000000003e-09,
+              0
+            ]
+          },
+          {
+            "cell_id": 6,
+            "element_id": null,
+            "occupancy": "occupied",
+            "quantity_id": "eden_total",
+            "sampling_method": "point_probe",
+            "scalar": -13215.919465274435,
+            "source": {
+              "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+              "default_slice_revision": "2306762730992757471",
+              "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+              "kind": "default"
+            },
+            "u_m": 9.999999999999999e-10,
+            "v_m": 1.0000000000000003e-09,
+            "vector": null,
+            "world_m": [
+              9.999999999999999e-10,
+              1.0000000000000003e-09,
+              0
+            ]
+          },
+          {
+            "cell_id": 6,
+            "element_id": null,
+            "occupancy": "occupied",
+            "quantity_id": "m",
+            "sampling_method": "point_probe",
+            "scalar": 1,
+            "source": {
+              "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+              "default_slice_revision": "2306762730992757471",
+              "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+              "kind": "default"
+            },
+            "u_m": 9.999999999999999e-10,
+            "v_m": 1.0000000000000003e-09,
+            "vector": [
+              0.986260256021403,
+              0.1651989933159304,
+              0
+            ],
+            "world_m": [
+              9.999999999999999e-10,
+              1.0000000000000003e-09,
+              0
+            ]
+          },
+          {
+            "cell_id": 6,
+            "element_id": null,
+            "occupancy": "occupied",
+            "quantity_id": "mat_aex",
+            "sampling_method": "point_probe",
+            "scalar": 1.3e-11,
+            "source": {
+              "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+              "default_slice_revision": "2306762730992757471",
+              "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+              "kind": "default"
+            },
+            "u_m": 9.999999999999999e-10,
+            "v_m": 1.0000000000000003e-09,
+            "vector": null,
+            "world_m": [
+              9.999999999999999e-10,
+              1.0000000000000003e-09,
+              0
+            ]
+          },
+          {
+            "cell_id": 6,
+            "element_id": null,
+            "occupancy": "occupied",
+            "quantity_id": "mat_alpha",
+            "sampling_method": "point_probe",
+            "scalar": 0.5,
+            "source": {
+              "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+              "default_slice_revision": "2306762730992757471",
+              "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+              "kind": "default"
+            },
+            "u_m": 9.999999999999999e-10,
+            "v_m": 1.0000000000000003e-09,
+            "vector": null,
+            "world_m": [
+              9.999999999999999e-10,
+              1.0000000000000003e-09,
+              0
+            ]
+          },
+          {
+            "cell_id": 6,
+            "element_id": null,
+            "occupancy": "occupied",
+            "quantity_id": "mat_ms",
+            "sampling_method": "point_probe",
+            "scalar": 800000,
+            "source": {
+              "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+              "default_slice_revision": "2306762730992757471",
+              "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+              "kind": "default"
+            },
+            "u_m": 9.999999999999999e-10,
+            "v_m": 1.0000000000000003e-09,
+            "vector": null,
+            "world_m": [
+              9.999999999999999e-10,
+              1.0000000000000003e-09,
+              0
+            ]
+          }
+        ],
+        "real_pointer_pick": true,
+        "state": "passed",
+        "themes": [
+          "light",
+          "dark"
+        ]
+      },
+      "field_transport_lifecycle": [
+        {
+          "cleanupStarted": false,
+          "events": [
+            {
+              "cleanupStarted": false,
+              "elapsed_ms": 173,
+              "event": "response",
+              "status": 200
+            },
+            {
+              "cleanupStarted": false,
+              "elapsed_ms": 175,
+              "event": "requestfinished"
+            }
+          ],
+          "method": "GET",
+          "path": "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full"
+        }
+      ],
+      "live_field_observation": {
+        "after_home": {
+          "dataset": {
+            "fdm_airbox_model_count": 0,
+            "fdm_airbox_vector_segment_count": 0,
+            "fdm_airbox_vectors_visible": false,
+            "fdm_domain_bounds": "{\"center\":[0,0,0],\"radius\":4.58257569495584e-9,\"size\":[8e-9,4e-9,2e-9]}",
+            "fdm_model_count": 8,
+            "fdm_vector_segment_count": 0
+          },
+          "field_state": "data-ready",
+          "label_visible": true,
+          "quantity_id": "m",
+          "readiness_signal": "visible quantity label data-field-state=data-ready",
+          "solver_family": "fdm"
+        },
+        "airbox_vectors_expected": false,
+        "before_home": {
+          "dataset": {
+            "fdm_airbox_model_count": 0,
+            "fdm_airbox_vector_segment_count": 0,
+            "fdm_airbox_vectors_visible": false,
+            "fdm_domain_bounds": "{\"center\":[0,0,0],\"radius\":4.58257569495584e-9,\"size\":[8e-9,4e-9,2e-9]}",
+            "fdm_model_count": 8,
+            "fdm_vector_segment_count": 0
+          },
+          "field_state": "data-ready",
+          "label_visible": true,
+          "quantity_id": "m",
+          "readiness_signal": "visible quantity label data-field-state=data-ready",
+          "solver_family": "fdm"
+        },
+        "expected_quantity_id": "m",
+        "field_data_proven": false,
+        "note": "Quantity label data-ready and viewport datasets are DOM readiness observations only; they do not prove field payload presence or values."
+      },
+      "viewport_dom_observations": {
+        "after_home": {
+          "dataset": {
+            "cameraPosition": "1.2015924198249532e-8 8.651465422739664e-9 1.2015924198249532e-8",
+            "cameraProjection": "perspective",
+            "cameraTarget": "0 0 0",
+            "cameraUp": "0 0 1",
+            "fdmAirboxBuildError": "",
+            "fdmAirboxBuildKey": "",
+            "fdmAirboxBuildStatus": "idle",
+            "fdmAirboxDomainCellCount": "0",
+            "fdmAirboxModelCount": "0",
+            "fdmAirboxPointsVisible": "false",
+            "fdmAirboxTarget": "airbox",
+            "fdmAirboxVectorLengthMax": "0",
+            "fdmAirboxVectorLengthMin": "0",
+            "fdmAirboxVectorLengthScale": "1",
+            "fdmAirboxVectorSegmentCount": "0",
+            "fdmAirboxVectorsVisible": "false",
+            "fdmAirboxViewPresent": "false",
+            "fdmAirboxWireframeVisible": "false",
+            "fdmDomainBounds": "{\"center\":[0,0,0],\"radius\":4.58257569495584e-9,\"size\":[8e-9,4e-9,2e-9]}",
+            "fdmModelCount": "8",
+            "fdmVectorSegmentCount": "0",
+            "frozenSpinsOverlayCount": "0",
+            "frozenSpinsOverlaySource": "none",
+            "frozenSpinsOverlayVisible": "true",
+            "frozenSpinsPreviewCurrent": "false",
+            "hysteresisReplayFieldDirection": "",
+            "hysteresisReplayMeasurementAxis": "",
+            "hysteresisReplaySnapshotId": "",
+            "hysteresisReplayStageId": "",
+            "inspectEnabled": "false",
+            "primitiveObjectCount": "1",
+            "primitiveObjectGeometryDescriptors": "film:Box:{\"size\":[8e-9,4e-9,2e-9]}:{\"pivot\":[0,0,0],\"rotation_quat\":[0,0,0,1],\"scale\":[1,1,1],\"translation\":[0,0,0]}",
+            "primitiveObjectIds": "film",
+            "primitiveObjectKinds": "film:box",
+            "topologyFreshness": "current",
+            "viewSource": "current",
+            "viewportBounds": "{\"center\":[0,0,0],\"radius\":4.58257569495584e-9,\"size\":[8e-9,4e-9,2e-9]}",
+            "visualProfileId": "interactive"
+          },
+          "dataset_entry_count": 38,
+          "dataset_truncated": false,
+          "quantity_label_count": 1,
+          "quantity_labels": [
+            {
+              "field_state": "data-ready",
+              "quantity_id": "m",
+              "tag_name": "span"
+            }
+          ],
+          "quantity_labels_truncated": false
+        },
+        "before_home": {
+          "dataset": {
+            "cameraPosition": "1.2015924198249532e-8 8.651465422739664e-9 1.2015924198249532e-8",
+            "cameraProjection": "perspective",
+            "cameraTarget": "0 0 0",
+            "cameraUp": "0 0 1",
+            "fdmAirboxBuildError": "",
+            "fdmAirboxBuildKey": "",
+            "fdmAirboxBuildStatus": "idle",
+            "fdmAirboxDomainCellCount": "0",
+            "fdmAirboxModelCount": "0",
+            "fdmAirboxPointsVisible": "false",
+            "fdmAirboxTarget": "airbox",
+            "fdmAirboxVectorLengthMax": "0",
+            "fdmAirboxVectorLengthMin": "0",
+            "fdmAirboxVectorLengthScale": "1",
+            "fdmAirboxVectorSegmentCount": "0",
+            "fdmAirboxVectorsVisible": "false",
+            "fdmAirboxViewPresent": "false",
+            "fdmAirboxWireframeVisible": "false",
+            "fdmDomainBounds": "{\"center\":[0,0,0],\"radius\":4.58257569495584e-9,\"size\":[8e-9,4e-9,2e-9]}",
+            "fdmModelCount": "8",
+            "fdmVectorSegmentCount": "0",
+            "frozenSpinsOverlayCount": "0",
+            "frozenSpinsOverlaySource": "none",
+            "frozenSpinsOverlayVisible": "true",
+            "frozenSpinsPreviewCurrent": "false",
+            "hysteresisReplayFieldDirection": "",
+            "hysteresisReplayMeasurementAxis": "",
+            "hysteresisReplaySnapshotId": "",
+            "hysteresisReplayStageId": "",
+            "inspectEnabled": "false",
+            "primitiveObjectCount": "1",
+            "primitiveObjectGeometryDescriptors": "film:Box:{\"size\":[8e-9,4e-9,2e-9]}:{\"pivot\":[0,0,0],\"rotation_quat\":[0,0,0,1],\"scale\":[1,1,1],\"translation\":[0,0,0]}",
+            "primitiveObjectIds": "film",
+            "primitiveObjectKinds": "film:box",
+            "topologyFreshness": "current",
+            "viewSource": "current",
+            "viewportBounds": "{\"center\":[0,0,0],\"radius\":4.58257569495584e-9,\"size\":[8e-9,4e-9,2e-9]}",
+            "visualProfileId": "interactive"
+          },
+          "dataset_entry_count": 38,
+          "dataset_truncated": false,
+          "quantity_label_count": 1,
+          "quantity_labels": [
+            {
+              "field_state": "data-ready",
+              "quantity_id": "m",
+              "tag_name": "span"
+            }
+          ],
+          "quantity_labels_truncated": false
+        },
+        "field_data_proven": false,
+        "note": "Viewport dataset and quantity label attributes are DOM observations only; they do not prove field payload presence or values."
+      }
+    },
+    "playwright_version": "1.62.1",
+    "probe_url": "http://frontend:8080",
+    "public_url": "http://127.0.0.1:3243",
+    "qa_scope": "canvas-home-fdm-cell-physics",
+    "request_cancellations": [
+      "GET http://127.0.0.1:3243/v2/platform/health net::ERR_ABORTED",
+      "GET http://127.0.0.1:3243/v2/sessions/current/diagnostics/cpu net::ERR_ABORTED",
+      "GET http://127.0.0.1:3243/v2/sessions/current/diagnostics/gpu net::ERR_ABORTED",
+      "GET http://127.0.0.1:3243/v2/platform/compute/nodes net::ERR_ABORTED"
+    ],
+    "request_failures": 0,
+    "resource_responses": [
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/platform/health"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/platform/instances"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/status"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/workspace/settings/telemetry.enabled"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/workspace/settings/update.available"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/workspace/items?kind=all&sort=last_used&limit=500&include_missing=true"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/platform/capabilities"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/diagnostics/gpu"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/diagnostics/cpu"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/model/readiness"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/model/geometry/validation"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/meshing/builds/current"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/simulation/solver/status"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/simulation/stages/execution"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/visualization/state"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/simulation/preparation"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/platform/health"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/simulation/runs/current"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/platform/health"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/model/readiness"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/model/geometry/validation"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/meshing/builds/current"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/simulation/solver/status"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/visualization/state"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/model/geometry/capabilities"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/meshing/builds/latest-successful"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/meshing/capabilities"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/meshing/summary"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/meshing/semantics"
+      },
+      {
+        "content_type": "application/json",
+        "status": 200,
+        "url": "http://127.0.0.1:3243/v2/sessions/current/persistence/checkpoints"
+      }
+    ],
+    "schema": "fullmag.docker-dev-browser-qa-result.v1",
+    "session": {
+      "request_scope_epoch": "193a3ec9-97af-4e1e-8c31-8cbd731d386b:1",
+      "session_epoch": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e@1794161957943",
+      "session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e"
+    },
+    "skipped_areas": [
+      "viewport appearance and color-profile checks",
+      "camera interaction checks",
+      "viewport export checks at DPR 1 and DPR 2",
+      "layout and DPR 1/2 checks",
+      "20-cycle viewport lifecycle checks",
+      "viewport QA fixture preparation",
+      "scene/model adoption readiness endpoint",
+      "viewport performance instrumentation"
+    ],
+    "state": "passed",
+    "viewport_dom_observations": {
+      "after_home": {
+        "dataset": {
+          "cameraPosition": "1.2015924198249532e-8 8.651465422739664e-9 1.2015924198249532e-8",
+          "cameraProjection": "perspective",
+          "cameraTarget": "0 0 0",
+          "cameraUp": "0 0 1",
+          "fdmAirboxBuildError": "",
+          "fdmAirboxBuildKey": "",
+          "fdmAirboxBuildStatus": "idle",
+          "fdmAirboxDomainCellCount": "0",
+          "fdmAirboxModelCount": "0",
+          "fdmAirboxPointsVisible": "false",
+          "fdmAirboxTarget": "airbox",
+          "fdmAirboxVectorLengthMax": "0",
+          "fdmAirboxVectorLengthMin": "0",
+          "fdmAirboxVectorLengthScale": "1",
+          "fdmAirboxVectorSegmentCount": "0",
+          "fdmAirboxVectorsVisible": "false",
+          "fdmAirboxViewPresent": "false",
+          "fdmAirboxWireframeVisible": "false",
+          "fdmDomainBounds": "{\"center\":[0,0,0],\"radius\":4.58257569495584e-9,\"size\":[8e-9,4e-9,2e-9]}",
+          "fdmModelCount": "8",
+          "fdmVectorSegmentCount": "0",
+          "frozenSpinsOverlayCount": "0",
+          "frozenSpinsOverlaySource": "none",
+          "frozenSpinsOverlayVisible": "true",
+          "frozenSpinsPreviewCurrent": "false",
+          "hysteresisReplayFieldDirection": "",
+          "hysteresisReplayMeasurementAxis": "",
+          "hysteresisReplaySnapshotId": "",
+          "hysteresisReplayStageId": "",
+          "inspectEnabled": "false",
+          "primitiveObjectCount": "1",
+          "primitiveObjectGeometryDescriptors": "film:Box:{\"size\":[8e-9,4e-9,2e-9]}:{\"pivot\":[0,0,0],\"rotation_quat\":[0,0,0,1],\"scale\":[1,1,1],\"translation\":[0,0,0]}",
+          "primitiveObjectIds": "film",
+          "primitiveObjectKinds": "film:box",
+          "topologyFreshness": "current",
+          "viewSource": "current",
+          "viewportBounds": "{\"center\":[0,0,0],\"radius\":4.58257569495584e-9,\"size\":[8e-9,4e-9,2e-9]}",
+          "visualProfileId": "interactive"
+        },
+        "dataset_entry_count": 38,
+        "dataset_truncated": false,
+        "quantity_label_count": 1,
+        "quantity_labels": [
+          {
+            "field_state": "data-ready",
+            "quantity_id": "m",
+            "tag_name": "span"
+          }
+        ],
+        "quantity_labels_truncated": false
+      },
+      "before_home": {
+        "dataset": {
+          "cameraPosition": "1.2015924198249532e-8 8.651465422739664e-9 1.2015924198249532e-8",
+          "cameraProjection": "perspective",
+          "cameraTarget": "0 0 0",
+          "cameraUp": "0 0 1",
+          "fdmAirboxBuildError": "",
+          "fdmAirboxBuildKey": "",
+          "fdmAirboxBuildStatus": "idle",
+          "fdmAirboxDomainCellCount": "0",
+          "fdmAirboxModelCount": "0",
+          "fdmAirboxPointsVisible": "false",
+          "fdmAirboxTarget": "airbox",
+          "fdmAirboxVectorLengthMax": "0",
+          "fdmAirboxVectorLengthMin": "0",
+          "fdmAirboxVectorLengthScale": "1",
+          "fdmAirboxVectorSegmentCount": "0",
+          "fdmAirboxVectorsVisible": "false",
+          "fdmAirboxViewPresent": "false",
+          "fdmAirboxWireframeVisible": "false",
+          "fdmDomainBounds": "{\"center\":[0,0,0],\"radius\":4.58257569495584e-9,\"size\":[8e-9,4e-9,2e-9]}",
+          "fdmModelCount": "8",
+          "fdmVectorSegmentCount": "0",
+          "frozenSpinsOverlayCount": "0",
+          "frozenSpinsOverlaySource": "none",
+          "frozenSpinsOverlayVisible": "true",
+          "frozenSpinsPreviewCurrent": "false",
+          "hysteresisReplayFieldDirection": "",
+          "hysteresisReplayMeasurementAxis": "",
+          "hysteresisReplaySnapshotId": "",
+          "hysteresisReplayStageId": "",
+          "inspectEnabled": "false",
+          "primitiveObjectCount": "1",
+          "primitiveObjectGeometryDescriptors": "film:Box:{\"size\":[8e-9,4e-9,2e-9]}:{\"pivot\":[0,0,0],\"rotation_quat\":[0,0,0,1],\"scale\":[1,1,1],\"translation\":[0,0,0]}",
+          "primitiveObjectIds": "film",
+          "primitiveObjectKinds": "film:box",
+          "topologyFreshness": "current",
+          "viewSource": "current",
+          "viewportBounds": "{\"center\":[0,0,0],\"radius\":4.58257569495584e-9,\"size\":[8e-9,4e-9,2e-9]}",
+          "visualProfileId": "interactive"
+        },
+        "dataset_entry_count": 38,
+        "dataset_truncated": false,
+        "quantity_label_count": 1,
+        "quantity_labels": [
+          {
+            "field_state": "data-ready",
+            "quantity_id": "m",
+            "tag_name": "span"
+          }
+        ],
+        "quantity_labels_truncated": false
+      },
+      "field_data_proven": false,
+      "note": "Viewport dataset and quantity label attributes are DOM observations only; they do not prove field payload presence or values."
+    },
+    "workspace": {
+      "canvas_dom_stable": true,
+      "visible": true
+    }
+  },
+  "validation": {
+    "control_room_full_suite": {
+      "tests_passed": 9619,
+      "files_passed": 923,
+      "scope": "before final minor typography, symbol fallback and standalone QA profile; current focused checks and final CI cover those changes"
+    },
+    "current_focused_ui_tests": 105,
+    "controller_tests": 84,
+    "controller_existing_skips": 1,
+    "typecheck": "passed",
+    "lint": "passed; final changed TSX and browser runner checked again",
+    "architecture_hygiene": "passed",
+    "api_hygiene": "passed",
+    "react_doctor": "scope changed fell back to whole-project scan because mirrored frontend workspace has no Git metadata; score57,11errors; no changed-only baseline and no FdmCellPhysicsPanel diagnostic, not a pass claim"
+  },
+  "open_gates": [
+    "Fresh startup run summary final_total_energy is null; separate terminal telemetry check remains failed. Dedicated cell probe proof does not close it.",
+    "Broader P01-P22/T8 and remaining solver/device/multilayer gates remain open."
+  ],
+  "preflight_failure": {
+    "attempt": "7154dfdceec0479ba31424c32253a7fd",
+    "failed_receipt_preserved": true,
+    "interpretation": "authenticated original verified live group; original failed-current hash retained as admission fence; no receipt overwrite, service restart or Solve"
+  },
+  "qa_controller_failure_reconciliation": {
+    "attempt": "f861b7b9836e4c0bae581e415d2c0f62",
+    "cause": "missing Python name in new numeric text validator; fixed and unit-tested before final successful proof",
+    "state": "failed-confirmed",
+    "lease_released": true,
+    "verification": "NOT VERIFIED",
+    "source": "/tmp/cell-visual-qa-reconciliation.log"
+  }
+}

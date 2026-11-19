@@ -10,7 +10,11 @@ import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectio
 import {
   sessionRequestScopeKey,
 } from "@/kernel/resources/sessionResourceIdentity";
-import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+import {
+  SESSION_STATUS_RESOURCE_KEY,
+  useSessionResourceIdentity,
+} from "@/kernel/resources/useSessionStatus";
+import { useRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
 import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
@@ -29,7 +33,11 @@ import {
 } from "../../InspectorEditSession";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
-import { AirboxFieldRow as FieldRow, boundedDisplayText } from "./airboxDisplay";
+import {
+  AirboxFieldRow as FieldRow,
+  airboxEffectiveLengthUnit,
+  boundedDisplayText,
+} from "./airboxDisplay";
 import { FormField } from "../../primitives/FormField";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { QuantityUnitSelect } from "../../primitives/QuantityUnitSelect";
@@ -51,6 +59,7 @@ import {
   draftFromUniverseMeshPolicyResource,
   draftIdentityKeyForUniverseMeshPolicyResource,
   draftKeyForUniverseMeshPolicyResource,
+  rebaseAirboxMeshPolicyDraft,
   type AirboxMeshPolicyDraft,
   type AirboxLengthPolicyField,
   type AirboxLengthUnit,
@@ -112,8 +121,8 @@ function GeometryBoundsDiagnosticNotice({
   );
   if (error || status === "error") {
     return (
-      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" role="status">
-        <p>Backend geometry diagnostics could not be loaded.</p>
+      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+        <p role="status">Backend geometry diagnostics could not be loaded.</p>
         <p>{boundedDisplayText(error instanceof Error ? error.message : String(error ?? "No error details published."))}</p>
         <Button size="sm" type="button" variant="secondary" onClick={onOpenDiagnostics}>Open diagnostics</Button>
       </div>
@@ -121,30 +130,30 @@ function GeometryBoundsDiagnosticNotice({
   }
   if (!diagnostics) {
     return (
-      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" role="status">
-        <p>{status === "loading" ? "Checking backend geometry diagnostics for manual bounds." : "Geometry diagnostics are not available for this session."}</p>
+      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+        <p role="status">{status === "loading" ? "Checking backend geometry diagnostics for manual bounds." : "Geometry diagnostics are not available for this session."}</p>
         <Button size="sm" type="button" variant="secondary" onClick={onOpenDiagnostics}>Open diagnostics</Button>
       </div>
     );
   }
   if (stale) {
     return (
-      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" role="status">
-        <p>Backend geometry diagnostics are for scene revision {diagnostics.scene_revision}; current scene revision is {sceneRevision}.</p>
+      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+        <p role="status">Backend geometry diagnostics are for scene revision {diagnostics.scene_revision}; current scene revision is {sceneRevision}.</p>
         <Button size="sm" type="button" variant="secondary" onClick={onOpenDiagnostics}>Open current diagnostics</Button>
       </div>
     );
   }
   if (outside.length === 0) {
     return (
-      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" role="status">
-        <p>The backend has not published GEOMETRY_OBJECT_OUTSIDE_UNIVERSE for scene revision {diagnostics.scene_revision}.</p>
+      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+        <p role="status">The backend has not published GEOMETRY_OBJECT_OUTSIDE_UNIVERSE for scene revision {diagnostics.scene_revision}.</p>
         <Button size="sm" type="button" variant="secondary" onClick={onOpenDiagnostics}>Open diagnostics</Button>
       </div>
     );
   }
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" role="status">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       {outside.map((diagnostic) => (
         <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" key={diagnostic.id}>
           <p>{diagnostic.message}</p>
@@ -208,6 +217,8 @@ const EFFECTIVE_FIELDS = [
   ["airbox_hmin", "Effective minimum element size"],
   ["airbox_growth_rate", "Effective growth rate"],
   ["airbox_grading", "Effective grading"],
+  ["airbox_curvature_factor", "Effective curvature factor"],
+  ["airbox_narrow_region_resolution", "Effective narrow-region resolution"],
   ["padding", "Effective padding"],
   ["size", "Effective size"],
   ["center", "Effective center"],
@@ -219,61 +230,6 @@ const FDM_EFFECTIVE_FIELDS = EFFECTIVE_FIELDS.filter(([key]) =>
 
 const displayEffectiveValue = (value: unknown) =>
   Array.isArray(value) ? value.join(", ") : value == null ? "not published" : String(value);
-
-function effectiveConfigurationSource(
-  policy: ReturnType<typeof useUniverseMeshPolicyResource>,
-): string {
-  const hasEffectiveConfig = policy.data?.effective_config != null;
-  const hasRefreshFailure = Boolean(policy.error || policy.refreshError);
-
-  if (hasEffectiveConfig) {
-    if (policy.status === "ready" && !hasRefreshFailure) {
-      return "effective_config published by backend";
-    }
-    if (policy.status === "stale" || hasRefreshFailure) {
-      return "Previously published effective_config (stale)";
-    }
-    if (policy.status === "loading") {
-      return "Previously published effective_config (refreshing)";
-    }
-    return `Previously published effective_config (${policy.status})`;
-  }
-
-  if (policy.status === "ready") {
-    return policy.data
-      ? "No effective_config was published by backend"
-      : "Unavailable; policy response has no data";
-  }
-  if (policy.status === "loading") return "Unavailable while the policy resource loads";
-  if (policy.status === "stale") return "Unavailable; no previous effective_config is retained";
-  if (policy.status === "error") return "Unavailable; policy refresh failed";
-  return "Unavailable; policy resource has not loaded";
-}
-
-function effectiveConfigurationNotice(
-  policy: ReturnType<typeof useUniverseMeshPolicyResource>,
-): { kind: "error" | "warning"; message: string } | null {
-  const hasEffectiveConfig = policy.data?.effective_config != null;
-  const failure = policy.error ?? policy.refreshError;
-
-  if (failure) {
-    return {
-      kind: hasEffectiveConfig ? "warning" : "error",
-      message: `Backend effective configuration refresh failed: ${failure.message}.${
-        hasEffectiveConfig
-          ? " Showing the previously published effective configuration."
-          : " No effective configuration is available."
-      }`,
-    };
-  }
-  if (policy.status === "stale" && hasEffectiveConfig) {
-    return {
-      kind: "warning",
-      message: "Showing the previous effective configuration; it may not reflect the current policy.",
-    };
-  }
-  return null;
-}
 
 export type AirboxMeshParametersLane = "fem" | "fdm";
 
@@ -292,7 +248,6 @@ export function AirboxMeshParametersPanel({
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const policy = useUniverseMeshPolicyResource();
   const resource = policy.data ?? defaultUniverseMeshPolicyResource();
-  const effectiveConfigNotice = effectiveConfigurationNotice(policy);
   const baseDraft = useMemo(
     () => draftFromUniverseMeshPolicyResource(resource),
     [resource],
@@ -344,14 +299,20 @@ export function AirboxMeshParametersPanel({
     isDirty: airboxMeshPolicyDraftDirty,
     state: draftState,
   });
+  // Mesh commands resolve their lane from the session status in the context.
+  const runtimeResourceData = useRuntimeCommandControlResourceData({
+    includeSharedDomainReadiness: false,
+    includeStageExecution: false,
+  });
   const commandContext = useMemo(
     () =>
       createCommandContext("inspector", kernel, {
+        resourceData: runtimeResourceData,
         sessionScopeKey,
         sourceDetail: "airbox-mesh-parameters",
         input: { origin: "airbox" },
       }),
-    [kernel, sessionScopeKey],
+    [kernel, runtimeResourceData, sessionScopeKey],
   );
   const inspectorEditSession = useInspectorEditSession();
   const effectiveMode = draft.airboxMode.trim() || "auto";
@@ -454,9 +415,10 @@ export function AirboxMeshParametersPanel({
       identityKey,
       sessionScopeKey: operationSessionScopeKey,
     });
+    const submittedDraft = draft;
     try {
       const submission = await submitAirboxPolicyDraft(
-        draft,
+        rebaseAirboxMeshPolicyDraft(draft, policy.data ?? null),
         (request, requestOptions) => api.meshing.replaceUniversePolicy(request, requestOptions),
         { lane, sessionScopeKey: operationSessionScopeKey },
       );
@@ -470,6 +432,21 @@ export function AirboxMeshParametersPanel({
         return true;
       }
       const next = submission.resource;
+      // Adopt the committed policy as the clean draft base. The server
+      // canonicalizes the config (e.g. it marks it authored), so comparing the
+      // submitted draft with the new base would stay dirty forever. Edits made
+      // while the request was in flight are kept.
+      setDraftState((current) =>
+        current.identityKey === identityKey &&
+        current.dirty &&
+        airboxMeshPolicyDraftDirty(current.draft, submittedDraft)
+          ? current
+          : initialInspectorDraftState({
+            baseDraft: draftFromUniverseMeshPolicyResource(next),
+            baseKey: `${operationSessionScopeKey}:${draftKeyForUniverseMeshPolicyResource(next)}`,
+            identityKey,
+          }),
+      );
       publishCommittedMeshPolicyResource?.(
         resources,
         MESH_UNIVERSE_POLICY_RESOURCE_KEY,
@@ -479,6 +456,11 @@ export function AirboxMeshParametersPanel({
       resources.invalidate(MESH_UNIVERSE_POLICY_RESOURCE_KEY, next.revision);
       resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, next.revision);
       resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, next.revision);
+      // The policy is stored in the scene document and bumps the scene and
+      // mesh revisions without a realtime event. Refetch both, so open object
+      // drafts and the build dialog's mesh_revision precondition stay current.
+      resources.invalidate(SCENE_RESOURCE_KEY, `mesh-policy:universe:${next.revision}`);
+      resources.invalidate(SESSION_STATUS_RESOURCE_KEY, `mesh-policy:universe:${next.revision}`);
       let fdmReplanMessage: Feedback | null = null;
       if (isFdm && runtimeLane === "fdm") {
         try {
@@ -617,7 +599,7 @@ export function AirboxMeshParametersPanel({
     });
     setFeedback({
       kind: "success",
-      message: "Backend-effective Airbox defaults loaded into the draft. Click Apply Airbox Policy to commit.",
+      message: "Backend-effective Airbox defaults loaded into the draft. Use Apply in the Inspector footer to commit.",
     });
   };
 
@@ -642,8 +624,8 @@ export function AirboxMeshParametersPanel({
           <FeedbackBanner
             kind="warning"
             message={runtimeLane === "fdm"
-              ? "Apply Airbox Policy saves the canonical policy and queues an FDM grid replan."
-              : "Apply Airbox Policy saves canonical authoring. FDM grid actions wait for runtime lane resolution."}
+              ? "Apply in the Inspector footer saves the canonical policy and queues an FDM grid replan."
+              : "Apply in the Inspector footer saves canonical authoring. FDM grid actions wait for runtime lane resolution."}
           />
         ) : null}
         {!draft.authoredConfigPresent && resource.effective_config ? (
@@ -658,16 +640,13 @@ export function AirboxMeshParametersPanel({
             message={
               isFdm
                 ? runtimeLane === "fdm"
-                  ? "Unapplied changes. Apply Airbox Policy to save and queue the FDM grid replan."
-                  : "Unapplied changes. Apply Airbox Policy to save the canonical policy."
-                : "Unapplied changes. Apply Airbox Policy or Apply & Build before trusting the current Airbox mesh."
+                  ? "Unapplied changes. Use Apply in the Inspector footer to save and queue the FDM grid replan."
+                  : "Unapplied changes. Use Apply in the Inspector footer to save the canonical policy."
+                : "Unapplied changes. Use Apply in the Inspector footer or Apply & Build before trusting the current Airbox mesh."
             }
           />
         ) : null}
         <div className="fm-inspector-toolbar">
-          <Button disabled={!sessionScopeKey || pending || validationError !== null} size="sm" type="button" variant="primary" onClick={() => void (inspectorEditSession?.apply() ?? applyPolicy())}>
-            Apply Airbox Policy
-          </Button>
           {!isFdm && runtimeLane === "fem" ? (
             <Button disabled={!sessionScopeKey || pending || buildPending || validationError !== null} size="sm" type="button" variant="secondary" onClick={() => void build()}>
               {buildPending ? "Waiting for mesh build…" : dirty ? "Apply & Build Shared-Domain Mesh" : "Build Shared-Domain Mesh"}
@@ -678,9 +657,6 @@ export function AirboxMeshParametersPanel({
               Load Effective Defaults
             </Button>
           ) : null}
-          <Button disabled={pending} size="sm" type="button" variant="ghost" onClick={revert}>
-            Revert
-          </Button>
         </div>
         {validationError ? <FeedbackBanner kind="error" message={validationError} /> : null}
         {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
@@ -815,19 +791,14 @@ export function AirboxMeshParametersPanel({
         </InspectorGroup>
       </fieldset>
       <InspectorGroup title="Backend-effective Values" badge="read-only">
-        <FieldRow
-          label="Source"
-          value={effectiveConfigurationSource(policy)}
-          status={policy.status}
-        />
-        {effectiveConfigNotice ? (
-          <FeedbackBanner
-            kind={effectiveConfigNotice.kind}
-            message={effectiveConfigNotice.message}
-          />
-        ) : null}
+        <FieldRow label="Source" value="effective_config published by backend" />
         {(isFdm ? FDM_EFFECTIVE_FIELDS : EFFECTIVE_FIELDS).map(([key, label]) => (
-          <FieldRow key={key} label={label} value={displayEffectiveValue(resource.effective_config?.[key])} />
+          <FieldRow
+            key={key}
+            label={label}
+            value={displayEffectiveValue(resource.effective_config?.[key])}
+            unit={airboxEffectiveLengthUnit(key)}
+          />
         ))}
         <FieldRow
           label="Unknown effective keys"

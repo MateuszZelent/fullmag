@@ -53,11 +53,7 @@ export interface ViewerRoute {
   readonly reason: string | null;
 }
 
-/**
- * The saved-results viewer is the Results module of an open project
- * (SavedResultsBrowser); there is no viewer for a bare folder. So the button
- * is live only when the folder is linked to the project that owns it.
- */
+/** The legacy project route used when standalone saved playback is unavailable. */
 export function viewerRoute(
   item: Pick<ApiWorkspaceItem, "status">,
   answer: ApiItemDetailAnswer | undefined,
@@ -91,6 +87,8 @@ export interface ResultInspectorProps {
   readonly onSelectSource: (source: ApiWorkspaceItem) => void;
   /** Opens a project and then its saved results; resolves to a failure message or null. */
   readonly onOpenResults: (project: ApiWorkspaceItem) => Promise<string | null>;
+  /** Opens this result folder directly in read-only playback when available. */
+  readonly onOpenPlayback?: (item: ApiWorkspaceItem) => Promise<string | null>;
   /** Why opening projects is unavailable right now (no session confirmed); null when it works. */
   readonly openDisabledReason: string | null;
   /** The tab shown first (a deep link, or a test); Overview by default. */
@@ -229,6 +227,7 @@ export function ResultInspector({
   onForget,
   onSelectSource,
   onOpenResults,
+  onOpenPlayback,
   openDisabledReason,
   initialTab = "overview",
 }: ResultInspectorProps) {
@@ -250,7 +249,9 @@ export function ResultInspector({
     readError: result?.readError,
   });
   const route = viewerRoute(item, answer);
-  const viewerReason = route.reason ?? openDisabledReason;
+  const viewerReason = onOpenPlayback
+    ? (missing ? "The folder is missing." : null)
+    : route.reason ?? openDisabledReason;
   const previewSrc = item.hasThumbnail ? thumbnailSource(item, thumbnailUrl) : undefined;
   const source = resultSourceName(item);
 
@@ -279,6 +280,14 @@ export function ResultInspector({
   };
 
   const openViewer = async () => {
+    if (onOpenPlayback) {
+      if (missing) return;
+      setBusy(true);
+      const failure = await onOpenPlayback(item);
+      setBusy(false);
+      if (failure) report(failure);
+      return;
+    }
     if (!route.project) return;
     setBusy(true);
     const failure = await onOpenResults(route.project);
@@ -485,7 +494,7 @@ export function ResultInspector({
         onPrimary={() => void openViewer()}
         primaryAction="open-results-viewer"
         primaryDisabledReason={viewerReason ?? (busy ? "Another action is running" : null)}
-        primaryLabel="Open results viewer"
+        primaryLabel={onOpenPlayback ? "Open saved playback" : "Open results viewer"}
         splitActions={splitActions}
       />
     </aside>

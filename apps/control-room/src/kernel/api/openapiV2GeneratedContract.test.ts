@@ -32,6 +32,7 @@ describe("generated OpenAPI v2 transport", () => {
       "x-fullmag-mesh-topology-hash": "string",
       "x-fullmag-n-comp": "integer",
       "x-fullmag-node-index-count": "integer",
+      "x-fullmag-observation-frame-id": "string",
       "x-fullmag-payload-state": "string",
       "x-fullmag-point-count": "integer",
       "x-fullmag-quantity-id": "string",

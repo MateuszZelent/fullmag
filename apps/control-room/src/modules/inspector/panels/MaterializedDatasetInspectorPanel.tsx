@@ -4,6 +4,10 @@ import type { MaterializedDatasetResource } from "@/kernel/api/apiTypes";
 import { useProjectDocumentSnapshot } from "@/kernel/persistence/ProjectDocumentStatus";
 import { useMaterializedDatasetResource } from "@/kernel/resources/solutionSetResources";
 import type { PinnedMaterializedDatasetSelectionRef, Selection } from "@/kernel/selection/selectionTypes";
+import { useSavedFieldPresentation } from "@/kernel/visualization/useObjectVisualization";
+import { materializedDatasetSelectionMatches } from "@/kernel/visualization/savedFieldPresentation";
+export { materializedDatasetSelectionMatches } from "@/kernel/visualization/savedFieldPresentation";
+import { SavedFieldVisualizationPanel, savedFieldPresentationForDataset } from "./SavedFieldVisualizationPanel";
 import { Badge } from "@/shared/ui/Badge";
 
 import { InspectorGroup } from "../primitives/InspectorGroup";
@@ -13,6 +17,7 @@ import { MaterializedDatasetValues } from "./MaterializedDatasetValues";
 export function MaterializedDatasetInspectorPanel({ selection }: InspectorPanelProps) {
   const ref = materializedDatasetSelection(selection);
   const project = useProjectDocumentSnapshot();
+  const { presentation } = useSavedFieldPresentation();
   const activeProjectId = project.state === "ready" ? project.resource.project_id : null;
   const projectMatchesSelection =
     ref !== null && materializedDatasetSelectionMatchesProject(ref, activeProjectId);
@@ -59,8 +64,11 @@ export function MaterializedDatasetInspectorPanel({ selection }: InspectorPanelP
   }
 
   const data = resource.data;
+  const savedPresentation = savedFieldPresentationForDataset(presentation, ref);
   return (
     <div className="grid min-w-0 gap-3" data-materialized-dataset-inspector="readonly">
+      {savedPresentation ? <SavedFieldVisualizationPanel presentation={savedPresentation} dataset={data}
+        refreshWarning={resource.refreshError?.message ?? null} /> : null}
       <InspectorGroup title="Pinned identity">
         <ReadonlyGrid
           rows={[
@@ -132,26 +140,6 @@ export function materializedDatasetSelection(
   selection: Selection,
 ): PinnedMaterializedDatasetSelectionRef | null {
   return selection.ref?.type === "materialized-dataset" ? selection.ref : null;
-}
-
-export function materializedDatasetSelectionMatches(
-  ref: PinnedMaterializedDatasetSelectionRef,
-  data: MaterializedDatasetResource,
-): boolean {
-  return (
-    data.project_id === ref.projectId &&
-    data.run_id === ref.runId &&
-    data.solution_set_id === ref.solutionSetId &&
-    data.containing_solution_revision === ref.containingRevision &&
-    data.member_id === ref.memberId &&
-    data.artifact_id === ref.artifactId &&
-    data.manifest_object_ref === ref.manifestObjectRef &&
-    data.sample_id === ref.sampleId &&
-    data.item_id === ref.itemId &&
-    data.field_id === ref.fieldId &&
-    data.dataset.dataset_id === ref.datasetId &&
-    data.dataset.revision === ref.datasetRevision
-  );
 }
 
 export function materializedDatasetSelectionMatchesProject(

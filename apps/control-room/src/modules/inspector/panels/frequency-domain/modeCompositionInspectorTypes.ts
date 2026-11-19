@@ -1,6 +1,5 @@
 import type {
   ModeCompositionController,
-  ModeCompositionControllerSnapshot,
   ModeCompositionResource,
 } from "@/kernel/visualization/ModeCompositionController";
 
@@ -52,9 +51,7 @@ export interface ModeCompositionInspectorDependencies {
   readonly controller: Pick<
     ModeCompositionController,
     "assign" | "mutate" | "remove" | "setPhaseClock" | "updateLayer"
-  > & Partial<Pick<ModeCompositionController, "getSnapshot">> | null;
-  readonly controllerState?: ModeCompositionControllerSnapshot;
-  readonly sessionScopeKey?: string | null;
+  > | null;
   readonly resource: ModeCompositionResource | null;
   readonly spectrum: ModeCompositionInspectorSpectrum | null;
 }

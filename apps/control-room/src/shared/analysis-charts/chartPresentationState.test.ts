@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveChartPresentationState } from "./chartPresentationState";
+import {
+  chartPresentationStatusDisplay,
+  deriveChartPresentationState,
+} from "./chartPresentationState";
 
 const active = { latestKnownRevision: null, paused: false };
 const points = [{ x: 1, y: 2 }];
@@ -91,5 +94,51 @@ describe("deriveChartPresentationState", () => {
       kind: "unsupported",
       reason: "The current runtime does not provide table samples.",
     });
+  });
+});
+
+describe("chartPresentationStatusDisplay", () => {
+  it("keeps the Live pill while a background refresh retains visible data", () => {
+    const ready = chartPresentationStatusDisplay({ kind: "ready", revision: "41" });
+    const refreshing = chartPresentationStatusDisplay({
+      kind: "refreshing",
+      requestedRevision: "42",
+      visibleRevision: "41",
+    });
+
+    expect(refreshing).toEqual({ primary: "Live", revision: "41" });
+    // ready -> refreshing at the same visible revision must not change the pill.
+    expect(refreshing).toEqual(ready);
+  });
+
+  it("reports loading only when no payload is visible", () => {
+    expect(chartPresentationStatusDisplay({ kind: "initial-loading" })).toEqual({
+      primary: "Loading…",
+    });
+  });
+
+  it("keeps paused, stale and error states distinct from Live", () => {
+    expect(
+      chartPresentationStatusDisplay({
+        kind: "paused",
+        latestKnownRevision: "44",
+        visibleRevision: "41",
+      }),
+    ).toEqual({ primary: "Paused", requestedRevision: "44", revision: "41" });
+    expect(
+      chartPresentationStatusDisplay({
+        error: new Error("connection lost"),
+        kind: "stale",
+        visibleRevision: "41",
+      }),
+    ).toEqual({
+      detail: "connection lost",
+      isAlert: true,
+      primary: "Refresh failed",
+      revision: "41",
+    });
+    expect(
+      chartPresentationStatusDisplay({ error: new Error("boom"), kind: "error" }),
+    ).toEqual({ detail: "boom", isAlert: true, primary: "Error" });
   });
 });

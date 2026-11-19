@@ -1,7 +1,9 @@
 import { Button } from "@/shared/ui/Button";
+import { DisabledReason } from "@/shared/ui/DisabledReason";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../../primitives/InspectorMetricStrip";
 import type { MeshRegionMembershipResource, MaterialParameterFieldListResource } from "@/kernel/api/apiTypes";
 import type {
   ObjectRegionDraft,
@@ -39,7 +41,6 @@ export interface RegionSubPanelProps {
   ) => void;
   addMaterialOverride: () => void;
   removeMaterialOverride: (index: number) => void;
-  removeQuantityFieldDraftKeys?: (keys: readonly string[]) => void;
   materialFields: MaterialParameterFieldListResource | null;
   couplingDependencies: RegionCouplingDependency[];
   auxiliaryDraftOwnerKey?: string;
@@ -91,34 +92,52 @@ export function ObjectRegionInlineDiagnostics({
 export function ObjectRegionMetadataSection({
   model,
   meshLane = "unknown",
+  defaultOpen = false,
 }: {
   model: ObjectRegionPanelModel;
   meshLane?: MeshInspectorLane;
+  defaultOpen?: boolean;
 }) {
   return (
-    <InspectorGroup title="Authored Subregion" collapsible defaultOpen>
-      <FieldRow label="Owner object ID" value={model.objectId} />
-      <FieldRow label="Subregion ID" value={model.regionId} />
-      <FieldRow label="Source" value={model.source} />
-      <FieldRow label="Material ref" value={model.materialRef} />
-      <FieldRow label="Magnetization ref" value={model.magnetizationRef} />
-      <FieldRow label="Material overrides" value={String(model.materialOverrideCount)} />
-      <FieldRow label="Parameter fields" value={String(model.materialFieldCount)} />
-      <FieldRow
-        label="Priority"
-        value={model.priority === null ? "default" : String(model.priority)}
+    <>
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Region", value: model.regionId },
+          { label: "Material", value: model.materialRef },
+          {
+            label: "Overrides",
+            value: String(model.materialOverrideCount + model.materialFieldCount),
+          },
+          {
+            label: "Lane",
+            value: meshLane === "unknown" ? "unresolved" : meshLane.toUpperCase(),
+          },
+        ]}
       />
-      <FieldRow
-        label="Realization"
-        value={
-          meshLane === "fem"
-            ? model.realizationStatus ?? model.realizationPolicy ?? "inherits object"
-            : meshLane === "fdm"
-              ? "structured-grid membership"
-              : "Withheld until the session discretization is explicit"
-        }
-      />
-    </InspectorGroup>
+      <InspectorGroup title="Authored Subregion" collapsible defaultOpen={defaultOpen}>
+        <FieldRow label="Owner object ID" value={model.objectId} />
+        <FieldRow label="Subregion ID" value={model.regionId} />
+        <FieldRow label="Source" value={model.source} />
+        <FieldRow label="Material ref" value={model.materialRef} />
+        <FieldRow label="Magnetization ref" value={model.magnetizationRef} />
+        <FieldRow label="Material overrides" value={String(model.materialOverrideCount)} />
+        <FieldRow label="Parameter fields" value={String(model.materialFieldCount)} />
+        <FieldRow
+          label="Priority"
+          value={model.priority === null ? "default" : String(model.priority)}
+        />
+        <FieldRow
+          label="Realization"
+          value={
+            meshLane === "fem"
+              ? model.realizationStatus ?? model.realizationPolicy ?? "inherits object"
+              : meshLane === "fdm"
+                ? "structured-grid membership"
+                : "Withheld until the session discretization is explicit"
+          }
+        />
+      </InspectorGroup>
+    </>
   );
 }
 
@@ -211,28 +230,41 @@ export function ObjectRegionActionsSection({
         </>
       )}
       <div className="fm-inspector-toolbar">
-        <Button
-          disabled={!sessionAvailable || pending || !canWriteRegion}
-          size="sm"
-          type="button"
-          variant="primary"
-          title={canWriteRegion ? undefined : "Select an authored object region"}
-          onClick={() => void applyRegion()}
-        >
-          Apply Region
-        </Button>
-        {meshLane === "fem" ? (
-          <Button
-            disabled={!sessionAvailable || pending || buildPending || !meshWritesAllowed || femMeshLifecycle?.status === "unsupported"}
-            size="sm"
-            type="button"
-            variant="primary"
-            title={meshWritesAllowed ? femMeshLifecycle?.reason : "FEM mesh realization is unavailable"}
-            onClick={() => void buildRegion()}
-          >
-            {buildPending ? "Waiting for mesh build…" : draftDirty ? "Apply & Build Mesh" : "Build Mesh"}
-          </Button>
-        ) : null}
+        {(() => {
+          const applyRegionButton = (
+            <Button
+              disabled={!sessionAvailable || pending || !canWriteRegion}
+              size="sm"
+              type="button"
+              variant="primary"
+              onClick={() => void applyRegion()}
+            >
+              Apply Region
+            </Button>
+          );
+          return canWriteRegion ? applyRegionButton : (
+            <DisabledReason reason="Select an authored object region">{applyRegionButton}</DisabledReason>
+          );
+        })()}
+        {meshLane === "fem" ? (() => {
+          const buildReason = meshWritesAllowed ? femMeshLifecycle?.reason : "FEM mesh realization is unavailable";
+          const buildBlocked = !meshWritesAllowed || femMeshLifecycle?.status === "unsupported";
+          const buildButton = (
+            <Button
+              disabled={!sessionAvailable || pending || buildPending || buildBlocked}
+              size="sm"
+              type="button"
+              variant="primary"
+              title={buildBlocked ? undefined : buildReason}
+              onClick={() => void buildRegion()}
+            >
+              {buildPending ? "Waiting for mesh build…" : draftDirty ? "Apply & Build Mesh" : "Build Mesh"}
+            </Button>
+          );
+          return buildBlocked && buildReason ? (
+            <DisabledReason reason={buildReason}>{buildButton}</DisabledReason>
+          ) : buildButton;
+        })() : null}
         <Button
           size="sm"
           type="button"

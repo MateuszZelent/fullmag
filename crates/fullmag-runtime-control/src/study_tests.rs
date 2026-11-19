@@ -1,4 +1,6 @@
-use super::validate_requested_execution;
+use super::{
+    materialize_accepted_worker_execution_plan, validate_requested_execution, AcceptedWorkerStep,
+};
 use fullmag_application::{
     ProjectId, ProjectSnapshot, RequestedExecution, RequestedResourceBudget, RunSpecification,
     StudyId, StudyReference,
@@ -126,9 +128,516 @@ fn run_spec(device: &str) -> RunSpecification {
             device: device.into(),
             precision: "double".into(),
             mode: "strict".into(),
-            minimum_resources: None,
+            minimum_resources: Some(RequestedResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1 << 20,
+                gpu_memory_bytes: if device == "gpu" { 1 << 20 } else { 0 },
+                storage_bytes: 1 << 20,
+            }),
         },
     )
+}
+
+fn accepted_frequency_response_snapshot() -> super::AcceptedStudySnapshot {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+    problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+        fdm: None,
+        fem: Some(fullmag_ir::FemHintsIR {
+            order: 1,
+            hmax: 2e-9,
+            mesh: Some("meshes/unit_tet.msh".into()),
+            demag_solver_policy: None,
+        }),
+        hybrid: None,
+    });
+    problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: Vec::new(),
+        fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
+            geometry_name: "strip".into(),
+            mesh_source: Some("meshes/unit_tet.msh".into()),
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "accepted-fr-preparation".into(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0e-9, 0.0, 0.0],
+                    [0.0, 1.0e-9, 0.0],
+                    [0.0, 0.0, 1.0e-9],
+                ],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
+                element_markers: vec![1],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
+                boundary_markers: vec![1],
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+        }],
+        fem_domain_mesh_asset: None,
+    });
+    problem.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+    problem.study = fullmag_ir::StudyIR::FrequencyResponse {
+        dynamics: problem.study.dynamics().clone(),
+        operator: fullmag_ir::EigenOperatorConfigIR {
+            kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+        k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
+        damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+        excitation: fullmag_ir::FrequencyExcitationIR {
+            field_au_per_m: [0.0, 0.0, 1.0],
+            phase_rad: 0.0,
+        },
+        frequencies_hz: fullmag_ir::FrequencySweepIR {
+            values_hz: vec![1.0e9],
+        },
+        solver_policy: None,
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            stage_autosave: None,
+            outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
+                observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
+            }],
+        },
+    };
+
+    let study = StudyPlan::from_pipeline(
+        "study_execution_validation",
+        1,
+        &StudyPipelineDocument {
+            version: "study_pipeline.v2".into(),
+            nodes: vec![StudyPipelineNode::Primitive(PrimitiveStageNode {
+                id: "step:run".into(),
+                label: "FEM frequency response".into(),
+                enabled: true,
+                notes: None,
+                source: Some(StudyPipelineNodeSource::UiAuthored),
+                stage_kind: StudyPrimitiveStageKind::FrequencyResponse,
+                payload: [
+                    ("frequencies_hz".into(), json!([1.0e9])),
+                    ("equilibrium_source".into(), json!("provided")),
+                    ("bc".into(), json!("free")),
+                ]
+                .into_iter()
+                .collect(),
+            })],
+        },
+        &StudyPlanMigrationDefaults {
+            model: StudyModelReference {
+                model_id: "model:one".into(),
+                version: "v1".into(),
+            },
+            solver_config: StudySolverConfigReference {
+                preset_id: "solver:default".into(),
+                version: "v1".into(),
+            },
+            discretization: StudyDiscretizationReference {
+                recipe_id: "mesh:default".into(),
+                version: "v1".into(),
+            },
+            execution_profile: StudyExecutionProfileReference {
+                profile_id: "exec:auto".into(),
+                version: "v1".into(),
+            },
+        },
+    )
+    .expect("accepted FR study fixture is valid");
+    let catalog = StudyProblemCatalog::from_entries(
+        &study,
+        study
+            .steps
+            .iter()
+            .map(|step| StudyProblemCatalogEntry::from_step(step, problem.clone()))
+            .collect(),
+    )
+    .expect("accepted FR catalog is valid");
+    let lowered = lower_study_plan_with_catalog(&study, &catalog)
+        .expect("accepted FR step lowers to its immutable execution plan");
+    let mut specification = run_spec("cpu");
+    specification.requested_execution.backend = "fem".into();
+    let run_id = specification.run_id.as_str().to_owned();
+    let intent = fullmag_session::FmsRunIntent::new(
+        &run_id,
+        format!("intent-{run_id}"),
+        serde_json::to_value(&specification).unwrap(),
+    );
+
+    super::AcceptedStudySnapshot {
+        run: crate::AcceptedRunSnapshot {
+            intent,
+            specification,
+            definition_bytes: Vec::new(),
+        },
+        study,
+        catalog,
+        lowered,
+    }
+}
+
+fn native_fem_evidence_for_mesh(
+    mesh: &fullmag_ir::MeshIR,
+    fe_order: u32,
+) -> fullmag_plan::NativeFemMeshSpaceEvidence {
+    let fingerprint = |hex: char| format!("sha256:{}", hex.to_string().repeat(64));
+    fullmag_plan::NativeFemMeshSpaceEvidence {
+        abi_version: fullmag_plan::preparation::NATIVE_FEM_MESH_SPACE_ABI_VERSION,
+        producer_id: fullmag_plan::preparation::NATIVE_FEM_MESH_SPACE_PRODUCER_ID.into(),
+        schema_version: fullmag_plan::preparation::NATIVE_FEM_MESH_SPACE_SCHEMA_VERSION.into(),
+        producer_version: fullmag_plan::preparation::NATIVE_FEM_MESH_SPACE_PRODUCER_VERSION.into(),
+        mesh_matches_canonical_input: true,
+        canonical_mesh_fingerprint: mesh.topology_fingerprint_v6(),
+        topology_fingerprint: fingerprint('8'),
+        marker_map_fingerprint: fingerprint('9'),
+        quality_fingerprint: fingerprint('a'),
+        space_fingerprint: fingerprint('b'),
+        mesh_dimension: 3,
+        fe_family: "H1".into(),
+        fe_order,
+        node_count: mesh.nodes.len() as u64,
+        cell_count: mesh.cells.types.len() as u64,
+        boundary_element_count: mesh.facets.len() as u64,
+        local_dof_count: mesh.nodes.len() as u64,
+        true_dof_count: mesh.nodes.len() as u64,
+        quality_sample_count: 4,
+        invalid_cell_count: 0,
+        min_jacobian_determinant: 1.0e-27,
+        max_jacobian_determinant: 2.0e-27,
+    }
+}
+
+#[test]
+fn accepted_frequency_response_preparation_binds_native_evidence_to_exact_run_problem_and_step() {
+    use fullmag_ir::BackendPlanIR;
+
+    let accepted = accepted_frequency_response_snapshot();
+    let step = accepted
+        .lowered
+        .steps
+        .iter()
+        .find(|step| step.step_id == "step:run")
+        .expect("accepted FR step");
+    let plan = step.execution_plan.as_ref().expect("planned FR execution");
+    let BackendPlanIR::FemFrequencyResponse(response) = &plan.backend_plan else {
+        panic!("accepted step must retain its FEM frequency-response plan");
+    };
+    let native = native_fem_evidence_for_mesh(&response.mesh, response.fe_order);
+    assert!(accepted
+        .materialize_fem_preparation_receipt("prep-fr-through-time-path", "step:run", &native)
+        .is_err(), "the time-domain preparation path must keep rejecting FR");
+    let receipt = accepted
+        .materialize_fem_frequency_response_preparation_receipt(
+            "prep-fr-bound",
+            "step:run",
+            &native,
+        )
+        .expect("FR preparation must use its native mesh-space evidence");
+
+    let source = receipt
+        .accepted_run_source
+        .as_ref()
+        .expect("FR preparation receipt must carry accepted identity");
+    assert_eq!(source.run_id, accepted.run.specification.run_id);
+    assert_eq!(source.step_id, "step:run");
+    assert_eq!(
+        source.specification_fingerprint,
+        format!("sha256:{}", accepted.run.specification.fingerprint().unwrap())
+    );
+    match receipt.plan.source.as_ref().unwrap() {
+        fullmag_plan::PreparationPlanSource::AcceptedRunStep { step_id, .. } => {
+            assert_eq!(step_id, "step:run");
+        }
+    }
+    assert!(receipt.validate().is_ok());
+
+    let rebound = receipt
+        .clone()
+        .bind_to_accepted_run(&accepted.run.specification, "step:other")
+        .expect_err("a receipt cannot be rebound to a different accepted step");
+    assert!(rebound.to_string().contains("another accepted run step"));
+
+    let mut wrong_mesh = native;
+    wrong_mesh.canonical_mesh_fingerprint = format!("sha256:{}", "f".repeat(64));
+    assert!(accepted
+        .materialize_fem_frequency_response_preparation_receipt(
+            "prep-fr-wrong-mesh",
+            "step:run",
+            &wrong_mesh,
+        )
+        .is_err());
+}
+
+#[test]
+fn relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_reset() {
+    use fullmag_application::{
+        decode_study_artifact_bytes, materialize_fdm_preparation_from_problem,
+        DecodedStudyArtifact, PreparationBinding, ResolvedInput, ResolvedStudyArtifact,
+        ResolvedTaskInput, ResourceBudget, ResourceKind, ResourceLease, TaskRecord,
+        RESOLVED_TASK_INPUT_SCHEMA, STUDY_MAGNETIZATION_CODEC_ID,
+        STUDY_MAGNETIZATION_CODEC_VERSION,
+    };
+    use fullmag_authoring::{StudyInputPort, StudyInputSource, StudyPortDataKind};
+    use fullmag_ir::{
+        BackendPlanIR, EnergyTermIR, ExecutionPlanIR, GeometryEntryIR, InitialMagnetizationIR,
+        RelaxStopIR, RelaxationAlgorithmIR, StudyIR,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let store = fullmag_session::SessionStore::open(directory.path().join("store")).unwrap();
+    let run = run_spec("cpu");
+    let make_step = |step_id: &str, algorithm, field_tesla| {
+        let mut problem = ProblemIR::bootstrap_example();
+        // One spin in a transverse field gives each solver a real update
+        // without making continuation depend on line search near equilibrium.
+        problem.geometry.entries[0] = GeometryEntryIR::Box {
+            name: "strip".into(),
+            size: [2e-9; 3],
+        };
+        problem.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::Uniform {
+            value: [1.0, 0.0, 0.0],
+        });
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".into(),
+            json!({"device": "cpu", "precision": "double", "source": "qualification_fixture"}),
+        );
+        problem.energy_terms = vec![EnergyTermIR::Zeeman { b: field_tesla }];
+        let StudyIR::TimeEvolution { dynamics, mut sampling } = problem.study else {
+            panic!("expected the bootstrap dynamics fixture");
+        };
+        sampling.outputs.clear();
+        problem.study = StudyIR::Relaxation {
+            algorithm,
+            dynamics: (algorithm == RelaxationAlgorithmIR::LlgOverdamped).then_some(dynamics),
+            stop: RelaxStopIR {
+                torque_tolerance_apm: Some(1e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(if algorithm == RelaxationAlgorithmIR::LlgOverdamped {
+                    10
+                } else {
+                    1
+                }),
+                max_relaxation_time_s: None,
+            },
+            sampling,
+        };
+        let execution_plan = fullmag_plan::plan(&problem).unwrap();
+        let receipt = materialize_fdm_preparation_from_problem(
+            format!("prep-{step_id}"),
+            1,
+            &problem,
+            &json!({}),
+        )
+        .unwrap();
+        let mut task = TaskRecord::new(run.run_id.clone(), "a".repeat(64)).unwrap();
+        task.queue().unwrap();
+        let claim = task
+            .claim(
+                ResourceLease::new(
+                    "cpu-test",
+                    ResourceKind::Cpu,
+                    ResourceBudget {
+                        cpu_millis: 100,
+                        memory_bytes: 1 << 20,
+                        gpu_memory_bytes: 0,
+                        storage_bytes: 1 << 20,
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let resolved_input = ResolvedTaskInput {
+            schema_version: RESOLVED_TASK_INPUT_SCHEMA.into(),
+            run_id: claim.run_id.clone(),
+            task_id: claim.task_id.clone(),
+            attempt_id: claim.attempt_id.clone(),
+            ownership_epoch: claim.ownership_epoch,
+            specification_fingerprint: run.fingerprint().unwrap(),
+            plan_fingerprint: fullmag_session::canonical_json_sha256(
+                &serde_json::to_value(&execution_plan).unwrap(),
+            ),
+            requested_execution: run.requested_execution.clone(),
+            preparation: PreparationBinding::from_receipt(&receipt).unwrap(),
+            inputs: Default::default(),
+            frozen_stage_context: None,
+        };
+        AcceptedWorkerStep {
+            claim,
+            step_id: step_id.into(),
+            study_inputs: vec![],
+            initial_state_overlay: None,
+            problem,
+            execution_plan,
+            until_seconds: None,
+            resolved_input,
+        }
+    };
+    let samples = |plan: ExecutionPlanIR| {
+        let BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+            panic!("expected FDM")
+        };
+        fdm.initial_magnetization
+    };
+    let decode_state = |kind, bytes: &[u8]| {
+        let DecodedStudyArtifact::MagnetizationState(state) = decode_study_artifact_bytes(
+            kind,
+            STUDY_MAGNETIZATION_CODEC_ID,
+            STUDY_MAGNETIZATION_CODEC_VERSION,
+            bytes,
+        )
+        .unwrap() else {
+            panic!("expected the runner magnetization codec");
+        };
+        state
+    };
+    let execute = |step: &AcceptedWorkerStep, plan: &ExecutionPlanIR, case: &str| {
+        let output_dir = directory.path().join(case);
+        let result = fullmag_runner::run_planned_problem(&step.problem, plan, 1e-12, &output_dir)
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
+        assert_eq!(
+            result.status,
+            fullmag_runner::RunStatus::Completed,
+            "{case}: completion={:?}, last step={:?}",
+            result.completion,
+            result.steps.last().map(|stats| (stats.step, stats.max_torque_Apm, stats.e_total)),
+        );
+        let initial = std::fs::read(output_dir.join("m_initial.json")).unwrap();
+        let initial = decode_state("initial_state", &initial);
+        assert_eq!(initial.step, 0);
+        assert_eq!(initial.time_s, 0.0);
+        assert_eq!(initial.provenance["execution_engine"], "cpu_reference");
+        (
+            initial,
+            std::fs::read(output_dir.join("m_final.json")).unwrap(),
+        )
+    };
+    let first = make_step(
+        "relax-a",
+        RelaxationAlgorithmIR::LlgOverdamped,
+        [0.0, 0.1, 0.0],
+    );
+    let mut second = make_step(
+        "relax-b",
+        RelaxationAlgorithmIR::ProjectedGradientBb,
+        [0.0, 0.0, 0.1],
+    );
+    let mut third = make_step(
+        "relax-c",
+        RelaxationAlgorithmIR::NonlinearCg,
+        [0.1, 0.0, 0.0],
+    );
+    let continue_from = |source_stage: &str,
+                         target: &mut AcceptedWorkerStep,
+                         predecessor_bytes: &[u8],
+                         expected_start: &[[f64; 3]],
+                         case: &str| {
+        let previous = decode_state("state", predecessor_bytes);
+        // The transverse field must move the state enough to detect a mistaken reset or skipped stage.
+        assert!(
+            previous
+                .values
+                .iter()
+                .zip(expected_start)
+                .any(|(final_m, initial_m)| {
+                    final_m
+                        .iter()
+                        .zip(initial_m)
+                        .any(|(after, before)| (after - before).abs() > 1e-5)
+                }),
+            "{source_stage} did not produce a distinguishable final state"
+        );
+        let artifact_id = format!("{source_stage}-final");
+        let object_ref = store.cas().put(predecessor_bytes).unwrap();
+        target.study_inputs.push(StudyInputPort {
+            port_id: "initial_state".into(),
+            data_kind: StudyPortDataKind::State,
+            required: true,
+            source: StudyInputSource::StepOutput {
+                step_id: source_stage.into(),
+                port: "final_state".into(),
+                case_id: "default".into(),
+            },
+        });
+        let unresolved = materialize_accepted_worker_execution_plan(&store, target).unwrap_err();
+        assert!(unresolved.to_string().contains("has no resolved artifact"));
+        target.resolved_input.inputs.insert(
+            "initial_state".into(),
+            ResolvedInput {
+                source: artifact_id.clone(),
+                content_sha256: object_ref.clone(),
+                study_artifact: Some(ResolvedStudyArtifact {
+                    artifact_id,
+                    object_ref,
+                    data_kind: "state".into(),
+                    codec_id: STUDY_MAGNETIZATION_CODEC_ID.into(),
+                    codec_version: STUDY_MAGNETIZATION_CODEC_VERSION.into(),
+                }),
+            },
+        );
+        let bound = materialize_accepted_worker_execution_plan(&store, target).unwrap();
+        let (initial, final_bytes) = execute(target, &bound, case);
+        assert_eq!(initial.layout, previous.layout);
+        assert_eq!(samples(bound), previous.values, "{}", target.step_id);
+        assert_eq!(initial.values.len(), previous.values.len());
+        // The CPU state constructor normalizes unit vectors again. Compare each component.
+        for (index, (actual, expected)) in initial.values.iter().zip(&previous.values).enumerate() {
+            assert!(
+                actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(a, b)| (a - b).abs() <= 1e-12),
+                "{} sample {index} differs from the predecessor's final state",
+                target.step_id
+            );
+        }
+        (initial, final_bytes)
+    };
+    let first_plan = materialize_accepted_worker_execution_plan(&store, &first).unwrap();
+    let (authored, first_final) = execute(&first, &first_plan, "relax-a");
+    let (second_initial, second_final) = continue_from(
+        "relax-a",
+        &mut second,
+        &first_final,
+        &authored.values,
+        "relax-b",
+    );
+    continue_from(
+        "relax-b",
+        &mut third,
+        &second_final,
+        &second_initial.values,
+        "relax-c",
+    );
+
+    // Repeating the original uniform texture is a distinct authored input for B.
+    second.study_inputs[0].source = StudyInputSource::AuthoredInitialState {
+        reference: fullmag_plan::authored_initial_state_reference(&second.step_id, &second.problem)
+            .unwrap(),
+    };
+    second.study_inputs[0].data_kind = StudyPortDataKind::InitialState;
+    second.resolved_input.inputs.clear();
+    let reset_plan = materialize_accepted_worker_execution_plan(&store, &second).unwrap();
+    let (reset, reset_final) = execute(&second, &reset_plan, "relax-b-authored-reset");
+    assert_eq!(samples(reset_plan), authored.values);
+    assert_eq!(reset.layout, authored.layout);
+    assert_eq!(reset.values, authored.values);
+
+    let mut third_after_reset = make_step(
+        "relax-c",
+        RelaxationAlgorithmIR::NonlinearCg,
+        [0.1, 0.0, 0.0],
+    );
+    continue_from(
+        "relax-b",
+        &mut third_after_reset,
+        &reset_final,
+        &reset.values,
+        "relax-c-after-authored-reset",
+    );
 }
 
 #[test]

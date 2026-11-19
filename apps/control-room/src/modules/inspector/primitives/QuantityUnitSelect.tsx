@@ -1,6 +1,8 @@
 import { useId } from "react";
 
 import type { QuantityInputState, QuantityUnit } from "@/kernel/authoring/object-edit/quantityInput";
+import { controlVariants } from "@/shared/ui/controlVariants";
+import { cn } from "@/shared/utils/className";
 
 const LENGTH_UNITS = ["m", "mm", "um", "nm"] as const;
 const ANGLE_UNITS = ["rad", "deg", "°"] as const;
@@ -29,7 +31,7 @@ export function QuantityUnitSelect({
       <select
         aria-label={`${label} unit`}
         aria-describedby={reason ? reasonId : undefined}
-        className="fm-inspector-select fm-inspector-quantity-unit"
+        className={cn("fm-inspector-input fm-inspector-quantity-unit", controlVariants())}
         disabled={blocked}
         title={reason}
         value={displayedUnit}

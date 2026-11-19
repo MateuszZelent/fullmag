@@ -1,6 +1,5 @@
 "use client";
 
-import { parseQuantityInput } from "@/kernel/authoring/object-edit/quantityInput";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FormField } from "../../primitives/FormField";
@@ -33,7 +32,7 @@ export function FftResponseStageInspector(props: StageInspectorFrameProps) {
   const effectiveSampling = unsupported ? null : finiteK
     ? effectiveState.outputs.find((output) => output.quantity === "m" && output.outputKind === "field") ?? null
     : effectiveState.tableAutosave;
-  const durationS = positiveDurationSeconds(nextRun?.untilSeconds);
+  const durationS = positiveNumber(nextRun?.untilSeconds);
   const disabled = !draft || draft.fftResponse.readOnly;
 
   return (
@@ -190,9 +189,7 @@ export function FftResponseStageInspector(props: StageInspectorFrameProps) {
   );
 }
 
-function positiveDurationSeconds(value: string | number | null | undefined): number | null {
-  const parsed = parseQuantityInput(value == null ? "" : String(value), "time");
-  return parsed.parseStatus === "valid" && parsed.parsedSI !== null && parsed.parsedSI > 0
-    ? parsed.parsedSI
-    : null;
+function positiveNumber(value: string | number | null | undefined): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }

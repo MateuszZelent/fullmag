@@ -549,14 +549,49 @@ niewykonane**; nie zamykają bramek powyżej.
 (spin-transport-composite-resume-v2)=
 ### 2.6.3. Composite checkpoint v2: accepted ARS i durable outputs
 
-**Stan: planned_contract; codec/integracja/runtime NOT VERIFIED.** Dokładny
+**Publiczna odmowa A: `IMPLEMENTED_SOURCE_ONLY`, `NOT_COMPILED`,
+`NOT_EXECUTED`.** Wspólny runner-owned
+`validate_fdm_transport_checkpoint_resume_support` odmawia checkpoint continuation
+rzeczywistego CPU workflow M1/M2/M3, również z frozen spins. Jego `Ok(())`
+oznacza tylko brak tej konkretnej odmowy, nie pozytywny admission formatu lub
+tożsamości. API klasyfikuje te checkpointy jako `RestoreClass::Unsupported`
+(`unsupported`) i odmawia restore przed odczytem common state oraz mutacją;
+CLI odmawia przed pobraniem paused state przez `take()`, a UI dopuszcza restore
+wyłącznie dla `exact_resume`. Nie ma automatycznego downgrade do
+InitialConditionImport, LogicalResume ani portable importu.
+
+Nie dodano globalnej odmowy pure-magnetic/frozen/ABM3 bez spin workflow;
+GPU/FEM zachowują własnych ownerów i bramki. Pozostała klasyfikacja katalogu
+API nadal korzysta z dotychczasowego self-compatibility; A nie naprawia jej
+zgodności z aktualną identity. Prywatny codec i original-stage gate B nie są
+pozytywnym admission. Full v2 carriers/generation, activation/spin history,
+immutable original context, committed outputs/CAS prefix i atomowy restore
+pozostają OPEN. Dokładna granica publiczna jest w
+[specyfikacji API](../specs/resource-first-control-room-api-v2.md#checkpoint-restore-admission).
+Nowy wariant wire wymaga oficjalnej generacji OpenAPI/TS z przyszłego managed
+pakietu z pinami A; pakiet #80 nie zawiera tej zmiany i jej nie weryfikuje.
+
+**Prywatny codec: IMPLEMENTED_SOURCE_ONLY, NOT_COMPILED, NOT_EXECUTED;
+publiczna obsługa codec i integracja ExactResume: planned_contract,
+runtime NOT VERIFIED.** Dokładny
 schema fullmag.fdm.coupled_m3_checkpoint.v2, required fields i hash są w
 [§13 frozen spec](../specs/frozen-spins-v1.md#frozen-v2-composite-checkpoint).
 Reuse dotyczy pełnego FdmCoupledCheckpoint V1 i jego complete validatora,
 FrozenSpinsCheckpointV1, FrozenSpinsActivationSet oraz AcceptedStateRef.
 Nie zmienia równań, parametrów SpinDriftDiffusion/TransportExecution/solver
-policy ani Python→ProblemIR mapping. Nowe nazwy Composite*V2 są planowane,
-nie istniejącymi konstruktorami publicznymi lub obsługiwanym codec.
+policy ani Python→ProblemIR mapping. Prywatne `FdmCompositeCheckpointV2`,
+`decode_composite_m3_codec_v2` i `FdmCompositeCheckpointV2::validate_self_contained`
+mają ownera `crates/fullmag-runner/src/fdm/cpu/spin_transport/composite_checkpoint.rs`.
+Nie są konstruktorami publicznymi ani bramką ExactResume; rzeczywiste
+plan/source/common/carriers/generation oraz committed output CAS wymagają
+kolejnej contextual walidacji.
+
+Prywatny `CodecCheckedCompositeV2::validate_for_original_stage` ma status
+`SOURCE_ONLY`, `NOT_COMPILED`, `NOT_EXECUTED`: sprawdza oryginalne
+problem/plan/stage/outputs przekazane przez admitted ownera. Sam helper nie
+dowodzi pochodzenia tych danych z immutable admission ani integracji callera.
+Common state, primary carriers/generation, activation history, store/CAS prefix,
+atomic restore i publiczne API pozostają OPEN; ExactResume/runtime NOT VERIFIED.
 
 | Solver | Device | Composite v2 ExactResume |
 |---|---|---|
@@ -2200,6 +2235,48 @@ with the same quantity id fail before native execution rather than overwriting
 one another. Requested field schedules for these steady quantities select the
 already-solved records and must not query the time-domain FEM preview ABI.
 
+(cd-terminal-transport-publication)=
+### 4.CD. Prerejestracja C+D: terminalny accepted transport i historia
+
+Status: **planned_contract; niewdrożone; runtime NOT VERIFIED**. Pełny dokładny wire,
+required fields/defaults/units/hash, limity, publisher i consumer contracts:
+[specyfikacja §14](../specs/frozen-spins-v1.md#cd-terminal-publication-preregistration).
+Rozdział nie zmienia równań M3 ani ARS. coupled.previous_dt_s pozostaje outer accepted dt,
+a TransientSpinState.previous_dt_s historią ostatniego inner residual half.
+
+C+D jest atomem terminal publication zakończonego etapu. Snapshot V2 semantic preimages
+pochodzą raz z jednego accepted bundle, po normalnym writer drain i przed drop engine/workflow;
+nie serializujemy ich w StepStats/per-step hooku. Runner nie zna claimu i nie nadaje
+artifact/CAS IDs; istniejący publisher buduje owner-qualified bindings. Nowy manifest V4
+completed wymaga prawdziwej coverage wszystkich wyemitowanych próbek. Nie empty fallback.
+Historię reprezentuje thin index/page -> actual CPU snapshot JSON/scalar-row bytes,
+nie inline Vec wszystkich M. Nowy generic bounded history decoder jest planowany,
+nie utożsamiany z final m_final codec. Snapshot metadata <=64KiB, history root/page<=4MiB;
+pełny field/grid/output budget obowiązuje dodatkowo.
+
+| Parametr kontraktu | Typ / default | SI | Walidacja / owner |
+|---|---|---|---|
+| semantic clock | existing ObservationClock / required | $\mathrm{s}$ dla time/dt | ten sam accepted frame; actual CPU reference |
+| primary_carriers | exactly4 SemanticCarrierV2 / required | $1$ | existing engine/M3/frozen/activation values; bez manifest cycle |
+| accepted_state_ref.generation | existing typed reference / required | $1$ | rzeczywisty claim epoch; publisher |
+| history sample time/dt | finite f64 / required | $\mathrm{s}$ | exact writer job clock; scalar CSV15e nie jest bit-exact clock storage |
+| history values | existing sample bytes / required | unit existing quantity catalog | scalar/field decode sample-by-sample; bez nowego formatu physics |
+| coverage | typed schedule/cause/count / required | $1$, czasy $\mathrm{s}$ | actual outputs; missing/empty mismatch odmawia publication |
+
+| Lane dla nowego C+D | Stan |
+|---|---|
+| FDM CPU double M3 | planned_contract, unqualified, bez ExactResume admission |
+| FDM GPU / single / hybrid | poza zakresem, bez capability promotion |
+| FEM CPU | poza tym FDM checkpoint codec; aktualne transport statusy bez zmian |
+| FEM GPU | poza tym FDM checkpoint codec; aktualne transport statusy bez zmian |
+
+Python/ProblemIR: brak nowego authored parametru i brak zmiany loweringu; requested intent
+pozostaje oryginalne, resolved execution nadal jawne. Validation errors dla missing carriers,
+raw/hash/count/clock/lineage mismatch są fail-closed; unsupported combinations pozostają
+Unsupported. Wymagane przyszłe dowody: real producer->publisher->completion/cold reader,
+bounded multi-frame IO, pruning/archive i fault injection oraz później publiczny resume.
+Nie wykonano tych gates przez source/doc validator.
+
 (validation)=
 ## 5. Validation strategy
 
@@ -2246,6 +2323,20 @@ wokół normalizacji, wykonania Fullmaga i porównania; binaria Fullmaga mają
 osobne piny. Drift przerywa macierz, a `validate_matrix_summary` kontroluje
 strukturę/metryki bez ponownego wykonania i bez nadania authority runtime.
 Nowej macierzy, benchmarku i zgodności solverów **nie zaliczono**.
+
+`scripts/run_fullmag_m2_nf_reference.py::_problem` przypisuje część urojoną
+interfejsu `spin_transport_modules[0].interfaces[0].g_i_Spm2` z
+`BORIS_GMIX_SPM2[1]`, tego samego elementu pary co metadata
+`transport.Gmix_Spm2[1]` i jawne `ferromagnet.param.Gmix[1]` w generowanym
+scenariuszu BORIS. Jednostką jest $\mathrm{S/m^2}$. Scalar `BORIS_GI_SPM2`
+opisuje inny parametr kanałów interfejsu; nie jest źródłem imaginary mixing.
+Dla obecnego scenariusza zadane $G_i=0$ zastępuje omyłkowe $5\times10^{14}$
+w rzeczywistym IR. Publiczne lowering i niezależny odczyt AST renderera
+sprawdzają coarse/medium/fine. To kontrola tego przypisania wejścia,
+**nie** zgodności całego modelu, native execution ani pełnego complex mixing.
+Pozostałe różnice kanałów, reakcji, zakresu magnetycznego, sterowania
+terminalami i ewolucji pozostają niezakwalifikowane; dotychczasowych
+porównań i momentów `incomparable` nie promuje się do PASS.
 
 The bounded FEM CPU M2 lane also has a nontrivial managed constitutive oracle,
 `just verify-fem-steady-transport-m2-affine-contract`. It uses a
@@ -3141,6 +3232,572 @@ job/runtime locators, odmawia caller build/image/output/container overrides.
 Receipts wymagają retained actual container oraz dostępnego operatora; brak
 portable signed admission nie jest zastępowany caller JSON authority.
 
+(fullmag-m2-explicit-magnetic-domain-v2)=
+## Prerejestracja M2 CPU: jawna domena magnetyczna N/F w descriptorze v2
+
+Status: **planned contract / storage-only source candidate; NOT COMPILED,
+NOT EXECUTED, benchmark NOT QUALIFIED**. Ten dodatek nie zmienia dopisków C+D,
+checkpoint refusal ani historycznych dowodów. Wspólny model ma jeden
+`Ferromagnet` wyłącznie F i oddzielną auxiliary geometry N z rolą `conductor`;
+charge/spin obejmują N+F, torque i FrozenSpins tylko F. Nie stosuje się dummy m,
+Ms epsilon ani regionalnego Ms=0 jako zamiennika magnetic active mask.
+
+Istniejące `ProblemIR` przechowuje ten authoring. `transport_common_grid`
+próbkuje magnetic mask F niezależnie od transport domain. Pierwotny M2 v1
+traci tę maskę i bezwarunkowo wymaga unit m także w N. Prerejestrowany M2 v2
+ma wymagane `magnetic_active_mask: Vec<bool>` w resolved descriptorze i
+`CoupledChargeSpinMaterialFields`. Nie ma defaultu all-true. Brak pola,
+niezgodna długość, maska poza transport domain, niezgodność z FdmPlanIR albo
+stary descriptor v1 są odmową; v1 nie jest reinterpretowane.
+
+| Pole / reguła | Typ, domyślność i SI | Walidacja / znaczenie |
+|---|---|---|
+| `magnetic_active_mask` | required ordered `Vec<bool>`, $1$ | ta sama kolejność i długość grid; magnetic subset transport; źródło magnetic domain autora, nie nazwa/P/Ms heurystyka |
+| magnetic m | required $m$, $1$ | finite unit; constructor zachowuje $10^{-8}$, constitutive $10^{-12}$ |
+| nonmagnetic m | required $m=0$, $1$ | finite exact zero na transport-active N; nie ma normalizacji do sztucznego kierunku |
+| N material | istniejące współczynniki SI | explicit N odrzuca P, AMR, AHE, lambda_J/phi i torque target; sigma, sigma_s, theta i spin-flip pozostają aktywne |
+| mixing i target | istniejący kontrakt | F to_cell i torque target należą do magnetic mask; unit m_F oraz Ms>0 pozostają bez zmian |
+
+Dla N pozostają produkcyjne równania reciprocal, a nie charge-only fallback.
+Izotropowa przewodność charge wynosi $\sigma_{\perp}=\sigma_{\parallel}$;
+współczynnik $\sigma$ w członach SHE jest osobnym istniejącym parametrem
+konstytutywnym. Wspólny przypadek N/F deklaruje wszystkie te przewodności równe:
+
+```{math}
+:label: m2-explicit-nonmagnetic-constitutive
+J_{c,i}=\sigma_{\perp} E_i+\theta_{\mathrm{SH}}\sigma\epsilon_{ija}G_{ja},\qquad
+Q_{ia}=\sigma_sG_{ia}+\theta_{\mathrm{SH}}\sigma\epsilon_{ika}E_k,
+\qquad G_{ia}=-\partial_i\mu_{s,a}/2.
+```
+
+Istniejący człon spin-flip pozostaje określony w {eq}`spin-balance-reaction`;
+zerowe człony exchange i dephasing wynikają z jawnej
+niesprzecznej konfiguracji N, nie z cichego mnożenia błędnych magnetic
+współczynników przez zero. Równania F, znaki, gamma, mixing, normalne,
+Gilbert conversion i adapter pozostają niezmienione.
+
+`evaluate` zachowuje strict magnetic=true wrapper. M2 używa
+`evaluate_with_magnetic_activity` z rzeczywistym bitem maski osobno dla obu
+stron same-material face, boundary i końcowych cell observations. Konstruktor,
+reaction/preconditioner i target admission sprawdzają zgodność explicit mask;
+interface nadal używa wyłącznie m_F z to_cell. Maska resolved descriptoru jest
+porównywana z FdmPlanIR, a nie wyprowadzana z parametrów materiału.
+
+Publiczne nazwy pozostają istniejące: `Problem.auxiliary_geometries`,
+`auxiliary_geometry_roles`, `Ferromagnet`, `RegionRef`, `FrozenSpins`,
+`fm.init.UniformMagnetization`. Nie dodaje się publicznego materiałowego bool
+lub nowego physics module. Required mask jest częścią canonical resolved
+execution plan/provenance; obejmuje ją istniejący descriptor digest. Nowy
+managed package i oficjalna generacja schematu są wymagane przed public runtime.
+Przykład pełnego authoringu/loweringu jest osobnym prerejestrowanym kandydatem
+N/F; tutaj nie publikuje się niewykonanego kompletnego programu.
+
+| Realizacja | Stan tego dodatku |
+|---|---|
+| FDM CPU FP64 M2 | source candidate; parser/policy controls nie dowodzą solve |
+| FDM GPU | bez zmian; brak promocji ani nowej ABI |
+| FEM CPU | bez zmiany operatora; konieczna jedynie aktualizacja testowego literal FDM descriptoru |
+| FEM GPU | bez zmian i bez nowej kwalifikacji |
+
+Wymagane gates: publiczny lowering z N magnetic inactive/m=0/Ms=0 i F active;
+mask length/subset/mismatch/v1/missing odmowy; N konflikt P/AMR/AHE/J/phi/torque;
+finite state i niezmienione obie tolerancje F; zachowanie SHE/iSHE/sf oraz
+mixing N→F; whole-result frozen-M proof; niezmieniony all-magnetic operator;
+nowy container-backed managed build i rzeczywisty N/F solve; signed terminal
+current i pełny provenance/reopen. Checkpoint resume oraz pełny benchmark są
+nadal odrębnymi otwartymi bramkami. Nie zmieniać scope przez fake magnetic N.
+
+| Kontrakt | Ścieżka | Symbol | Stan |
+|---|---|---|---|
+| M2 magnetic domain v2 | crates/fullmag-ir/src/spin_transport.rs | ResolvedFdmCoupledSpinTransportIR | required resolved mask, source candidate |
+| M2 lowering | crates/fullmag-plan/src/spin_transport.rs | materialize_m2_descriptor | transfer base mask i conflict refusal |
+| M2 runner | crates/fullmag-runner/src/fdm/cpu/spin_transport.rs | solve_coupled_module | explicit forwarding, no dummy m |
+| M2 material | crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs | CoupledChargeSpinProblem::new | explicit activity i state admission |
+| M2 constitutive | crates/fullmag-engine/src/fdm/cpu/transport/reciprocal_constitutive.rs | ReciprocalConstitutiveMaterial::evaluate_with_magnetic_activity | nonmagnetic equations z SHE/iSHE |
+
+| Symbol | Token LaTeX | Znaczenie | SI |
+|---|---|---|---|
+| Maska domeny magnetycznej M2 | $\chi_m$ | Jawna aktywność magnetyczna komórki wspólnego gridu M2 | $1$ |
+| Tensor permutacji | $\epsilon_{ija}$ | Tensor Levi-Civity, dodatni dla cyklicznej kolejności xyz | $1$ |
+| Indeksy kartezjańskie | $i,j,k,a$ | Indeksy z xyz; i/j/k przestrzenne, a polaryzacji spinu; powtórzone indeksy sumowane | $1$ |
+
+| Kontrakt | Ścieżka | Symbol | Dowód |
+|---|---|---|---|
+| Explicit nonmagnetic constitutive | crates/fullmag-engine/src/fdm/cpu/transport/reciprocal_constitutive.rs | evaluate_with_magnetic_activity | source candidate, nie wynik Rust/runtime |
+| Nonmagnetic rejection i sf | crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs | explicit_nonmagnetic_domain_admission_preserves_spin_flip_and_rejects_conflicts | źródło regresji, NOT COMPILED/NOT RUN |
+
+| m2-mask-v2-prereg | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:fullmag-m2-explicit-magnetic-domain-v2 | planned contract; source candidate, runtime NOT VERIFIED |
+
+
+(spin-transport-frozen-state-output-bridge)=
+### Planowany most frozen Relax → M3
+
+Status `planned_contract`, runtime NOT VERIFIED. Kanoniczny kontrakt envelope,
+jednostek, pełnej historii i jedynego ownera docelowych epoch określa
+[spec §14.11](../specs/frozen-spins-v1.md#frozen-v1-output-lifecycle-bridge),
+a konsekwencje frozen opisuje [0996](0996-frozen-spins-constraint.md#frozen-spins-state-output-bridge).
+Pure-frozen poprzednik nie emituje czterech nośników M3. Dopiero aktywny M3
+wymaga atomowego C+D manifest V4 z rzeczywistą coverage i oboma czytnikami.
+Brak cold reopen/Relax → M3 evidence; publiczny ExactResume pozostaje Unsupported.
+
+(spin-terminal-homogeneous-gradient-prereg)=
+## Prerejestracja: jednorodny normalny gradient potencjału spinowego na terminalu
+
+**CANDIDATE_ONLY, 2026-10-16; NOT COMPILED, NOT EXECUTED, runtime NOT VERIFIED.**
+To jawny warunek brzegowy tej samej konstytutywnej fizyki M2, bez nowego bulk
+operatora. Nie zmienia znaczenia SpinInsulating (całkowity strumień zero),
+SpinSink/SpecifiedSpinPotential (Dirichlet) ani SpecifiedSpinFlux (stały
+całkowity outward strumień). W istniejącym publicznym API nie było wariantu
+wyrażającego zerowy normalny gradient przy zachowanym niedyfuzyjnym prądzie.
+
+```{math}
+:label: spin-terminal-homogeneous-normal-gradient
+\partial_{n}\boldsymbol{\mu}_s=\mathbf 0,
+\qquad \mathbf n=\mathbf n_{\rm terminal}.
+```
+
+Przy $G_{ia}=-\partial_i\mu_{s,a}/2$ normalny wiersz $G$ jest zerowy, a
+pozostałe składowe są aktualnym stanem rozwiązania. Pełna odpowiedź
+konstytutywna daje
+
+```{math}
+:label: spin-terminal-nondiffusive-normal-flux
+n_i Q_{ia}=P\sigma(n_i E_i)m_a+
+\theta_{\rm SH}\sigma n_i\epsilon_{ika}E_k.
+```
+
+$\mathbf n$ jest zewnętrzną jednostkową normalną terminala, $\partial_n\mu_s$
+ma SI V/m, a $n_iQ_{ia}$ ma SI A/m². Indeksy i,j,k,a oraz tensor Levi-Civity
+mają znaczenie z równania M2 explicit nonmagnetic constitutive. Nie oblicza
+się strumienia z oczekiwanego E ani z request checkbox; pochodzi z aktualnego
+E, m i materiału. Charge response zachowuje reciprocal P oraz iSHE; nie zeruje
+się stycznych gradientów, całego tensora Q ani momentu.
+
+Publiczny wariant kandydata `HomogeneousSpinPotentialGradient(id, surfaces)`
+serializuje kind `homogeneous_spin_potential_gradient` w
+`spin_transport_modules[].boundaries[]`. Nie ma wartości do fitowania,
+expression ani backend-only wrappera. Jawne id i surfaces przechodzą przez
+SceneSpinBoundary, ProblemIR, ownership resolver i resolved typed condition.
+
+| Parametr Python | Typ | Default | SI | Walidacja | Znaczenie | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| HomogeneousSpinPotentialGradient.id | str | required | $1$ | non-empty | tożsamość warunku brzegowego | steady M2 FDM CPU double strict, candidate source-only | spin_transport_modules[].boundaries[].id |
+| HomogeneousSpinPotentialGradient.surfaces | Sequence[SurfaceRef] | required | $1$ | niepuste; istniejące ownership, coverage i overlap gates | jawne zewnętrzne powierzchnie | steady M2 FDM CPU double strict, candidate source-only | spin_transport_modules[].boundaries[].surfaces |
+
+```python
+# %% Jawny warunek; powierzchnie są zdefiniowane w kanonicznym modelu autora
+import fullmag as fm
+terminal = fm.HomogeneousSpinPotentialGradient(
+    "spin_terminal", [fm.SurfaceRef("conductor", "x_min", (-1.0, 0.0, 0.0))],
+)
+terminal.to_ir()
+```
+
+Fragment przedstawia wyłącznie serializację obiektu, nie kompletny wykonalny
+problem. Pełny przypadek E1 wymaga tego samego rodzaju na CAŁYCH dwóch
+xterminals N+F i jawnego total-spin-insulating coverage czterech sidewalls.
+W jednorodnym affine fixed-voltage case N ma P=0 i E_tangent=0, zatem nowa BC
+w N daje również total Q.n=0 jak BORIS NHNeumann; F zachowuje drift przez
+terminal. To prerejestrowany zakres, nie kwalifikacja dowolnego BVP.
+
+Wspólny structured ABI nadal ma jedną condition na face. Partial, overlapping
+oraz mixed N/F conditions na jednej face nadal odmawiają; nie dodajemy per-cell
+ABI i nie wybieramy rodzaju BC z nazwy, typu obiektu, P ani Ms. M1, transient
+M3, native M1, FEM CPU/GPU, FDM GPU i unsupported precision/mode odmawiają przed
+solve bez CPU fallback. Enclosing requested intent i resolved execution
+pozostają w planie i provenance.
+
+| Realizacja | Stan tego warunku |
+|---|---|
+| FDM CPU double strict, steady reciprocal M2 | kandydat źródłowy; compilation/runtime NOT VERIFIED |
+| FDM CPU M1 i transient M3 | jawnie unsupported, bez konwersji na NoFlux |
+| FDM GPU | unsupported, bez CPU fallback |
+| FEM CPU | unsupported; odrębny boundary realization nie jest wdrożony |
+| FEM GPU | unsupported |
+
+Runtime wykorzystuje ten sam stage/session workflow. Hash descriptoru wiąże
+nowy typed rodzaj; stare pakiety mają prawo odmówić nieznanego kind. Nie
+przepisuje się starych receipts ani requested intent. Canonical script builder
+musi odtwarzać ten sam publiczny obiekt, a OpenAPI/TS wymagają oficjalnego
+nowego eksportu po udanym managed pakiecie, bez ręcznej edycji generated.
+Nie podnosi się capability status do qualified.
+
+### Stała domena i jedna rodzina nowego benchmarku E1
+
+Nowy przypadek zachowuje fizyczną domenę referencyjnego medium: długość 1 µm,
+szerokość 0,4 µm, grubość N=2 nm i F=2 nm. Wszystkie siatki mają te same
+materiały, interfejs, rzeczywiste magnetic F/nonmagnetic N, zamrożone m=(1,0,0)
+w F, terminale i dodatnie fixed voltage ΔV=0,0017241379310344827 V. Napięcie
+wynika z dotychczasowego control scale 10¹¹ A/m², długości i σ=5,8·10⁷ S/m;
+nie jest dopasowaniem rzeczywistego prądu. Rzeczywisty podpisany terminal
+current musi być osobno zmierzony. Nowy rodzaj spin BC jest na obu całych
+xfaces N+F, razem z charge Voltage BC; cztery sidewalls mają total Q.n=0.
+Inna para charge BC jest jawnie unsupported dla tego nowego wariantu:
+obecny face owner wyznacza konstytutywny normalny E z Voltage. Nie zastępuje
+się go requestowym E dla current/insulating charge BC.
+
+| Nowa siatka | nx | ny | nz N + F | dx | dy | dz | Liczba cells |
+|---|---:|---:|---:|---|---|---|---:|
+| r0 | 4 | 100 | 2 + 2 | 250 nm | 4 nm | 1 nm | 1600 |
+| r1 | 4 | 200 | 4 + 4 | 250 nm | 2 nm | 0,5 nm | 6400 |
+| r2 | 4 | 400 | 8 + 8 | 250 nm | 1 nm | 0,25 nm | 25600 |
+
+To jedna zaplanowana rodzina, nie trzy zaliczone runy. Najkrótsze skale są
+λ_sf=5 nm i λ_J=2 nm, więc r2 ma dwie próbki na λ_J w y i osiem w z;
+nie dowodzi to samo z siebie zbieżności. Parametry interfejsu mogą narzucić
+jeszcze krótszą efektywną skalę. Obowiązkowe są ocena błędu przestrzennego i
+z góry ustalony budżet przed actual wynikami; żaden discrepancy PASS między
+solverami ani zmniejszenie inner residual nie zastępuje mesh convergence.
+
+Stałe nx=4 wymaga źródłowego dowodu zamknięcia całego wspólnego BVP w affine
+V(x), spin μ(y,z), μ_x=0: materiały i interfejs są translacyjnie niezmienne
+w x; magnetyzacja jest jawnie stała i zamrożona; mixing przy m w osi x nie
+miesza podprzestrzeni y/z z x; N SHE generuje tylko spin y/z; F SHE=0; nowe
+xBC zachowuje dryf, a stałe potencjały obu xfaces dopuszczają affine V.
+iSHE może zmieniać J_x(y,z), lecz jego dywergencja x znika. Na normalnym do z
+interfejsie ΔV=0 i μ_x=0 nie generują longitudinal charge/spin źródła. Te
+założenia muszą zostać związane z nową faktyczną wersją scenariusza i oba
+solvery muszą wykazać w actual raw danych x-invariance oraz affine V przed
+uznaniem tej rodziny za kwalifikacyjną. Nie jest to ogólne twierdzenie dla
+asymetrycznych położeń, zmiennego m, niejednorodnego zasilania ani dowolnego
+interfejsu. Nadal uruchamiany jest istniejący solver 3D, nie model 2D.
+
+Źródłowy M2 ma 4 niewiadome/cell, restarted matrix-free GMRES oraz lokalny
+block/line preconditioner, bez znalezionego jawnego globalnego cell cap w
+admission tego ownera. Nie gwarantuje to czasu, pamięci ani jakości. Pierwszy
+capacity gate dotyczy wyłącznie r0, w istniejącym zarządzanym limicie CPU/RAM.
+GMRES restart=40 nie jest stałym memory cap: istniejący `restarted_gmres`
+może powiększać effective restart po cyklu. Przy existing max_iterations=2000
+konserwatywny bound samej bazy 4N×2001×8 B wynosi około 97,7 MiB / 390,8 MiB /
+1,53 GiB dla r0/r1/r2; to nie obejmuje innych wektorów, line blocks, bibliotek
+ani tmpfs. Nie jest to pomiar ani gwarancja zmieszczenia r2 w 2 GiB. Nie
+zmieniamy algorytmu ani tolerancji w celu uzyskania capacity PASS.
+
+Dopiero terminalny sukces, rzeczywisty koszt i kompletność artefaktów pozwalają
+na serialne r1, potem r2. OOM, timeout, brakujące dane albo limit pliku to
+odmowa; bez zmniejszania geometrii, podmiany solvera, tolerancji czy budżetu
+po obejrzeniu wyników. Runtime capacity i convergence pozostają NOT VERIFIED.
+
+Wcześniejszy niewykonany proposal 10/20/40 zachowuje się historycznie;
+nawet jego dy=25 nm jest większe od λ_sf i λ_J. Nie jest drugą wykonywalną
+rodziną, nie jest uruchamiany dla dodatkowego zielonego wyniku i nie zostaje
+przemianowany na nowy benchmark. Dotychczasowe legacy siatki o rosnących
+extents także nie są refinementem. Nowa rodzina, wspólny operator, signed
+parameter mapping, fixed voltage i worker/input tools wymagają nowej jawnej
+wersji i provenance; starych 42 inputs ani historycznych receipts nie zmienia
+się. Torque pozostaje incomparable. Pełne E1 nadal wymaga actual benchmarku.
+
+Bramki przed zamknięciem: konstrukcja/invalid surface i Python→IR→script
+round-trip; unsupported-lane oraz mixed-face odmowy; normalne obu znaków,
+aktualny niezerowy P/SHE flux i charge iSHE; spójny face trace i pola cellwise;
+nowy managed native build; pełny prerejestrowany source-bound E1 case z raw M,
+grid/origin, potentials, face currents, residual/interface i host reopen.
+Dotychczasowe 42 źródła BORIS i runtime85 nie stanowią nowego scenariusza:
+betaD, signed parameter mapping oraz fixed-voltage input/worker provenance
+wymagają osobnego kontraktu. Torque nadal incomparable. Framework tests,
+native runtime oraz nowy benchmark nie są zaliczone przez tę prerejestrację.
+
+Checklist: fizyczne równania i SI opisane; publiczne parametry/IR i cztery
+backend lanes jawne; źródła path+symbol poniżej; planned source controls i
+actual managed gates rozdzielone. Deferred: unsupported lanes, per-cell BC,
+complex torque equivalence i pełne actual E1. Bibliografia i kanoniczny bulk
+model pozostają w nocie0970; źródłowe uzasadnienie pinned BORIS jest w audycie
+E1 common-operator z 2026-10-16. Nowa BC nie zmienia równań bulk.
+
+
+| Symbol | Token LaTeX | Znaczenie | SI |
+|---|---|---|---|
+| Normalna terminala | $\mathbf n_{\rm terminal}$ | Zewnętrzna jednostkowa normalna terminala | $1$ |
+| Gradient normalny | $\partial_n\boldsymbol{\mu}_s$ | Normalny gradient potencjału spinowego | $\mathrm{V\,m^{-1}}$ |
+| Strumień niedyfuzyjny | $n_i Q_{ia}$ | Zewnętrzny niedyfuzyjny strumień spinu przy zerowym normalnym gradiencie | $\mathrm{A\,m^{-2}}$ |
+
+| Kontrakt | Ścieżka | Symbol | Dowód |
+|---|---|---|---|
+| spin-terminal-gradient-contract | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:spin-terminal-homogeneous-gradient-prereg | Prerejestracja jednorodnego normalnego gradientu i całych terminal faces. planned/source-only; runtime NOT VERIFIED |
+| spin-terminal-gradient-python | packages/fullmag-py/src/fullmag/model/spin_transport.py | class HomogeneousSpinPotentialGradient | Jeden canonical publiczny boundary object i serializacja. planned/source-only; runtime NOT VERIFIED |
+| spin-terminal-gradient-roundtrip | packages/fullmag-py/src/fullmag/runtime/script_builder.py | _render_spin_boundary_payload | Canonical script export tego samego kind. planned/source-only; runtime NOT VERIFIED |
+| spin-terminal-gradient-authoring | crates/fullmag-authoring/src/spin_transport.rs | SceneSpinBoundary | Typed scene contract bez drugiej fizyki. planned/source-only; runtime NOT VERIFIED |
+| spin-terminal-gradient-ir | crates/fullmag-ir/src/spin_transport.rs | SpinBoundaryIR | Authored i resolved type. planned/source-only; runtime NOT VERIFIED |
+| spin-terminal-gradient-plan | crates/fullmag-plan/src/spin_transport.rs | resolve_spin_transport_with_active_graph | Jawny steady M2 CPU strict gate oraz brak fallbacku. planned/source-only; runtime NOT VERIFIED |
+| spin-terminal-gradient-ownership | crates/fullmag-plan/src/spin_transport.rs | resolve_spin_boundaries | Pełne face coverage i zachowane overlap/mixed-face odmowy. planned/source-only; runtime NOT VERIFIED |
+| spin-terminal-gradient-runner | crates/fullmag-runner/src/fdm/cpu/spin_transport.rs | spin_boundary_conditions | Wierne typed forwarding. planned/source-only; runtime NOT VERIFIED |
+| spin-terminal-gradient-engine | crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs | boundary_flux | Normalny G=0, pełny actual nondiffusive constitutive response. planned/source-only; runtime NOT VERIFIED |
+| spin-terminal-gradient-constitutive | crates/fullmag-engine/src/fdm/cpu/transport/reciprocal_constitutive.rs | evaluate_with_magnetic_activity | Wspólny P, SHE i iSHE response bez nowego bulk operatora. planned/source-only; runtime NOT VERIFIED |
+| spin-terminal-gradient-m1-refusal | crates/fullmag-engine/src/fdm/cpu/transport/spin_drift_diffusion.rs | validate_boundary_condition | Jawna odmowa poza coupled M2. planned/source-only; runtime NOT VERIFIED |
+
+| spin-terminal-gradient-voltage-pair | crates/fullmag-plan/src/spin_transport.rs | materialize_m2_descriptor | Nowy rodzaj wyłącznie razem z Voltage na tej samej resolved face. planned/source-only; runtime NOT VERIFIED |
+| spin-terminal-gradient-direct-admission | crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs | validate_boundaries | Direct M2 owner odmawia nowego rodzaju z charge Neumann/insulating. planned/source-only; runtime NOT VERIFIED |
+| spin-terminal-gradient-ui-recognition | apps/control-room/src/shared/domain/physics/transportRecognition.ts | isSpinBoundary | Canonical UI rozpoznaje dokładnie nowy kind i zachowuje strict key gate. planned/source-only; runtime NOT VERIFIED |
+| spin-terminal-gradient-ui-kind | apps/control-room/src/modules/inspector/panels/TransportCollectionFieldsModel.ts | changeTransportBoundaryKind | Istniejący edytor listy typów zachowuje authored surfaces bez nowego panelu. planned/source-only; runtime NOT VERIFIED |
+
+| spin-terminal-gradient-native-fixture | crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs | m2_homogeneous_gradient_retains_constitutive_flux_on_all_face_normals | Źródłowy regression fixture normal obu znaków trzech osi, actual gradient i P/SHE/iSHE; NOT RUN, NOT COMPILED. runtime NOT VERIFIED |
+| spin-terminal-gradient-capacity-owner | crates/fullmag-engine/src/fdm/cpu/transport/coupled_block_linear.rs | restarted_gmres | Rzeczywisty matrix-free owner może powiększać Krylov basis; source nie dowodzi capacity. runtime NOT VERIFIED |
+
+Dalsze źródłowe wymagania strict completed receipt V2 i cold coverage opisuje
+[aneks §14.12](../specs/frozen-spins-v1.md#cd-terminal-completion-receipt-clock),
+status `planned_contract`; nie rozszerza to obsługiwanych lane ani ExactResume.
+
+
+(nf-common-fixed-m-iterations-diagnostic)=
+## Prerejestracja diagnostyki fixed-M: 1/2/4/8 wywołań transportu
+
+**CANDIDATE SOURCE ONLY; NOT EXECUTED; nie jest bramką PASS ani macierzą v3.**
+Ownerem fizyki i mapowania SI pozostaje niniejsza nota. Diagnostyka korzysta
+z tego samego stałego r0 N/F, materiałów, napięcia, geometrii, fixed M i BC
+z [common-case v3](#nf-common-managed-case-v3). Nie rozszerza rodziny
+na dowolne 3D problemy ani nie zastępuje jej translacyjną realizacją2.5D.
+Historyczny run42db pozostaje odmową; nowe dane mają osobny identity/closure.
+
+### Problem i ścisły zakres
+
+Badamy, czy skończone bloki rozdzielonego rozwiązania BORIS zmieniają $V$, $\mathbf S^{B}$, $\mathbf J_c$
+oraz wszystkie dziewięć składowych $Q_{ia}$ przy niezmiennym $\mathbf M$.
+Jeden proces żąda ośmiu `computefields`; zapis po żądaniach1,2,4,8. Są to
+liczniki żądań skryptu, nie dowiedzione liczby wszystkich wewnętrznych solve,
+ponieważ inicjalizacja modułów również może wywołać transport.
+
+| Realizacja | Zakres tej diagnozy | Status |
+|---|---|---|
+| BORIS FDM CPU double | Pinned upstream, te same N/F i fixed M | planned; NOT EXECUTED |
+| Fullmag FDM CPU double strict | Dotychczasowy publiczny common-case pozostaje bez zmian; brak uruchomienia porównania w tym profilu | not run by this diagnostic |
+| Fullmag FDM GPU | Brak tego common-case witness | unsupported for this diagnostic |
+| Fullmag FEM CPU | Nie jest realizacją tej próby | not applicable |
+| Fullmag FEM GPU | Nie jest realizacją tej próby | not applicable |
+
+Elektrody pokrywają całe $x$-faces N+F i zadają $V=-\Delta V/2,+\Delta V/2$.
+$\mathbf S^{B}$ nie ma tam Dirichlet0: idealnie dla $\mathbf E\parallel\hat{\mathbf x}$ wiersz flow-$x$
+NHNeumann SHE jest zerowy. Pozostałe zewnętrzne faces używają pełnego
+normalnego strumienia spinowego0. N iSHE $\nabla V$ jest sprzężony z $\nabla\times\mathbf S^{B}$;
+F iSHE jest nieobsługiwane, nie zastępowane numericznym readback0.
+G-interface bierze Gi/Gmix z górnego F. Idealny osiowy ansatz jest zgodny
+z tymi BC, ale nie stanowi dowodu zbieżności skończonych kroków SOR.
+
+### Rzeczywiste kryterium i czego nie mierzymy
+
+```{math}
+:label: nf-diagnostic-iterate-update
+D_u^{(k)}=\max_m\max_{K\in\mathcal U_m}
+ \lVert u_{mK}^{(k+1)}-u_{mK}^{(k)}\rVert_2,\qquad
+A_u^{(k+1)}=\max_m\max_{K\in\mathcal U_m}\lVert u_{mK}^{(k+1)}\rVert_2,
+\qquad \eta_u^{(k)}=D_u^{(k)}/A_u^{(k+1)}\quad(A_u^{(k+1)}>0).
+```
+
+To iloraz DWÓCH niezależnych globalnych maksimów po meshes, nie maksimum
+ilorazów per mesh. Dla $V$ norma jest modułem skalara, dla $\mathbf S^{B}$
+normą wektora. Przy $A_u=0$ kod zwraca $D_u$, czyli wymiarową zmianę
+absolutną, i porównuje jej liczbową reprezentację z tym samym parametrem;
+nie jest to bezwymiarowe względne kryterium $\eta_u$ w tym przypadku.
+`VEC_VC::IteratePoisson_SOR` pomija komórki CMBND; ich aktualizacja następuje
+po redukcji. Miara nie jest residualem PDE, błędem rozwiązania, kryterium
+każdej składowej ani dowodem samouzgodnienia $V\leftrightarrow\mathbf S^{B}$.
+Osiągnięcie200 kończy blok także bez spełnienia progu.
+
+```{math}
+:label: nf-diagnostic-native-si-map
+\mu_{s,a}=\frac{2D_e}{\sigma\kappa}S^{B}_a,\qquad
+Q_{ia}=\frac{J^{s,B}_{ia}}{\kappa},\qquad \kappa=\mu_B/e.
+```
+
+Indeks $i$ oznacza kierunek przepływu, $a$ polaryzację spinu; kolejność
+flow-major $3i+a$ pozostaje dotychczasowa. Native $\mathbf S^{B}$ oraz
+$J^{s,B}_{ia}$ nie są Fullmag $\boldsymbol\mu_s$ i $Q_{ia}$. Poniższa mapa
+to istniejący adapter, bez fitted signs, nowej skali lub zmiany operatora.
+
+| Symbol / token | Znaczenie | SI |
+|---|---|---|
+| $u_{mK}$ | V albo native spin accumulation w komórce K mesh m | $\mathrm{V}$ albo $\mathrm{A\,m^{-1}}$ |
+| $m,K,\mathcal U_m,k$ | mesh, komórka, zbiór aktualizowanych komórek bez CMBND, sweep | $1$ |
+| $D_u,A_u$ | globalne maksima zmiany i wartości iteratu | $\mathrm{V}$ albo $\mathrm{A\,m^{-1}}$ |
+| $\eta_u$ | względna zmiana tylko dla dodatniego mianownika | $1$ |
+| $S^{B}_a$ | native BORIS spin accumulation | $\mathrm{A\,m^{-1}}$ |
+| $J^{s,B}_{ia}$ | native BORIS spin-current tensor | $\mathrm{A\,s^{-1}}$ |
+| $\mu_{s,a}$ | pełne rozszczepienie spinowe Fullmaga | $\mathrm{V}$ |
+| $Q_{ia}$ | flow-major spin current Fullmaga | $\mathrm{A\,m^{-2}}$ |
+| $D_e$ | współczynnik dyfuzji spinu | $\mathrm{m^2\,s^{-1}}$ |
+| $\sigma$ | przewodność elektryczna adaptera | $\mathrm{S\,m^{-1}}$ |
+| $\kappa$ | stała konwersji magnetonu Bohra i ładunku elementarnego | $\mathrm{m^2\,s^{-1}}$ |
+| $i,a$ | kierunek przepływu i polaryzacji spinu | $1$ |
+
+Publiczne source-backed witness: `ns.showdata('conductor','v_iter')`,
+`'s_iter'` i `'ts_err'`. Ostatnia wartość pochodzi z energy supermodule,
+czyli ostatniej spinowej zmiany iteratu, nie charge/PDE residualu.
+Liczniki dotyczą ostatniego block; nie sumujemy ich jako wszystkich
+iteracji. `counter == 200` jest cap-hit, nigdy dowodem convergence.
+Zewnętrzny coupled residual obejmujący finalny CMBND i V/S pozostaje
+**unavailable**: brak zgodnego native interface witness. Na r0 nie wolno
+podstawić residualu0 ani dowolnej central-difference miary bez komórek bulk.
+
+### Absolutne zmiany zapisanych pól (R2)
+
+Dla dokładnie trzech par żądań $(p,q)\in\{(1,2),(2,4),(4,8)\}$,
+osobno w domenach $m\in\{\mathrm N,\mathrm F\}$, raport zawiera:
+
+```{math}
+:label: nf-diagnostic-absolute-field-change
+\Delta_{m,c}^{p,q}=\max_{K\in\mathcal C_m}|F_{mK,c}^{(q)}-F_{mK,c}^{(p)}|.
+```
+
+| Symbol / token | Znaczenie | SI |
+|---|---|---|
+| $p,q$ | stała para liczników żądań, nie liczników wewnętrznych solve | $1$ |
+| $\mathcal C_m$ | wszystkie zapisane komórki domeny, także boundary; nie zbiór sweep $\mathcal U_m$ | $1$ |
+| $F_{mK,c}$ | skalar $V$, składowa $S_a^B$, $J_{c,i}$ albo $Q_{ia}=J^{s,B}_{ia}/\kappa$ | $\mathrm V\;\text{or}\;\mathrm{A\,m^{-1}}\;\text{or}\;\mathrm{A\,m^{-2}}$ |
+| $c$ | indeks składowej: 0 dla $V$, 0..2 dla wektorów, $3i+a$ dla $Q_{ia}$ | $1$ |
+| $\Delta_{m,c}^{p,q}$ | maksimum absolutnej różnicy danej składowej | $\mathrm V\;\text{or}\;\mathrm{A\,m^{-1}}\;\text{or}\;\mathrm{A\,m^{-2}}$ |
+| $K_{m,c}^{p,q}$ | pierwszy rzeczywisty indeks maksimum w porządku x-fast, także trójka indeksów siatki | $1$ |
+
+Przed odejmowaniem owner `absolute_field_changes` wymaga identycznej siatki,
+origin, kroków, kolejności x-fast, liczby komórek i składowych. Nie zakłada
+identycznej siatki N i F: zgodność dotyczy tej samej domeny między snapshotami.
+Każdy wynik zachowuje SHA surowego pliku przed i po zmianie, indeks komórki
+oraz zaobserwowane maksima modułu wartości przed i po. Nie używa tych maksimów
+jako mianowników, floors ani bramek. Dla dziewięciu składowych $Q_{ia}$ używa
+wyłącznie dotychczasowego $J^{s,B}_{ia}/\kappa$, bez fitu znaku lub skali.
+Wartości wejściowe i wyniki dzielenia/odejmowania muszą być skończone.
+Zgodny carrier nie dowodzi, że zewnętrzny writer nie przestawił samych wartości;
+obowiązuje istniejący przypięty exporter i jego porządek OVF.
+Zerowa różnica tekstowych próbek pozostaje **unresolved**, nigdy converged.
+To metryka zmiany zapisanych iteratów, nie residual ani physics PASS.
+
+### Wejście, zasoby i provenance
+
+| Parametr | Stała wartość | SI / walidacja |
+|---|---|---|
+| Snapshot command counts | 1,2,4,8; jeden proces, najwyżej8requests | $1$; literal, bez user list |
+| Native V/S stopping | 1e-5, maxiter200; bez zmian | $1$; actual readback |
+| Solver deadline |180 dla całego procesu i wszystkich eksportów | $\mathrm{s}$; bez resetu po snapshot |
+| Worker deadline |240 całości | $\mathrm{s}$ |
+| CPU/memory/PID |2CPU,2GiB,128pids | $1$, $\mathrm{byte}$, $1$; istniejąca atestacja |
+| Worker tmpfs |256MiB | $\mathrm{byte}$; bez podwyższenia |
+| Raw output |16OVF/snapshot, initial-M, metadata/logs/probe | zamknięta membership i SHA; żadnego v3summary |
+| Odczyt serializacji |dataprecision17 | $1$; numeric actual, po configure |
+| Text OVF payload |niezmieniony domyślny ostream6 | $1$; nie binary64 witness |
+
+Recepta/profil należy do istniejącego `docker-dev-nf-common-qualify` i
+`docker_nf_common_volume`, z jawnym zamkniętym literalem profilu.
+Defaultcomparison zachowuje dotychczasowe wejście. Diagnostyka nie uruchamia
+Fullmaga/compare i nie jest przyjmowana przez commoncase/native/summaryv3.
+Nie ma nowego launchera ani solvera. Admission przed/po zachowuje dokładne
+source/package/image/prefix/binary/ABI/tool/owner binding; zmienione narzędzia
+wymagają zgodnego canonical capture, nie wyjątku `_source_matches`.
+Dane techniczne pozostają wcontrolvolume, raw naukowe pod rozwiązanym
+Windows runs_root, osobny reportID; brak blindretry albo overwrite.
+
+Python→ProblemIR: publiczny Fullmag DSL i IR nie zmieniają się. Istniejące
+materiały/BC/mapy są z common-case; native BORIS ma oddzielny skrypt z
+powtórzeniami własnej komendy, bez drugiej definicji fizyki. SI mapping $\mu_{s,a}=2D_e S^B_a/(\sigma\kappa)$ i $Q_{ia}=J^{s,B}_{ia}/\kappa$ pozostaje stały, bez fitted signs.
+
+### Ograniczenie tekstowej kwantyzacji i decyzje
+
+`dataprecision17` poprawia socket/header, ale `OVF2::Write_OVF2_VEC/SCA`
+zapisuje textpayload przez osobny ostream bez setprecision. Równość
+snapshotów po odczycie tekstu nie dowodzi równości binary64 pól ani
+zbieżności poniżej rozdzielczości6 cyfr. Raport ma zachować literalne pliki,
+hashe i absolutne zmiany; below-text-resolution pozostaje unresolved.
+Różnice N.Jsx obserwowane wcześniej są większe od ostatniej cyfry i nie
+znikają wskutek samego tej uwagi o serializacji.
+
+Upstream wspiera bin8, lecz istniejący `read_text_ovf` obsługuje tylko text.
+Najmniejszy profil zachowuje go i ogranicza wnioski. Bin8 wymagałby osobnego
+bounded readera/sentinela/endianness/count/carrier/finite/closure tests i
+nowej prerejestracji; sama zmiana export string jest niezgodna. Nie dodajemy
+takiego czytnika w tym etapie ani nie nazywamy textnoise naprawą wszystkichFAIL.
+
+Walidacja po review: source/parser/kontrakty→niezależny review→zgodny pakiet
+i producent→jedno osobne execution. Zapisujemy wszystkie4snapshoty,
+V/S/Jc/9Q, fixed M, counters/settings i ich hashe; timeout/nonzero/missing/
+unknown pozostają odmową i zachowanymi partial, bez dopełniania danych.
+Żaden diagnostic complete nie jest physics/mesh/parity PASS. Prerejestracja
+nie zmienia progu1e-6 ani normy aktualnego common porównania. Brak native
+coupled residual i strata textprecision są deferred, nie ukryte.
+
+(nf-common-managed-case-v3)=
+## Prerejestracja wykonania common-case v3 i osobnych narzędzi Fullmag v2
+
+**CANDIDATE_ONLY; runtime, native execution i benchmark NOT VERIFIED.**
+To nowe wejście porównawcze, nie przemianowanie 42 historycznych wejść, runtime85
+ani wcześniejszej macierzy. Jedna fizyczna domena ma $L_x=1\,\mathrm{\mu m}$,
+$L_y=0.4\,\mathrm{\mu m}$ oraz $t_N=t_F=2\,\mathrm{nm}$.
+Trzy siatki r0/r1/r2 mają odpowiednio 4×100×(2+2),4×200×(4+4),4×400×(8+8).
+Dokładne kroki pochodzą z `boris_nf_common_case_v3.case_descriptor`, bez zaokrąglania
+ich reprezentacji JSON. Nx=4 wymaga actual affine/x-invariance gate wcześniej
+zdefiniowanego dla tej translacyjnie niezmiennej rodziny; nie oznacza dowolnej domeny.
+
+| Parametr / owner | Wartość | SI | Mapowanie / walidacja |
+|---|---|---|---|
+| Fullmag N P,theta | 0,−0.1 | $1$ | SpinTransportMaterial → spin_transport_modules.materials; N jest auxiliary conductor i magnetic_active=false |
+| Fullmag F P,theta | −0.4,0 | $1$ | ten sam publiczny materiał → canonical IR; F-only mask i rzeczywiste fixed M=(1,0,0) |
+| BORIS F P,betaD | 0.4,0.4 | $1$ | jawny material readback; beta Zhang–Li nie zastępuje betaD |
+| Fullmag g_up,g_down | 0,5e14 | $\mathrm{S\,m^{-2}}$ | MixingConductanceSpinInterface; signed channel map wyprowadzony wcześniej, bez epsilon/fitu |
+| Fullmag g_r,g_i | 1.5e15,0 | $\mathrm{S\,m^{-2}}$ | interfejs N→F,+z; tensor flow-major |
+| sigma,sigma_s | 5.8e7,5.8e7 | $\mathrm{S\,m^{-1}}$ | publiczne charge/spin materials i oba native readbacks |
+| D_e,lambda_sf | 0.01,5e−9 | $\mathrm{m^2\,s^{-1}}$,$\mathrm{m}$ | dodatni historyczny adapter mu=2DeS/(sigma kappa),Q=Js/kappa zachowany |
+| F lambda_J,lambda_phi | 2e−9,4e−9 | $\mathrm{m}$ | publiczne materiały → reaction; N nie ma reakcji magnetycznych |
+| DeltaV | 1e11·1e−6/5.8e7 | $\mathrm{V}$ | fixed voltage, nie zadany rzeczywisty current; gauge Fullmag−BORIS=+DeltaV/2 bez fitu |
+| terminale x,sidewalls | homogeneous gradient,total spin insulating | $1$ | HomogeneousSpinPotentialGradient na CAŁYCH obu xfaces N+F, Voltage na tych samych faces; pozostałe faces total Q.n=0 |
+| Fullmag linear tolerances | 1e−8,1e−10 | $1$ | dwie istniejące tolerancje, maxiter2000/restart40/Picard20 bez zmian; BORIS jest osobnym stałym solverem |
+| actual scope gate | relative1e−6; zero scale exact zero | $1$ | actual max vector norm; affine voltage scale DeltaV; nie jest tolerance solvera ani physics PASS |
+| zasoby Fullmag | 2 CPU,2GiB,128pids;2100s całości,300s/case | $1$,$\mathrm{byte}$,$1$,$\mathrm{s}$ | existing managed RAM owner/attestation,768MiB tmpfs bez zmiany; przekroczenie odmawia |
+
+M2 native descriptor musi mieć v2 oraz jawny `magnetic_active_mask` identyczny
+z F-only actual plan/layout/raw M. Brak descriptoru, stare defaulty, inne urządzenie,
+precision, fallback lub niewłaściwe BC odmawiają. Nie zmieniamy operatora, solvera,
+profilu ani tolerance na podstawie wyników. FDM GPU,FEM CPU,FEM GPU pozostają
+unsupported dla tej macierzy; FDM CPU double strict jest jedynym źródłowym kandydatem.
+
+`run_fullmag_m2_nf_common_case_v3.build_fullmag_nf_problem` jest kanonicznym publicznym
+Python→ProblemIR ownerem nowego request.v3. Wybiera istniejące CurrentTransport,
+SpinDriftDiffusion, FrozenSpins i jawny nowy BC; nie dodaje parametru publicznego API
+ani drugiego IR. Legacy helpery i stare BORIS identity/runtimev1/v2/v3 nie są
+interpretowane jako common runtime.v4. Consumer przyjmuje wyłącznie nowy
+managed_run.v3/runtime.v4 po rzeczywistym observe i ponownym raw readback.
+
+Przed całkowaniem current wymagane są rzeczywiste nagłówki obu OVF carrierów,
+ustalona translacja całej geometrii Fullmag−BORIS oraz affine/x-invariance raw pól.
+Całkowity reciprocal Jc jest całkowany niezależnie na wszystkich czterech xplanes:
+
+```{math}
+:label: nf-common-cell-current-quadrature
+I_i=\Delta y\Delta z\sum_{j,k}J_{c,x}(i,j,k),\qquad
+I_{\mathrm{out},x_{min}}=-I_0,\quad I_{\mathrm{out},x_{max}}=I_3.
+```
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $I_i,I_{\mathrm{out}}$ | signed cell-quadrature current na xplane lub outward terminal | $\mathrm{A}$ |
+| $J_{c,x}$ | rzeczywisty pełny reciprocal charge-current density | $\mathrm{A\,m^{-2}}$ |
+| $\Delta y,\Delta z$ | rzeczywiste kroki carrierów | $\mathrm{m}$ |
+| $i,j,k$ | indeksy x,y,z; x-fast; i=0,1,2,3 | $1$ |
+
+To cell quadrature, nie electrode face API. Native BORIS GetCurrent mierzy tylko
+sigmaE oraz corrected ground/net: zachowujemy te liczby i ich ograniczenie,
+nie promujemy ich do niezależnego full-Jc electrode current. Nie zastępujemy
+prądu przez volume mean Jc ani total boundary closure. Stały gauge offset jest
+z descriptoru, nigdy z dopasowanej średniej potencjałów.
+
+r0 ma zero bulk interior cells w obu domenach: residual musi być `unavailable`
+z nullable wartościami, nigdy zero/PASS. Ten etap dostarcza wyłącznie capacity
+oraz raw-completion gate. r1/r2 zachowują rzeczywiste bulk diagnostics; residual
+BORIS i solver residual Fullmaga mają odrębne definicje, nie kwalifikują się przez
+odejmowanie ich wartości. Porównanie Qz przy interfejsie dotyczy tych samych
+adjacent cell centers; różne native traces i FV face law pozostają odrębne.
+Torque jest `incomparable`. Nawet sześć complete porównań i mesh refinement
+nie jest automatycznym physics/mesh-convergence PASS.
+
+Nowe tools mają osobny manifest SHA i `solver_capsule_attribution=False`.
+Native package nadal pochodzi wyłącznie z terminalnego managed build binding
+job/commit/source/native SHA i immutable capsule. Publiczny DSL workera pochodzi
+z tej kapsuły; hostowy niezależny readback wymaga identycznych public DSL bytes.
+Zmiany scripts-only mogą użyć faktycznie zgodnego BC+mask native pakietu bez
+przypisywania mu nowych tools. Nowy publiczny DSL/native operator wymaga nowego
+pakietu. Nie ma source_hash override, zgadywania runtime ani silent fallback.
+
+Przed actual: niezależny source review obu nowych workerów i dispatch, exact pins,
+public Python lowering, odmowy malformed/legacy/case-swap oraz nowy zgodny native
+build. Następnie serialny r0 capacity/raw success, r1,r2 z kompletem artefaktów,
+niezależne host readback i dopiero osobny convergence/science review. Source,
+parser i fixture nie są benchmarkiem ani dopuszczeniem uruchomienia.
+
 (source-code-index)=
 ## 8. Source-code index
 
@@ -3150,7 +3807,29 @@ a qualified workload without the validation gates above.
 
 | Claim | Path | Symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-checkpoint` | Dokładny planned schema wrappera i required pola; codec niewdrożony. | planned_contract; prereg composite_v2_*; runtime NOT VERIFIED |
+| Aneks terminal C+D | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:cd-terminal-completion-receipt-clock` | Strict existing completed owner V2, bounded publication i rzeczywisty terminal clock; planned, bez runtime. | FDM CPU FP64; pozostali unsupported dla nowej ścieżki; source/parser; runtime NOT VERIFIED; planned_contract; storage candidate; path + symbol |
+| Aneks terminal C+D | `crates/fullmag-api/src/accepted_study_worker.rs` | `WorkerExecutionCompletedReceiptV2` | Nowy oddzielny strict wire, old V1 closed set nietknięty. | FDM CPU FP64; pozostali unsupported dla nowej ścieżki; source/parser; runtime NOT VERIFIED; planned_contract; storage candidate; path + symbol |
+| Aneks terminal C+D | `crates/fullmag-runtime-control/src/study_output_history.rs` | `validate_committed_history` | Rzeczywiste thin history leaves, canonical layout/units oraz existing schedule cursors. | FDM CPU FP64; pozostali unsupported dla nowej ścieżki; source/parser; runtime NOT VERIFIED; planned_contract; storage candidate; path + symbol |
+| Aneks terminal C+D | `crates/fullmag-application/src/study_artifact.rs` | `encode_frozen_study_state` | Nowy envelope z rzeczywistym terminal child clock; legacy state bytes nietknięte. | FDM CPU FP64; pozostali unsupported dla nowej ścieżki; source/parser; runtime NOT VERIFIED; planned_contract; storage candidate; path + symbol |
+| Jawny adapter metadata terminal M | `crates/fullmag-application/src/study_artifact.rs` | `materialize_study_state_at_terminal_clock` | Metadata aktualnego M bez zmiany wartości | planned_contract; runtime NOT VERIFIED |
+| Wspólna owner/role/raw identity | `crates/fullmag-session/src/types.rs` | `terminal_publication_artifact_id` | Jedna formuła publishera i cold readera | planned_contract; runtime NOT VERIFIED |
+| Wspólny descriptor | `scripts/boris_nf_common_case_v3.py` | `case_descriptor` | Fixed-domain parameters obu solverów | candidate_source_only_not_executed |
+| Wspólny scope gate | `scripts/boris_nf_common_case_v3.py` | `check_affine_x_invariance` | Actual affine/x-invariance bez fitu | candidate_source_only_not_executed |
+| Common-case v3 prereg | `docs/physics/0970-spin-hall-drift-diffusion-transport.md` | `DOC-ANCHOR:nf-common-managed-case-v3` | Fixed domain, signed mapping i gates | planned_contract; NOT VERIFIED |
+| Common Python→IR | `scripts/run_fullmag_m2_nf_common_case_v3.py` | `build_fullmag_nf_problem` | Rzeczywisty publiczny request.v3 | candidate_source_only_not_executed |
+| Full Jc cell quadrature | `scripts/run_fullmag_m2_nf_common_case_v3.py` | `validate_common_fields` | Eq nf-common-cell-current-quadrature; actual4planes | candidate_source_only_not_executed |
+| Native readback | `scripts/run_managed_fullmag_nf_common_v2.py` | `validate_case` | Descriptorv2/mask/BC i niezależny host | candidate_source_only_not_executed |
+| Typed runtimev4 consumer | `scripts/run_boris_fullmag_nf_common_matrix_v3.py` | `normalize_common_boris` | Nullable bulk residual i legacy refusal | candidate_source_only_not_executed |
+| Planowany most frozen state-output | `docs/physics/0970-spin-hall-drift-diffusion-transport.md` | `DOC-ANCHOR:spin-transport-frozen-state-output-bridge` | Pełna historia i jawny codec w istniejącym publisherze | planned_contract; bez runtime/ExactResume |
+| Publiczna odmowa transport resume A | `crates/fullmag-runner/src/lib.rs` | `validate_fdm_transport_checkpoint_resume_support` | Wspólna odmowa checkpoint continuation dla rzeczywistego CPU M1/M2/M3 workflow; Ok(()) nie dowodzi admission. | FDM CPU M1/M2/M3; SOURCE_ONLY; NOT_COMPILED; NOT_EXECUTED; source freeze 77afed0bb488f115d3692e27044d5209daa876e33eceafbe34e78566c8267844; runtime i pełne v2 OPEN |
+| Publiczna odmowa transport resume A | `crates/fullmag-api/src/session_persistence.rs` | `checkpoint_resume_unsupported_reason` | Typed metadata i schema wyznaczają powód Unsupported; brak wymaganej transport identity daje odmowę. | FDM CPU M1/M2/M3; SOURCE_ONLY; NOT_COMPILED; NOT_EXECUTED; source freeze 77afed0bb488f115d3692e27044d5209daa876e33eceafbe34e78566c8267844; runtime i pełne v2 OPEN |
+| Publiczna odmowa transport resume A | `crates/fullmag-api/src/session_persistence.rs` | `supported_checkpoint_restore_class` | Unsupported przed dotychczasową klasyfikacją; pozostały catalog self-compatibility nie jest naprawiony przez A. | FDM CPU M1/M2/M3; SOURCE_ONLY; NOT_COMPILED; NOT_EXECUTED; source freeze 77afed0bb488f115d3692e27044d5209daa876e33eceafbe34e78566c8267844; runtime i pełne v2 OPEN |
+| Publiczna odmowa transport resume A | `crates/fullmag-api/src/session_persistence.rs` | `restore_checkpoint_with_context` | API odmawia przed odczytem common state i mutacją snapshotu; brak automatycznego downgrade. | FDM CPU M1/M2/M3; SOURCE_ONLY; NOT_COMPILED; NOT_EXECUTED; source freeze 77afed0bb488f115d3692e27044d5209daa876e33eceafbe34e78566c8267844; runtime i pełne v2 OPEN |
+| Prywatny codec composite v2 | `crates/fullmag-runner/src/fdm/cpu/spin_transport/composite_checkpoint.rs` | `FdmCompositeCheckpointV2` | Prywatne typy composite v2; IMPLEMENTED_SOURCE_ONLY, NOT_COMPILED, NOT_EXECUTED. | FDM CPU FP64; IMPLEMENTED_SOURCE_ONLY; NOT_COMPILED; NOT_EXECUTED; parser/source checks; worktree/uncommitted; ExactResume/runtime NOT VERIFIED |
+| Prywatny codec composite v2 | `crates/fullmag-runner/src/fdm/cpu/spin_transport/composite_checkpoint.rs` | `decode_composite_m3_codec_v2` | Strict raw ingress, required-null, typed roundtrip i outer hash; wyłącznie codec źródłowy. | FDM CPU FP64; IMPLEMENTED_SOURCE_ONLY; NOT_COMPILED; NOT_EXECUTED; parser/source checks; worktree/uncommitted; ExactResume/runtime NOT VERIFIED |
+| Prywatny original-stage gate | `crates/fullmag-runner/src/fdm/cpu/spin_transport/composite_checkpoint.rs` | `validate_for_original_stage` | CodecCheckedCompositeV2::validate_for_original_stage sprawdza oryginalne problem/plan/stage/outputs przekazane przez admitted ownera; sam helper nie dowodzi immutable admission. SOURCE_ONLY; NOT_COMPILED; NOT_EXECUTED. | FDM CPU FP64; source_only_unqualified; SOURCE_ONLY; NOT_COMPILED; NOT_EXECUTED; parser/source checks; worktree/uncommitted; pozostałe contextual gates OPEN |
+| Prywatny codec composite v2 | `crates/fullmag-runner/src/fdm/cpu/spin_transport/composite_checkpoint.rs` | `validate_self_contained` | Reuse nested walidatorów oraz bitowe clocks/history/frozen i output shape; contextual gates i ExactResume nadal planned, NOT VERIFIED. | FDM CPU FP64; IMPLEMENTED_SOURCE_ONLY; NOT_COMPILED; NOT_EXECUTED; parser/source checks; worktree/uncommitted; ExactResume/runtime NOT VERIFIED |
+| Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-checkpoint` | Kontrakt wrappera i required pól; prywatny codec IMPLEMENTED_SOURCE_ONLY, publiczna integracja planned. | planned_contract; prereg composite_v2_*; runtime NOT VERIFIED |
 | Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-hash` | Strict ingress, kompletność nested codecs i kanoniczny outer hash. | planned_contract; prereg composite_v2_*; runtime NOT VERIFIED |
 | Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-accepted-history` | Outer accepted dt i rzeczywiste inner ARS history, bez dopisywania timestampów. | planned_contract; prereg composite_v2_*; runtime NOT VERIFIED |
 | Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-output-commit` | Binding istniejącego committed output manifestu i jawna odmowa braku trwałego prefixu. | planned_contract; prereg composite_v2_*; runtime NOT VERIFIED |
@@ -3163,7 +3842,7 @@ a qualified workload without the validation gates above.
 | Composite checkpoint v2 | `crates/fullmag-cli/src/interactive_runtime_host.rs` | `ensure_interactive_preview_runtime` | Przeniesienie historycznego activation set przy przebudowie stage runtime. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
 | Composite checkpoint v2 | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm_with_coupled_checkpoint` | Istniejący adaptive full/two-half acceptance oraz outer dt/history writer; nie dowód runtime. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
 | Composite checkpoint v2 | `crates/fullmag-runner/src/schedules.rs` | `OutputSchedule` | Istniejący pojedynczy owner next_time i last_sampled_time; brak checkpoint cursorów V2. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
-| Composite checkpoint v2 | `crates/fullmag-session/src/types.rs` | `canonical_json_bytes` | Istniejąca rekursywna kanonizacja JSON; planowany reuse dla outer digest. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-session/src/types.rs` | `canonical_json_bytes` | Istniejąca rekursywna kanonizacja JSON użyta w prywatnym codec outer digest; runtime NOT VERIFIED. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
 | Composite checkpoint v2 | `crates/fullmag-quantities/src/accepted_state.rs` | `AcceptedStateRef` | Istniejąca tożsamość accepted clocks/state/generation bez nowego modelu. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
 | Composite checkpoint v2 | `crates/fullmag-session/src/types.rs` | `FmsStudyOutputManifest` | Istniejący CAS-backed manifest z task/attempt/step i accepted-state reference. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
 | Composite checkpoint v2 | `crates/fullmag-session/src/types.rs` | `FmsArtifactCatalog` | Istniejący katalog revision i immutable published entries, nie nowy receipt. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
@@ -3319,12 +3998,36 @@ a qualified workload without the validation gates above.
 | fdm-cpu-external-rhs-assembly | crates/fullmag-engine/src/fdm/cpu/integrators.rs | apply_external_stage_terms | Dodawanie już jawnych external terms po RHS pola i istniejąca maska; bez zmiany obecnej semantyki. |
 | fdm-cpu-local-alpha | crates/fullmag-engine/src/fdm/shared/problem.rs | alpha_at | Istniejący owner lokalnego tłumienia potrzebnego przyszłemu adapterowi; bez korekty normy trial m. |
 | fdm-cpu-direct-torque-owner | crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs | direct_torques_add_into | Istniejąca granica CPU direct RHS; osobny helper konwertuje wyłącznie zewnętrzne źródło Gilberta, bez drugiej konwersji istniejących torque. |
+| boris-fullmag-gmix-imag-authoring | scripts/run_fullmag_m2_nf_reference.py | _problem | G_i z elementu imaginary Gmix do rzeczywistego IR; public lowering/render controls, bez native/parity qualification. |
 | boris-managed-matrix-v2-driver | scripts/run_boris_fullmag_she_nf_matrix.py | run_resolution_matrix | Windows-only trzy stałe managed BORIS CPU runtime.v2 razy dwie tolerancje Fullmaga; source-only, benchmark NOT VERIFIED. |
 | boris-managed-matrix-v2-pin | scripts/run_boris_fullmag_she_nf_matrix.py | _require_reference_pin | Exact bytes summary/runtime/receipt/scenario przed i po wykorzystaniu; drift odmawia, bez runtime qualification. |
 | boris-managed-matrix-v2-validation | scripts/run_boris_fullmag_she_nf_matrix.py | validate_matrix_summary | Walidacja struktury i metryk sześciu rekordów nie zastępuje admission ani nowego wykonania solvera. |
 | Mandatory raw FEM identity | crates/fullmag-runner/src/native_fem/steady_transport/artifact_identity.rs | actual_transport_identity; tagged_json_digest | hash actual prepared request, full topology v3, descriptor and result; source-only, runtime unverified |
 | Independent public FEM readback | scripts/verify_transport_public_oracles.py | validate_fem_identity; check_fem | exact mesh/intent/operator binding and existing analytical gates; no PASS without managed observation |
 | Fixed managed FEM oracle | scripts/run_managed_transport_oracles.py | start; observe; transport_spec | source/package/container/log-output binding; no builds, runtime unverified |
+
+
+
+### Indeks C+D prerejestracji i obecnych ownerów
+
+| Claim | Ścieżka | Symbol | Status |
+|---|---|---|---|
+| Planowany C+D semantic/published wire, thin history i istniejący pojedynczy publisher. | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:cd-terminal-publication-preregistration` | planned_contract |
+| Planowany terminal-only callback existing drain przed drop engine/workflow, bez per-step export. | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:cd-terminal-accepted-bundle-hook` | planned_contract |
+| Aktualne accepted terminal state i workflow; istniejący punkt przed drop, bez nowego hooka. | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm_with_coupled_checkpoint` | source_only_unqualified |
+| Aktualny writer scalar/field i Shutdown flush/drain; nowy complete index planowany. | `crates/fullmag-runner/src/artifact_pipeline.rs` | `writer_loop` | source_only_unqualified |
+
+
+| Kontrakt diagnostyczny | Ścieżka | Symbol | Dowód |
+|---|---|---|---|
+| Prerejestracja fixed-M1/2/4/8 | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:nf-common-fixed-m-iterations-diagnostic | planned_contract; NOT EXECUTED |
+| Pinned stopping/counters/BC | scripts/boris_nf_iteration_diagnostic.py | verify_source_contract | exact upstream source pins; source only |
+| Oddzielne wejście | scripts/boris_nf_iteration_diagnostic.py | fixed_inputs | jeden r0/8requests/fixed snapshots; NOT EXECUTED |
+| Zamknięte raw i liczniki | scripts/boris_nf_iteration_diagnostic.py | validate_outputs | unavailable coupled residual; NOT EXECUTED |
+| Absolutne zmiany wszystkich składowych | scripts/boris_nf_iteration_diagnostic.py | absolute_field_changes | fixed pairs; SI/raw SHA/cell index; candidate, NOT EXECUTED |
+| Jawny istniejący profil | scripts/docker_nf_common_volume.py | run | wspólne admission/bounds/source; NOT EXECUTED |
+
+| Regresje wejścia i refusal | scripts/test_boris_nf_iteration_diagnostic.py | class IterationDiagnosticContract | pure/mock only; bez native |
 
 (scientific-bibliography)=
 ## 9. References

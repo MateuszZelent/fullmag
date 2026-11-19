@@ -68,6 +68,40 @@ export function reconcileObjectEditAck(
   return reconciled(draft, canonical);
 }
 
+const CANONICAL_SCALAR_FIELDS = [
+  "archHeight", "geometryKind", "height", "length", "material", "mode", "name",
+  "notes", "objectId", "radius", "region", "width", "z0",
+] as const;
+const CANONICAL_VECTOR_FIELDS = ["rotation", "scale", "size", "translation"] as const;
+
+function sameCanonicalObject(left: GeometryObjectDraft, right: GeometryObjectDraft): boolean {
+  return CANONICAL_SCALAR_FIELDS.every((field) => left[field] === right[field]) &&
+    CANONICAL_VECTOR_FIELDS.every((field) =>
+      left[field].every((value, index) => value === right[field][index]));
+}
+
+/**
+ * Policy and other scene writes bump the scene revision without touching this
+ * object. Moving a dirty draft onto the new revision then keeps its edits and
+ * avoids a revision conflict that only Revert could clear. Any change to the
+ * object itself leaves the draft on its old base, so the conflict stays visible.
+ */
+export function rebaseDirtyDraftOntoUnchangedObject(
+  draft: GeometryObjectDraft,
+  previousCanonical: GeometryObjectDraft,
+  canonical: GeometryObjectDraft,
+): GeometryObjectDraft | null {
+  if (
+    canonical.baseRevision === null ||
+    draft.baseRevision !== previousCanonical.baseRevision ||
+    draft.baseRevision === canonical.baseRevision ||
+    !sameCanonicalObject(previousCanonical, canonical)
+  ) {
+    return null;
+  }
+  return { ...draft, baseRevision: canonical.baseRevision };
+}
+
 /** Identity writes leave all unsent geometry edits intact as well as newer metadata. */
 export function reconcileObjectIdentityAck(
   current: GeometryObjectDraft,

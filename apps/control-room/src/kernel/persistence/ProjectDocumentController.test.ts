@@ -88,6 +88,47 @@ describe("ProjectDocumentController", () => {
     await creating;
     expect(controller.getSnapshot().resource?.name).toBe("First project");
   });
+  it("retains the archive and blocks repeat activation after unknown session create", async () => {
+    const api = apiFor(); const controller = new ProjectDocumentController(api);
+    const activate = vi.fn(async (_response: ProjectFromScriptResource, beforeCreate: () => void) => { beforeCreate(); throw new Error("unknown outcome"); });
+    const request = { source: { name: "a.py", text: "import fullmag as fm" }, consent: { executed_by_user: true } };
+    await expect(controller.createFromScript(request, activate)).rejects.toThrow("unknown outcome");
+    expect(controller.getSnapshot().resource?.archive_base64).toBe(fromScriptResource().archive_base64);
+    await expect(controller.createFromScript(request, activate)).rejects.toThrow("outcome is unknown");
+    expect(api.persistence.projects.fromScript).toHaveBeenCalledTimes(1);
+  });
+  it("holds the document operation while imported-scene activation is pending", async () => {
+    const api = apiFor(); const controller = new ProjectDocumentController(api);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const request = { source: { name: "a.py", text: "import fullmag as fm" }, consent: { executed_by_user: true } };
+    const creating = controller.createFromScript(request, async () => {
+      await pending;
+      return { projectId: "project-script", verifyCurrent: async () => undefined, readSceneDocument: async () => ({}) };
+    });
+    await Promise.resolve();
+    expect(controller.close(true)).toBe(false);
+    await expect(controller.open({ bytes: new Uint8Array([1]), fileName: "foreign.fms" })).rejects.toThrow("already in progress");
+    release(); await creating;
+  });
+  it("permits another explicit import after known success and close", async () => {
+    const controller = new ProjectDocumentController(apiFor());
+    const request = { source: { name: "a.py", text: "import fullmag as fm" }, consent: { executed_by_user: true } };
+    const activate = async (_response: ProjectFromScriptResource, before: () => void, known: () => void) => {
+      before(); known(); return { projectId: "project-script", verifyCurrent: async () => undefined, readSceneDocument: async () => ({}) };
+    };
+    await controller.createFromScript(request, activate); expect(controller.close(true)).toBe(true);
+    await expect(controller.createFromScript(request, activate)).resolves.toMatchObject({ project_id: "project-script" });
+  });
+  it("does not let a stale generation callback clear an unknown create", async () => {
+    const controller = new ProjectDocumentController(apiFor()); let stale!: () => void;
+    const request = { source: { name: "a.py", text: "import fullmag as fm" }, consent: { executed_by_user: true } };
+    const activate = async (_response: ProjectFromScriptResource, before: () => void, known: () => void) => { stale = known; before(); throw new Error("unknown"); };
+    await expect(controller.createFromScript(request, activate)).rejects.toThrow("unknown");
+    controller.close(true); await controller.create("another document");
+    expect(() => stale()).toThrow("operation changed");
+    await expect(controller.createFromScript(request, activate)).rejects.toThrow("outcome is unknown");
+  });
   describe("createFromScript", () => {
     const request = {
       consent: { executed_by_user: true },
@@ -520,7 +561,7 @@ describe("ProjectDocumentController", () => {
       const invoke = vi.fn(async (_command: string, _args?: unknown) => hostArchive);
       const { controller } = await openedController(
         resource({ dirty: true, revision: 5 }),
-        resource({ revision: 6 }),
+        resource({ revision: 6, persisted_revision: 6 }),
         invoke,
       );
       await controller.recordRunOutcome(run);
@@ -539,5 +580,59 @@ describe("ProjectDocumentController", () => {
     expect(projectFileName("My Study")).toBe("my-study.fms");
     expect(projectFileName("already.FMS")).toBe("already.fms");
     expect(projectFileName(" ")).toBe("fullmag-project.fms");
+  });
+});
+
+describe("owner-confirmed authoring archive activation", () => {
+  const source = { bytes: new Uint8Array([1, 2]), fileName: "authoring.fms" };
+  const scene = { version: "scene.v2", revision: 41, study: { requested_backend: "fem" } };
+
+  it("keeps legacy responses evidence-only without inferring from read_write", async () => {
+    const controller = new ProjectDocumentController(apiFor());
+    const activate = vi.fn();
+    await controller.open(source, activate);
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it("binds the original project while preserving revision, archive and source hash", async () => {
+    const original = resource({ revision: 3, persisted_revision: 3, authoring_scene_document: scene });
+    const controller = new ProjectDocumentController(apiFor(undefined, original));
+    const verifyCurrent = vi.fn(async () => undefined);
+    const finalize = vi.fn();
+    const activate = vi.fn(async (_response: ProjectDocumentResource, before: () => void, known: () => void) => {
+      before(); known();
+      return { projectId: original.project_id, verifyCurrent, readSceneDocument: async () => scene };
+    });
+    const result = await controller.open(source, activate, { assertCurrent: () => undefined, finalize });
+    expect(result).toEqual(original);
+    expect(controller.getSnapshot().resource).toEqual(original);
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(verifyCurrent).toHaveBeenCalled();
+    expect(finalize).toHaveBeenCalledOnce();
+  });
+
+  it("retains unknown create ownership across archive and script imports", async () => {
+    const original = resource({ authoring_scene_document: scene });
+    const api = apiFor(undefined, original);
+    const controller = new ProjectDocumentController(api);
+    const activate = vi.fn(async (_response: ProjectDocumentResource, before: () => void) => { before(); throw new Error("unknown create"); });
+    await expect(controller.open(source, activate)).rejects.toThrow("unknown create");
+    expect(controller.getSnapshot().resource?.archive_base64).toBe(original.archive_base64);
+    await expect(controller.open(source, activate)).rejects.toThrow("outcome is unknown");
+    expect(activate).toHaveBeenCalledTimes(1);
+    await expect(controller.createFromScript({ source: { name: "x.py", text: "" }, consent: { executed_by_user: true } }, vi.fn()))
+      .rejects.toThrow("outcome is unknown");
+  });
+
+  it("does not activate malformed or read-only authoring projections", async () => {
+    for (const override of [
+      { authoring_scene_document: { version: "scene.v1" } },
+      { authoring_scene_document: scene, mode: { kind: "read_only" as const, reason: "historical" } },
+    ]) {
+      const controller = new ProjectDocumentController(apiFor(undefined, resource(override)));
+      const activate = vi.fn();
+      await expect(controller.open(source, activate)).rejects.toThrow();
+      expect(activate).not.toHaveBeenCalled();
+    }
   });
 });

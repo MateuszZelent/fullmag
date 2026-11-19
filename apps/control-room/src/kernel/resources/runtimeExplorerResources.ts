@@ -48,6 +48,9 @@ export function usePlatformHealthResource({
   const resource = useResource<HealthResource>({
     enabled,
     load,
+    // Health only feeds the degraded-runtime banner and diagnostics; an
+    // unreachable probe must not raise a global resource-failure toast.
+    notifyOnError: false,
     resolveRevision: () => null,
     resourceKey: PLATFORM_HEALTH_PATH,
   });

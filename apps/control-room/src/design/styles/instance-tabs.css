@@ -1,0 +1,147 @@
+/* Home, this instance's session and one tab per other Fullmag instance on the
+   host (ADR 0069). The strip sits above the workspace frame; other instances
+   render in frames over the mounted workspace. */
+.fm-instance-tabs {
+  display: flex;
+  flex: none;
+  align-items: flex-end;
+  min-width: 0;
+  border-bottom: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-chrome);
+  padding: var(--fm-space-1) var(--fm-space-2) 0;
+}
+
+.fm-instance-tabs > [data-orientation] {
+  min-width: 0;
+}
+
+.fm-instance-tabs__popout {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--fm-space-1);
+  margin: 0 0 var(--fm-space-1) auto;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-2xs);
+  text-decoration: none;
+}
+
+.fm-instance-tabs__popout:hover,
+.fm-instance-tabs__popout:focus-visible {
+  color: var(--fm-accent);
+}
+
+.fm-instance-tabs__list {
+  gap: var(--fm-space-1);
+  overflow-x: auto;
+  border-bottom: 0;
+  scrollbar-width: thin;
+}
+
+.fm-instance-tabs__item {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+.fm-instance-tabs__tab {
+  gap: var(--fm-space-1);
+  max-width: 240px;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.fm-instance-tabs__item .fm-instance-tabs__tab {
+  padding-right: var(--fm-space-2);
+}
+
+.fm-instance-tabs__close {
+  width: var(--fm-control-height-compact);
+  height: var(--fm-control-height-compact);
+  flex: none;
+  margin-left: 0;
+}
+
+.fm-instance-tabs__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-instance-tabs__port {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-instance-tabs__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fm-text-muted);
+}
+
+.fm-instance-tabs__dot[data-tone="running"] {
+  background: var(--fm-success);
+}
+
+.fm-instance-tabs__dot[data-tone="starting"] {
+  background: var(--fm-accent);
+}
+
+.fm-instance-tabs__dot[data-tone="waiting"] {
+  background: var(--fm-warning);
+}
+
+.fm-instance-tabs__dot[data-tone="failed"] {
+  background: var(--fm-danger);
+}
+
+.fm-instance-tabs__tab[data-unavailable] .fm-instance-tabs__name {
+  color: var(--fm-text-muted);
+}
+
+.fm-instance-stage {
+  position: relative;
+  display: flex;
+  flex: 1 1 0%;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.fm-instance-frames {
+  position: absolute;
+  inset: 0;
+  z-index: var(--fm-z-panel);
+  background: var(--fm-bg-app);
+}
+
+.fm-instance-frames[data-state="hidden"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.fm-instance-frames__frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  visibility: hidden;
+}
+
+.fm-instance-frames[data-state="visible"] .fm-instance-frames__frame[data-active] {
+  visibility: visible;
+}
+
+.fm-instance-frames__unavailable {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--fm-space-2);
+  background: var(--fm-bg-app);
+  color: var(--fm-text-secondary);
+}

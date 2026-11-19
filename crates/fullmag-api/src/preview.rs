@@ -1,5 +1,7 @@
 //! Grid resampling, preview math, and vector field utilities.
 
+use crate::router_v2::handlers::data::field_resolution::{flatten_current_field_values, json_field_grid};
+use crate::session::{resolved_current_field_source, ResolvedCurrentFieldSource};
 use crate::types::*;
 use fullmag_quantities::{quantity_spec, QuantityShape as QuantityKind};
 use fullmag_runner::{FemMeshPayload, LivePreviewField};
@@ -45,33 +47,31 @@ pub(crate) fn current_vector_field(
     current: &SessionStateResponse,
     quantity: &str,
 ) -> Option<(Vec<[f64; 3]>, [usize; 3])> {
-    if quantity == "m" {
-        if let Some(ls) = current.live_state.as_ref() {
-            if let Some(mag) = ls.latest_step.magnetization.as_deref() {
-                if !mag.is_empty() && mag.len() % 3 == 0 {
-                    let grid = if ls.latest_step.grid.iter().any(|v| *v > 0) {
-                        [
-                            ls.latest_step.grid[0] as usize,
-                            ls.latest_step.grid[1] as usize,
-                            ls.latest_step.grid[2] as usize,
-                        ]
-                    } else {
-                        [mag.len() / 3, 1, 1]
-                    };
-                    let vectors = mag
-                        .chunks_exact(3)
-                        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
-                        .collect::<Vec<_>>();
-                    return Some((vectors, grid));
-                }
-            }
-        }
+    if quantity_spec(quantity)?.n_comp != 3 {
+        return None;
     }
-
-    current
-        .latest_fields
-        .get(quantity)
-        .and_then(parse_field_value)
+    let (values, grid) = match resolved_current_field_source(current, quantity, 3)? {
+        ResolvedCurrentFieldSource::Latest(raw) => (
+            std::borrow::Cow::Owned(flatten_current_field_values(current, quantity, raw).ok()?),
+            json_field_grid(raw),
+        ),
+        ResolvedCurrentFieldSource::Preview(field) => (
+            std::borrow::Cow::Borrowed(field.vector_field_values.as_slice()),
+            Some(field.preview_grid),
+        ),
+        ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, grid } => (
+            std::borrow::Cow::Borrowed(values),
+            Some(grid),
+        ),
+    };
+    if values.is_empty() || values.len() % 3 != 0 || values.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    let vectors = values.chunks_exact(3)
+        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+        .collect::<Vec<_>>();
+    let grid = grid.map(|grid| grid.map(|axis| axis as usize)).unwrap_or([vectors.len(), 1, 1]);
+    Some((vectors, grid))
 }
 
 pub(crate) fn mesh_preview_active_mask(mesh: &FemMeshPayload, quantity: &str) -> Option<Vec<bool>> {

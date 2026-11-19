@@ -5,6 +5,6 @@ description: Combines all of the `better-*` skills into a single review across a
 
 # better-interface
 
-Use the [canonical better-interface instructions](../../../.agents/skills/better-interface/SKILL.md).
-Resolve its references and relative paths against that canonical skill directory.
-This entry preserves the GitHub skill mirror without duplicating the skill package.
+Read and follow the canonical [better-interface skill](../../../.agents/skills/better-interface/SKILL.md).
+Resolve its references and scripts relative to that canonical directory.
+This entrypoint shares the existing implementation without duplicating it.

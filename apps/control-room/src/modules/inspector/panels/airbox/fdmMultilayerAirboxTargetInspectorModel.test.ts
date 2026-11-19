@@ -41,10 +41,10 @@ describe("FDM multilayer Airbox target inspector model", () => {
     if (model.status !== "ready") throw new Error("Expected a published target-only Airbox carrier");
     expect(model.targetGridRows).toEqual([
       { label: "Target-only", value: "yes" },
-      { label: "Cells", value: "[5, 4, 3]" },
+      { label: "Grid shape", value: "[5, 4, 3]" },
       { label: "Origin", value: "[-4e-9, -6e-9, -8e-9]", unit: "m" },
       { label: "Cell size", value: "[2e-9, 3e-9, 4e-9]", unit: "m" },
-      { label: "Samples", value: "60" },
+      { label: "Total cells", value: "60" },
       { label: "Values", value: "180" },
     ]);
     expect(model.fieldCapabilityRows).toEqual([
@@ -70,7 +70,7 @@ describe("FDM multilayer Airbox target inspector model", () => {
     });
   });
 
-  it("fails closed when a target-only carrier incorrectly claims H_eff", () => {
+  it("reports a composed H_eff on the target-only carrier as available", () => {
     const model = resolveFdmMultilayerAirboxTargetInspectorModel({
       ...layout,
       airbox: {
@@ -80,9 +80,11 @@ describe("FDM multilayer Airbox target inspector model", () => {
       },
     });
 
-    expect(model).toEqual({
-      notice: "Target-only Airbox carrier is not published or failed validation.",
-      status: "unavailable",
-    });
+    expect(model.status).toBe("ready");
+    if (model.status !== "ready") throw new Error("Expected a published target-only Airbox carrier");
+    expect(model.fieldCapabilityRows).toEqual([
+      { label: "H_demag", value: "available" },
+      { label: "H_eff", value: "available" },
+    ]);
   });
 });

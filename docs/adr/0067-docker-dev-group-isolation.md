@@ -198,3 +198,21 @@ automatycznym rollbackiem: wymaga jej własnej obsługi zachowanego stanu.
 Implementacja: `docker_volume_fresh_runtime.py`, `docker_volume_dev.py`,
 `docker_group_ledger.py`. Kontrola składni nie zastępuje dowodu stop→archiwum→
 nowy ledger→API; do czasu takiego uruchomienia ścieżka ma status NOT VERIFIED.
+
+### Pusta sesja po przerwaniu demona (24.10.2026)
+
+Jawna kwarantanna namespace może objąć dokładnie zatrzymaną generację,
+która nie opublikowała żadnego RunIntent i ma pusty grupowy ledger. Zapis
+ready w starym ownerze nie jest zmieniany na failed ani uznawany za drain.
+Dowód nieobecności prywatnych namespace kontenerów, brak innych konsumentów,
+pusty allowlistowany store oraz blokady natywne stanowią odrębny kontrakt
+otwarcia nowej pustej sesji. Nie jest to wznowienie starej sesji.
+
+Trwały intent poprzedza usunięcie dokładnej zatrzymanej pary bez force;
+niezmienny receipt i CAS rejestru namespace następują po dowodzie usunięcia.
+Stare marker/receipt/owner/store/ledger pozostają zachowane, a recovery_id
+wyznacza świeży grupowy ledger. Stary request nie może być ponowiony.
+Nie ma wyjątków dla store z przyjętym runem ani dla niepustych rezerwacji.
+Implementacja: docker_volume_empty_quarantine.py i walidator namespace.
+Rollback nie odtwarza starego unknown; wymaga osobnej kanonicznej procedury.
+NOT VERIFIED do rzeczywistego wykonania i kontroli zachowania dowodów.

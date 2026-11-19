@@ -69,6 +69,14 @@ static_assert(
         8u + sizeof(fullmag_fem_plan_desc_v2),
     "mixed-body certificate pointer must append after plan v2");
 
+static_assert(sizeof(fullmag_fem_plan_desc) == 1616u, "legacy plan ABI size");
+static_assert(sizeof(fullmag_fem_plan_desc_v2) == 1640u, "legacy v2 plan ABI size");
+static_assert(sizeof(fullmag_fem_plan_desc_v3) == 1656u, "legacy v3 plan ABI size");
+static_assert(offsetof(fullmag_fem_plan_desc_v4, base) == 8u, "canonical marker v4 prefix offset");
+static_assert(offsetof(fullmag_fem_plan_desc_v4, poisson_boundary_marker) ==
+    8u + sizeof(fullmag_fem_plan_desc_v3), "canonical u32 selector must append after v3");
+static_assert(sizeof(fullmag_fem_plan_desc_v4) == 1672u, "canonical marker v4 ABI size");
+
 namespace {
 
 void check(bool condition, const char *message) {

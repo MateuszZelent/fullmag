@@ -104,7 +104,7 @@ const page = (styles, inspector) => `
   <style>* { box-sizing: border-box; } body { margin: 0; } #frame { width: 100vw; height: 100vh; }
   ${styles.join("\n")}</style>
   <div id="frame">
-    <div class="fm-start" data-section="home">
+    <div class="fm-start" data-inspector="visible" data-section="home">
       <div class="fm-start__rail"><nav><ul class="fm-start-rail__nav"><li><button class="fm-start-rail__item" aria-current="page">Home</button></li></ul></nav></div>
       <main class="fm-start__content"><div class="fm-start__content-inner"><p>Recent work</p></div></main>
       ${inspector}

@@ -43,6 +43,9 @@ export function planarVisualizationCoverage(selection: Selection): {
 export function planarViewScopeForSelection(
   selection: Selection,
 ): PlanarViewScopeState {
+  if (selection.kind === "universe") {
+    return { kind: "airbox" };
+  }
   if (selection.ref?.type === "mesh-part") {
     return {
       kind: "mesh_part",
@@ -50,10 +53,29 @@ export function planarViewScopeForSelection(
     };
   }
   if (
+    selection.ref?.type === "fdm-domain" &&
+    selection.ref.scope === "layer" &&
+    selection.ref.layerId
+  ) {
+    return { kind: "layer", scope_id: selection.ref.layerId };
+  }
+  if (
     selection.ref?.type === "airbox" ||
     selection.kind?.includes("airbox")
   ) {
     return { kind: "airbox" };
+  }
+  // P1-03: an object region (scene object or FDM region node) scopes the 2D
+  // view to that region; region ids are scoped by their owner object.
+  const ref = selection.ref;
+  if (
+    ref &&
+    ((ref.type === "scene-object") ||
+      (ref.type === "fdm-domain" && ref.scope === "region")) &&
+    ref.objectId &&
+    ref.regionId
+  ) {
+    return { kind: "region", scope_id: ref.objectId, region_id: ref.regionId };
   }
   return { kind: "monitor_target" };
 }

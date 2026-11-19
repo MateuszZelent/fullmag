@@ -70,37 +70,37 @@
       "id": "field",
       "latex": "$\\mathbf H_d$",
       "meaning": "demagnetizing field",
-      "si_unit": "A m^-1"
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
     },
     {
       "id": "position",
       "latex": "$\\mathbf r_i$",
       "meaning": "target cell centre",
-      "si_unit": "m"
+      "si_unit": "$\\mathrm{m}$"
     },
     {
       "id": "period",
       "latex": "$\\mathbf L$",
       "meaning": "unit-cell period",
-      "si_unit": "m"
+      "si_unit": "$\\mathrm{m}$"
     },
     {
       "id": "index",
       "latex": "$\\mathbf n$",
       "meaning": "image index",
-      "si_unit": "1"
+      "si_unit": "$1$"
     },
     {
       "id": "set",
       "latex": "$\\mathcal I$",
       "meaning": "finite image set",
-      "si_unit": "1"
+      "si_unit": "$1$"
     },
     {
       "id": "magnetization",
       "latex": "$\\mathbf M_j$",
       "meaning": "source magnetization",
-      "si_unit": "A m^-1"
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
     }
   ],
   "equations": [
@@ -126,7 +126,7 @@
         "python": "FdmPbc.axes",
         "type": "tuple[bool, bool, bool]",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "iterates input, applies `bool(value)`, then requires length three",
         "meaning": "periodic flags",
         "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM separate contract",
@@ -136,7 +136,7 @@
         "python": "FdmPbc.demag",
         "type": "str",
         "default": "open",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "applies `strip().lower()`, then requires `open`, `truncated_images`, or `periodic_airbox_k0`",
         "meaning": "normalized requested demag policy",
         "backend_support": "FDM CPU open/truncated source-backed; GPU capability-gated; FEM differs",
@@ -146,7 +146,7 @@
         "python": "FdmPbc.image_counts",
         "type": "tuple[int, int, int] | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "applies `int(value)`, then requires length three and non-negative results; only `truncated_images`",
         "meaning": "finite image ranges; when omitted for active periodic truncated demag, resolves to 10 on periodic axes and 0 on open axes",
         "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",

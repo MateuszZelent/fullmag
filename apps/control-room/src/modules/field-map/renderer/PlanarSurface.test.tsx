@@ -1,6 +1,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it, vi } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   findElement,
@@ -8,9 +9,10 @@ import {
   TestElement,
   TestEvent,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import { planarToolStore } from "@/kernel/visualization/planarToolStore";
 
 import { PLANAR_OCCUPANCY } from "../model/planarOccupancy";
-import { resolvePlanarEvidenceStatus } from "../model/fieldMapEvidence";
+import { planarModelRenderKey, resolvePlanarEvidenceStatus } from "../model/fieldMapEvidence";
 import { buildFieldMapRenderModel } from "../model/fieldMapRenderModel";
 import type {
   PlanarColorizeRequest,
@@ -18,11 +20,13 @@ import type {
 } from "./planarRendererProtocol";
 import { colorizePlanarRendererRequest } from "./planarRendererTask";
 import { PlanarSurface } from "./PlanarSurface";
+import { PlanarOverlaySurface } from "./PlanarOverlaySurface";
 
 function makeRenderModel(
   values: readonly number[],
   bounds: readonly [number, number, number, number],
   mask?: Uint8Array,
+  resolution: readonly [number, number] = [values.length, 1],
 ) {
   return buildFieldMapRenderModel({
     bounds,
@@ -37,13 +41,77 @@ function makeRenderModel(
     layers: { contours: true, mesh: false, raster: true, vectors: false },
     mask,
     range: { mode: "auto" },
-    resolution: [values.length, 1],
+    resolution,
     sampleIdentity: '"fm-planar-sha256:current"',
     scalar: new Float64Array(values),
   });
 }
 
 describe("PlanarSurface lifecycle", () => {
+  afterEach(() => planarToolStore.reset());
+
+  it("acknowledges unchanged overlay pixels to a reused buffer without recreating canvases", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const context = {
+      beginPath: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(),
+      lineTo: vi.fn(), moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(),
+      scale: vi.fn(), stroke: vi.fn(), translate: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    const createElement = dom.document.createElement.bind(dom.document);
+    dom.document.createElement = ((tag: string) => {
+      const element = createElement(tag);
+      if (tag === "canvas") Object.assign(element, { getContext: () => context, width: 0, height: 0 });
+      return element;
+    }) as typeof dom.document.createElement;
+    const previousObserver = Object.getOwnPropertyDescriptor(globalThis, "ResizeObserver");
+    Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        this.callback([{ target, contentRect: { width: 100, height: 100 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      disconnect() {}
+      unobserve() {}
+    } });
+    const model = buildFieldMapRenderModel({
+      bounds: [0, 1, 0, 1], canonicalUnit: "A/m", component: "magnitude",
+      frame: { normal: [0, 0, 1], origin: [0, 0, 0], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      layers: { raster: false, vectors: false, contours: false, mesh: false },
+      range: { mode: "auto" }, resolution: [1, 1], scalar: new Float64Array([1]), sampleIdentity: "unchanged",
+    });
+    const first = vi.fn();
+    const reused = vi.fn();
+    try {
+      await act(async () => { root.render(<PlanarOverlaySurface id="magnet" quantityId="m" model={model} onRenderEvidence={first} />); });
+      expect(first).toHaveBeenCalled();
+      const canvas = findElement(container, (element) => element.tagName === "CANVAS", "overlay canvas");
+      const draws = (context.clearRect as ReturnType<typeof vi.fn>).mock.calls.length;
+      await act(async () => { root.render(<PlanarOverlaySurface id="magnet" quantityId="m" model={model} onRenderEvidence={reused} />); });
+      expect(reused).toHaveBeenCalledWith(expect.objectContaining({ renderKey: planarModelRenderKey(model) }));
+      expect(findElement(container, (element) => element.tagName === "CANVAS", "reused canvas")).toBe(canvas);
+      expect((context.clearRect as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(draws);
+    } finally {
+      await act(async () => root.unmount());
+      if (previousObserver) Object.defineProperty(globalThis, "ResizeObserver", previousObserver);
+      else Reflect.deleteProperty(globalThis, "ResizeObserver");
+      dom.restore();
+    }
+  });
+  it("places the probe readout overlay inside the canvas stack", () => {
+    const html = renderToStaticMarkup(
+      <PlanarSurface
+        model={makeRenderModel([1, 2], [0, 2, 0, 1])}
+        probeOverlay={<table className="fm-planar-node-readout__table"><tbody /></table>}
+      />,
+    );
+    expect(html).toMatch(
+      /<div class="fm-field-map__canvas-stack"[^>]*>[\s\S]*<table class="fm-planar-node-readout__table">[\s\S]*<\/table>[\s\S]*<\/div>/,
+    );
+    expect(html).not.toContain("fm-field-map__field-overlays");
+    expect(html.match(/<canvas\b/g)).toHaveLength(2);
+  });
+
   it("preserves an empty occupancy pixel through worker colorization and hover, then releases owned rendering resources", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
@@ -227,6 +295,7 @@ describe("PlanarSurface lifecycle", () => {
       expect(Array.from(raster.data.slice(0, 4))).toEqual([0, 0, 0, 0]);
       expect(raster.data[7]).toBe(255);
       expect(onRenderEvidence).toHaveBeenLastCalledWith({
+        renderKey: planarModelRenderKey(initialModel),
         glyphCount: 0,
         overlayCounts: { boundsSegments: 0, contours: 0, meshSegments: 0, pointMarkers: 0 },
         raster: {
@@ -263,12 +332,9 @@ describe("PlanarSurface lifecycle", () => {
       await act(async () => {
         scalarCanvas?.dispatchEvent(occupiedPointerMove);
       });
-      const probeOutput = findElement(
-        container,
-        (element) => element.tagName === "OUTPUT",
-        "probe output",
-      );
-      expect(probeOutput.textContent).toBe("x 5 m · y 0 m · 20 m");
+      // The cursor goes to the tool store (status bar); no badge on the canvas.
+      expect(planarToolStore.getSnapshot().cursorUv).toEqual({ u_m: 5, v_m: 0 });
+      expect(container.textContent).not.toContain("No sample");
       expect(canvasContext.setLineDash).toHaveBeenCalledWith([6, 4]);
 
       const emptyPointerMove = new TestEvent("pointermove", { bubbles: true });
@@ -276,9 +342,8 @@ describe("PlanarSurface lifecycle", () => {
       await act(async () => {
         scalarCanvas?.dispatchEvent(emptyPointerMove);
       });
-      expect(
-        probeOutput.textContent,
-      ).toBe("No sample");
+      expect(planarToolStore.getSnapshot().cursorUv).toEqual({ u_m: 2.5, v_m: 0 });
+      expect(container.textContent).not.toContain("No sample");
 
       const pin = new TestEvent("keydown", { bubbles: true, key: "Enter" });
       await act(async () => {
@@ -321,7 +386,7 @@ describe("PlanarSurface lifecycle", () => {
     }
   });
 
-  it("formats hover values in the display unit without mutating the canonical sample", async () => {
+  it("publishes the hover position and zooms without mutating the canonical sample", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
@@ -362,8 +427,7 @@ describe("PlanarSurface lifecycle", () => {
       const move = new TestEvent("pointermove", { bubbles: true });
       Object.assign(move, { clientX: 50, clientY: 50 });
       await act(async () => { canvas.dispatchEvent(move); });
-      const probe = findElement(container, (element) => element.tagName === "OUTPUT", "unit probe");
-      expect(probe.textContent).toBe("x 0.5 m · y 0.5 m · 1 kA/m");
+      expect(planarToolStore.getSnapshot().cursorUv).toEqual({ u_m: 0.5, v_m: 0.5 });
       await act(async () => { canvas.dispatchEvent(new TestEvent("keydown", { bubbles: true, key: "+" })); });
       expect(onInteraction).toHaveBeenLastCalledWith({ panU: 0, panV: 0, zoom: 1.25 });
 
@@ -421,7 +485,8 @@ describe("PlanarSurface lifecycle", () => {
       expect(onPin).not.toHaveBeenCalled();
       expect(onRenderEvidence).not.toHaveBeenCalled();
       expect(canvas.getAttribute("data-probes-enabled")).toBe("false");
-      expect(canvas.getAttribute("tabindex")).toBe("-1");
+      // Keyboard pan, zoom and fit stay reachable without probes.
+      expect(canvas.getAttribute("tabindex")).toBe("0");
     } finally {
       await act(async () => root.unmount());
       if (previousWorker) Object.defineProperty(globalThis, "Worker", previousWorker); else Reflect.deleteProperty(globalThis, "Worker");
@@ -431,6 +496,15 @@ describe("PlanarSurface lifecycle", () => {
 
   it("emits positive FMFG mesh evidence without starting a raster worker", async () => {
     const dom = installSimulationPreparationTestDom();
+    const previousObserver = Object.getOwnPropertyDescriptor(globalThis, "ResizeObserver");
+    Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        this.callback([{ target, contentRect: { width: 100, height: 100 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      disconnect() {}
+      unobserve() {}
+    } });
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
     const context = {
@@ -471,11 +545,12 @@ describe("PlanarSurface lifecycle", () => {
     } finally {
       await act(async () => root.unmount());
       if (previousWorker) Object.defineProperty(globalThis, "Worker", previousWorker); else Reflect.deleteProperty(globalThis, "Worker");
+      if (previousObserver) Object.defineProperty(globalThis, "ResizeObserver", previousObserver); else Reflect.deleteProperty(globalThis, "ResizeObserver");
       dom.restore();
     }
   });
 
-  it("clears released raster state, cancels probes, and lazily recreates a contour-only worker", async () => {
+  it("clears released raster state, coalesces the cursor per frame, and lazily recreates a contour-only worker", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
@@ -529,7 +604,7 @@ describe("PlanarSurface lifecycle", () => {
     Object.defineProperty(globalThis, "requestAnimationFrame", { configurable: true, value: requestAnimationFrame });
     Object.defineProperty(globalThis, "cancelAnimationFrame", { configurable: true, value: cancelAnimationFrame });
     const onRenderEvidence = vi.fn();
-    const initialModel = makeRenderModel([1, 2], [0, 1, 0, 1]);
+    const initialModel = makeRenderModel([1, 2, 1, 2], [0, 1, 0, 1], undefined, [2, 2]);
     try {
       await act(async () => {
         root.render(<PlanarSurface model={initialModel} onRenderEvidence={onRenderEvidence} />);
@@ -540,9 +615,13 @@ describe("PlanarSurface lifecycle", () => {
       const pointerMove = new TestEvent("pointermove", { bubbles: true });
       Object.assign(pointerMove, { clientX: 75, clientY: 50 });
       await act(async () => { canvas.dispatchEvent(pointerMove); frames[0]?.(0); });
-      const probe = findElement(container, (element) => element.tagName === "OUTPUT", "transition probe");
-      expect(probe.textContent).toBe("x 0.75 m · y 0.5 m · 2 m");
-      await act(async () => { canvas.dispatchEvent(pointerMove); });
+      expect(planarToolStore.getSnapshot().cursorUv).toEqual({ u_m: 0.75, v_m: 0.5 });
+      // Two moves in one frame publish one cursor position.
+      const nextMove = new TestEvent("pointermove", { bubbles: true });
+      Object.assign(nextMove, { clientX: 25, clientY: 50 });
+      await act(async () => { canvas.dispatchEvent(pointerMove); canvas.dispatchEvent(nextMove); });
+      expect(frames).toHaveLength(2);
+      expect(planarToolStore.getSnapshot().cursorUv).toEqual({ u_m: 0.75, v_m: 0.5 });
       const drawsBeforeRelease = (context.drawImage as ReturnType<typeof vi.fn>).mock.calls.length;
       const evidenceBeforeRelease = onRenderEvidence.mock.calls.length;
 
@@ -553,12 +632,13 @@ describe("PlanarSurface lifecycle", () => {
         }} onRenderEvidence={onRenderEvidence} />);
       });
 
-      expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
-      expect(probe.textContent).toBe("No sample");
+      await act(async () => { frames[1]?.(0); });
+      expect(planarToolStore.getSnapshot().cursorUv).toEqual({ u_m: 0.25, v_m: 0.5 });
       expect(workers).toHaveLength(1);
       expect(workers[0]?.terminate).toHaveBeenCalledTimes(1);
-      expect((context.drawImage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(drawsBeforeRelease);
-      expect(onRenderEvidence.mock.calls).toHaveLength(evidenceBeforeRelease);
+      expect((context.drawImage as ReturnType<typeof vi.fn>).mock.calls.length).toBe(drawsBeforeRelease);
+      expect(onRenderEvidence.mock.calls.length).toBeGreaterThan(evidenceBeforeRelease);
+      expect(onRenderEvidence).toHaveBeenLastCalledWith(expect.objectContaining({ raster: null }));
 
       await act(async () => {
         root.render(<PlanarSurface model={{
@@ -568,16 +648,34 @@ describe("PlanarSurface lifecycle", () => {
         await Promise.resolve();
       });
 
-      expect(probe.textContent).toBe("No sample");
+      expect(container.textContent).not.toContain("No sample");
       expect(workers).toHaveLength(2);
       expect(workers[1]?.terminate).not.toHaveBeenCalled();
       expect(requests).toHaveLength(2);
       expect(requests[1]?.contours).toMatchObject({ enabled: true });
-      expect((context.drawImage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(drawsBeforeRelease);
-      expect(onRenderEvidence.mock.calls).toHaveLength(evidenceBeforeRelease);
+      expect((context.drawImage as ReturnType<typeof vi.fn>).mock.calls.length).toBe(drawsBeforeRelease);
+      expect(onRenderEvidence.mock.calls.length).toBeGreaterThan(evidenceBeforeRelease);
+      expect(onRenderEvidence).toHaveBeenLastCalledWith(expect.objectContaining({ raster: null }));
+
+      expect(onRenderEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
+        overlayCounts: expect.objectContaining({ contours: 1 }),
+      }));
+      await act(async () => {
+        root.render(<PlanarSurface model={{
+          ...initialModel,
+          viewport: [0.1, 1.1, 0, 1],
+          layers: { ...initialModel.layers, contours: true, probes: true, raster: false },
+        }} onRenderEvidence={onRenderEvidence} />);
+      });
+      expect(requests).toHaveLength(2);
+      expect(onRenderEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
+        raster: null,
+        overlayCounts: expect.objectContaining({ contours: 1 }),
+      }));
 
       await act(async () => root.unmount());
       expect(workers[1]?.terminate).toHaveBeenCalledTimes(1);
+      expect(planarToolStore.getSnapshot().cursorUv).toBeNull();
     } finally {
       await act(async () => root.unmount());
       if (previousImageData) Object.defineProperty(globalThis, "ImageData", previousImageData); else Reflect.deleteProperty(globalThis, "ImageData");

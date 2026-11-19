@@ -7,7 +7,6 @@ import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
-import { draftNumber, positiveDraftNumberList } from "../StudyStageAuthoringModel";
 import { FrequencyDomainCalculationModeSection } from "./FrequencyDomainCalculationModeSection";
 import { StageInspectorFrame, type StageInspectorFrameProps } from "./StageInspectorFrame";
 
@@ -208,11 +207,11 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           />
           <FieldRow
             label="Frequency count"
-            value={sweepSummary.count === null ? "not available" : `${sweepSummary.count} point(s)`}
+            value={`${sweepSummary.count} point(s)`}
           />
           <FieldRow
             label="Estimated artifacts"
-            value={sweepSummary.count === null ? "not available" : `${sweepSummary.count} frequency-point artifact(s)`}
+            value={`${sweepSummary.count} frequency-point artifact(s)`}
           />
           <FieldRow
             label="Deduplication"
@@ -613,10 +612,12 @@ function parseObject(value: string): Record<string, unknown> | null {
 }
 
 function formatFrequencyDraftList(value: string | null | undefined): string {
-  const parsed = positiveDraftNumberList(value ?? "", "frequency");
-  if (parsed.invalid.length || parsed.nonPositive.length) return "invalid frequency list";
-  if (!parsed.values.length) return "not set";
-  return parsed.values.map((entry) => formatFrequencyHz(entry)).join(", ");
+  const frequencies = (value ?? "").split(/[,\s]+/).flatMap((entry) => {
+    const frequency = Number(entry);
+    return Number.isFinite(frequency) ? [frequency] : [];
+  });
+  if (!frequencies.length) return "not set";
+  return frequencies.map((entry) => formatFrequencyHz(entry)).join(", ");
 }
 
 function summarizeExcitation(
@@ -624,7 +625,7 @@ function summarizeExcitation(
   phaseValue: string | null | undefined,
 ) {
   const vector = parseNumberList(fieldValue);
-  const phase = draftNumber(phaseValue ?? "");
+  const phase = Number(phaseValue ?? "");
   const vectorFinite = vector.length === 3 && vector.every(Number.isFinite);
   const vectorNonzero = vectorFinite && vector.some((entry) => entry !== 0);
   const phaseFinite = Number.isFinite(phase);
@@ -677,26 +678,24 @@ function parseNumberList(value: string | null | undefined): number[] {
 }
 
 function summarizeFrequencySweep(value: string | null | undefined) {
-  const parsed = positiveDraftNumberList(value ?? "", "frequency");
-  const frequencies = parsed.values;
-  const valid = parsed.invalid.length === 0 && parsed.nonPositive.length === 0;
+  const frequencies = parseNumberList(value);
+  const finite = frequencies.every(Number.isFinite);
+  const positive = frequencies.every((entry) => entry > 0);
   const uniqueCount = new Set(frequencies.map((entry) => String(entry))).size;
   const duplicateCount = frequencies.length - uniqueCount;
 
   return {
-    count: valid ? frequencies.length : null,
+    count: frequencies.length,
     deduplication:
-      !valid
-        ? "not available for invalid frequencies"
-        : duplicateCount > 0
-          ? `${duplicateCount} duplicate(s) require policy`
-          : "no duplicates",
+      duplicateCount > 0
+        ? `${duplicateCount} duplicate(s) require policy`
+        : "no duplicates",
     validation:
-      !valid
-        ? "all frequencies must be finite and positive"
-        : frequencies.length === 0
-          ? "frequency list required"
-          : "all frequencies finite and positive",
+      frequencies.length === 0
+        ? "frequency list required"
+        : finite && positive
+          ? "all frequencies finite and positive"
+          : "all frequencies must be finite and positive",
   };
 }
 

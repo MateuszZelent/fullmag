@@ -71,6 +71,7 @@ export type ExplorerNodeKind =
   | "object.region.diagnostics"
   | "object.region-magnetic-texture"
   | "object.magnetic-parameters"
+  | "object.absorbing-boundary"
   | "object.magnetic-texture"
   | "object.magnetic-texture.asset"
   | "object.magnetic-texture.load"
@@ -458,6 +459,7 @@ export interface ExplorerNode {
 
 export interface ModelTreeObjectSnapshot {
   id: string;
+  hasAbsorbingBoundary?: boolean;
   label: string;
   geometryKind?: string | null;
   magnetization?: string | null;
@@ -549,6 +551,10 @@ export interface ModelTreeFieldDriveSnapshot {
   label: string;
   targetKind: string;
   waveformKind: string;
+  /** Hand-written mask antenna (`mask_field_drive.v1`); absent for a regional drive. */
+  driveKind?: "mask";
+  targetObjectId?: string;
+  targetRegionId?: string;
 }
 
 export interface ModelTreeSnapshot {
@@ -627,6 +633,8 @@ interface ModelTreeStudySnapshot {
 }
 
 export interface ModelTreeStudyStageSnapshot {
+  /** Stable ID from the authored document, independent of runtime projection. */
+  authoredStageId?: string | null;
   pipelineNodeId?: string;
   pipelineEnabled?: boolean;
   pipelineLabel?: string | null;
@@ -683,9 +691,11 @@ export interface ModelTreeMeshSnapshot {
   latestBuildStatus?: string | null;
   lastError?: string | null;
   manifestSourceSceneRevision?: number | string | null;
+  manifestValidatedSceneRevision?: number | null;
   meshName?: string | null;
   meshRevision?: number | string | null;
   objectSegmentCount?: number | null;
+  outerBoundaryEvidenceStatus?: "verified" | "loading" | "stale" | "error" | "unknown";
   outerBoundaryPartCount?: number | null;
   partCount?: number | null;
   qualityStatus?: string | null;

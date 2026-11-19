@@ -35,7 +35,7 @@ export function transportScopeOptions(scene: SceneResource | null): Array<{ obje
 export const chargeMaterialFields = [["sigma_Spm", "Conductivity", "S/m"], ["sigma_parallel_Spm", "Parallel conductivity", "S/m"], ["sigma_perpendicular_Spm", "Perpendicular conductivity", "S/m"], ["sigma_AHE_Spm", "Anomalous Hall conductivity", "S/m"]] as const;
 export const spinMaterialFields = [["sigma_s_Spm", "Spin conductivity", "S/m"], ["lambda_sf_m", "Spin-flip length", "m"], ["lambda_j_m", "Exchange length (or disabled)", "m"], ["lambda_phi_m", "Dephasing length (or disabled)", "m"], ["polarization_p", "Polarization", "1"], ["theta_sh", "Spin Hall angle", "1"], ["spin_capacitance_As_per_V_m3", "Spin capacitance", "A s/(V m³)"], ["density_of_states_per_spin_Jinv_m3", "DOS per spin", "1/(J m³)"], ["capacitance_formula_version", "Capacitance formula version", ""]] as const;
 export const chargeBoundaryKinds = ["equipotential_current_terminal", "voltage_electrode", "normal_current_electrode", "insulating"] as const;
-export const spinBoundaryKinds = ["spin_insulating", "spin_sink", "specified_spin_potential", "specified_spin_flux", "periodic_spin"] as const;
+export const spinBoundaryKinds = ["spin_insulating", "homogeneous_spin_potential_gradient", "spin_sink", "specified_spin_potential", "specified_spin_flux", "periodic_spin"] as const;
 export function changeTransportBoundaryKind(value: string, index: number, kind: string): string {
   const rows = transportRows(value);
   const old = rows[index];

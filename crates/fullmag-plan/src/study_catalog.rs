@@ -7,7 +7,7 @@
 
 use fullmag_authoring::{
     StudyDiscretizationReference, StudyExecutionProfileReference, StudyModelReference, StudyPlan,
-    StudySolverConfigReference, StudyStep,
+    StudyInputPort, StudyInputSource, StudyPortDataKind, StudySolverConfigReference, StudyStep,
 };
 use fullmag_ir::{ComputeResourcesIR, ExecutionDevice, MaterializedExecutionRequestIR, ProblemIR};
 use serde::{Deserialize, Serialize};
@@ -172,6 +172,21 @@ impl StudyProblemCatalogEntry {
         self.captured_input_identity.as_ref()
     }
 
+    /// Qualify the authored source of an already validated catalog entry.
+    pub fn validate_authored_initial_state(
+        &self,
+        ports: &[StudyInputPort],
+    ) -> Result<bool, StudyCatalogError> {
+        validate_authored_initial_state_against(&self.step_id, ports, || {
+            match self.captured_input_identity() {
+                Some(identity) => authored_initial_state_reference_from_hash(
+                    &self.step_id, &identity.problem_sha256,
+                ),
+                None => authored_initial_state_reference(&self.step_id, &self.problem),
+            }
+        })
+    }
+
     fn validate_captured_input_identity(&self, schema: &str) -> Result<(), StudyCatalogError> {
         let mismatch = |reason: &str| {
             StudyCatalogError::Contract(format!(
@@ -309,6 +324,80 @@ impl StudyProblemCatalogEntry {
     }
 }
 
+fn captured_problem_sha256(problem: &ProblemIR) -> Result<String, StudyCatalogError> {
+    let value = serde_json::to_value(problem).map_err(|error| {
+        StudyCatalogError::Contract(format!("captured ProblemIR serialization failed: {error}"))
+    })?;
+    fullmag_ir::canonical_ir_json_sha256(&value).map_err(|error| {
+        StudyCatalogError::Contract(format!(
+            "captured ProblemIR canonicalization failed: {error}"
+        ))
+    })
+}
+
+/// Reference to the exact accepted ProblemIR that owns the authored initial state.
+pub fn authored_initial_state_reference(
+    step_id: &str,
+    problem: &ProblemIR,
+) -> Result<String, StudyCatalogError> {
+    authored_initial_state_reference_from_hash(step_id, &captured_problem_sha256(problem)?)
+}
+
+fn authored_initial_state_reference_from_hash(
+    step_id: &str,
+    problem_sha256: &str,
+) -> Result<String, StudyCatalogError> {
+    let receipt = serde_json::json!({
+        "schema": "fullmag.authored-initial-state.v1",
+        "step_id": step_id,
+        "problem_sha256": problem_sha256,
+    });
+    let digest = fullmag_ir::canonical_ir_json_sha256(&receipt)
+        .map_err(|error| StudyCatalogError::Contract(error.to_string()))?;
+    Ok(format!("authored-initial-state:v1:{digest}"))
+}
+
+/// Return whether the step has a qualified authored state already in its plan.
+pub fn validate_authored_initial_state(
+    step_id: &str,
+    ports: &[StudyInputPort],
+    problem: &ProblemIR,
+) -> Result<bool, StudyCatalogError> {
+    validate_authored_initial_state_against(step_id, ports, || {
+        authored_initial_state_reference(step_id, problem)
+    })
+}
+
+fn validate_authored_initial_state_against(
+    step_id: &str,
+    ports: &[StudyInputPort],
+    expected_reference: impl FnOnce() -> Result<String, StudyCatalogError>,
+) -> Result<bool, StudyCatalogError> {
+    let mut authored = ports.iter().filter_map(|port| match &port.source {
+        StudyInputSource::AuthoredInitialState { reference } => Some((port, reference)),
+        _ => None,
+    });
+    let Some((port, reference)) = authored.next() else {
+        return Ok(false);
+    };
+    let is_state = |port: &StudyInputPort| matches!(
+        port.data_kind, StudyPortDataKind::State | StudyPortDataKind::InitialState
+    );
+    if !is_state(port) || authored.next().is_some()
+        || ports.iter().filter(|port| is_state(port)).count() != 1
+    {
+        return Err(StudyCatalogError::Contract(format!(
+            "study step '{step_id}' authored initial state requires a single magnetization port"
+        )));
+    }
+    if *reference != expected_reference()? {
+        return Err(StudyCatalogError::Contract(format!(
+            "study step '{step_id}' authored initial state differs from its accepted ProblemIR reference"
+        )));
+    }
+    Ok(true)
+}
+
 pub fn capture_study_input_references(
     source_id: &str,
     problem: &ProblemIR,
@@ -323,14 +412,7 @@ pub fn capture_study_input_references(
             "captured study input source_id must be nonempty, at most 256 UTF-8 bytes, and contain no whitespace or control characters".into(),
         ));
     }
-    let value = serde_json::to_value(problem).map_err(|error| {
-        StudyCatalogError::Contract(format!("captured ProblemIR serialization failed: {error}"))
-    })?;
-    let problem_sha256 = fullmag_ir::canonical_ir_json_sha256(&value).map_err(|error| {
-        StudyCatalogError::Contract(format!(
-            "captured ProblemIR canonicalization failed: {error}"
-        ))
-    })?;
+    let problem_sha256 = captured_problem_sha256(problem)?;
     let version = format!("sha256:{problem_sha256}");
 
     Ok(CapturedStudyInputReferences {
@@ -388,6 +470,10 @@ impl StudyProblemCatalog {
 
     pub fn entries(&self) -> &[StudyProblemCatalogEntry] {
         &self.entries
+    }
+
+    pub fn into_entries(self) -> Vec<StudyProblemCatalogEntry> {
+        self.entries
     }
 
     /// Derive a case-local study and catalog with explicitly replaced
@@ -467,6 +553,13 @@ impl StudyProblemCatalog {
             study_step.model = references.model.clone();
             study_step.solver_config = references.solver_config.clone();
             study_step.discretization = references.discretization.clone();
+            for port in &mut study_step.inputs {
+                if let StudyInputSource::AuthoredInitialState { reference } = &mut port.source {
+                    *reference = authored_initial_state_reference_from_hash(
+                        step_id, &references.identity.problem_sha256,
+                    )?;
+                }
+            }
 
             let entry = &mut derived_catalog.entries[entry_index];
             entry.model = references.model;
@@ -558,6 +651,7 @@ impl StudyProblemCatalog {
             )?;
             entry.validate_captured_input_identity(&self.schema_version)?;
             entry.validate_execution_materialization(&self.schema_version)?;
+            entry.validate_authored_initial_state(&step.inputs)?;
             if let Err(reasons) = entry.problem.validate() {
                 return Err(StudyCatalogError::InvalidProblem {
                     step_id: entry.step_id.clone(),

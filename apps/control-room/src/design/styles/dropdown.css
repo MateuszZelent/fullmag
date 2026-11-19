@@ -244,11 +244,6 @@
   transition: border-color var(--fm-transition-fast), box-shadow var(--fm-transition-fast);
 }
 
-.fm-dropdown-color__swatch:has(.fm-dropdown-color__input:focus-visible) {
-  outline: 2px solid var(--fm-accent);
-  outline-offset: 2px;
-}
-
 .fm-dropdown-color__swatch:hover {
   border-color: var(--fm-accent);
   box-shadow:
@@ -303,4 +298,11 @@
   outline: none;
   border-color: var(--fm-accent);
   box-shadow: 0 0 0 1px var(--fm-accent);
+}
+
+/* Reduced motion: transform transitions snap; colour/shadow transitions remain. */
+@media (prefers-reduced-motion: reduce) {
+  .fm-dropdown-slider__track::-webkit-slider-thumb {
+    transition-property: background;
+  }
 }

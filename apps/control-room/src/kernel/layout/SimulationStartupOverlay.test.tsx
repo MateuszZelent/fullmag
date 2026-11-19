@@ -151,7 +151,7 @@ function statusResource(
 }
 
 describe("SimulationStartupOverlay", () => {
-  it("shows while the session status resource is loading", () => {
+  it("holds the startup gate without a window while the session status loads", () => {
     const state = resolveSimulationStartupOverlayState({
       data: null,
       error: null,
@@ -163,8 +163,13 @@ describe("SimulationStartupOverlay", () => {
     expect(state).toMatchObject({
       detail: "Connecting to the local simulation backend.",
       isVisible: true,
+      kind: "syncing",
       title: "Preparing simulation",
     });
+    expect(shouldRefreshSimulationStartupStatus(state)).toBe(true);
+    expect(
+      renderToStaticMarkup(<SimulationStartupOverlayView state={state} />),
+    ).toBe("");
   });
 
   it("shows explicit startup phases from the backend status", () => {
@@ -344,43 +349,14 @@ describe("SimulationStartupOverlay", () => {
       ),
       { ...statusResource(), status: "stale" },
       20_000,
+      // Only a transport disruption (or failed refresh) makes a retained
+      // snapshot stale; a refetch in flight alone does not.
+      true,
     );
+    // Ready is terminal, so a disruption afterwards neither reopens the
+    // window nor keeps the startup gate or its polling alive.
+    expect(staleReady).toMatchObject({ isVisible: false, kind: "stale" });
     expect(shouldRefreshSimulationStartupStatus(staleReady)).toBe(false);
-  });
-
-  it.each(["connection", "error", "refreshError"] as const)(
-    "keeps refreshing a retained ready snapshot after a real %s failure",
-    (failure) => {
-      const preparation = {
-        ...preparationResult(preparationResource({
-          active_stage_id: null,
-          completed_at_unix_ms: 20_000,
-          status: "ready",
-        }), "stale"),
-        error: failure === "error" ? new Error("Transport failed") : null,
-        refreshError: failure === "refreshError" ? new Error("Refresh failed") : null,
-      };
-      const model = resolveSimulationPreparationViewModel(
-        preparation, statusResource(), 20_000, failure === "connection",
-      );
-      expect(model.kind).toBe("stale");
-      expect(shouldRefreshSimulationStartupStatus(model)).toBe(true);
-    },
-  );
-
-  it("refreshes running preparation during a routine refresh and stops after terminal failure", () => {
-    const running = resolveSimulationPreparationViewModel(
-      preparationResult(preparationResource(), "stale"), statusResource(), 20_000,
-    );
-    expect(shouldRefreshSimulationStartupStatus(running)).toBe(true);
-    const failed = resolveSimulationPreparationViewModel(
-      preparationResult(preparationResource({
-        active_stage_id: null,
-        completed_at_unix_ms: 20_000,
-        status: "failed",
-      })), statusResource(), 20_000,
-    );
-    expect(shouldRefreshSimulationStartupStatus(failed)).toBe(false);
   });
 
   it("renders option A with determinate progress, ordered stages, and a visible log", () => {

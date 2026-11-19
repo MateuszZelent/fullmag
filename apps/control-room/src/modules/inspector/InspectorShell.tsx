@@ -4,7 +4,6 @@ import {
   Activity,
   Box,
   Focus,
-  MoreHorizontal,
   BarChart2,
   Database,
   Gauge,
@@ -12,17 +11,12 @@ import {
   PanelRightClose,
   Play,
 } from "lucide-react";
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 
-import { copyTextToClipboard } from "@/shared/browser/copyTextToClipboard";
+import { PanelChrome, usePanelChromeControls } from "@/shared/ui/PanelFrame";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/shared/ui/DropdownMenu";
+import { DropdownMenuItem } from "@/shared/ui/DropdownMenu";
 import { ScrollArea } from "@/shared/ui/ScrollArea";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 import { InspectorFooter } from "./InspectorFooter";
@@ -72,35 +66,16 @@ export function InspectorShell({
   onToggleVisibility,
 }: InspectorShellProps) {
   const activeTab = useInspectorActiveTab();
+  const chrome = usePanelChromeControls();
   const contentRef = useRef<HTMLDivElement>(null);
-  const nodeId = descriptor.nodeId ?? descriptor.metadata.find((item) => item.label === "Node")?.value;
-  const [copyFeedback, setCopyFeedback] = useState<{ nodeId: string; error: boolean; message: string } | null>(null);
-  const copySequence = useRef(0);
-  const visibleCopyFeedback = copyFeedback?.nodeId === nodeId ? copyFeedback : null;
+  const nodeId = descriptor.metadata.find((item) => item.label === "Node")?.value;
   const descriptorKey = `${nodeId ?? descriptor.title}:${descriptor.tabs.map((tab) => tab.id).join(",")}`;
   useLayoutEffect(() => {
     configureInspectorTabs(descriptorKey, descriptor.tabs.map((tab) => tab.id));
   }, [descriptor.tabs, descriptorKey]);
   useLayoutEffect(() => {
     resetInspectorScroll(contentRef.current);
-    copySequence.current += 1;
   }, [descriptorKey]);
-
-  async function copyNodeId(): Promise<void> {
-    if (!nodeId) return;
-    const sequence = ++copySequence.current;
-    setCopyFeedback(null);
-    try {
-      await copyTextToClipboard(nodeId);
-      if (sequence === copySequence.current) {
-        setCopyFeedback({ nodeId, error: false, message: "Node ID copied." });
-      }
-    } catch {
-      if (sequence === copySequence.current) {
-        setCopyFeedback({ nodeId, error: true, message: "Could not copy the node ID. Check clipboard permissions and try again." });
-      }
-    }
-  }
 
   return (
     <section
@@ -108,6 +83,32 @@ export function InspectorShell({
       className="fm-inspector"
       data-inspector-owner={descriptor.ownerId}
     >
+      <PanelChrome
+        menuItems={
+          <DropdownMenuItem
+            disabled={!nodeId}
+            onSelect={() => {
+              if (nodeId) void navigator.clipboard?.writeText(nodeId);
+            }}
+          >
+            Copy node ID
+          </DropdownMenuItem>
+        }
+      >
+        <span className="fm-panel-chrome__title">Inspector</span>
+        <Button
+          aria-label="Hide Inspector"
+          className="fm-inspector__panel-toggle"
+          data-panel-toggle="inspector"
+          size="icon"
+          title="Hide Inspector"
+          type="button"
+          variant="ghost"
+          onClick={() => (chrome ? chrome.hideWith(onToggleVisibility) : onToggleVisibility())}
+        >
+          <PanelRightClose size={16} aria-hidden="true" />
+        </Button>
+      </PanelChrome>
       <header className="fm-inspector__header">
         {descriptor.breadcrumbs.length > 0 ? (
           <nav className="fm-inspector__breadcrumbs" aria-label="Selection path">
@@ -148,40 +149,6 @@ export function InspectorShell({
               ) : null}
             </div>
           </div>
-          <div className="fm-inspector__header-actions">
-            <Button
-              aria-label="Hide Inspector"
-              className="fm-inspector__panel-toggle"
-              data-panel-toggle="inspector"
-              size="icon"
-              title="Hide Inspector"
-              type="button"
-              variant="ghost"
-              onClick={onToggleVisibility}
-            >
-              <PanelRightClose size={16} aria-hidden="true" />
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  aria-label="Inspector options"
-                  className="fm-inspector__options-button"
-                  size="icon"
-                  variant="ghost"
-                >
-                  <MoreHorizontal size={16} aria-hidden="true" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  disabled={!nodeId}
-                  onSelect={() => void copyNodeId()}
-                >
-                  Copy node ID
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
         </div>
         {descriptor.metadata.length > 0 ? (
           <dl className="fm-inspector__metadata-grid">
@@ -193,11 +160,6 @@ export function InspectorShell({
             ))}
           </dl>
         ) : null}
-        {visibleCopyFeedback ? (
-          <p className={visibleCopyFeedback.error ? "fm-inspector__action-error" : "fm-inspector__action-reason"} role={visibleCopyFeedback.error ? "alert" : "status"}>
-            {visibleCopyFeedback.message}
-          </p>
-        ) : null}
       </header>
 
       {descriptor.tabs.length > 0 ? (
@@ -206,7 +168,7 @@ export function InspectorShell({
           value={activeTab}
           onValueChange={setInspectorActiveTab}
         >
-          <TabsList aria-label="Inspector sections" className="fm-inspector__tab-list">
+          <TabsList className="fm-inspector__tab-list">
             {descriptor.tabs.map((tab) => (
               <TabsTrigger key={tab.id} value={tab.id}>{tab.label}</TabsTrigger>
             ))}

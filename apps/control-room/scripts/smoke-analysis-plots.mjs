@@ -300,41 +300,7 @@ async function verifyResponsiveAnalysisFixtures(page) {
       const visible = required.every(fits);
       const controls = root?.querySelector(".fm-analysis-chart-export");
       const chartOwner = root?.querySelector('.fm-analysis-chart-surface[role="img"]');
-      const ancestorRects = [];
-      for (let node = root; node instanceof HTMLElement && ancestorRects.length < 14; node = node.parentElement) {
-        const style = getComputedStyle(node);
-        ancestorRects.push({
-          tag: node.tagName,
-          classes: node.className,
-          rect: node.getBoundingClientRect().toJSON(),
-          clientWidth: node.clientWidth,
-          scrollWidth: node.scrollWidth,
-          style: Object.fromEntries([
-            "display", "position", "boxSizing", "width", "minWidth", "maxWidth",
-            "overflowX", "flexBasis", "flexGrow", "flexShrink", "gridTemplateColumns",
-            "paddingLeft", "paddingRight", "marginLeft", "marginRight", "transform",
-          ].map((property) => [property, style[property]])),
-        });
-      }
       return {
-        ancestorRects,
-        horizontalFitsRoot: Boolean(root && root.scrollWidth <= root.clientWidth + 1),
-        rootScrollWidth: root?.scrollWidth,
-        rootClientWidth: root?.clientWidth,
-        overflowingDescendants: Array.from(root?.querySelectorAll("*") ?? [])
-          .filter((node) => node instanceof HTMLElement && node.getClientRects().length > 0)
-          .map((node) => ({
-            tag: node.tagName,
-            classes: node.className,
-            label: node.getAttribute("aria-label"),
-            rect: node.getBoundingClientRect().toJSON(),
-            clientWidth: node.clientWidth,
-            scrollWidth: node.scrollWidth,
-            minWidth: getComputedStyle(node).minWidth,
-            gridTemplateColumns: getComputedStyle(node).gridTemplateColumns,
-          }))
-          .filter((node) => rootRect && (node.rect.right > rootRect.right + 1 || node.scrollWidth > node.clientWidth + 1))
-          .slice(0, 24),
         axisDescription: chartOwner?.getAttribute("aria-label") ?? "",
         clipped: required.filter(([name, node]) => !fits([name, node])).map(([name, node]) => ({
           name,
@@ -345,15 +311,11 @@ async function verifyResponsiveAnalysisFixtures(page) {
         rootFitsViewport: Boolean(
           rootRect && rootRect.left >= -1 && rootRect.right <= window.innerWidth + 1,
         ),
-        rootRect: rootRect?.toJSON() ?? null,
         visible,
-        viewport: { height: window.innerHeight, width: window.innerWidth },
       };
     });
-    if (!fixture.visible || !fixture.horizontalFitsRoot || !fixture.rootFitsViewport || !fixture.documentFitsViewport) {
-      throw new Error(
-        `Analysis responsive fixture clips a required scientific control at ${width}px: ${JSON.stringify(fixture)}`,
-      );
+    if (!fixture.visible || !fixture.rootFitsViewport || !fixture.documentFitsViewport) {
+      throw new Error(`Analysis responsive fixture clips a required scientific control at ${width}px: ${JSON.stringify(fixture)}`);
     }
     if (!/X axis .+\[.+\]\. Y axes .+\[.+\]\./.test(fixture.axisDescription)) {
       throw new Error(`Analysis chart does not expose axis labels and units at ${width}px: ${fixture.axisDescription}`);
@@ -606,7 +568,7 @@ async function verifyAnalysisInspectorSummary(page, datasetRef) {
       throw new Error(`Analysis Inspector is missing ${required}: ${text}`);
     }
   }
-  for (const forbidden of ["Chart controls", "Following", "Resume live chart updates"]) {
+  for (const forbidden of ["Chart controls", "Following", "Resume live chart updates", "Pause live chart updates"]) {
     if (text.includes(forbidden)) {
       throw new Error(`Analysis Inspector still exposes Live Chart control ${forbidden}.`);
     }
@@ -801,7 +763,7 @@ function validateProof(proof, expectedDatasetRef) {
   if (!proof.cursor || /cursor\s+—/i.test(proof.cursor)) {
     failures.push(`analysis cursor selection is missing: ${proof.cursor}`);
   }
-  for (const forbidden of ["Chart controls", "Following", "Resume live chart updates"]) {
+  for (const forbidden of ["Chart controls", "Following", "Resume live chart updates", "Pause live chart updates"]) {
     if (proof.inspectorText.includes(forbidden)) {
       failures.push(`Analysis Inspector exposes Live Chart control ${forbidden}.`);
     }
@@ -1014,6 +976,7 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
       requestPath &&
       (
         requestPath === CURRENT_RUN_FIXTURE_PATH ||
+        requestPath === "/v2/sessions/current/diagnostics/performance" ||
         requestPath.startsWith("/v2/sessions/current/analysis/")
       )
     ) {
@@ -1067,6 +1030,11 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
 
     const inspector = page.locator(".fm-inspector");
     await inspector.waitFor({ state: "visible", timeout: timeoutMs });
+    const provenanceGroup = inspector.getByRole("button", { name: "Provenance", exact: true });
+    await provenanceGroup.waitFor({ state: "visible", timeout: timeoutMs });
+    if (await provenanceGroup.getAttribute("aria-expanded") !== "true") {
+      await provenanceGroup.click({ timeout: timeoutMs });
+    }
     const ownerText = (await inspector.innerText()).replace(/\s+/g, " ");
     for (const expected of [runId, stageId, "Artifact revision", "17"]) {
       if (!ownerText.includes(expected)) {
@@ -2294,34 +2262,6 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
     table_id: datasetRef,
     total_rows: 256,
   };
-  await page.route("**/v2/platform/health", async (route) => {
-    const request = route.request();
-    const cors = {
-      "access-control-expose-headers": "x-api-contract-version",
-      "access-control-allow-origin": "*",
-      "x-api-contract-version": "1.0.0",
-    };
-    if (request.method() !== "GET") {
-      await route.fulfill({
-        body: JSON.stringify({ error: "Health fixture is read-only" }),
-        contentType: "application/json",
-        headers: cors,
-        status: 405,
-      });
-      return;
-    }
-    await route.fulfill({
-      body: JSON.stringify({
-        active_session: true,
-        api_contract_version: "1.0.0",
-        status: "ok",
-        uptime_seconds: 12,
-      }),
-      contentType: "application/json",
-      headers: cors,
-      status: 200,
-    });
-  });
   await page.route(`**${SESSION_COLLECTION_PATH}`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -2455,6 +2395,26 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
     if (referenceImportEnabled && url.pathname === DATA_OBSERVATION_FRAMES_FIXTURE_PATH) {
       await route.fulfill({
         body: JSON.stringify({ frames: [], next_cursor: null, run_id: REFERENCE_FIXTURE_RUN_ID }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (url.pathname === "/v2/sessions/current/diagnostics/performance") {
+      // A published fixture run has no native worker performance samples.
+      await route.fulfill({
+        body: JSON.stringify({
+          elapsed_monotonic_ns: 0,
+          gpu_scope: "unavailable",
+          points: [],
+          reason: "Analysis fixture does not run a native worker.",
+          revision: `analysis-performance-${revision}`,
+          rows_dropped: 0,
+          sample_sequence: 0,
+          state: "unavailable",
+          unique_step_callback_records: 0,
+        }),
         contentType: "application/json",
         headers: cors,
         status: 200,

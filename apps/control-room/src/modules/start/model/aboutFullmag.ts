@@ -5,8 +5,6 @@
  * this file disagree, so the two cannot drift apart unnoticed.
  */
 
-import generatedToolchainDeclarations from "./toolchainDeclarations.generated.json";
-
 export const FULLMAG_TAGLINE =
   "FDM and FEM micromagnetics with Python, CPU/CUDA solvers, and an interactive Control Room";
 
@@ -49,6 +47,10 @@ export const FULLMAG_AUTHORS: readonly FullmagAuthor[] = [
     affiliation: "Faculty of Physics and Astronomy, Adam Mickiewicz University, Poznań, Poland",
   },
   {
+    name: "Uladzislau Makartsou",
+    affiliation: "Faculty of Physics and Astronomy, Adam Mickiewicz University, Poznań, Poland",
+  },
+  {
     name: "Prof. Philipp Pirro",
     affiliation:
       "Fachbereich Physik and Landesforschungszentrum OPTIMAS, RPTU Kaiserslautern-Landau, Germany",
@@ -61,10 +63,10 @@ export const FULLMAG_CITATION_NOTE =
   "Until a versioned release with a persistent identifier is available, cite the repository and the exact commit used for the reported result";
 
 export const FULLMAG_CITATION =
-  "M. Zelent, M. Gołebiewski, and P. Pirro, FullMag: a computational framework for reproducible finite-difference and finite-element micromagnetics, research software, 2026.";
+  "M. Zelent, M. Gołebiewski, U. Makartsou, and P. Pirro, FullMag: a computational framework for reproducible finite-difference and finite-element micromagnetics, research software, 2026.";
 
 export const FULLMAG_BIBTEX = `@software{fullmag_2026,
-  author = {Zelent, Mateusz and Gołebiewski, Mateusz and Pirro, Philipp},
+  author = {Zelent, Mateusz and Gołebiewski, Mateusz and Makartsou, Uladzislau and Pirro, Philipp},
   title  = {FullMag: A Computational Framework for Reproducible
             Finite-Difference and Finite-Element Micromagnetics},
   year   = {2026},
@@ -75,7 +77,7 @@ export const FULLMAG_BIBTEX = `@software{fullmag_2026,
 export const FULLMAG_REPOSITORY_URL = "https://github.com/MateuszZelent/fullmag";
 
 export const FULLMAG_LICENSE =
-  "The repository does not currently contain a root-level license file. Contact the project coordinator before reuse or redistribution.";
+  "FullMag is free software, licensed under the GNU General Public License, version 3 or any later version (GPL-3.0-or-later). The full text is in the LICENSE file at the repository root; the fullmag Python package ships the same text.";
 
 export const FULLMAG_FUNDING =
   "Mateusz Zelent acknowledges funding from the European Union's Horizon Europe programme under HORIZON-MSCA-2024-PF-01, Marie Skłodowska-Curie Grant Agreement No. 101208951 (CNMA).";
@@ -87,7 +89,7 @@ export const FULLMAG_CONTROL_ROOM_URL = "https://fullmag.mzelent.pl/frontend/con
 export const FULLMAG_PYTHON_API_URL = "https://fullmag.mzelent.pl/python-api/index.html";
 export const FULLMAG_PHYSICS_URL = "https://fullmag.mzelent.pl/physics/index.html";
 export const FULLMAG_NUMERICAL_URL = "https://fullmag.mzelent.pl/numerical-methods/index.html";
-export const FULLMAG_CAPABILITY_MATRIX_URL = "https://fullmag.mzelent.pl/docs/specs/capability-matrix-v0.md";
+export const FULLMAG_CAPABILITY_MATRIX_URL = "https://fullmag.mzelent.pl/architecture/planner-and-capabilities.html";
 
 export interface ExtendedAuthor extends FullmagAuthor {
   readonly role: string;
@@ -132,6 +134,19 @@ export const FULLMAG_EXTENDED_AUTHORS: readonly ExtendedAuthor[] = [
     location: "Poznań, Poland",
     affiliation: "Faculty of Physics and Astronomy, Adam Mickiewicz University, Poznań, Poland",
     focus: "Theoretical physics, high-performance computing, mathematical modeling & GPU algorithms",
+  },
+  {
+    name: "Uladzislau Makartsou",
+    fullName: "Uladzislau Makartsou",
+    title: "MSc",
+    initials: "UM",
+    role: "Co-Author & Computational Physics",
+    institution: "Adam Mickiewicz University",
+    institutionShort: "AMU Poznań",
+    department: "Faculty of Physics and Astronomy",
+    location: "Poznań, Poland",
+    affiliation: "Faculty of Physics and Astronomy, Adam Mickiewicz University, Poznań, Poland",
+    focus: "Magnetization dynamics, spin waves, magnonics & micromagnetic simulations",
   },
   {
     name: "Prof. Philipp Pirro",
@@ -316,12 +331,27 @@ export interface ToolchainBadge {
   readonly version: string;
   readonly category: "core" | "scientific" | "ui";
   readonly isAccent?: boolean;
-  readonly source?: string;
-  readonly basis?: string;
 }
 
-export const FULLMAG_TOOLCHAIN_BADGES =
-  generatedToolchainDeclarations as readonly ToolchainBadge[];
+export const FULLMAG_TOOLCHAIN_BADGES: readonly ToolchainBadge[] = [
+  { name: "FullMag", version: "v0.1.0", category: "core", isAccent: true },
+  { name: "Python", version: ">=3.10", category: "core" },
+  { name: "Rust", version: "stable 2021", category: "core" },
+  { name: "Node.js", version: "24.18.0", category: "core" },
+  { name: "CUDA", version: "12.4.1", category: "scientific", isAccent: true },
+  { name: "MFEM", version: "4.9", category: "scientific" },
+  { name: "hypre", version: "3.1.0", category: "scientific" },
+  { name: "libCEED", version: "0.12.0", category: "scientific" },
+  { name: "Gmsh", version: ">=4.12", category: "scientific" },
+  { name: "NumPy", version: ">=1.24", category: "scientific" },
+  { name: "PyO3", version: "0.29", category: "scientific" },
+  { name: "Next.js", version: "16.2.11", category: "ui" },
+  { name: "React", version: "19.2.4", category: "ui" },
+  { name: "TypeScript", version: "5.8.3", category: "ui" },
+  { name: "Three.js", version: "^0.183.2", category: "ui" },
+  { name: "ECharts", version: "^6.1.0", category: "ui" },
+  { name: "Tauri", version: "2.11.1", category: "ui" },
+];
 
 export const FULLMAG_KEY_PILLARS = [
   {

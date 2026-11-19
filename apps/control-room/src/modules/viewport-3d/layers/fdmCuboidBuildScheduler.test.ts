@@ -210,6 +210,37 @@ describe("FDM cuboid build scheduler", () => {
     expect(result.vectorCellIndices).toEqual(new Uint32Array([0, 1]));
   });
 
+  it("preserves float32 field storage when cloning a worker request", async () => {
+    vi.stubGlobal("Worker", LoopbackFdmCuboidWorker);
+    const sourceValues = new Float32Array([1, 0, 0, 0, 1, 0]);
+    await buildViewport3DFdmVectorsOffMainThread(
+      {
+        anchorMode: "center",
+        anchors: new Float32Array([0, 0, 0, 1, 0, 0]),
+        cellIndices: new Uint32Array([0, 1]),
+        fieldVector: {
+          dtype: "float32",
+          grid: [2, 1, 1],
+          nComp: 3,
+          pointCount: 2,
+          quantityId: "H_demag",
+          valueCount: 6,
+          values: sourceValues,
+        },
+        gridShape: [2, 1, 1],
+        membershipAdmission: "full-domain",
+        maxVectors: 2,
+        scale: 1,
+      },
+      { buildKey: "fdm-vector-only:float32" },
+    );
+
+    const clonedValues = LoopbackFdmCuboidWorker.instances[0]?.requests[0]?.vectorField?.values;
+    expect(clonedValues).toBeInstanceOf(Float32Array);
+    expect(clonedValues).not.toBe(sourceValues);
+    expect(Array.from(clonedValues ?? [])).toEqual(Array.from(sourceValues));
+  });
+
   it("carries exact vectors-only membership through the worker request", async () => {
     vi.stubGlobal("Worker", LoopbackFdmCuboidWorker);
     const result = await buildViewport3DFdmVectorsOffMainThread(

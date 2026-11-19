@@ -48,26 +48,18 @@ The equation denotes a record, not an effective meshing law. Current effective s
 
 ### Complete public signature and IR matrix
 
-The following rows are the exhaustive public-signature contract for this page; each row mirrors one public_api.parameters entry in the source map.
+The following rows document the public signature and `ProblemIR` contract for this page.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| study.universe(mode=...) | str \| None | None | 1 | forwarded to StudyUniverseConfig | domain mode | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.mode |
-| study.universe(size=...) | Sequence[float] \| None | None | m | as_vector3; explicit dimensions must be positive when realized | outer dimensions | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.size |
-| study.universe(center=...) | Sequence[float] \| None | None | m | as_vector3 | outer center | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.center |
-| study.universe(padding=...) | Sequence[float] \| None | None | m | as_vector3; domain validation governs signs | directional padding | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.padding |
-| study.universe.mesh(maximum_element_size=...) | float \| None | None | m | positive | airbox coarse target | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_hmax |
-| study.universe.mesh(minimum_element_size=...) | float \| None | None | m | positive and no greater than numeric maximum | airbox lower clamp | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_hmin |
-| study.universe.mesh(maximum_element_growth_rate=...) | float \| None | None | 1 | finite positive at most 2.5 | airbox growth target | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_growth_rate |
-| study.universe.mesh(grading=...) | str \| None | None | 1 | forwarded without vocabulary validation by this handle | airbox grading request | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_grading |
-| SharedMeshAssemblyPolicy.interface_hmax_factor | float | 0.5 | $1$ | finite real in $(0,1]$; `TypeError`/`ValueError` | compatibility field | FEM CPU/GPU capability-gated | shared_mesh_policy.interface_hmax_factor |
-| SharedMeshAssemblyPolicy.enforce_conforming | bool | True | $1$ | boolean; `TypeError` otherwise | compatibility field | FEM CPU/GPU capability-gated | shared_mesh_policy.enforce_conforming |
-| SharedMeshAssemblyPolicy.airbox_hmax_factor | float | 3.0 | $1$ | finite positive real; `TypeError`/`ValueError` | compatibility field | FEM CPU/GPU capability-gated | shared_mesh_policy.airbox_hmax_factor |
-
-
-
-| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-| --- | --- | --- | --- | --- | --- | --- | --- |
+| `study.universe(mode=...)` | `str \| None` | `None` | $1$ | forwarded to StudyUniverseConfig | domain mode | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.mode` |
+| `study.universe(size=...)` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | as_vector3; explicit dimensions must be positive when realized | outer dimensions | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.size` |
+| `study.universe(center=...)` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | as_vector3 | outer center | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.center` |
+| `study.universe(padding=...)` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | as_vector3; domain validation governs signs | directional padding | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.padding` |
+| `study.universe.mesh(maximum_element_size=...)` | `float \| None` | `None` | $\mathrm{m}$ | positive | airbox coarse target | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_hmax` |
+| `study.universe.mesh(minimum_element_size=...)` | `float \| None` | `None` | $\mathrm{m}$ | positive and no greater than numeric maximum | airbox lower clamp | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_hmin` |
+| `study.universe.mesh(maximum_element_growth_rate=...)` | `float \| None` | `None` | $1$ | finite positive at most 2.5 | airbox growth target | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_growth_rate` |
+| `study.universe.mesh(grading=...)` | `str \| None` | `None` | $1$ | forwarded without vocabulary validation by this handle | airbox grading request | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_grading` |
 | `SharedMeshAssemblyPolicy.interface_hmax_factor` | `float` | `0.5` | $1$ | finite real in $(0,1]$; `TypeError`/`ValueError` | compatibility field | FEM CPU/GPU capability-gated | `shared_mesh_policy.interface_hmax_factor` |
 | `SharedMeshAssemblyPolicy.enforce_conforming` | `bool` | `True` | $1$ | boolean; `TypeError` otherwise | compatibility field | FEM CPU/GPU capability-gated | `shared_mesh_policy.enforce_conforming` |
 | `SharedMeshAssemblyPolicy.airbox_hmax_factor` | `float` | `3.0` | $1$ | finite positive real; `TypeError`/`ValueError` | compatibility field | FEM CPU/GPU capability-gated | `shared_mesh_policy.airbox_hmax_factor` |
@@ -134,7 +126,7 @@ FEM CPU/GPU use the shared mesh subject to runtime capability. FDM CPU/GPU are n
 (shared-domain-validation)=
 ## Validation
 
-Validate policy construction and inspect the realized shared mesh separately. A source map pass does not demonstrate planner consumption or GPU execution.
+Validate policy construction and inspect the realized shared mesh separately. API lowering alone does not demonstrate planner consumption or GPU execution.
 
 (shared-domain-limitations)=
 ## Limitations
@@ -147,21 +139,19 @@ Do not treat `enforce_conforming=True` as an effective current build-mode switch
 Geuzaine and Remacle, *IJNME* 79 (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 
 (shared-domain-source-code-index)=
-## Contract source-code index
+## Source-code index
 
 | ID | Path | Symbol | Responsibility | Evidence |
 | --- | --- | --- | --- | --- |
-| shared_policy | packages/fullmag-py/src/fullmag/model/discretization.py | class SharedMeshAssemblyPolicy | compatibility validation and lowering | source-inspected |
-| public_study | packages/fullmag-py/src/fullmag/world.py | study | public study entry point | source-inspected |
-| universe_authoring | packages/fullmag-py/src/fullmag/world.py | class StudyUniverseHandle | public shared-domain authoring | source-inspected |
-| problem_lowering | packages/fullmag-py/src/fullmag/world.py | _build_problem | builder-state lowering | source-inspected |
-| problem_ir | packages/fullmag-py/src/fullmag/model/problem.py | class Problem | ProblemIR and geometry-asset serialization | source-inspected |
-| domain_realization | packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py | realize_fem_domain_mesh_asset_from_components_with_report | shared-domain realization and report | source-inspected |
-| occ_shared | packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py | generate_shared_domain_mesh_via_occ | conformal OCC realization | source-inspected |
-| planner | crates/fullmag-plan/src/lib.rs | plan | ProblemIR planning and compatibility | source-inspected, runtime-unverified |
-| runtime | crates/fullmag-runner/src/lib.rs | run_planned_problem | planned runtime dispatch | source-inspected, device-unverified |
-
-**Last changes: 12:31 24.08.2026**
+| shared_policy | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class SharedMeshAssemblyPolicy` | compatibility validation and lowering | source-inspected |
+| public_study | `packages/fullmag-py/src/fullmag/world.py` | `study` | public study entry point | source-inspected |
+| universe_authoring | `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseHandle` | public shared-domain authoring | source-inspected |
+| problem_lowering | `packages/fullmag-py/src/fullmag/world.py` | `_build_problem` | builder-state lowering | source-inspected |
+| problem_ir | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | ProblemIR and geometry-asset serialization | source-inspected |
+| domain_realization | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `realize_fem_domain_mesh_asset_from_components_with_report` | shared-domain realization and report | source-inspected |
+| occ_shared | `packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py` | `generate_shared_domain_mesh_via_occ` | conformal OCC realization | source-inspected |
+| planner | `crates/fullmag-plan/src/lib.rs` | `plan` | ProblemIR planning and compatibility | source-inspected, runtime-unverified |
+| runtime | `crates/fullmag-runner/src/lib.rs` | `run_planned_problem` | planned runtime dispatch | source-inspected, device-unverified |
 
 A shared-domain mesh is one immutable topology containing all magnetic and air regions required by coupled FEM operators, with conforming interfaces and semantic markers.
 
@@ -334,7 +324,6 @@ The read-only effective values come from backend resources. They must not be rec
 current form fields because presets, capability gates and backend normalization can change the
 resolved configuration.
 
-
 ### Universe / airbox workflow
 
 1. In **Explorer**, select **Universe / Airbox Mesh**.
@@ -427,7 +416,4 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 - C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79** (2009), 1309–1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 - C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 - Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
-## Source-code index
-
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Runtime realization is owned by the relevant `backends/fdm` or `backends/fem` implementation; the page must not claim a symbol not named in its implementation mapping.
 

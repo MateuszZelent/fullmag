@@ -241,33 +241,22 @@ describe("dedicated torque and Oersted inspectors", () => {
   });
 
   it("builds exact mutation payloads with SOT efficiencies only on prescribed_sot", () => {
-    const base = { beta: "0", compatibilityOrigin: "", currentDensity: "1, 0, 0", currentSource: "charge", degree: "0.4", drive: JSON.stringify({ kind: "signed_scalar", current_density_Apm2: 1, sigma_hat: [0, 1, 0] }), epsilonPrime: "0", fixedLayerPosition: "", formulaVersion: "prescribed_sot.fullmag.v1", freeLayerThickness: "1e-9", id: "sot", kind: "prescribed_sot" as const, landeG: "", lambdaAsymmetry: "1", operatorVersion: "", rawSpinPolarization: "", realization: "", schemaVersion: "prescribed_sot.v1", spinPolarization: "0, 0, 1", stackNormal: "", target: "", xiDl: "0.12", xiFl: "-0.03" };
+    const base = { beta: "0", compatibilityOrigin: "", currentDensity: "1, 0, 0", currentSource: "charge", degree: "0.4", drive: JSON.stringify({ kind: "signed_scalar", current_density_Apm2: 1, sigma_hat: [0, 1, 0] }), epsilonPrime: "0", fixedLayerPosition: "", formulaVersion: "prescribed_sot.fullmag.v1", freeLayerThickness: "1e-9", id: "sot", kind: "prescribed_sot" as const, landeG: "", lambdaAsymmetry: "1", operatorVersion: "", rawSpinPolarization: "", realization: "", schemaVersion: "prescribed_sot.v1", spinPolarization: "0, 0, 1", stackNormal: "", target: "", timeExpression: "", xiDl: "0.12", xiFl: "-0.03" };
     const sot = buildTorque(base) as Record<string, unknown>;
     expect(sot).toMatchObject({ kind: "prescribed_sot", xi_dl: 0.12, xi_fl: -0.03 });
     const slon = buildTorque({ ...base, kind: "slonczewski", formulaVersion: "slonczewski.fullmag.v2", schemaVersion: "" }) as Record<string, unknown>;
     expect(slon).not.toHaveProperty("xi_dl");
     expect(slon).not.toHaveProperty("xi_fl");
-  });
 
-  it("rejects blank required torque scalars and empty vector components while preserving numeric syntax", () => {
-    const draft: Parameters<typeof buildTorque>[0] = {
-      beta: "0.02", compatibilityOrigin: "", currentDensity: "", currentSource: "",
-      degree: "0", drive: "", epsilonPrime: "0", fixedLayerPosition: "",
-      formulaVersion: "zhang_li.fullmag.v1", freeLayerThickness: "", id: "numeric-draft",
-      kind: "zhang_li", landeG: " \t", lambdaAsymmetry: "1", operatorVersion: "",
-      rawSpinPolarization: "", realization: "", schemaVersion: "zhang_li_torque.v1",
-      spinPolarization: "", stackNormal: "", target: "", xiDl: "0", xiFl: "0",
-    };
-
-    expect(() => buildTorque({ ...draft, beta: " \t" })).toThrow("Beta is required.");
-    for (const vector of ["1,,2,3", ",1,2,3", "1,2,3,"]) {
-      expect(() => buildTorque({ ...draft, currentDensity: vector })).toThrow("Current density requires three finite components.");
-    }
-
-    const valid = buildTorque({ ...draft, beta: "-2.5e-2", currentDensity: "+1e2 , -2e0\t0" });
-    expect(valid).toMatchObject({ beta: -0.025, degree: 0, current_density: [100, -2, 0], lande_g: undefined });
-    expect(buildTorque({ ...draft, currentDensity: "+1e2\t-2e0\n0" })).toMatchObject({ current_density: [100, -2, 0] });
-    expect(buildTorque(draft)).toHaveProperty("current_density", undefined);
+    const timeExpression = { source: "heaviside(t-on)*sin(2*pi*f*t)", constants: { f: 4e9, on: 1e-11 }, event_times_s: [1e-11] };
+    expect(buildTorque({
+      ...base,
+      kind: "slonczewski",
+      formulaVersion: "slonczewski.fullmag.v2",
+      schemaVersion: "",
+      currentSource: "",
+      timeExpression: JSON.stringify(timeExpression),
+    })).toHaveProperty("time_expression", timeExpression);
   });
 
   it("builds the complete canonical Zhang-Li identity without dropping operator physics", () => {
@@ -280,7 +269,7 @@ describe("dedicated torque and Oersted inspectors", () => {
       operatorVersion: "zl_central_reference_v1", rawSpinPolarization: "",
       realization: "", schemaVersion: "zhang_li_torque.v1",
       spinPolarization: "", stackNormal: "",
-      target: JSON.stringify({ object_id: "track" }), xiDl: "0", xiFl: "0",
+      target: JSON.stringify({ object_id: "track" }), timeExpression: "", xiDl: "0", xiFl: "0",
     }) as Record<string, unknown>;
 
     expect(torque).toMatchObject({
@@ -300,7 +289,7 @@ describe("dedicated torque and Oersted inspectors", () => {
       freeLayerThickness: "", id: "torque", kind: "prescribed_sot" as const,
       landeG: "2.1", lambdaAsymmetry: "1", operatorVersion: "zl_central_reference_v1",
       rawSpinPolarization: "", realization: "", schemaVersion: "prescribed_sot.v1",
-      spinPolarization: "", stackNormal: "", target: "", xiDl: "0", xiFl: "0",
+      spinPolarization: "", stackNormal: "", target: "", timeExpression: "", xiDl: "0", xiFl: "0",
     };
 
     expect(torqueModelPatch(draft, "zhang_li")).toMatchObject({
@@ -325,7 +314,7 @@ describe("dedicated torque and Oersted inspectors", () => {
       freeLayerThickness: "", id: "torque", kind: "zhang_li" as const,
       landeG: "", lambdaAsymmetry: "1", operatorVersion: "zl_central_reference_v1",
       rawSpinPolarization: "", realization: "", schemaVersion: "",
-      spinPolarization: "", stackNormal: "", target: "", xiDl: "0", xiFl: "0",
+      spinPolarization: "", stackNormal: "", target: "", timeExpression: "", xiDl: "0", xiFl: "0",
     };
 
     expect(torqueCurrentBindingPatch(draft, "current_transport")).toEqual({

@@ -1,6 +1,5 @@
 "use client";
 
-import { parseQuantityInput } from "@/kernel/authoring/object-edit/quantityInput";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FormField } from "../../primitives/FormField";
@@ -28,7 +27,7 @@ export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
     ? resolveStudyWorkflowStateBefore(pipelineDrafts, nextRunIndex)
     : null;
   const effectiveSampling = effectiveState?.tableAutosave ?? null;
-  const durationS = positiveDurationSeconds(nextRun?.untilSeconds);
+  const durationS = positiveNumber(nextRun?.untilSeconds);
   const readOnly = draft?.tableAutosave.readOnly ?? false;
 
   return (
@@ -148,9 +147,7 @@ export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
   );
 }
 
-function positiveDurationSeconds(value: string | number | null | undefined): number | null {
-  const parsed = parseQuantityInput(value == null ? "" : String(value), "time");
-  return parsed.parseStatus === "valid" && parsed.parsedSI !== null && parsed.parsedSI > 0
-    ? parsed.parsedSI
-    : null;
+function positiveNumber(value: string | number | null | undefined): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }

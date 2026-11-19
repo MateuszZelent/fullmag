@@ -1,15 +1,22 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useRef, useState } from "react";
+
+import { useKernel } from "@/kernel/KernelContext";
+import {
+  getStageInitialStateChoice,
+  matchesPreparedStageInitialState,
+  preparedStageInitialStateChoice,
+  setStageInitialStateChoice,
+  type StageInitialStateChoice,
+} from "@/kernel/runtime/studyStageInitialState";
+
+import { readStudyStageSource } from "@/shared/domain/study/studyStageSource";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
-import { useRegisterInspectorEditSession } from "../InspectorEditSession";
-import {
-  QuantityFieldDraftScope,
-  useQuantityFieldDraftScope,
-} from "../primitives/QuantityField";
+import { useInspectorEditSession, useRegisterInspectorEditSession } from "../InspectorEditSession";
 
-import { validateStudyStageDraft } from "./StudyStageAuthoringModel";
+import { isEditablePipelineStage, validateStudyStageDraft } from "./StudyStageAuthoringModel";
 import { useStudyInspectorPanelController } from "./StudyInspectorPanel";
 import { ChangeDeviceStageInspector } from "./stages/ChangeDeviceStageInspector";
 import { AddFieldDriveStageInspector } from "./stages/AddFieldDriveStageInspector";
@@ -25,6 +32,10 @@ import { RunStageInspector } from "./stages/RunStageInspector";
 import { SaveStateStageInspector } from "./stages/SaveStateStageInspector";
 import { TableAutosaveStageInspector } from "./stages/TableAutosaveStageInspector";
 import { UnsupportedStageInspector } from "./stages/UnsupportedStageInspector";
+import { MaskFieldDriveStageInspector } from "./stages/MaskFieldDriveStageInspector";
+import { summarizeMaskFieldDriveStage } from "./stages/maskFieldDriveStageSummary";
+import { StageInitialStateSelector } from "./stages/StageInitialStateSelector";
+import { StageTextureAssignmentsEditor } from "./stages/StageTextureAssignmentsEditor";
 import type { FrequencyDomainAuthoringView } from "./stages/StageInspectorFrame";
 import { validateStudyWorkflow } from "./stages/studyWorkflowState";
 
@@ -35,8 +46,11 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     dispatch,
     k0ModalReadinessFor,
     model,
+    modelReadiness,
     runtimeStatus,
     runCommand,
+    runStage,
+    stageRunDisabledReason,
     scene,
     sceneHasPayload,
     sceneRevision,
@@ -45,21 +59,16 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     stageExecution,
     state,
   } = useStudyInspectorPanelController(selection);
-  const selectedIndex = model.selectedStage?.index ?? state.selectedDraftIndex;
+  const stageId = selection.ref?.type === "study-stage" ? selection.ref.stageId : null;
+  const launchKey = JSON.stringify([sessionScopeKey, stageId]);
+  const [textureEditorKey, setTextureEditorKey] = useState<string | null>(null);
+  const textureEditing = textureEditorKey === launchKey;
+  const textureEditBlockReason = textureEditing ? "Add or cancel the pending texture change." : undefined;
+  const canonicalIndex = state.stageDrafts.findIndex((draft) => draft.pipelineNodeId === stageId);
+  const selectedIndex = state.stageDrafts.some((draft) => draft.pipelineNodeId)
+    ? canonicalIndex
+    : model.selectedStage?.index ?? state.selectedDraftIndex;
   const draft = state.stageDrafts[selectedIndex] ?? null;
-  const stageIdentity =
-    model.selectedStage?.pipelineNodeId ??
-    model.selectedStage?.stageId ??
-    draft?.pipelineNodeId ??
-    (selection.ref?.type === "study-stage" ? selection.ref.stageId : null) ??
-    JSON.stringify([selection.nodeId, selectedIndex]);
-  const numericDrafts = useQuantityFieldDraftScope(
-    JSON.stringify([sessionScopeKey ?? "no-session", stageIdentity]),
-  );
-  const hasPendingNumericDrafts = numericDrafts.summary.pendingCount > 0;
-  const pendingNumericApplyReason = hasPendingNumericDrafts
-    ? "Commit or discard pending numeric inputs before applying stage changes."
-    : undefined;
   const localValidation = draft
     ? validateStudyStageDraft(draft, {
         activeLane: runtimeStatus?.capabilities.active_lane ?? null,
@@ -96,46 +105,143 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   ]);
   const resetStageDrafts = useCallback(
     () => {
-      if (state.authoringBusy) return;
-      numericDrafts.store.clear();
+      setTextureEditorKey(null);
       dispatch({ type: "revertStageDrafts" });
     },
-    [dispatch, numericDrafts.store, state.authoringBusy],
+    [dispatch],
   );
-  const commitStageDraftsWhenReady = useCallback(() => {
-    if (state.authoringBusy || numericDrafts.store.getSummary().pendingCount > 0) {
-      return false;
-    }
-    return commitStageDrafts();
-  }, [commitStageDrafts, numericDrafts.store, state.authoringBusy]);
-  const canonicalStageDraftsDirty =
-    JSON.stringify(state.stageDrafts) !==
-    JSON.stringify(state.baselineStageDrafts);
-  const stageDraftsValid =
-    !allStageValidation.some((issue) => issue.severity === "error") &&
-    !hasPendingNumericDrafts;
+  const stagesDirty = JSON.stringify(state.stageDrafts) !== JSON.stringify(state.baselineStageDrafts);
   useRegisterInspectorEditSession(
     "staged",
     state.authoringBusy,
-    canonicalStageDraftsDirty || hasPendingNumericDrafts,
-    stageDraftsValid,
+    stagesDirty || textureEditing,
+    !textureEditing && !(draft?.pipelineNodeId ? validation : allStageValidation).some((issue) => issue.severity === "error"),
     state.authoringBusy ? "Study stage changes are being saved." : undefined,
-    commitStageDraftsWhenReady,
+    commitStageDrafts,
     resetStageDrafts,
-    {
-      applyBlockReason: pendingNumericApplyReason,
-      historyMode: "mutation-owned",
-    },
+    { applyBlockReason: textureEditBlockReason, historyMode: "mutation-owned" },
   );
   const selectedStageKind = model.selectedStage?.kind ?? draft?.kind ?? null;
   const inspectorKind = draft?.pipelineNodeId && draft.kind === "unsupported"
     ? "unsupported" : resolveStudyStageInspectorKind(selection.kind, selectedStageKind);
+  // Add/Update stages of a mask antenna keep their raw payload; they get a
+  // read-only summary instead of the generic "unsupported stage" notice.
+  const maskStageSummary = draft?.kind === "unsupported"
+    ? summarizeMaskFieldDriveStage(draft.rawStage)
+    : null;
   const frequencyDomainAuthoringView =
     resolveFrequencyDomainAuthoringView(selection.kind);
   const hysteresisView =
     inspectorKind === "hysteresis"
       ? resolveHysteresisInspectorView(selection.nodeId)
       : "overview";
+  const kernel = useKernel();
+  const form = useInspectorEditSession();
+  const stageRunPending = useRef(false);
+  const [launching, setLaunching] = useState(false);
+  const [launchFeedback, setLaunchFeedback] = useState<{ key: string; message: string; failed: boolean } | null>(null);
+  const displayedRevision = scene.data?.revision;
+  const committedRevision = scene.status === "ready" && typeof displayedRevision === "number" &&
+    displayedRevision === runtimeStatus?.resources.scene_revision ? displayedRevision : null;
+  const pinnedSource = stageId
+    ? getStageInitialStateChoice(kernel.api, sessionScopeKey, stageId)
+    : undefined;
+  const preparedSource = preparedStageInitialStateChoice(
+    modelReadiness.status === "ready" ? modelReadiness.data : null,
+    committedRevision,
+  );
+  const choice = pinnedSource?.choice;
+  const staleSource = pinnedSource !== undefined && committedRevision !== null &&
+    (pinnedSource.sceneRevision !== committedRevision ||
+      (choice?.kind === "prepared" && !matchesPreparedStageInitialState(choice, preparedSource)));
+  let sourceBlockedReason = null;
+  if (staleSource) {
+    sourceBlockedReason = "Choose the initial magnetization for the current saved scene and preview.";
+  } else if (pinnedSource && committedRevision === null) {
+    sourceBlockedReason = "Wait for the saved scene to refresh before using the chosen source.";
+  } else if (stagesDirty && choice?.kind === "prepared") {
+    sourceBlockedReason = "Save the stage first, then choose a prepared magnetization for the saved scene.";
+  }
+  const changeInitialState = (choice: StageInitialStateChoice) => {
+    if (!stageId || !sessionScopeKey || committedRevision === null ||
+        kernel.commands.getSessionScopeKey() !== sessionScopeKey) return;
+    setStageInitialStateChoice(kernel.api, sessionScopeKey, stageId, committedRevision, choice);
+    kernel.commands.refresh();
+  };
+  const stageSource = readStudyStageSource(scene.data?.study);
+  const stageTextureSupported = stageSource.kind === "pipeline"
+    ? stageSource.entries.every((item) => !item.enabled ||
+        ["run", "relax", "set_field", "set_current", "add_field_drive",
+          "remove_field_drive", "table_autosave", "autosave"].includes(item.stageKind ?? ""))
+    : stageSource.kind === "flat" && state.stageDrafts.every((item) => item.kind === "run" || item.kind === "relax");
+  const textureAuthoring = scene.data && draft &&
+    (inspectorKind === "run" || inspectorKind === "relax") ? (
+      <StageTextureAssignmentsEditor
+        key={launchKey}
+        disabledReason={launching || state.authoringBusy
+          ? "Wait for the current stage request."
+          : stageTextureSupported ? null : "Texture changes require an ordered Run and Relax Study."}
+        onChange={(value) => dispatch({
+          type: "updateStageDraft", index: selectedIndex, patch: { stageMagnetizationAssignments: value },
+        })}
+        onOpenChange={(open) => setTextureEditorKey(open ? launchKey : null)}
+        open={textureEditing}
+        scene={scene.data}
+        value={draft.stageMagnetizationAssignments}
+      />
+    ) : undefined;
+  const baseline = state.baselineStageDrafts[selectedIndex];
+  const disabledStageReason = draft?.pipelineAncestorsEnabled === false
+    ? "Enable the parent group before starting this stage."
+    : draft?.stageEnabled === false ? "Enable and save this stage before starting it." : undefined;
+  const stageLaunch = stageId && stageId === draft?.stageId &&
+    (inspectorKind === "run" || inspectorKind === "relax") ? {
+      disabledReason: launching
+        ? "The stage request is in progress."
+        : textureEditBlockReason ?? disabledStageReason ?? sourceBlockedReason ??
+          stageRunDisabledReason(stageId, stagesDirty, form),
+      feedback: launchFeedback?.key === launchKey ? launchFeedback : null,
+      initialStateControl: (
+        <StageInitialStateSelector
+          key={launchKey}
+          stageId={stageId}
+          sceneRevision={committedRevision}
+          choice={choice ?? { kind: "default_for_target" }}
+          preparedSource={preparedSource}
+          stale={staleSource}
+          hasAuthoredReset={Boolean(baseline?.scriptMagnetizationAssignments || baseline?.stageMagnetizationAssignments)}
+          disabled={launching || state.authoringBusy}
+          onChange={changeInitialState}
+          onPreviewResult={kernel.savedResultsPlayback
+            ? (result) => kernel.savedResultsPlayback?.openStudyResult(result)
+            : undefined}
+        />
+      ),
+      label: launching
+        ? state.authoringBusy ? "Saving stage…" : "Starting stage…"
+        : stagesDirty ? "Save and run this stage" : "Run this stage",
+      onRun: async () => {
+        if (stageRunPending.current || sourceBlockedReason || disabledStageReason || textureEditing) return;
+        stageRunPending.current = true;
+        setLaunching(true);
+        setLaunchFeedback(null);
+        try {
+          const result = await runStage(stageId, stagesDirty, form, pinnedSource?.choice);
+          const failed = result.status === "failed" || result.status === "cancelled";
+          setLaunchFeedback({
+            failed,
+            key: launchKey,
+            message: result.message ?? (failed ? "Could not run the selected stage." : "Stage requested."),
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Could not run the selected stage.";
+          setLaunchFeedback({ failed: true, key: launchKey, message });
+        } finally {
+          stageRunPending.current = false;
+          setLaunching(false);
+        }
+      },
+    } : undefined;
   const commonProps = {
     authoringBusy: state.authoringBusy,
     algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
@@ -144,9 +250,12 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     draft,
     draftIndex: selectedIndex,
     demagEnabled: state.globalDraft.demagEnabled,
-    onCommit: () => void commitStageDraftsWhenReady(),
-    onUpdateDraft: (patch: Partial<(typeof state.stageDrafts)[number]>) =>
-      dispatch({ type: "updateStageDraft", index: selectedIndex, patch }),
+    onCommit: () => { if (!textureEditing) void commitStageDrafts(); },
+    pipelineDraftDirty: stagesDirty,
+    onUpdateDraft: (patch: Partial<(typeof state.stageDrafts)[number]>) => {
+      if (draft?.pipelineNodeId && (!isEditablePipelineStage(draft) || draft.pipelineNodeId !== stageId)) return;
+      dispatch({ type: "updateStageDraft", index: selectedIndex, patch });
+    },
     pipelineDrafts: state.stageDrafts,
     requestedBackend: model.requested.backend,
     requestedDevice: model.requested.device,
@@ -155,12 +264,15 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     runRuntimeCommand: runCommand,
     runtimeCommandDisabledReason: commandDisabledReason,
     stage: model.selectedStage,
+    stageLaunch,
     stageExecutionRevision: stageExecution.data?.revision ?? null,
-    validation,
+    textureAuthoring,
+    validation: textureEditBlockReason
+      ? [...validation, { message: textureEditBlockReason, severity: "error" as const }]
+      : validation,
   };
 
   return (
-    <QuantityFieldDraftScope store={numericDrafts.store}>
     <div
       className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
       data-scene-has-payload={sceneHasPayload}
@@ -175,6 +287,13 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
           expectedKind="antenna_field_solve"
           kindLabel="Antenna Field Solve"
         />
+      ) : maskStageSummary ? (
+        <MaskFieldDriveStageInspector
+          {...commonProps}
+          expectedKind="unsupported"
+          kindLabel={maskStageSummary.kindLabel}
+          summary={maskStageSummary}
+        />
       ) : inspectorKind === "unsupported" ? (
         <UnsupportedStageInspector
           {...commonProps}
@@ -186,7 +305,6 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
           {...commonProps}
           expectedKind="add_field_drive"
           kindLabel="Add Field Drive"
-          numericDraftStore={numericDrafts.store}
         />
       ) : inspectorKind === "table_autosave" ? (
         <TableAutosaveStageInspector
@@ -253,7 +371,6 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
         />
       )}
     </div>
-    </QuantityFieldDraftScope>
   );
 }
 

@@ -1,3 +1,13 @@
+import type { MaterialLibraryResource, MaterialLibraryMutationResource, MaterialLibraryWriteRequest, MaterialLibraryUpdateRequest, MaterialLibraryDeleteRequest, MaterialLibraryDeleteResource, SceneMaterialSource } from "./apiTypes";
+import type { MaterialVersionMutationResource, MaterialVersionPublishRequest, MaterialVersionUpdateRequest } from "./apiTypes";
+import {
+  WORKSPACE_MATERIAL_LIBRARY_PATH, WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH,
+  WORKSPACE_MATERIAL_LIBRARY_VERSIONS_PATH, WORKSPACE_MATERIAL_LIBRARY_VERSION_PATH,
+} from "./apiPaths";
+import { MODEL_OBJECT_SOURCE_SURFACE_PATH, MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH } from "./apiPaths";
+import type { ImportedSourceSurfaceResource, ImportedSourceSurfaceQuery } from "./apiTypes";
+import { WORKSPACE_ITEM_PLAYBACK_PATH, WORKSPACE_ITEM_PLAYBACK_FRAME_PATH, WORKSPACE_ITEM_PLAYBACK_GEOMETRY_PATH } from "./apiPaths";
+import type { SavedPlaybackResource } from "./savedResultsPlayback";
 import { artifactFieldResponseIdentityError } from "./artifactFieldResponseIdentity";
 import { objectMeshPolicyWireRequest } from "./objectMeshPolicyWire";
 import { API_INSTANCE_HEADER, isApiInstanceId, resolveApiInstancePin } from "./apiInstancePin";
@@ -78,6 +88,7 @@ import {
   DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
   DATA_PLANAR_FIELD_META_PATH,
   DATA_PLANAR_FIELD_PROBE_PATH,
+  DATA_PLANAR_FIELD_PROFILE_PATH,
   DATA_PLANAR_FIELD_RENDER_PNG_PATH,
   DATA_PLANAR_FIELD_SCALAR_PATH,
   DATA_PLANAR_FIELD_VECTORS_PATH,
@@ -85,6 +96,7 @@ import {
   DATA_PLANAR_DEFAULT_FIELD_MESH_OVERLAY_PATH,
   DATA_PLANAR_DEFAULT_FIELD_META_PATH,
   DATA_PLANAR_DEFAULT_FIELD_PROBE_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_PROFILE_PATH,
   DATA_PLANAR_DEFAULT_FIELD_RENDER_PNG_PATH,
   DATA_PLANAR_DEFAULT_FIELD_SCALAR_PATH,
   DATA_PLANAR_DEFAULT_FIELD_VECTORS_PATH,
@@ -104,6 +116,7 @@ import {
   DIAGNOSTICS_CPU_PATH,
   DIAGNOSTICS_ENGINE_LOG_PATH,
   DIAGNOSTICS_GPU_PATH,
+  DIAGNOSTICS_RUN_PERFORMANCE_PATH,
   DIAGNOSTICS_SOLVER_PROFILE_PATH,
   MESHING_CAPABILITIES_PATH,
   MESHING_BUILDS_PATH,
@@ -152,6 +165,10 @@ import {
   MODEL_CURRENT_TRANSPORTS_PATH,
   MODEL_FIELD_DRIVE_PATH,
   MODEL_FIELD_DRIVES_PATH,
+  MODEL_MASK_FIELD_DRIVE_PATH,
+  MODEL_MASK_FIELD_DRIVES_PATH,
+  MODEL_READY_ANTENNA_TERMS_PATH,
+  MODEL_READY_ANTENNAS_PATH,
   MODEL_SPIN_TRANSPORT_PATH,
   MODEL_SPIN_TRANSPORTS_PATH,
   MODEL_SPIN_INTERFACES_PATH,
@@ -215,6 +232,11 @@ import {
   PROJECT_RUN_SUBMIT_PATH,
   PROJECT_RUN_MATERIALIZATION_PATH,
   PROJECT_RUN_PATH,
+  PROJECT_STUDY_RESULT_MAGNETIZATION_PATH,
+  PROJECT_STUDY_RESULT_SCALARS_PATH,
+  PROJECT_STUDY_RESULT_STATE_PATH,
+  PROJECT_STUDY_RESULT_SUPPORT_PATH,
+  PROJECT_STUDY_RESULT_TOPOLOGY_PATH,
   PROJECT_RUN_TASK_CANCELLATION_PATH,
   PROJECT_RUN_TASK_RETRY_PATH,
   PROJECT_BATCHES_PATH,
@@ -227,6 +249,7 @@ import {
   PLATFORM_COMPUTE_NODES_PATH,
   PLATFORM_COMPUTE_NODE_POLICY_PATH,
   PLATFORM_HEALTH_PATH,
+  PLATFORM_INSTANCES_PATH,
   PLATFORM_RUNTIME_SERVICE_PATH,
   WORKSPACE_ITEMS_PATH,
   WORKSPACE_ITEM_FORGET_PATH,
@@ -261,6 +284,7 @@ import {
   SIMULATION_STAGE_HYSTERESIS_SATURATION_PATH,
   SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
+  SIMULATION_STAGES_RESULTS_PATH,
   VISUALIZATION_CLIENT_ACKS_PATH,
   VISUALIZATION_DISPLAY_PATH,
   VISUALIZATION_MODE_COMPOSITION_ACTIVE_PATH,
@@ -291,6 +315,7 @@ import type {
   BinaryResourceResult,
   AuthoringTransactionRequest,
   AuthoringTransactionResponse,
+  MagnetizationApplyTarget,
   CheckpointCreateRequest,
   CheckpointCreateResponse,
   CheckpointEntry,
@@ -320,6 +345,12 @@ import type {
   FieldDriveDeleteRequest,
   FieldDriveListResource,
   FieldDriveReplaceRequest,
+  MaskFieldDriveCreateRequest,
+  MaskFieldDriveListResource,
+  MaskFieldDriveReplaceRequest,
+  ReadyAntennaListResource,
+  ReadyAntennaTermsRequest,
+  ReadyAntennaTermsResource,
   SpinWaveGammaResource,
   CpuTelemetryResource,
   CrossSectionImageQuery,
@@ -352,6 +383,8 @@ import type {
   PlanarFieldMetaResource,
   PlanarFieldProbeQuery,
   PlanarFieldProbeResource,
+  PlanarFieldProfileQuery,
+  PlanarFieldProfileResource,
   PlanarFieldQuery,
   PlanarFieldSource,
   AnalyticReferenceModelCollectionResource,
@@ -372,6 +405,7 @@ import type {
   GeometryRealizationResource,
   GeometryValidationResource,
   GpuTelemetryResource,
+  RunPerformanceResource,
   HealthResource,
   RuntimeServiceStatusResource,
   WorkspaceItemsQuery,
@@ -380,6 +414,7 @@ import type {
   JsonObject,
   LiveStatusResource,
   PlatformCapabilitiesResource,
+  InstanceDiscoveryResource,
   MagnetizationAssetPatchRequest,
   MagnetizationAssetResource,
   ModeCompositionPatch,
@@ -568,6 +603,11 @@ import type {
   SimulationPreparationResource,
   SolverStatusResource,
   StageExecutionResource,
+  StudyResultScalarWindow,
+  StudyResultStateResource,
+  StudyStageResult,
+  StudyStageResultsQuery,
+  StudyStageResultsResource,
   StructuredCommandRequest,
   StudyRuntimePatchRequest,
   StudyRuntimeResource,
@@ -755,14 +795,29 @@ export function transformFieldVectorForDisplay(
     "magnitude_squared"
       ? scale * scale
       : scale;
-  const values = Float64Array.from(result.data.values, (value) => value * projectionScale);
-  return {
-    ...result,
-    data: {
+  let data: DecodedFieldVector;
+  if (result.data.dtype === "float32") {
+    const values = Float32Array.from(
+      result.data.values,
+      (value) => value * projectionScale,
+    );
+    if (values.some((value) => !Number.isFinite(value))) {
+      throw new Error("Display conversion produced non-finite float32 values");
+    }
+    data = { ...result.data, quantityId: requestedQuantityId, values };
+  } else {
+    data = {
       ...result.data,
       quantityId: requestedQuantityId,
-      values,
-    },
+      values: Float64Array.from(
+        result.data.values,
+        (value) => value * projectionScale,
+      ),
+    };
+  }
+  return {
+    ...result,
+    data,
     responseMetadata: {
       ...result.responseMetadata,
       quantityId: requestedQuantityId,
@@ -773,7 +828,14 @@ import { decodeCrossSection } from "./codecs/crossSectionCodec";
 import { decodeCrossSectionQuality } from "./codecs/crossSectionQualityCodec";
 import { decodeFieldVector } from "./codecs/fieldVectorCodec";
 import { decodeMeshQualityData } from "./codecs/meshQualityDataCodec";
-import { decodeSavedSupport, savedSupportByteLimit } from "./codecs/savedSupportCodec";
+import { decodeSavedSupport, decodeSavedSupportBody, MAX_SAVED_SUPPORT_BYTES, savedSupportByteLimit } from "./codecs/savedSupportCodec";
+import {
+  MAX_STUDY_RESULT_BYTES,
+  validateStudyResultMagnetization,
+  validateStudyResultScalars,
+  validateStudyResultState,
+  verifyStudyResultBinary,
+} from "./studyResultPlayback";
 import { savedTopologyByteLimit, validateSavedGeometry, verifySavedTopologyBody } from "./savedGeometryIdentity";
 import { boundedBinaryResponse } from "./boundedBinaryResponse";
 import {
@@ -817,6 +879,16 @@ import { recordVisualizationDebugPerformanceMetric } from "@/kernel/performance/
 
 type FetchLike = typeof fetch;
 type PathParams = Record<string, string | number>;
+type StudyResultBinaryPath = typeof PROJECT_STUDY_RESULT_MAGNETIZATION_PATH |
+  typeof PROJECT_STUDY_RESULT_TOPOLOGY_PATH | typeof PROJECT_STUDY_RESULT_SUPPORT_PATH;
+
+function studyResultPath(result: Pick<StudyStageResult, "project_id" | "source" | "artifact_id">): PathParams {
+  return {
+    project_id: assertSolutionSetProjectId(result.project_id),
+    run_id: assertSolutionSetRunId(result.source.run_id),
+    artifact_id: assertMaterializedDatasetPathId("artifact id", result.artifact_id),
+  };
+}
 type QueryParams = Record<string, unknown>;
 type BinaryOpenApiTransportResult = {
   data?: unknown;
@@ -1131,6 +1203,31 @@ export class ControlRoomApi {
    * them (modules/start/model/workspaceApiTypes.ts) until generated types exist.
    */
   readonly workspace = {
+    listMaterials: (options?: RequestOptions) =>
+      this.requestJson<MaterialLibraryResource>(WORKSPACE_MATERIAL_LIBRARY_PATH, options),
+    publishMaterialVersion: (input: MaterialVersionPublishRequest, options?: RequestOptions) =>
+      this.postJson<MaterialVersionMutationResource, MaterialVersionPublishRequest>(
+        WORKSPACE_MATERIAL_LIBRARY_VERSIONS_PATH, input, options,
+      ),
+    updateMaterialVersion: (family: string, version: string, input: MaterialVersionUpdateRequest, options?: RequestOptions) =>
+      this.patchJson<MaterialVersionMutationResource, MaterialVersionUpdateRequest>(
+        WORKSPACE_MATERIAL_LIBRARY_VERSION_PATH, input, options, { path: { family, version } },
+      ),
+    createMaterial: (input: MaterialLibraryWriteRequest, options?: RequestOptions) =>
+      this.postJson<MaterialLibraryMutationResource, MaterialLibraryWriteRequest>(WORKSPACE_MATERIAL_LIBRARY_PATH, input, options),
+    updateMaterial: (id: string, input: MaterialLibraryUpdateRequest, options?: RequestOptions) =>
+      this.putJson<MaterialLibraryMutationResource, MaterialLibraryUpdateRequest>(WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH, input, options, { path: { id } }),
+    deleteMaterial: (id: string, input: MaterialLibraryDeleteRequest, options?: RequestOptions) =>
+      this.deleteJsonWithBody<MaterialLibraryDeleteResource, MaterialLibraryDeleteRequest>(WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH, input, options, { path: { id } }),
+    playback: (id: string, options?: RequestOptions) =>
+      this.requestJson<SavedPlaybackResource>(WORKSPACE_ITEM_PLAYBACK_PATH, options, {path: {id}}),
+    playbackGeometry: (id: string, revision: string, part: "topology"|"support", options?: BinaryRequestOptions) =>
+      this.requestBinaryBytes(WORKSPACE_ITEM_PLAYBACK_GEOMETRY_PATH, {...options, maxResponseBytes: part === "support" ? 1024*1024 : 64*1024*1024},
+        {id}, {revision, part}),
+    playbackFrame: (id: string, stageId: string, frameIndex: number, revision: string, options?: BinaryRequestOptions) =>
+      this.requestBinaryBytes(WORKSPACE_ITEM_PLAYBACK_FRAME_PATH, {...options, maxResponseBytes: 64 * 1024 * 1024},
+        {id, frame_index: String(frameIndex)}, {stage_id: stageId, revision}),
+
     items: (query: WorkspaceItemsQuery = {}, options?: RequestOptions) =>
       this.requestJson<unknown>(WORKSPACE_ITEMS_PATH, options, {
         query: workspaceQueryParams(query),
@@ -1240,6 +1337,8 @@ export class ControlRoomApi {
       ),
     health: (options?: RequestOptions) =>
       this.requestJson<HealthResource>(PLATFORM_HEALTH_PATH, options),
+    instances: (options?: RequestOptions) =>
+      this.requestJson<InstanceDiscoveryResource>(PLATFORM_INSTANCES_PATH, options),
     runtimeService: (options?: RequestOptions) =>
       this.requestJson<RuntimeServiceStatusResource>(PLATFORM_RUNTIME_SERVICE_PATH, options),
   };
@@ -1283,12 +1382,17 @@ export class ControlRoomApi {
         SIMULATION_COMMANDS_PATH,
         options,
       ),
-    submit: (command: StructuredCommandRequest, options?: RequestOptions) =>
-      this.postJson<CommandResponse, StructuredCommandRequest>(
+    submit: (command: StructuredCommandRequest, options?: RequestOptions) => {
+      const compute = command.kind === "solve" || command.kind === "run" || command.kind === "relax";
+      const key = compute ? command.client_intent_id : undefined;
+      return this.postJson<CommandResponse, StructuredCommandRequest>(
         SIMULATION_COMMANDS_PATH,
         command,
         options,
-      ),
+        undefined,
+        key ? { "Idempotency-Key": key } : undefined,
+      );
+    },
   };
 
   readonly analysis = {
@@ -1995,6 +2099,29 @@ export class ControlRoomApi {
           options,
         ).then((result) => transformFieldVectorForDisplay(requestedQuantityId, result));
       },
+      preparedMagnetization: async (
+        source: { observation_frame_id: string; domain_generation_id: string },
+        query: FieldVectorQuery = {},
+        options?: BinaryRequestOptions,
+      ) => {
+        if (!source.observation_frame_id?.trim() || !source.domain_generation_id?.trim()) {
+          throw new ControlRoomApiError("The prepared magnetization has no complete source identity.", 409);
+        }
+        const result = await this.requestFieldVector(
+          DATA_FIELD_VECTOR_PATH,
+          { quantity_id: "m" },
+          fieldVectorQueryParams({
+            ...query,
+            expected_generation_id: source.domain_generation_id,
+          }),
+          options,
+          source.observation_frame_id,
+        );
+        if (result.status !== "ready" && result.status !== "not-modified") {
+          throw new ControlRoomApiError("This prepared magnetization is no longer available.", 409);
+        }
+        return result;
+      },
       fdmVector: (
         quantityId: string,
         query: FdmScopedFieldVectorQuery,
@@ -2107,6 +2234,23 @@ export class ControlRoomApi {
             DATA_PLANAR_DEFAULT_FIELD_PROBE_PATH,
           );
           return this.requestJson<PlanarFieldProbeResource>(request.path, options, {
+            path: request.pathParams,
+            query,
+          });
+        },
+        profile: (
+          quantityId: string,
+          source: PlanarFieldSource,
+          query: PlanarFieldProfileQuery,
+          options?: RequestOptions,
+        ) => {
+          const request = planarRequestSpec(
+            source,
+            quantityId,
+            DATA_PLANAR_FIELD_PROFILE_PATH,
+            DATA_PLANAR_DEFAULT_FIELD_PROFILE_PATH,
+          );
+          return this.requestJson<PlanarFieldProfileResource>(request.path, options, {
             path: request.pathParams,
             query,
           });
@@ -2238,6 +2382,11 @@ export class ControlRoomApi {
     solverProfile: (options?: RequestOptions) =>
       this.requestJson<SolverProfileResource>(
         DIAGNOSTICS_SOLVER_PROFILE_PATH,
+        options,
+      ),
+    runPerformance: (options?: RequestOptions) =>
+      this.requestJson<RunPerformanceResource>(
+        DIAGNOSTICS_RUN_PERFORMANCE_PATH,
         options,
       ),
   };
@@ -2467,6 +2616,13 @@ export class ControlRoomApi {
   };
 
   readonly model = {
+    sourceSurface: (objectId: string, options?: RequestOptions) =>
+      this.requestJson<ImportedSourceSurfaceResource>(MODEL_OBJECT_SOURCE_SURFACE_PATH, options,
+        { path: { object_id: objectId } }),
+    sourceSurfaceTopology: (objectId: string, query: ImportedSourceSurfaceQuery, options?: BinaryRequestOptions) =>
+      this.requestTopology(MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH, options,
+        { object_id: objectId }, { ...query }),
+
     frozenSpins: {
       list: (options?: RequestOptions) =>
         this.requestJson<FrozenSpinsCollectionResource>(
@@ -2657,6 +2813,47 @@ export class ControlRoomApi {
         transaction,
         options,
       ),
+    applyMagnetization: async (
+      target: MagnetizationApplyTarget,
+      options: RequestOptions & { baseRevision: number; sessionScopeKey: string },
+    ) => {
+      if (!options.sessionScopeKey || !Number.isSafeInteger(options.baseRevision) || options.baseRevision < 0) {
+        throw new Error("The saved scene and session are required to apply magnetization.");
+      }
+      const operationId = createRequestId().replaceAll("-", "");
+      const pinnedTarget = structuredClone(target);
+      const transaction: AuthoringTransactionRequest = {
+        kind: "apply_magnetization",
+        operation_id: operationId,
+        base_revision: options.baseRevision,
+        target: pinnedTarget,
+      };
+      const submit = () => this.postJson<AuthoringTransactionResponse, AuthoringTransactionRequest>(
+        MODEL_TRANSACTIONS_PATH, transaction, options, undefined, { "Idempotency-Key": operationId },
+      );
+      let response: AuthoringTransactionResponse;
+      try {
+        response = await submit();
+      } catch (error) {
+        if (!(error instanceof ControlRoomApiError) || error.code !== API_UNAVAILABLE_CODE) throw error;
+        options.signal?.throwIfAborted();
+        await delayRetry(this.retryDelayMs, options.signal);
+        response = await submit();
+      }
+      const receipt = response.magnetization_apply;
+      const regionId = pinnedTarget.kind === "region" ? pinnedTarget.region_id : null;
+      if (!receipt || receipt.operation_id !== operationId ||
+          receipt.scene_revision !== options.baseRevision + 1 ||
+          response.scene_revision !== receipt.scene_revision ||
+          response.committed_scene?.revision !== receipt.scene_revision ||
+          !Array.isArray(receipt.scopes) || receipt.scopes.length !== 1 ||
+          receipt.scopes[0]?.object_id !== pinnedTarget.object_id ||
+          (receipt.scopes[0]?.region_id ?? null) !== regionId ||
+          (receipt.status !== "initial_state_ready" && receipt.status !== "initial_state_pending")) {
+        throw new Error("The server did not confirm the magnetization apply. Refresh the scene before retrying.");
+      }
+      return { ...response, magnetization_apply: receipt };
+    },
     patchMagnetization: (
       objectId: string,
       regionId: string | null,
@@ -2835,11 +3032,14 @@ export class ControlRoomApi {
       properties: MaterialPropertiesResource,
       references: MaterialReferenceResource[] = [],
       options?: AuthoringWriteOptions,
+      asset?: { source?: SceneMaterialSource | null; assignToObjectId?: string },
     ) =>
       this.model.commitTransaction(
         {
           ...baseRevisionPayload(options),
           kind: "create_material",
+          ...(asset?.source ? { source: asset.source } : {}),
+          ...(asset?.assignToObjectId ? { assign_to_object_id: asset.assignToObjectId } : {}),
           material_id: materialId,
           name,
           properties,
@@ -2949,6 +3149,53 @@ export class ControlRoomApi {
         request,
         options,
         { path: { drive_id: driveId } },
+      ),
+    maskFieldDrives: (options?: RequestOptions) =>
+      this.requestJson<MaskFieldDriveListResource>(
+        MODEL_MASK_FIELD_DRIVES_PATH,
+        options,
+      ),
+    createMaskFieldDrive: (
+      request: MaskFieldDriveCreateRequest,
+      options?: RequestOptions,
+    ) =>
+      this.postJson<AuthoringTransactionResponse, MaskFieldDriveCreateRequest>(
+        MODEL_MASK_FIELD_DRIVES_PATH,
+        request,
+        options,
+      ),
+    replaceMaskFieldDrive: (
+      driveId: string,
+      request: MaskFieldDriveReplaceRequest,
+      options?: RequestOptions,
+    ) =>
+      this.putJson<AuthoringTransactionResponse, MaskFieldDriveReplaceRequest>(
+        MODEL_MASK_FIELD_DRIVE_PATH,
+        request,
+        options,
+        { path: { drive_id: driveId } },
+      ),
+    deleteMaskFieldDrive: (
+      driveId: string,
+      request: FieldDriveDeleteRequest,
+      options?: RequestOptions,
+    ) =>
+      this.deleteJsonWithBody<AuthoringTransactionResponse, FieldDriveDeleteRequest>(
+        MODEL_MASK_FIELD_DRIVE_PATH,
+        request,
+        options,
+        { path: { drive_id: driveId } },
+      ),
+    readyAntennas: (options?: RequestOptions) =>
+      this.requestJson<ReadyAntennaListResource>(MODEL_READY_ANTENNAS_PATH, options),
+    readyAntennaTerms: (
+      request: ReadyAntennaTermsRequest,
+      options?: RequestOptions,
+    ) =>
+      this.postJson<ReadyAntennaTermsResource, ReadyAntennaTermsRequest>(
+        MODEL_READY_ANTENNA_TERMS_PATH,
+        request,
+        options,
       ),
     createObjectRegion: (
       objectId: string,
@@ -3242,6 +3489,57 @@ export class ControlRoomApi {
           options,
           { path: { project_id: projectId, run_id: runId } },
         ),
+      studyResultState: async (result: StudyStageResult, options?: RequestOptions) => {
+        const state = await this.requestJson<StudyResultStateResource>(
+          PROJECT_STUDY_RESULT_STATE_PATH, options, { path: studyResultPath(result) },
+        );
+        return validateStudyResultState(state, result);
+      },
+      studyResultMagnetization: async (state: StudyResultStateResource, options?: RequestOptions) => {
+        const binary = await this.requestBinaryResource(
+          PROJECT_STUDY_RESULT_MAGNETIZATION_PATH, "field-vector", decodeFieldVector,
+          { signal: options?.signal, maxResponseBytes: Math.min(MAX_STUDY_RESULT_BYTES, state.sample_count * 24 + 4096) },
+          studyResultPath(state), undefined,
+          (response) => verifyStudyResultBinary(response.headers, state),
+        );
+        if (binary.status !== "ready") throw new Error("Saved Study magnetization is unavailable.");
+        return validateStudyResultMagnetization(binary.data, state);
+      },
+      studyResultTopology: async (state: StudyResultStateResource, options?: RequestOptions) => {
+        const geometry = state.geometry;
+        if (geometry.kind !== "fem") return null;
+        const binary = await this.requestBinaryResource(
+          PROJECT_STUDY_RESULT_TOPOLOGY_PATH, "topology", decodeTopology,
+          { signal: options?.signal, maxResponseBytes: MAX_STUDY_RESULT_BYTES },
+          studyResultPath(state), undefined,
+          (response) => verifyStudyResultBinary(response.headers, state),
+        );
+        if (binary.status !== "ready" || binary.data.formatVersion !== 2 ||
+            binary.data.nodeCount !== geometry.node_count || binary.data.elementCount !== geometry.element_count) {
+          throw new Error("Saved FEM topology differs from the pinned Study state.");
+        }
+        return binary.data;
+      },
+      studyResultSupport: async (state: StudyResultStateResource, options?: RequestOptions) => {
+        if (!state.support_available) return null;
+        const binary = await this.requestBinaryResource(
+          PROJECT_STUDY_RESULT_SUPPORT_PATH, "raw-bytes", (buffer) => buffer,
+          { signal: options?.signal, maxResponseBytes: MAX_SAVED_SUPPORT_BYTES },
+          studyResultPath(state), undefined,
+          (response) => verifyStudyResultBinary(response.headers, state),
+        );
+        if (binary.status !== "ready") throw new Error("Saved Study magnetic support is unavailable.");
+        return decodeSavedSupportBody(binary.data, state.sample_count);
+      },
+      studyResultScalars: async (result: StudyStageResult, start: number, options?: RequestOptions) => {
+        const window = await this.requestJson<StudyResultScalarWindow>(
+          PROJECT_STUDY_RESULT_SCALARS_PATH, options, {
+            path: studyResultPath(result),
+            query: { start, limit: 50 },
+          },
+        );
+        return validateStudyResultScalars(window, result);
+      },
       solutionSets: (
         projectId: string,
         runId: string,
@@ -3628,6 +3926,12 @@ export class ControlRoomApi {
           SIMULATION_STAGES_EXECUTION_PATH,
           options,
         ),
+      results: (query: StudyStageResultsQuery = {}, options?: RequestOptions) =>
+        this.requestJson<StudyStageResultsResource>(
+          SIMULATION_STAGES_RESULTS_PATH,
+          options,
+          { query },
+        ),
       hysteresis: {
         plan: (stageId: string, options?: RequestOptions) =>
           this.requestJson<HysteresisStagePlanSchema>(
@@ -3680,7 +3984,7 @@ export class ControlRoomApi {
     solver: {
       energies: {
         current: (options?: RequestOptions) =>
-          this.requestJson<SolverEnergyCurrentResource>(
+          this.requestOptionalJson<SolverEnergyCurrentResource>(
             SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
             options,
           ),
@@ -3805,7 +4109,8 @@ export class ControlRoomApi {
   }
 
   private async requestJson<T>(
-    path: OpenApiV2Path,
+    path: OpenApiV2Path | typeof SIMULATION_STAGES_RESULTS_PATH |
+      typeof PROJECT_STUDY_RESULT_STATE_PATH | typeof PROJECT_STUDY_RESULT_SCALARS_PATH,
     options: RequestOptions = {},
     params?: Record<string, unknown>,
   ): Promise<T> {
@@ -4313,6 +4618,7 @@ export class ControlRoomApi {
     pathParams: PathParams,
     query: QueryParams,
     options: BinaryRequestOptions = {},
+    expectedObservationFrameId?: string,
   ): Promise<BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>> {
     return this.requestBinaryResource(
       path,
@@ -4322,7 +4628,15 @@ export class ControlRoomApi {
       pathParams,
       query,
       (response, data) => {
+        if (expectedObservationFrameId &&
+            response.headers.get("x-fullmag-observation-frame-id") !== expectedObservationFrameId) {
+          throw new ControlRoomApiError("The prepared magnetization frame changed.", 409);
+        }
         const metadata = parseFieldVectorResponseMetadata(response.headers);
+        if (expectedObservationFrameId &&
+            metadata.domainGenerationId !== query["expected_generation_id"]) {
+          throw new ControlRoomApiError("The prepared magnetization domain changed.", 409);
+        }
         const expectedArtifactGenerationId = query[
           "expected_artifact_generation_id"
         ];
@@ -4339,8 +4653,17 @@ export class ControlRoomApi {
         const identityIssues = collectFieldVectorIdentityIssues(data, metadata);
         const artifactIdentityError = artifactFieldResponseIdentityError(String(pathParams.quantity_id), query, data, { ...metadata, identityIssues });
         if (artifactIdentityError) throw new ControlRoomApiError(artifactIdentityError, 409);
-        return { ...metadata, identityIssues };
+        return {
+          ...metadata,
+          identityIssues,
+          ...(expectedObservationFrameId
+            ? { preparedObservationFrameId: expectedObservationFrameId }
+            : {}),
+        };
       },
+      expectedObservationFrameId
+        ? { "x-fullmag-expected-observation-frame-id": expectedObservationFrameId }
+        : undefined,
     );
   }
 
@@ -4538,19 +4861,20 @@ export class ControlRoomApi {
   }
 
   private async requestBinaryResource<TData, TMetadata = undefined>(
-    path: OpenApiV2Path,
+    path: OpenApiV2Path | StudyResultBinaryPath,
     decoderKind: BinaryDecoderKind,
     decode: (buffer: ArrayBuffer) => TData,
     options: BinaryRequestOptions = {},
     pathParams?: PathParams,
     query?: QueryParams,
     responseMetadata?: (response: Response, data: TData) => TMetadata,
+    additionalHeaders?: Record<string, string>,
   ): Promise<BinaryResourceResult<TData, TMetadata>> {
     const measureBase = `fullmag.api.requestBinaryResource.${decoderKind}`;
     return measureControlRoomApiPerformance(
       measureBase,
       async () => {
-        const headers: Record<string, string> = sessionScopeHeaders(options);
+        const headers = { ...sessionScopeHeaders(options), ...additionalHeaders };
         if (options.etag) {
           headers["if-none-match"] = options.etag;
         }

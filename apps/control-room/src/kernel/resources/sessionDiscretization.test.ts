@@ -6,6 +6,7 @@ import {
   resolveSessionAuthoringDiscretization,
   hasSessionActiveLaneDeclaration,
   resolveSessionDiscretization,
+  resolveSessionTopologyDiscretization,
   type SessionDiscretizationStatus,
 } from "./sessionDiscretization";
 
@@ -93,6 +94,26 @@ describe("resolveSessionDiscretization", () => {
     expect(
       resolveSessionDiscretization({ domainDiscretization: "fdm" }),
     ).toBe("fdm");
+  });
+});
+
+describe("resolveSessionTopologyDiscretization", () => {
+  const unresolvedFdmPreview = (topologyRevision: unknown) => ({
+    capabilities: { active_lane: { resolved: null } },
+    domain: { cell_count: 2_244_000, discretization: "fdm", generation_id: "55c8" },
+    resources: { domain_generation_id: "55c8", topology_revision: topologyRevision },
+  });
+
+  it("previews a published FDM grid whose u64 hash revision exceeds the safe range", () => {
+    // JSON.parse rounds the backend's 64-bit FDM grid hash revision.
+    const revision = JSON.parse("4279780263755545282") as number;
+    expect(Number.isSafeInteger(revision)).toBe(false);
+
+    expect(resolveSessionTopologyDiscretization(unresolvedFdmPreview(revision))).toBe("fdm");
+  });
+
+  it.each([0, -1, 1.5, "7", null])("refuses an unpublished topology revision %s", (revision) => {
+    expect(resolveSessionTopologyDiscretization(unresolvedFdmPreview(revision))).toBeNull();
   });
 });
 

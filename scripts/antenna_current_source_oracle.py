@@ -31,35 +31,48 @@ def fixture_input_digest(inputs):
 
 
 def prism_field(position_m, *, y_min_m, current_density_apm2, subdivisions):
-    """Integrate a uniform x-directed current in [-1,2] x [y,y+1] x [0,1].
+    """Original fixed prism, retained for the pinned current-source fixture."""
+    lower = finite(y_min_m, "y_min_m")
+    return rectangular_prism_field(
+        position_m, lower_m=(-1.0, lower, 0.0), upper_m=(2.0, lower + 1.0, 1.0),
+        current_density_apm2=current_density_apm2, subdivisions=subdivisions,
+    )
 
-    The x integral is exact; a tensor-product composite Simpson rule covers
-    y/z. Targets must lie strictly above or below the source's z slab.
-    This is a three-dimensional volume integral, not a filament model.
+
+def rectangular_prism_field(position_m, *, lower_m, upper_m, current_density_apm2, subdivisions):
+    """Uniform x-directed volume current; exact x integral and Simpson in y/z.
+
+    Targets must be strictly outside the source z slab. This is an independent
+    reference integral, not a source qualification or a production FEM solver.
     """
     if len(position_m) != 3:
         raise ValueError("position must have three components")
     x, y, z = (finite(v, "position") for v in position_m)
-    lower = finite(y_min_m, "y_min_m")
+    if len(lower_m) != 3 or len(upper_m) != 3:
+        raise ValueError("prism bounds must have three components")
+    lower = tuple(finite(v, "lower bound") for v in lower_m)
+    upper = tuple(finite(v, "upper bound") for v in upper_m)
+    if any(b <= a for a, b in zip(lower, upper)):
+        raise ValueError("prism bounds must have positive extent")
     density = finite(current_density_apm2, "current_density_apm2")
-    if 0.0 <= z <= 1.0:
+    if lower[2] <= z <= upper[2]:
         raise ValueError("target must be outside the source z slab")
     if type(subdivisions) is not int or subdivisions not in (8, 16, 32, 64, 128, 256):
         raise ValueError("unsupported bounded Simpson subdivision count")
     n = subdivisions
     hy, hz = [], []
     for i in range(n + 1):
-        dy = y - (lower + i / n)
+        dy = y - (lower[1] + (upper[1] - lower[1]) * i / n)
         wi = 1 if i in (0, n) else 4 if i % 2 else 2
         for k in range(n + 1):
-            dz = z - k / n
+            dz = z - (lower[2] + (upper[2] - lower[2]) * k / n)
             wk = 1 if k in (0, n) else 4 if k % 2 else 2
             s2 = dy * dy + dz * dz
-            a, b = x + 1.0, x - 2.0
+            a, b = x - lower[0], x - upper[0]
             kernel = (a / math.sqrt(a * a + s2) - b / math.sqrt(b * b + s2)) / s2
             hy.append(-wi * wk * dz * kernel)
             hz.append(wi * wk * dy * kernel)
-    scale = density / (4 * math.pi * 9 * n * n)
+    scale = density * (upper[1] - lower[1]) * (upper[2] - lower[2]) / (4 * math.pi * 9 * n * n)
     result = (0.0, scale * math.fsum(hy), scale * math.fsum(hz))
     if not all(math.isfinite(v) for v in result):
         raise ValueError("field exceeds finite oracle range")

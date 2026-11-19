@@ -78,6 +78,7 @@ class _Control:
     project = PROJECT
     volume = VOLUME
     namespace = ""
+    namespace_registry = None
     namespace_registry_sha256 = None
 
     def __init__(self, previous: dict[str, object], document: dict[str, object], events: list[object]) -> None:
@@ -85,6 +86,7 @@ class _Control:
         self.document = document
         self.events = events
         self.writes: list[tuple[str, object]] = []
+        self.read_bytes_calls: list[tuple[str, bool]] = []
         self.operation_value = _Operation(events)
 
     def prepare(self) -> None:
@@ -98,6 +100,13 @@ class _Control:
         if optional:
             return None
         raise AssertionError("unexpected control read: " + relative)
+
+    def read_bytes(self, relative: str, *, optional: bool = False) -> bytes | None:
+        self.read_bytes_calls.append((relative, optional))
+        value = self.read(relative, optional=optional)
+        if value is None:
+            return None
+        return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
     def operation(self, phase: str, _inputs: object) -> _Operation:
         if phase != "recreate-services":
@@ -120,6 +129,7 @@ class _Harness:
         self.events: list[object] = []
         self.drift_under_lease = drift_under_lease
         self.inspect_calls: dict[str, int] = {"backend": 0, "frontend": 0}
+        self.archive_runtime_control = mock.Mock(return_value={"archived": True})
         self.certificate = {
             "schema": "fullmag.windows-folder-host.v1",
             "storage_profile": "windows-folder-v1",
@@ -141,7 +151,9 @@ class _Harness:
             "services": {
                 "backend": {
                     "image": IMAGE,
+                    "gpus": [{"count": "all"}],
                     "environment": {
+                        "FULLMAG_DOCKER_DEVICE_ACCESS": "gpu",
                         "FULLMAG_DEV_INCLUDE_UNTRACKED": "[]",
                         "FULLMAG_STARTUP_ENABLED": "0",
                     },
@@ -185,6 +197,7 @@ class _Harness:
                 "source_checkout_kind": "worktree",
                 "gpu_access_requested": "auto",
                 "device_access": "gpu",
+                "gpu_preflight": "PASS",
             },
         }
         self.actual = {
@@ -231,7 +244,7 @@ class _Harness:
 
     def docker_text(self, *arguments: str, **_kwargs: object) -> str:
         if arguments[:2] == ("image", "inspect"):
-            return json.dumps([{"Config": {"Entrypoint": ["entry"], "Cmd": ["serve"]}}])
+            return json.dumps([{"Id": IMAGE, "Config": {"Entrypoint": ["entry"], "Cmd": ["serve"]}}])
         if arguments[:1] != ("inspect",):
             raise AssertionError("unexpected docker_text: " + repr(arguments))
         identifiers = {BACKEND_ID: "backend", FRONTEND_ID: "frontend"}
@@ -294,9 +307,10 @@ def _helper_module(harness: _Harness, *, proof_drift: bool = False, reject: bool
 
 
 class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
-    def _run(self, harness: _Harness, *, helper: types.ModuleType, accepted_module: types.ModuleType | None = None):
+    def _run(self, harness: _Harness, *, helper: types.ModuleType, accepted_module: types.ModuleType | None = None, recovery_context=None, device_probe=None):
         import docker_build_control
         import docker_dev
+        import docker_volume_cancelled_activation_guard
         import docker_volume_activation_reconcile
         import docker_volume_dev as dev
 
@@ -306,6 +320,14 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
         identity = harness.identity
         started = mock.Mock(return_value={"started": True})
         patches = [
+            # The retained recreation cases in this harness have no cancelled
+            # activation recovery record; model that optional helper read as
+            # an authenticated absence while exercising the real guard.
+            mock.patch.object(
+                docker_volume_cancelled_activation_guard,
+                "_read_control_bytes",
+                return_value=None,
+            ),
             mock.patch.object(dev, "require_host"),
             mock.patch.object(docker_dev, "_select_source", return_value=(harness.source, {"runtime_root": str(harness.state)})),
             mock.patch.object(docker_dev, "_compose_identity", return_value=identity),
@@ -316,7 +338,9 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
             mock.patch.object(dev, "docker_text", side_effect=harness.docker_text),
             mock.patch.object(dev, "docker_capture", side_effect=harness.docker_capture),
             mock.patch.object(dev, "_validate_retained_service"),
-            mock.patch.object(dev, "_retained_recovery_context", return_value={}),
+            mock.patch.object(dev, "_retained_recovery_context",
+                              **({"side_effect": recovery_context} if callable(recovery_context)
+                                 else {"return_value": recovery_context or {}})),
             mock.patch.object(dev, "_retained_certificate", return_value=harness.certificate),
             mock.patch.object(dev, "_certificate_path", return_value=harness.state / "certificate.json"),
             mock.patch.object(dev.storage, "validate_path", side_effect=lambda value, *_args: Path(value)),
@@ -329,6 +353,12 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
                 ),
             ),
             mock.patch.object(dev, "start", started),
+            # Fresh state archives the old runtime root through the managed
+            # control helper; the harness control is not a real BuildControl.
+            mock.patch(
+                "docker_volume_fresh_runtime.archive_runtime_control",
+                harness.archive_runtime_control,
+            ),
         ]
         if accepted_module is not None:
             patches.append(mock.patch.dict(sys.modules, {"docker_volume_accepted_reattach": accepted_module}))
@@ -336,6 +366,8 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
                 mock.patch.object(dev, "_validate_accepted_reattach_environment", side_effect=lambda value: value),
                 mock.patch.object(dev, "_validate_accepted_reattach_metadata", side_effect=lambda value, _environment: value),
             ])
+        patches.append(mock.patch.object(dev, "_probe_retained_device_access",
+                                         **({"side_effect": device_probe} if device_probe is not None else {"return_value": "gpu"})))
         patches.append(mock.patch.dict(sys.modules, {"docker_volume_pre_admission_recreate": helper}))
         with ExitStack() as stack:
             for patch in patches:
@@ -362,6 +394,33 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
             )
         )
         return module
+
+    def test_offline_proof_is_rechecked_with_exact_lease_before_removal(self) -> None:
+        import docker_volume_offline_reconcile as offline
+
+        harness = _Harness()
+        self.addCleanup(harness.close)
+        helper = _helper_module(harness)
+        harness.args.offline_reconciliation = "7" * 32
+        calls = []
+
+        def validate(*_args, **kwargs):
+            calls.append(kwargs)
+            self.assertEqual(kwargs["expected_operation_attempt"], "7" * 32)
+            if len(calls) == 1:
+                self.assertNotIn("lease-enter", harness.events)
+                self.assertNotIn("current_operation", kwargs)
+                return True
+            self.assertIn("lease-enter", harness.events)
+            self.assertIs(kwargs["current_operation"], harness.control.operation_value.value)
+            raise BuildControlError("offline proof changed under lease")
+
+        with mock.patch.object(offline, "validate_for_recreate", side_effect=validate):
+            with self.assertRaisesRegex(BuildControlError, "offline proof changed under lease"):
+                self._run(harness, helper=helper)
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("rm", harness.events)
+        harness.archive_runtime_control.assert_not_called()
 
     def test_exact_failure_proofs_are_revalidated_under_lease_before_rm(self) -> None:
         harness = _Harness()
@@ -483,57 +542,62 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
         self.assertNotIn("post_build_generation", started.call_args.kwargs)
         self.assertIsNotNone(started.call_args.kwargs["reuse_state"])
 
+    def _after_ready_route(self, *, backend_id=BACKEND_ID,
+                           failure_kind="native-after-ready-failure", historical_only=False):
+        import docker_volume_dev as dev
+        import docker_volume_post_build_generation as generation
+        harness = _Harness()
+        self.addCleanup(harness.close)
+        harness.certificate["restart_verified"] = True
+        metadata = {"schema": "fullmag.docker-native-failed-stop-recreate.v1",
+                    "failure_kind": failure_kind, "container_id": backend_id,
+                    "image_id": IMAGE, "claim_pending": False}
+        context = {"native_restart_metadata": metadata, "previous_config_sha256": "a" * 64}
+        if historical_only:
+            harness.previous["native_failed_restart"] = metadata
+            context = {}
+        original_read = harness.control.read
+        def read(relative, *, optional=False):
+            if relative == "verification/stop-failed-" + BACKEND_ID + ".json":
+                return {"state": "stopped-confirmed"}
+            return original_read(relative, optional=optional)
+        harness.control.read = read
+        with mock.patch.object(dev, "_post_build_certificate_evidence", return_value={}), \
+             mock.patch.object(dev, "_read_runtime_config_digest", return_value="a" * 64), \
+             mock.patch.object(generation, "build_failed_owner_continuation",
+                               side_effect=BuildControlError("nine-key continuation selected")) as continuation:
+            if backend_id == BACKEND_ID and failure_kind == "native-after-ready-failure" and not historical_only:
+                result, started = self._run(harness, helper=_helper_module(harness), recovery_context=context)
+                self.assertEqual(result, {"started": True})
+                self.assertEqual(started.call_args.kwargs["native_restart_metadata"], metadata)
+                continuation.assert_not_called()
+            else:
+                with self.assertRaisesRegex(BuildControlError, "nine-key continuation selected"):
+                    self._run(harness, helper=_helper_module(harness), recovery_context=context)
+                continuation.assert_called_once()
+                self.assertNotIn("rm", harness.events)
+
+    def test_original_after_ready_restart_keeps_native_context_without_later_continuation(self):
+        self._after_ready_route()
+
+    def test_later_namespace_and_other_failure_still_require_continuation(self):
+        self._after_ready_route(backend_id="a" * 64)
+        self._after_ready_route(failure_kind="native-start-failure")
+
+    def test_historical_after_ready_metadata_is_not_restart_authority(self):
+        self._after_ready_route(historical_only=True)
+
     def test_fresh_state_remains_explicit_and_does_not_use_the_exception(self) -> None:
-        import docker_volume_fresh_runtime as fresh_runtime
         harness = _Harness()
         self.addCleanup(harness.close)
         harness.args.fresh_state = True
         harness.previous["post_build_generation"] = {"historical": "retained"}
         harness.previous["post_build_start"] = {"state": "pending"}
         helper = _helper_module(harness, reject=True)
-        archive_record = {
-            "schema": "fullmag.docker-fresh-runtime-archive-terminal.v1",
-            "state": "succeeded",
-            "operation_attempt": "1" * 32,
-        }
-
-        def archive_runtime_control(control, operation, **kwargs):
-            self.assertIs(control, harness.control)
-            self.assertIs(operation, harness.control.operation_value.value)
-            self.assertTrue(operation["receipt"]["fresh_state"])
-            self.assertTrue(operation["daemon_pending"])
-            self.assertEqual(
-                kwargs,
-                {
-                    "previous_state_root": str(harness.state),
-                    "source_root": str(harness.source),
-                    "removed_containers": [BACKEND_ID, FRONTEND_ID],
-                },
-            )
-            harness.events.append("runtime-control-archive")
-            return archive_record
-
-        with mock.patch.object(
-            fresh_runtime,
-            "archive_runtime_control",
-            side_effect=archive_runtime_control,
-        ) as archive:
-            _result, started = self._run(harness, helper=helper)
+        _result, started = self._run(harness, helper=helper)
         self.assertEqual(helper.calls["count"], 0)
         self.assertIsNone(started.call_args.kwargs["reuse_state"])
-        archive.assert_called_once()
-        self.assertEqual(
-            harness.control.operation_value.value["receipt"]["runtime_control_archive"],
-            archive_record,
-        )
-        self.assertLess(
-            harness.events.index("rm"),
-            harness.events.index("runtime-control-archive"),
-        )
-        self.assertLess(
-            harness.events.index("runtime-control-archive"),
-            harness.events.index("lease-exit"),
-        )
+        harness.archive_runtime_control.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()

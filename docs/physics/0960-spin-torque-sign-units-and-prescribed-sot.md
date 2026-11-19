@@ -2,7 +2,7 @@
 
 - Status: active normative physics note; bounded FEM CPU/GPU stage-time implementation evidence
 - Owners: Fullmag core
-- Last updated: 2026-08-05
+- Last updated: 2026-11-19
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `zhang_li.fullmag.v1`, `slonczewski.fullmag.v2`,
@@ -142,6 +142,46 @@ Two mutually exclusive realizations exist:
   spin flux, without an artificial `1/t_F` in the FEM weak form.
 
 Applying both to the same target/interface is invalid.
+
+#### 2.3.1 Authored time expression for the CPP drive
+
+Status: source-implemented for single-grid FDM CPU reference and CUDA FP64 RK45 in extended mode; scientific and device qualification remains separate. This contract extends the prescribed current of the canonical thin-layer Slonczewski interaction. It uses the same static spatial target, polarization and stack orientation.
+
+At each right-hand-side evaluation the signed current entering the Slonczewski prefactor is
+
+```{math}
+:label: slonczewski-expressed-current
+J_n(t) = (\mathbf J_0 \cdot \hat{\mathbf n}_{\mathrm{stack}})\,g(t),
+\qquad
+\Omega_J(t) = \frac{\gamma_e \hbar}{e M_s t_F}\, J_n(t).
+```
+
+| Symbol | Physical meaning | SI unit |
+|---|---|---|
+| $t$ | Cumulative physical time of the integrator substep | $\mathrm{s}$ |
+| $\mathbf J_0$ | Authored reference charge-current density | $\mathrm{A\,m^{-2}}$ |
+| $\hat{\mathbf n}_{\mathrm{stack}}$ | Oriented fixed-to-free unit normal | $1$ |
+| $g(t)$ | Signed scalar value of the authored mathematical expression | $1$ |
+| $J_n(t)$ | Signed charge-current component normal to the stack | $\mathrm{A\,m^{-2}}$ |
+| $\gamma_e$ | Positive angular gyromagnetic magnitude | $\mathrm{s^{-1}\,T^{-1}}$ |
+| $\hbar$ | Reduced Planck constant | $\mathrm{J\,s}$ |
+| $e$ | Positive elementary charge | $\mathrm{C}$ |
+| $M_s$ | Local saturation magnetization on the target | $\mathrm{A\,m^{-1}}$ |
+| $t_F$ | Homogenized free-layer thickness | $\mathrm{m}$ |
+| $\Omega_J(t)$ | Signed torque-frequency scale | $\mathrm{s^{-1}}$ |
+
+The Python authoring value is `fm.TimeExpression(source, constants=..., event_times_s=...)` on `fm.SlonczewskiSTT`. The existing constant `current_density` vector supplies $\mathbf J_0$. An omitted expression gives $g(t)=1$, preserving the constant-current path. The expression may compose arithmetic and supported real-valued mathematical functions of `t`, `pi` and explicitly bound finite constants. For example, a reference vector of $(0,0,-2.6\times 10^{10})\,\mathrm{A\,m^{-2}}$ with `heaviside(t - t_on) - heaviside(t - t_off)` and `t_on`/`t_off` constants expresses the CPP pulse. `sin(2*pi*f*t)` with `f` specified in $\mathrm{Hz}$ expresses an alternating drive. The [MuMax3 API](https://mumax.github.io/api.html) defines `heaviside(0)` as $0.5$; the expression evaluator uses that value for an exact, non-stage-side sample. Every discontinuity must be listed in `event_times_s` as an absolute cumulative physical time in seconds. The integrator splits steps at those events. RK stages ending at an event evaluate the left limit; stage 1 of the next step evaluates the right limit.
+
+The canonical Slonczewski module must carry the expression source, explicit constants, and sorted finite event times through `SceneDocument`, `ProblemIR`, and accepted-run provenance. Compilation must bind only the supported mathematical vocabulary and validate finite values at evaluation. Invalid syntax, unbound constants and a non-finite evaluation fail explicitly. Compilation and retry must preserve the original physical clock and regional target. Relaxation uses a separate pseudotime clock and excludes an active time-dependent torque.
+
+| Realization | Intended capability and validation |
+|---|---|
+| FDM CPU | Single-grid CPU reference FP64 RK45 in extended mode evaluates one scalar at every Dormand–Prince RK stage and applies it to the canonical Slonczewski torque. FP32, strict mode, non-RK45, multilayer, relaxation with an active expression and solved spin transport are rejected. |
+| FDM GPU | Single-grid CUDA FP64 RK45 in extended mode evaluates one scalar per actual RK substep and applies it to the CUDA torque. FP32, strict mode, non-RK45, multilayer, relaxation with an active expression and solved spin transport are rejected. |
+| FEM CPU | Existing constant Slonczewski behavior. The planner must reject this expression until a FEM implementation has been verified. |
+| FEM GPU | Existing constant Slonczewski behavior. The planner must reject this expression until a native CUDA FEM implementation has been verified. |
+
+Source checks cover the safe parser and Python/IR/script round trip, exact CPU event clipping, one-sided event values, non-finite evaluation rejection and the extended FP64 RK45 legality checks. Managed CPU/GPU runtime, parity, scientific comparison, continuous-versus-restarted behavior, browser authoring and event rollback still require separate qualification. Expression-driven direction changes and full Go scripting remain outside the CPP scalar-drive contract.
 
 ### 2.4 Prescribed SOT
 
@@ -452,6 +492,14 @@ without rebuilding them from a current norm. `mfem_bridge.cpp` passes
 descriptors only. Strict GPU may not invoke a CPU torque path or claim GPU
 provenance after a fallback.
 
+Dla celu obejmującego obiekt maska węzłowa FEM jest sumą węzłów connectivity
+wszystkich elementów segmentów tego ownera. Podział obiektu na markery
+regionów konformalnych i kolejność markerów nie zmieniają tej maski. Wspólne
+węzły są zaznaczane raz; osobny, rozłączny obiekt pozostaje poza maską.
+Ta sama reguła dotyczy STT i prescribed SOT. Jawne `region_id` nadal jest
+odrzucane do czasu obsługi dokładnej maski celu regionowego. Regresja planera
+sprawdza maski, bez nowego dowodu wykonania torque ani parytetu CPU/GPU.
+
 ### 3.3 Hybrid and stage coupling
 
 No hybrid torque capability is validated by this note. A hybrid realization
@@ -718,6 +766,16 @@ hidden change to `alpha`.
 
 | Path | Symbol | Responsibility |
 |---|---|---|
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class TimeExpression` | Preserve expression source, finite constants and absolute physical event times in public Slonczewski authoring. |
+| `crates/fullmag-ir/src/time_expression.rs` | `compile` | Validate declared events and compile the existing safe field-expression dialect for time. |
+| `crates/fullmag-engine/src/fdm/shared/terms.rs` | `evaluate` | Evaluate the compiled scalar at global physical time, apply one-sided event values, and reject non-finite multipliers. |
+| `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `rk45_step_buf_with_endpoint_policy` | Sample J(t) at every Dormand–Prince stage and invalidate FSAL reuse for expression-driven current. |
+| `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `rk45_step_soa_buf_with_endpoint_policy` | Apply the same global stage times and one-sided event limits in the buffer-SoA CPU lane. |
+| `crates/fullmag-runner/src/time_events.rs` | `extend_absolute_time_expression_events` | Preserve absolute J(t) discontinuities and split FDM CPU steps at each declared event. |
+| `crates/fullmag-engine/src/fdm/shared/terms.rs` | `j_of_t_is_zero_outside_pulse_and_uses_consistent_one_sided_rk_values` | Check zero drive outside a pulse and consistent CPU left/right RK endpoint values. |
+| `backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu` | `slonczewski_time_factor` | Sample the signed multiplier on the global CUDA RK clock with one-sided event limits. |
+| `crates/fullmag-plan/src/fem.rs` | `materialize_fem_spin_torque_target_masks` | Maska STT/SOT z connectivity wszystkich elementów wybranego ownera. |
+| `crates/fullmag-plan/src/tests/material_boundary_stt.rs` | `fem_torque_object_target_mask_covers_conformal_regions_per_owner_and_order` | Regresja STT/SOT dla dwóch regionów, obu kolejności i odrębnego ownera. |
 | `backends/fem/cpu/mfem/interactions/stt_slonczewski.cpp` | `add_slonczewski_stt_rhs_aos` | FEM CPU canonical v2 algebraic oracle |
 | `backends/fem/cpu/mfem/interactions/stt.cpp` | `initialize_stt_plan_fields` | FEM STT descriptor validation and normalization |
 | `backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu` | `slonczewski_stt_rhs_kernel` | FEM GPU v2 device torque kernel |
@@ -728,9 +786,9 @@ hidden change to `alpha`.
 | `backends/fem/gpu/cuda/runtime/gpu_state_runtime.cpp` | `initialize_context_gpu_state` | Bootstrap upload ordering |
 | `backends/fdm/include/spin_torque.hpp` | `prescribed_sot_explicit_rhs` | Canonical prescribed-SOT Gilbert source and single explicit Gilbert conversion shared by CUDA precision lanes |
 | `backends/fdm/include/context.hpp` | `sot_params_from_ctx` | Native FDM SOT descriptor normalization and signed SI prefactor |
-| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `prescribed_sot_scales` | Independent CPU reference scales for canonical and legacy prescribed SOT |
-| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `sot_torque` | CPU reference torque evaluation with active/target mask intersection |
-| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `prescribed_sot_torque_from_config` | Backend-neutral canonical SOT SI/Gilbert algebra shared by FDM and the Rust FEM reference |
+| `crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs` | `prescribed_sot_scales` | Independent CPU reference scales for canonical and legacy prescribed SOT |
+| `crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs` | `sot_torque` | CPU reference torque evaluation with active/target mask intersection |
+| `crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs` | `prescribed_sot_torque_from_config` | Backend-neutral canonical SOT SI/Gilbert algebra shared by FDM and the Rust FEM reference |
 | `backends/fdm/tests/prescribed_sot_contract.cpp` | `main` | Native algebraic canonical-SOT contract and sign/Gilbert checks |
 | `backends/fdm/tests/prescribed_sot_cuda_runtime.cu` | `main` | Managed FP64/FP32 native CUDA SOT runtime contract |
 | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available` | Managed eight-step FP64 FDM CUDA canonical-SOT trajectory parity against CPU reference prefixes |

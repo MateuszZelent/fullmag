@@ -128,6 +128,8 @@ preconditioner, tolerances, mesh identity, field recovery, and energy reduction.
 (demag-math-realization-matrix)=
 ## Realization hierarchy
 
+See {numref}`fig-demag-solver-families-comparison` on {doc}`index` for a visual comparison of Fullmag's four discrete operator families solving this continuum magnetostatic system.
+
 ### FDM CPU and GPU: discrete Green operator
 
 FDM represents the magnetization by cell averages. The demagnetizing field is a discrete
@@ -135,7 +137,7 @@ convolution with a translation-invariant tensor on a common grid:
 
 ```{math}
 :label: eq-demag-formulation-fdm-discrete
-H_{d,p}^{i}=-sum_{q}sum_{j=1}^{3}N_{pq}^{ij}M_q^{j}.
+H_{\mathrm{d},p}^{i}=-\sum_{q}\sum_{j=1}^{3}N_{pq}^{ij}M_q^{j}.
 ```
 
 The CPU reference constructs the tensor spectrum and applies the reduction in host memory.
@@ -146,7 +148,7 @@ Neither lane solves a finite airbox Poisson equation.
 ### FEM CPU and GPU: scalar potential
 
 FEM introduces a scalar potential over the magnetic body and, for the airbox variant, an
-exterior air region. The magnetic source enters through the divergence of $mathbf M$ and
+exterior air region. The magnetic source enters through the divergence of $\mathbf M$ and
 its boundary trace. The CPU path assembles and solves the operator using MFEM/Hypre
 components; the GPU path has a separate CSR/device-Hypre realization. The recovered field
 and energy must use the same sign convention as the common continuum equations.
@@ -159,8 +161,7 @@ the implementation must reduce
 
 ```{math}
 :label: eq-demag-formulation-discrete-energy
-E_{mathrm d}^{h}=-
-rac{mu_0}{2}sum_i w_i,mathbf M_icdotmathbf H_{mathrm d,i},
+E_{\mathrm d}^{h}=-\frac{\mu_0}{2}\sum_i w_i\,\mathbf M_i\cdot\mathbf H_{\mathrm d,i},
 ```
 
 where $w_i$ is the cell volume or FEM quadrature/lumped weight selected by the backend.
@@ -192,6 +193,10 @@ weak form. Both must reproduce the same sign convention and energy derivative.
 Newell tensor construction is in `compute_newell_kernels`; FEM source assembly is in
 `assemble_demag_poisson_rhs`; energy reduction is in `demag_poisson_energy_from_field`.
 
+### Control Room support
+
+When `PhysicsInteractionPanel` exposes demagnetization under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: parameters without a matching UI control are configured via the Python API or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+
 (demag-math-validation)=
 ## Validation
 
@@ -207,23 +212,17 @@ precision, periodicity, or airbox policy.
 (demag-math-scientific-bibliography)=
 ## Scientific bibliography
 
-- Brown, W. F., *Micromagnetics*, Wiley, 1963.
-- Fredkin, D. R. and Koehler, T. R., *IEEE Transactions on Magnetics* 26, 1990.
+1. D. R. Fredkin and T. R. Koehler, “Hybrid method for computing demagnetizing fields,” *IEEE
+   Transactions on Magnetics* **26**(2), 415–417 (1990),
+   [doi:10.1109/20.106342](https://doi.org/10.1109/20.106342).
+2. L. Exl and T. Schrefl, “Non-uniform FFT for the finite element computation of the
+   micromagnetic scalar potential,” *Journal of Computational Physics* **270**, 490–505 (2014),
+   [doi:10.1016/j.jcp.2014.04.013](https://doi.org/10.1016/j.jcp.2014.04.013), Open Access
+   preprint: [arXiv:1305.3162](https://arxiv.org/abs/1305.3162).
+3. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963.
+   [WorldCat record](https://search.worldcat.org/title/536451).
 
 (demag-math-source-code-index)=
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
 ## Source-code index
 
 | Repository path | Stable symbol | Responsibility |

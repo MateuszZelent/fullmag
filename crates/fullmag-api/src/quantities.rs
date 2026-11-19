@@ -6,12 +6,14 @@ use fullmag_quantities::{quantity_specs, QuantityShape};
 use fullmag_runner::{BackendCapabilities, FemMeshPayload};
 use serde_json::Value;
 
+use crate::shared_json::SharedJson;
+
 pub(crate) fn build_quantities(
     latest_fields: &LatestFields,
     preview_cache: &CachedPreviewFields,
     live_state: Option<&LiveState>,
     run: Option<&RunManifest>,
-    metadata: Option<&Value>,
+    metadata: Option<&SharedJson>,
     scalar_rows: &[ScalarRow],
     _field_location: &str,
 ) -> Vec<QuantityDescriptor> {
@@ -22,7 +24,9 @@ pub(crate) fn build_quantities(
         .and_then(|value| value.get("backend_plan"))
         .and_then(|value| value.get("kind"))
         .and_then(Value::as_str)
-        == Some("antenna_external_lead_inspection")
+        .is_some_and(|kind| matches!(
+            kind, "antenna_external_lead_inspection" | "antenna_field_only"
+        ))
     {
         // V/J/H belong to the owner-bound inspection publisher, not to the
         // magnetic quantity catalog or its interactive preview controls.
@@ -46,9 +50,7 @@ pub(crate) fn build_quantities(
                 })
         })
         .unwrap_or_default();
-    let execution_plan = metadata
-        .and_then(|value| value.get("execution_plan"))
-        .and_then(|value| serde_json::from_value::<ExecutionPlanIR>(value.clone()).ok());
+    let execution_plan = metadata.and_then(SharedJson::execution_plan);
     let dynamic_available =
         |quantity_id: &str| dynamic_supported.iter().any(|id| id == quantity_id);
     let scalar_available = |run_value: Option<f64>| {
@@ -83,7 +85,7 @@ pub(crate) fn build_quantities(
                                 .is_some_and(|mag| !mag.is_empty()))
                 }
                 QuantityShape::GlobalScalar => spec.scalar_metric_key.is_some_and(|metric_key| {
-                    (scalar_metric_is_active(execution_plan.as_ref(), metric_key)
+                    (scalar_metric_is_active(execution_plan.as_deref(), metric_key)
                         // A persisted component is authoritative even when a
                         // legacy session has no decodable execution plan.  Do
                         // not let the missing provenance hide a value that
@@ -96,7 +98,7 @@ pub(crate) fn build_quantities(
                         && scalar_available(run_manifest_scalar_value(
                             run,
                             metric_key,
-                            execution_plan.as_ref(),
+                            execution_plan.as_deref(),
                         ))
                 }),
             };
@@ -204,7 +206,8 @@ fn scalar_metric_is_active(plan: Option<&ExecutionPlanIR>, metric_key: &str) -> 
             _ => false,
         },
         BackendPlanIR::FdmMultilayer(plan) => match metric_key {
-            "e_rotated_dmi" => plan.rotated_interfacial_dmi.is_some(),
+            "e_rotated_dmi" => plan.rotated_interfacial_dmi.is_some()
+                || plan.layers.iter().any(|layer| layer.rotated_interfacial_dmi.is_some()),
             _ => true,
         },
     }
@@ -261,7 +264,8 @@ fn plan_is_rotated_dmi_only(plan: &ExecutionPlanIR) -> bool {
                 && plan.dbulk_field.is_none()
         }
         BackendPlanIR::FdmMultilayer(plan) => {
-            plan.rotated_interfacial_dmi.is_some()
+            (plan.rotated_interfacial_dmi.is_some()
+                || plan.layers.iter().any(|layer| layer.rotated_interfacial_dmi.is_some()))
                 && plan.interfacial_dmi.is_none()
                 && plan.bulk_dmi.is_none()
         }
@@ -272,14 +276,21 @@ fn plan_is_rotated_dmi_only(plan: &ExecutionPlanIR) -> bool {
     }
 }
 
-pub(crate) fn extract_fem_mesh_from_metadata(metadata: &Value) -> Option<FemMeshPayload> {
-    let execution_plan =
-        serde_json::from_value::<ExecutionPlanIR>(metadata.get("execution_plan")?.clone()).ok()?;
-    match execution_plan.backend_plan {
-        BackendPlanIR::AntennaFieldOnly(plan) => Some(fullmag_runner::StageFemMeshAsset::build_from_antenna_field_only_plan(&plan).payload),
-        BackendPlanIR::Fem(fem) => Some(FemMeshPayload::from(&fem)),
-        BackendPlanIR::FemEigen(fem) => Some(FemMeshPayload::from(&fem)),
-        BackendPlanIR::FemFrequencyResponse(fem) => Some(FemMeshPayload::from(&fem)),
+pub(crate) fn extract_fem_mesh_from_metadata(metadata: &SharedJson) -> Option<FemMeshPayload> {
+    let execution_plan = metadata.execution_plan()?;
+    match &execution_plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(plan) => {
+            // Global topology is owned by the pinned domain publication, not by
+            // the current-source plan. Missing domain data must stay missing.
+            if matches!(plan.field_sampling.domain, fullmag_ir::FieldTargetIR::Global {}) {
+                None
+            } else {
+                Some(fullmag_runner::StageFemMeshAsset::build_from_antenna_field_only_plan(plan).payload)
+            }
+        },
+        BackendPlanIR::Fem(fem) => Some(FemMeshPayload::from(fem)),
+        BackendPlanIR::FemEigen(fem) => Some(FemMeshPayload::from(fem)),
+        BackendPlanIR::FemFrequencyResponse(fem) => Some(FemMeshPayload::from(fem)),
         BackendPlanIR::Fdm(_)
         | BackendPlanIR::FdmMultilayer(_)
         | BackendPlanIR::AntennaExternalLeadInspection(_) => None,
@@ -289,6 +300,7 @@ pub(crate) fn extract_fem_mesh_from_metadata(metadata: &Value) -> Option<FemMesh
 #[cfg(test)]
 mod tests {
     use super::{build_quantities, run_manifest_scalar_value, scalar_metric_is_active};
+    use crate::shared_json::SharedJson;
     use crate::types::{
         CachedPreviewFields, LatestFields, LiveState, RunManifest, ScalarRow, StepUpdateView,
     };
@@ -366,7 +378,7 @@ mod tests {
             &CachedPreviewFields::default(),
             live_state,
             run,
-            Some(&metadata),
+            Some(&SharedJson::from(metadata.clone())),
             scalar_rows,
             "cell",
         )
@@ -515,7 +527,7 @@ mod tests {
             &CachedPreviewFields::default(),
             None,
             Some(&completed_run_manifest()),
-            Some(&metadata),
+            Some(&SharedJson::from(metadata.clone())),
             &[],
             "node",
         );
@@ -612,6 +624,7 @@ mod tests {
             requested_common_cell_size: None,
             grid_certificate: None,
             layers: vec![FdmLayerPlanIR {
+                rotated_interfacial_dmi: None,
                 magnet_name: "free".to_string(),
                 layer_id: "layer:free".to_string(),
                 object_id: "free".to_string(),
@@ -684,7 +697,7 @@ mod tests {
                 &CachedPreviewFields::default(),
                 None,
                 Some(&run),
-                Some(&metadata),
+                Some(&SharedJson::from(metadata.clone())),
                 &[],
                 "cell",
             );
@@ -735,7 +748,7 @@ mod tests {
             &CachedPreviewFields::default(),
             None,
             Some(&run),
-            Some(&metadata),
+            Some(&SharedJson::from(metadata.clone())),
             &[],
             "cell",
         );
@@ -759,7 +772,7 @@ mod tests {
             &CachedPreviewFields::default(),
             None,
             Some(&run),
-            Some(&conventional_metadata),
+            Some(&SharedJson::from(conventional_metadata.clone())),
             &[],
             "cell",
         );
@@ -854,7 +867,7 @@ mod tests {
             &CachedPreviewFields::default(),
             None,
             Some(&run),
-            Some(&malformed_metadata),
+            Some(&SharedJson::from(malformed_metadata.clone())),
             &[],
             "cell",
         );

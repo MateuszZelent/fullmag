@@ -543,10 +543,14 @@ describe("buildModelTree", () => {
     const airbox = universe?.children?.find((node) => node.id === "model:airbox");
 
     expect(airbox).toMatchObject({
+      availability: "available",
+      executionState: "not_started",
       id: "model:airbox",
       kind: "airbox.root",
       label: "Airbox",
       parentId: "model:universe",
+      resourceState: "stale",
+      statusReason: "Published FEM mesh has no source-scene provenance; freshness is unknown.",
     });
     expect(airbox?.children?.map(({ id, kind, label, parentId }) => ({
       id,
@@ -569,6 +573,12 @@ describe("buildModelTree", () => {
     ]);
 
     const mesh = airbox?.children?.[0];
+    expect(mesh).toMatchObject({
+      availability: "available",
+      executionState: "not_started",
+      resourceState: "stale",
+      statusReason: "Published FEM mesh has no source-scene provenance; freshness is unknown.",
+    });
     expect(mesh?.children?.map(({ id, kind, label, parentId }) => ({
       id,
       kind,
@@ -637,12 +647,18 @@ describe("buildModelTree", () => {
     });
   });
 
-  it("does not fabricate a FEM Airbox from discretization alone", () => {
+  it("keeps Airbox visualization reachable without fabricating a FEM mesh", () => {
     const flattened = flattenExplorerNodes(
       buildModelTree({ domainDiscretization: "fem" }),
     );
 
-    expect(flattened.map((node) => node.kind)).not.toContain("airbox.root");
+    expect(flattened.find((node) => node.kind === "airbox.root")).toMatchObject({
+      badge: "no mesh", status: "unavailable", visualizationTargetId: "airbox",
+    });
+    expect(flattened.find((node) => node.kind === "airbox.visualization")).toMatchObject({
+      status: "ready", visualizationTargetId: "airbox",
+    });
+    expect(flattened.map((node) => node.kind)).not.toContain("airbox.mesh");
   });
 
   it("marks authored FEM Airbox policy stale until a matching carrier is realized", () => {
@@ -710,6 +726,7 @@ describe("buildModelTree", () => {
         manifestSourceSceneRevision: 1,
         meshName: "semantic-target-fixture",
         meshRevision: 1,
+        outerBoundaryEvidenceStatus: "verified",
         outerBoundaryPartCount: 1,
         sourceSceneRevision: 1,
       },
@@ -731,6 +748,7 @@ describe("buildModelTree", () => {
         manifestSourceSceneRevision: 1,
         meshName: "stale-boundary-fixture",
         meshRevision: 1,
+        outerBoundaryEvidenceStatus: "verified",
         outerBoundaryPartCount: 1,
         sourceSceneRevision: 2,
       },
@@ -750,6 +768,7 @@ describe("buildModelTree", () => {
       domainDiscretization: "fem",
       mesh: {
         meshName: "mesh-without-boundary-carrier",
+        outerBoundaryEvidenceStatus: "verified",
         outerBoundaryPartCount: 0,
       },
     });
@@ -758,10 +777,38 @@ describe("buildModelTree", () => {
       ?.children?.find((node) => node.id === "model:boundary-faces");
 
     expect(boundaryFaces).toMatchObject({
-      badge: "mesh required",
+      badge: "no carrier",
+      statusReason: "The current published FEM manifest has no Universe outer-boundary carrier.",
       status: "unavailable",
     });
   });
+
+  it.each([
+    ["loading", "mesh-building", "building", "loading"],
+    ["stale", "mesh-stale", "mesh stale", "does not match"],
+    ["error", "mesh-failed", "failed", "failed to load"],
+    ["unknown", "unavailable", "identity unknown", "identity is incomplete"],
+  ] as const)(
+    "does not infer a missing carrier from %s manifest evidence",
+    (evidenceStatus, expectedStatus, expectedBadge, reason) => {
+      const [session] = buildModelTree({
+        domainDiscretization: "fem",
+        mesh: {
+          outerBoundaryEvidenceStatus: evidenceStatus,
+          outerBoundaryPartCount: null,
+        },
+      });
+      const boundaryFaces = session?.children
+        ?.find((node) => node.id === "model:universe")
+        ?.children?.find((node) => node.id === "model:boundary-faces");
+
+      expect(boundaryFaces).toMatchObject({
+        badge: expectedBadge,
+        status: expectedStatus,
+      });
+      expect(boundaryFaces?.statusReason).toContain(reason);
+    },
+  );
 
   it("exposes every orphan render target as an explicit unassigned mesh-part node", () => {
     const nodes = buildModelTree({
@@ -914,6 +961,22 @@ describe("buildModelTree", () => {
       badge: "stale",
       status: "mesh-stale",
     });
+  });
+
+  it("shows a retained FEM mesh as ready when the server validates the edited scene", () => {
+    const nodes = flattenExplorerNodes(buildModelTree({
+      domainDiscretization: "fem",
+      mesh: {
+        meshName: "shared-domain",
+        meshRevision: 12,
+        sourceSceneRevision: 5,
+        manifestSourceSceneRevision: 4,
+        manifestValidatedSceneRevision: 5,
+      },
+    }));
+
+    expect(nodes.find((node) => node.id === "model:mesh:shared-domain"))
+      .toMatchObject({ badge: "current", status: "mesh-ready" });
   });
 
   it("keeps the published mesh identity visible after a failed candidate", () => {
@@ -4448,7 +4511,7 @@ describe("buildModelTree", () => {
     ]) {
       expect(nodes.map((node) => node.kind)).toContain(kind);
     }
-    expect(nodes.map((node) => node.kind)).not.toContain("airbox.visualization.debug");
+    expect(nodes.map((node) => node.kind)).toContain("airbox.visualization.debug");
   });
 
   it("places each frozen-spins constraint once under its stable object or region owner", () => {

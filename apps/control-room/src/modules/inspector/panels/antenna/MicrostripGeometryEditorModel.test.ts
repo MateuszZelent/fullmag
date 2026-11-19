@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type { JsonObject } from "@/kernel/api/apiTypes";
+import type { JsonObject, SceneResource } from "@/kernel/api/apiTypes";
 
 import {
   buildMicrostripGeometry,
+  buildMicrostripCircuitPatch,
+  microstripCircuitDraft,
+  microstripCircuitEqual,
   insertWidthStation,
   widthStationDraft,
   widthStationsEqual,
@@ -87,5 +90,104 @@ describe("microstrip width station authoring", () => {
     ] } }, previous);
     expect(refreshed[3].rowId).toBe(previous[2].rowId);
     expect(new Set(refreshed.map((station) => station.rowId)).size).toBe(refreshed.length);
+  });
+});
+
+function circuitFixture() {
+  const scene = {
+    revision: 4,
+    objects: [{ id: "antenna", geometry }],
+    current_transports: [{
+      kind: "current_transport", name: "charge", model: "ohmic_poisson", coupling: "one_way",
+      domain: [{ object_id: "antenna" }],
+      materials: ["signal", "return"].map(region_id => ({
+        region: { object_id: "antenna", region_id }, material: { sigma_Spm: 5.8e7 },
+      })),
+    }],
+    antenna_port_modes: [{
+      id: "port", source_object_id: "antenna", current_transport_id: "charge",
+      branches: ["signal", "return"].map(id => ({
+        id, inlet_terminal_ref: id + ":in", outlet_terminal_ref: id + ":out",
+      })),
+    }],
+  } as unknown as SceneResource;
+  const draft = microstripCircuitDraft(geometry, scene, "antenna");
+  draft.enabled = true;
+  draft.potentialJumpV = "0.25";
+  draft.parameters = Object.fromEntries(["inlet", "outlet"].flatMap(end => [
+    [end + "_connection_length_m", "200e-9"], [end + "_connection_width_m", "100e-9"],
+    [end + "_connection_offset_v_m", "0"], [end + "_connection_part_id", end],
+    [end + "_connection_conductivity_s_per_m", "3e7"],
+  ]));
+  return { scene, draft };
+}
+
+describe("microstrip inlet source-cut authoring", () => {
+  it("defaults a new cut to the clearance midpoint with positive local z normal", () => {
+    const { scene, draft } = circuitFixture();
+    expect(draft.sourceCutOffsetM).toBe(String(-(10e-9 + 30e-9) / 2));
+    expect(draft.sourceCutNormal).toBe("positive_axis");
+    const patch = buildMicrostripCircuitPatch(scene, "antenna", geometry, draft);
+    expect(patch.current_transports).toEqual([expect.objectContaining({
+      structured_current_closure: expect.objectContaining({
+        schema_version: "structured_current_closure.v2",
+        source_cuts: [expect.objectContaining({
+          plane: { coordinate_frame: "object", axis: "z", offset_m: Number(draft.sourceCutOffsetM), normal: "positive_axis" },
+        })],
+      }),
+    })]);
+  });
+
+  it.each(["positive_axis", "negative_axis"])("edits offset and %s while retaining all source identities", (normal) => {
+    const { scene, draft } = circuitFixture();
+    const first = buildMicrostripCircuitPatch(scene, "antenna", geometry, draft);
+    const closedScene = { ...scene, ...first } as unknown as SceneResource;
+    const closedGeometry = closedScene.objects![0].geometry as JsonObject;
+    const original = closedScene.current_transports![0] as JsonObject;
+    const oldClosure = original.structured_current_closure as JsonObject;
+    const oldCut = (oldClosure.source_cuts as JsonObject[])[0];
+    oldClosure.closure_id = "custom-closure";
+    oldCut.source_cut_id = "custom-cut";
+    oldCut.circuit_id = "custom-circuit";
+    (oldCut.drive as JsonObject).drive_id = "custom-drive";
+    (oldCut.plane as JsonObject).offset_m = -25e-9;
+    (oldCut.plane as JsonObject).normal = "negative_axis";
+    const before = JSON.stringify(closedScene);
+    const edited = microstripCircuitDraft(closedGeometry, closedScene, "antenna");
+    expect(edited.sourceCutOffsetM).toBe(String(-25e-9));
+    expect(edited.sourceCutNormal).toBe("negative_axis");
+    edited.sourceCutOffsetM = "-15e-9";
+    edited.sourceCutNormal = normal;
+    const patch = buildMicrostripCircuitPatch(closedScene, "antenna", closedGeometry, edited);
+    expect(patch.current_transports).toEqual([expect.objectContaining({
+      structured_current_closure: {
+        ...oldClosure,
+        source_cuts: [{ ...oldCut, plane: { coordinate_frame: "object", axis: "z", offset_m: -15e-9, normal } }],
+      },
+    })]);
+    const reloadedScene = { ...closedScene, ...patch } as unknown as SceneResource;
+    const reloaded = microstripCircuitDraft(reloadedScene.objects![0].geometry as JsonObject, reloadedScene, "antenna");
+    expect(microstripCircuitEqual(edited, reloaded)).toBe(true);
+    expect(JSON.stringify(closedScene)).toBe(before);
+  });
+
+  it("rejects clearance endpoints, outside offsets, blanks, nonfinite offsets and unsupported normals", () => {
+    const { scene, draft } = circuitFixture();
+    const lower = -10e-9 / 2 - 30e-9;
+    const upper = -10e-9 / 2;
+    for (const offset of [String(lower), String(upper), "-40e-9", "0", "", " ", "NaN", "Infinity"]) {
+      expect(() => buildMicrostripCircuitPatch(scene, "antenna", geometry, { ...draft, sourceCutOffsetM: offset }))
+        .toThrow(/Source.cut offset|strictly inside/);
+    }
+    expect(() => buildMicrostripCircuitPatch(scene, "antenna", geometry, { ...draft, sourceCutNormal: "world_z" }))
+      .toThrow("positive_axis or negative_axis");
+  });
+
+  it("tracks source plane changes in the existing draft dirty comparison", () => {
+    const { draft } = circuitFixture();
+    expect(microstripCircuitEqual(draft, { ...draft, sourceCutOffsetM: "-20e-9" })).toBe(true);
+    expect(microstripCircuitEqual(draft, { ...draft, sourceCutOffsetM: "-15e-9" })).toBe(false);
+    expect(microstripCircuitEqual(draft, { ...draft, sourceCutNormal: "negative_axis" })).toBe(false);
+    expect(microstripCircuitEqual(draft, { ...draft, sourceCutOffsetM: "" })).toBe(false);
   });
 });

@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-coupling_registry",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_coupling_registry"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_coupling_registry",
@@ -63,7 +46,7 @@
         "python": "source/target",
         "type": "str or endpoint",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "typed, non-empty endpoints",
         "meaning": "coupling endpoints",
         "backend_support": "FEM/FDM CPU/GPU: IR; capability policy resolves runtime",
@@ -73,7 +56,7 @@
         "python": "mode",
         "type": "str",
         "default": "harmonic_mean",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "source validation modes",
         "meaning": "cross-interface averaging mode",
         "backend_support": "FEM/FDM CPU/GPU: IR; capability policy resolves runtime",
@@ -83,7 +66,7 @@
         "python": "scale",
         "type": "float or None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "finite when supplied",
         "meaning": "exchange scale",
         "backend_support": "FEM/FDM CPU/GPU: IR; capability policy resolves runtime",
@@ -93,7 +76,7 @@
         "python": "J1/J2",
         "type": "float",
         "default": "J1 required; J2 None",
-        "si_unit": "J/m^2",
+        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
         "validation": "finite when supplied",
         "meaning": "RKKY/interlayer constants",
         "backend_support": "FEM/FDM CPU/GPU: IR; capability policy resolves runtime",
@@ -103,7 +86,7 @@
         "python": "coupling_id",
         "type": "str or None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty when supplied",
         "meaning": "stable coupling ID",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -113,7 +96,7 @@
         "python": "enabled",
         "type": "bool",
         "default": "True",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "boolean",
         "meaning": "activation flag",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -123,7 +106,7 @@
         "python": "capability_policy",
         "type": "str",
         "default": "require_runtime",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "supported policy",
         "meaning": "runtime capability policy",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",

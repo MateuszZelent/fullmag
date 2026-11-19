@@ -16,6 +16,9 @@ use std::collections::BTreeMap;
 
 use crate::study::AcceptedStudySnapshot;
 
+mod recovered_inspection;
+pub use recovered_inspection::publish_recovered_inspection_solution;
+
 const RUNNING_ASSESSMENT_REASON: &str =
     "scientific assessment is pending while execution is running";
 
@@ -91,6 +94,20 @@ pub(crate) fn reconcile_study_solution(
     let step_id = accepted_step_id
         .context("accepted study solution task is not a step in the accepted plan")?;
     crate::study::validate_study_task_completion(store, claim)?;
+    // An unsuccessful attempt may have published its typed output manifest
+    // before portable-result conversion failed. Its terminal event must not
+    // run that conversion again and turn the same task error into a scheduler
+    // failure. Retain the catalog/CAS outputs and original task diagnostic;
+    // only close a portable solution that was actually published beforehand.
+    // Successful completion still requires the complete publication barrier.
+    if execution_status != SolutionExecutionStatus::Succeeded
+        && store
+            .solution_sets()
+            .read(&solution_set_id_for_claim(claim))?
+            .is_none()
+    {
+        return Ok(());
+    }
     let solution = build_solution(
         store,
         &accepted,
@@ -182,6 +199,18 @@ fn has_attempt_manifest(catalog: &FmsArtifactCatalog, claim: &TaskClaim) -> bool
     })
 }
 
+fn solution_set_id_for_claim(claim: &TaskClaim) -> String {
+    format!(
+        "solution-{}",
+        fullmag_session::canonical_json_sha256(&serde_json::json!({
+            "run_id": claim.run_id.as_str(),
+            "task_id": claim.task_id.as_str(),
+            "attempt_id": claim.attempt_id.as_str(),
+            "ownership_epoch": claim.ownership_epoch.value(),
+        }))
+    )
+}
+
 fn build_solution(
     store: &SessionStore,
     accepted: &AcceptedStudySnapshot,
@@ -210,11 +239,12 @@ fn build_solution(
     let manifest_ref = published_object_ref(manifest_artifact)?;
     let manifest_bytes = store
         .cas()
-        .get(manifest_ref)?
+        .get_bounded(manifest_ref, fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES)?
         .context("study solution output manifest is missing from CAS")?;
-    let manifest: fullmag_session::FmsStudyOutputManifest = serde_json::from_slice(&manifest_bytes)
+    let terminal = crate::study_output_history::open_published_terminal_manifest(store,accepted,claim,step_id,
+        &manifest_bytes,manifest_artifact,artifact_catalog)?;
+    let manifest = crate::study_output_history::read_manifest_projection(&manifest_bytes)
         .context("study solution output manifest is not typed")?;
-    manifest.validate()?;
     if manifest.run_id != accepted.run.specification.run_id.as_str()
         || manifest.task_id != task_id
         || manifest.step_id != step_id
@@ -248,32 +278,8 @@ fn build_solution(
         .as_ref()
         .with_context(|| format!("accepted study step `{step_id}` has no resolved plan"))?;
 
-    let solution_set_id = format!(
-        "solution-{}",
-        fullmag_session::canonical_json_sha256(&serde_json::json!({
-            "run_id": claim.run_id.as_str(),
-            "task_id": task_id,
-            "attempt_id": attempt_id,
-            "ownership_epoch": ownership_epoch,
-        }))
-    );
-    let provenance = SolutionSetProvenance {
-        run_spec_digest: prefixed_digest(accepted.run.specification.fingerprint()?),
-        model_digest: canonical_digest(&serde_json::json!({
-            "project_definition_sha256": accepted.run.specification.snapshot.definition_sha256,
-            "model": &step.model,
-        }))?,
-        physics_digest: canonical_digest(problem)?,
-        discretization_digest: canonical_digest(&step.discretization)?,
-        resolved_plan_digest: canonical_digest(resolved_plan)?,
-        acquisition_digest: canonical_digest(&serde_json::json!({
-            "policy": &step.acquisition,
-            "outputs": &step.outputs,
-        }))?,
-        seed_digest: (!accepted.run.specification.seeds.is_empty())
-            .then(|| canonical_digest(&accepted.run.specification.seeds))
-            .transpose()?,
-    };
+    let solution_set_id = solution_set_id_for_claim(claim);
+    let provenance = solution_provenance(accepted, step, problem, resolved_plan)?;
 
     let mut artifacts_by_case: BTreeMap<Option<String>, Vec<SolutionArtifactRef>> = BTreeMap::new();
     let mut coverage = Vec::new();
@@ -295,6 +301,10 @@ fn build_solution(
             claim.run_id.as_str(),
             &provenance.run_spec_digest,
         )?;
+        let inspection_tensors = if output.codec_id == fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID {
+            crate::study_inspection_tensor::materialize(store, problem, step, &artifact, output,
+                claim, &provenance.run_spec_digest, &solution_set_id)?
+        } else { Vec::new() };
         coverage.push(SolutionArtifactCoverage {
             artifact_id: artifact.artifact_id.clone(),
             state: SolutionCoverageState::Unknown,
@@ -306,6 +316,7 @@ fn build_solution(
             .entry(Some(output.case_id.clone()))
             .or_default()
             .push(artifact);
+        artifacts_by_case.entry(Some(output.case_id.clone())).or_default().extend(inspection_tensors);
         if let Some(field_tensor) = field_tensor {
             artifacts_by_case
                 .entry(Some(output.case_id.clone()))
@@ -319,7 +330,8 @@ fn build_solution(
         store,
         manifest_artifact,
         SolutionArtifactKind::Diagnostic,
-        fullmag_session::FMS_STUDY_OUTPUT_MANIFEST_SCHEMA.to_string(),
+        terminal.as_ref().map_or(fullmag_session::FMS_STUDY_OUTPUT_MANIFEST_SCHEMA,
+            |_| fullmag_session::FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V4).to_string(),
         None,
     )?);
     if let Some(source) = &manifest.observation_source {
@@ -339,6 +351,33 @@ fn build_solution(
             format!("{}@{}", source.state_codec_id, source.state_codec_version),
             Some(source.accepted_state_ref.id.clone()),
         )?);
+    }
+
+    if let Some(terminal) = &terminal {
+        let source = &terminal.observation_source;
+        for (id,schema) in [(&source.snapshot_artifact_id,source.snapshot_schema_version.clone()),
+            (&source.state_artifact_id,format!("{}@{}",source.state_codec_id,source.state_codec_version))] {
+            metadata.push(solution_artifact(store,exact_artifact(artifact_catalog,claim,id)?,SolutionArtifactKind::Diagnostic,
+                schema,Some(source.accepted_state_ref.id.clone()))?);
+        }
+        for carrier in &source.primary_carriers {
+            metadata.push(solution_artifact(store,exact_artifact(artifact_catalog,claim,&carrier.artifact_id)?,SolutionArtifactKind::Diagnostic,
+                format!("{}@{}",carrier.codec_id,carrier.codec_version),Some(source.accepted_state_ref.id.clone()))?);
+        }
+        for binding in &terminal.histories {
+            let bytes = store.cas().get_bounded(&binding.object_ref,fullmag_session::MAX_OUTPUT_HISTORY_METADATA_BYTES)?
+                .context("terminal solution history index is absent")?;
+            let index: fullmag_session::FmsOutputHistoryIndex = serde_json::from_slice(&bytes)?; index.validate()?;
+            metadata.push(solution_artifact(store,exact_artifact(artifact_catalog,claim,&binding.artifact_id)?,SolutionArtifactKind::Diagnostic,
+                index.schema_version.clone(),Some(source.accepted_state_ref.id.clone()))?);
+            coverage.push(SolutionArtifactCoverage {artifact_id:binding.artifact_id.clone(),state:SolutionCoverageState::Complete,
+                expected_samples:Some(index.sample_count),committed_samples:index.sample_count,
+                segments:index.pages.iter().map(|page|Ok(fullmag_quantities::SolutionSegmentRef {
+                    segment_id:page.artifact_id.clone(),start_sample:page.first_ordinal,
+                    end_sample_exclusive:page.first_ordinal.checked_add(page.sample_count).context("solution history count overflow")?,
+                    object_ref:page.object_ref.clone(),byte_length:page.byte_count,
+                })).collect::<Result<Vec<_>>>()?});
+        }
     }
 
     let mut members = Vec::with_capacity(artifacts_by_case.len());
@@ -387,10 +426,17 @@ fn build_solution(
 }
 
 fn publish_revision(store: &SessionStore, desired: SolutionSet) -> Result<()> {
+    // Obtain the writer before publishing so contention does not force a
+    // second coordinator replay. After admission, publication can fail
+    // following rename. Propagate that uncertainty without replaying the write.
+    let publish = |revision: &SolutionSet| {
+        let _writer = crate::retry_store_writer_busy(|| store.write_transaction())?;
+        store.publish_solution_set(revision)
+    };
     let current = store.solution_sets().read(&desired.solution_set_id)?;
     match current {
         None if desired.execution_status == SolutionExecutionStatus::Running => {
-            store.publish_solution_set(&desired)
+            publish(&desired)
         }
         None => {
             let mut open = desired.clone();
@@ -402,10 +448,10 @@ fn publish_revision(store: &SessionStore, desired: SolutionSet) -> Result<()> {
                 member.execution_status = SolutionExecutionStatus::Running;
                 member.scientific_assessment = open.scientific_assessment.clone();
             }
-            store.publish_solution_set(&open)?;
+            publish(&open)?;
             let mut closed = desired;
             closed.revision = 2;
-            store.publish_solution_set(&closed)
+            publish(&closed)
         }
         Some(current) if current.manifest_state == SolutionSetManifestState::Closed => {
             ensure_same_solution_payload(&current, &desired)?;
@@ -435,8 +481,63 @@ fn publish_revision(store: &SessionStore, desired: SolutionSet) -> Result<()> {
                 .revision
                 .checked_add(1)
                 .context("study solution revision exhausted")?;
-            store.publish_solution_set(&closed)
+            publish(&closed)
         }
+    }
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn closes_portable_solution_after_transient_store_writer_conflict() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let other = SessionStore::open_existing(directory.path().to_path_buf()).unwrap();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let open = SolutionSet {
+            schema_version: SOLUTION_SET_SCHEMA_VERSION.into(),
+            solution_set_id: "solution:run-publication-test".into(),
+            revision: 1,
+            run_id: "run:publication-test".into(),
+            manifest_state: SolutionSetManifestState::Open,
+            execution_status: SolutionExecutionStatus::Running,
+            scientific_assessment: unassessed(RUNNING_ASSESSMENT_REASON),
+            provenance: SolutionSetProvenance {
+                run_spec_digest: digest.clone(),
+                model_digest: digest.clone(),
+                physics_digest: digest.clone(),
+                discretization_digest: digest.clone(),
+                resolved_plan_digest: digest.clone(),
+                acquisition_digest: digest,
+                seed_digest: None,
+            },
+            members: Vec::new(),
+            coverage: Vec::new(),
+        };
+        publish_revision(&store, open.clone()).unwrap();
+        let mut closed = open.clone();
+        closed.revision = 2;
+        closed.manifest_state = SolutionSetManifestState::Closed;
+        closed.execution_status = SolutionExecutionStatus::Succeeded;
+        let to_publish = closed.clone();
+        let writer = store.write_transaction().unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (completions_tx, completions_rx) = mpsc::channel();
+        let publisher = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            completions_tx.send(publish_revision(&other, to_publish)).unwrap();
+        });
+        started_rx.recv().unwrap();
+        let premature = completions_rx.recv_timeout(Duration::from_millis(250));
+        drop(writer);
+        assert!(matches!(premature, Err(mpsc::RecvTimeoutError::Timeout)));
+        completions_rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        publisher.join().unwrap();
+        assert_eq!(store.solution_sets().read(&closed.solution_set_id).unwrap(), Some(closed));
     }
 }
 
@@ -531,6 +632,31 @@ fn artifact_kind(data_kind: &str) -> SolutionArtifactKind {
         "table" | "scalar" => SolutionArtifactKind::Table,
         _ => SolutionArtifactKind::Other,
     }
+}
+
+fn solution_provenance(
+    accepted: &AcceptedStudySnapshot,
+    step: &fullmag_authoring::StudyStep,
+    problem: &fullmag_ir::ProblemIR,
+    resolved_plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<SolutionSetProvenance> {
+    Ok(SolutionSetProvenance {
+        run_spec_digest: prefixed_digest(accepted.run.specification.fingerprint()?),
+        model_digest: canonical_digest(&serde_json::json!({
+            "project_definition_sha256": accepted.run.specification.snapshot.definition_sha256,
+            "model": &step.model,
+        }))?,
+        physics_digest: canonical_digest(problem)?,
+        discretization_digest: canonical_digest(&step.discretization)?,
+        resolved_plan_digest: canonical_digest(resolved_plan)?,
+        acquisition_digest: canonical_digest(&serde_json::json!({
+            "policy": &step.acquisition,
+            "outputs": &step.outputs,
+        }))?,
+        seed_digest: (!accepted.run.specification.seeds.is_empty())
+            .then(|| canonical_digest(&accepted.run.specification.seeds))
+            .transpose()?,
+    })
 }
 
 fn canonical_digest(value: &impl Serialize) -> Result<String> {

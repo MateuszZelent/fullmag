@@ -1,3 +1,4 @@
+import { buildImportedSurfacePreview, type ImportedSurfacePreview, type ImportedSurfaceSource } from "./viewport3dImportedSurfaceModel";
 import type {
   MeshSharedDomainManifestResource,
   SceneResource,
@@ -29,6 +30,7 @@ type Viewport3DPrimitiveKind =
   | "sphere"
   | "microstrip"
   | "cpw"
+  | "imported-surface"
   | "unsupported";
 type Viewport3DPrimitiveMeshState =
   | "primitive-only"
@@ -46,6 +48,7 @@ export interface Viewport3DPrimitiveObject {
   magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
   meshState: Viewport3DPrimitiveMeshState;
   antennaPreview?: AuthoredAntennaGeometry;
+  importedSurface?: ImportedSurfacePreview;
   objectId: string;
   role?: string | null;
   sceneRevision: number;
@@ -713,6 +716,7 @@ function quotePrimitiveKeyString(value: string): string {
 export function buildViewport3DPrimitiveRenderModel(
   scene: SceneResource | null | undefined,
   manifest: MeshSharedDomainManifestResource | null | undefined,
+  importedSources?: ReadonlyMap<string, ImportedSurfaceSource> | null,
 ): Viewport3DPrimitiveRenderModel {
   const sceneRecord = asRecord(scene);
   const sceneRevision = resolveSceneRevision(sceneRecord);
@@ -738,6 +742,16 @@ export function buildViewport3DPrimitiveRenderModel(
     const state = objectMeshState(objectId, sceneRevision, manifest, object);
     const transform = asRecord(object.transform);
     const csgPreview = csgPreviewFromGeometry(geometry, transform);
+    let importedSurface: ImportedSurfacePreview | undefined;
+    if (geometry.geometry_kind === "ImportedGeometry") {
+      const source = importedSources?.get(objectId);
+      if (!source || source.descriptor.scene_revision !== sceneRevision) return [];
+      try { importedSurface = buildImportedSurfacePreview(source, transform); }
+      catch (error) {
+        diagnostics.push({ objectId, message: error instanceof Error ? error.message : String(error) });
+        return [];
+      }
+    }
     let antennaPreview: AuthoredAntennaGeometry | undefined;
     if (geometry.geometry_kind === "MicrostripAntennaLayout" || geometry.geometry_kind === "CPWAntennaLayout") {
       try {
@@ -751,13 +765,13 @@ export function buildViewport3DPrimitiveRenderModel(
     }
     return [
       {
-        bounds: antennaPreview
+        bounds: importedSurface ? importedSurface.bounds : antennaPreview
           ? boundsFromMinMax(antennaPreview.boundsMin, antennaPreview.boundsMax)
           : boundsFromGeometry(geometry, transform),
         csgPreview,
         fallbackLabel: fallbackLabel(state),
-        geometryKey: geometryKey(objectId, geometry, transform),
-        kind: antennaPreview ? geometry.geometry_kind === "CPWAntennaLayout" ? "cpw" : "microstrip" : primitiveKindFromGeometry(geometry, transform),
+        geometryKey: `${geometryKey(objectId, geometry, transform)}${importedSurface ? `:surface=${importedSurface.surfaceId}` : ""}`,
+        kind: importedSurface ? "imported-surface" : antennaPreview ? geometry.geometry_kind === "CPWAntennaLayout" ? "cpw" : "microstrip" : primitiveKindFromGeometry(geometry, transform),
         label: asString(object.name) ?? objectId,
         magnetizationTexturePreview: magnetizationTexturePreview(
           sceneRecord,
@@ -765,6 +779,7 @@ export function buildViewport3DPrimitiveRenderModel(
         ),
         meshState: state,
         antennaPreview,
+        importedSurface,
         objectId,
         role: objectRole,
         sceneRevision,

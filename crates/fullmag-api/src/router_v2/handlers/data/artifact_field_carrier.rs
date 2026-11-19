@@ -15,6 +15,7 @@ pub(crate) enum ArtifactSampleIdentity {
 #[derive(Debug, Clone)]
 pub(crate) struct ArtifactSampleCarrier {
     pub owner: ArtifactFieldOwnerBinding,
+    pub sample_carrier: Option<super::antenna::AntennaSampleCarrierResource>,
     pub carrier_scope_kind: String,
     pub carrier_scope_id: Option<String>,
     pub indexing: ArtifactSampleIndexing,
@@ -31,6 +32,25 @@ impl ArtifactSampleCarrier {
             ("object",Some(id)) if !id.trim().is_empty() && id.len()<=4096 && !id.contains('\0')=>{},
             ("full",None)=>{},
             _=>return Err(ApiError::conflict("artifact sampling role/scope mismatch")),
+        }
+        if let Some(carrier) = &self.sample_carrier {
+            let domain_matches = match &carrier.domain {
+                super::antenna::AntennaFieldTargetResource::Global =>
+                    self.carrier_scope_kind == "full" && self.carrier_scope_id.is_none()
+                        && carrier.carrier_kind == "fem_domain_mesh_asset",
+                // The suffix identifies geometry, which may differ from object_id.
+                super::antenna::AntennaFieldTargetResource::Object { object_id } =>
+                    self.carrier_scope_kind == "object" && self.carrier_scope_id.as_ref() == Some(object_id)
+                        && carrier.carrier_kind.strip_prefix("fem_mesh_asset:").is_some_and(|id| !id.is_empty()),
+                super::antenna::AntennaFieldTargetResource::Region { .. } => false,
+            };
+            if !domain_matches || self.indexing != ArtifactSampleIndexing::SampleNodes
+                || self.topology.is_none() || carrier.location != "node"
+                || !carrier.topology_digest.strip_prefix("sha256:").is_some_and(|digest|
+                    digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+            {
+                return Err(ApiError::conflict("artifact sampling descriptor differs from its owned carrier"));
+            }
         }
         let owner=&self.owner;
         if !owner.historical_inspection || [&owner.session_id,&owner.run_id,&owner.runtime_stage_id,&owner.authored_stage_id,

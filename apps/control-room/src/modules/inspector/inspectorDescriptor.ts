@@ -39,7 +39,6 @@ export interface InspectorDescriptor {
   breadcrumbs: InspectorBreadcrumb[];
   icon: InspectorDescriptorIcon;
   metadata: InspectorMetadataItem[];
-  nodeId?: string | null;
   ownerId: string;
   status: {
     label: string;
@@ -184,9 +183,8 @@ function resolveBreadcrumbs(
   typeLabel: string,
 ): InspectorBreadcrumb[] {
   const crumbs: InspectorBreadcrumb[] = [];
-  // Object IDs are opaque model identities, not URL components or names.
   const objectLabel = selection.objectId
-    ? selection.kind === "object.root" ? selection.label ?? selection.objectId : selection.objectId
+    ? titleCase(decodeURIComponent(selection.objectId))
     : null;
   const title = selection.label ?? objectLabel;
 
@@ -235,7 +233,6 @@ export function resolveInspectorDescriptor(
       breadcrumbs: [],
       icon: "object",
       metadata: [],
-      nodeId: null,
       ownerId: "empty-selection",
       status: null,
       tabs: [],
@@ -256,7 +253,6 @@ export function resolveInspectorDescriptor(
     return {
       breadcrumbs: resolveBreadcrumbs(selection, family.typeLabel),
       icon: identity.icon,
-      nodeId: selection.nodeId,
       metadata: [
         { label: "Selected IJK snapshot", value: `[${fdmCellRef.ijk.join(", ")}]` },
         { label: "Selected mask snapshot", value: fdmCellRef.maskState },
@@ -299,7 +295,6 @@ export function resolveInspectorDescriptor(
     breadcrumbs: resolveBreadcrumbs(selection, family.typeLabel),
     icon: identity.icon,
     metadata: metadata.slice(0, 4),
-    nodeId: selection.nodeId,
     ownerId: identity.ownerId,
     status: null,
     tabs: family.tabs.slice(0, 4),

@@ -269,10 +269,10 @@ impl ConservativeCurrentSourceIR {
             .element_markers
             .iter()
             .chain(&lead_mesh.boundary_markers)
-            .any(|marker| *marker == 0 || *marker > i32::MAX as u32)
+            .any(|marker| *marker == 0)
         {
             errors.push(format!(
-                "{path}.lead_mesh markers must be positive signed-32-bit values"
+                "{path}.lead_mesh markers must be positive u32 values"
             ));
         }
         let elements = lead_mesh.require_tet4_elements();
@@ -693,6 +693,18 @@ pub(crate) mod current_source_tests {
     }
 
     #[test]
+    fn current_source_preserves_full_u32_mesh_markers() {
+        let mut source = fixture();
+        let ConservativeCurrentSourceIR::ExternalLeadCurrent { lead_mesh, .. } = &mut source
+            else { unreachable!("external lead fixture") };
+        lead_mesh.element_markers.fill(u32::MAX);
+        lead_mesh.boundary_markers.fill(i32::MAX as u32 + 1);
+        assert!(source.validation_errors("source").is_empty());
+        let restored: ConservativeCurrentSourceIR = serde_json::from_value(serde_json::to_value(&source).unwrap()).unwrap();
+        assert_eq!(restored, source);
+    }
+
+    #[test]
     fn current_source_rejects_unknown_fields_maps_and_essential_aliases() {
         for path in [
             vec!["unexpected"],
@@ -746,7 +758,7 @@ pub(crate) mod current_source_tests {
                 7 => lead_mesh.facets.roles[0] = crate::FemFacetRoleIR::MaterialInterface,
                 8 => lead_mesh.nodes[0] = lead_mesh.nodes[1],
                 9 => lead_mesh.element_markers[0] = 0,
-                _ => lead_mesh.boundary_markers[0] = u32::MAX,
+                _ => lead_mesh.boundary_markers[0] = 0,
             }
             assert!(
                 !source.validation_errors("source").is_empty(),
@@ -1122,6 +1134,10 @@ pub enum SpinInterfaceIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SpinBoundaryIR {
+    HomogeneousSpinPotentialGradient {
+        id: String,
+        surfaces: Vec<SurfaceRefIR>,
+    },
     SpinInsulating {
         id: String,
         surfaces: Vec<SurfaceRefIR>,
@@ -1530,6 +1546,7 @@ pub struct ResolvedFdmStructuredCurrentClosureIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ResolvedSpinBoundaryConditionIR {
+    HomogeneousSpinPotentialGradient,
     SpinInsulating,
     SpinSink,
     SpecifiedPotential {
@@ -1717,6 +1734,8 @@ pub struct ResolvedReciprocalMaterialIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedFdmCoupledSpinTransportIR {
     pub descriptor_schema: String,
+    /// Required v2 magnetic domain on the common transport grid; no legacy default.
+    pub magnetic_active_mask: Vec<bool>,
     /// Authored charge-source envelope evaluated at each coupled transport
     /// stage.  It scales only prescribed charge drives; the reciprocal
     /// constitutive solve still uses the stage magnetization to determine

@@ -208,7 +208,7 @@ export function sortEntries(entries: readonly RecentEntry[], sort: RecentSort): 
   switch (sort) {
     case "name":
       // localeCompare so non-ASCII names land where a human expects them.
-      return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      return out.sort((a, b) => a.name.localeCompare(b.name, "en-US", { numeric: true }));
     case "size":
       return out.sort((a, b) => (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0));
     case "created":
@@ -298,7 +298,7 @@ export function groupByRecency<T extends Recency = RecentEntry>(
 
 /* ── Formatting ─────────────────────────────────────────────────────────── */
 
-export function formatBytes(bytes: number | undefined, locale?: string): string {
+export function formatBytes(bytes: number | undefined, locale = "en-US"): string {
   if (bytes == null) return "—";
   const nf = (v: number, d: number) =>
     new Intl.NumberFormat(locale, { minimumFractionDigits: d, maximumFractionDigits: d }).format(v);
@@ -309,7 +309,7 @@ export function formatBytes(bytes: number | undefined, locale?: string): string 
 }
 
 /** Relative inside the week, absolute beyond it. */
-export function formatOpened(iso: string, now: Date = new Date(), locale?: string): string {
+export function formatOpened(iso: string, now: Date = new Date(), locale = "en-US"): string {
   const t = time(iso);
   if (!t) return "—";
   const d = new Date(t);

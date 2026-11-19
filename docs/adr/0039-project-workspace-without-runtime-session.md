@@ -42,6 +42,27 @@ dataset nadal podlega granicy projektu. Zapis kamery ma request scope,
 generation i anulowanie żądania; stary pending/dirty stan oraz późna odpowiedź
 nie mogą zostać zastosowane w kolejnej sesji.
 
+### Zakończenie zadania a zamknięcie zasobu sesji (24.10.2026)
+
+`completed`, `failed` i `cancelled` kończą zadanie, a nie zasób bieżącej
+sesji. Zakończony model, siatka i pola pozostają w tym samym workspace,
+z `session_resource=active` i niezmienionym `session_epoch`. Jawne `closed`
+tworzy tombstone i kończy dostęp do aktywnego scope. Import lub wymiana sesji
+nadal zmienia inkarnację; ta poprawka nie osłabia request fencing.
+
+Stan solvera i dopuszczenie komend pozostają oddzielne. Terminalny run nie
+oznacza automatycznego Solve ani dowolnej commandability. Odczyt wyników i
+obserwacje korzystają z istniejących kontraktów; obliczenia podlegają nadal
+runtime admission, a następny skrypt wymaga jawnej aktywacji. DEV zachowuje
+API i wyniki po wykonaniu; produkcyjny launcher może zakończyć kontenery
+według osobnego kontraktu trybu nieinteraktywnego.
+
+Dotknięte granice: `sessions/current/status`, jego walidacja scope/epoch,
+kolekcja sesji i resource hooks kernelu. Kształt OpenAPI i enumy nie zmieniają
+się. Dowodem regresji jest zakończony FEM/FDM z widocznym canvasem i polami,
+stabilną tożsamością przed/po Home oraz osobne jawne Close. Sama zmiana
+tego dokumentu nie potwierdza działania przeglądarki.
+
 ## Kontrakty i konsekwencje
 
 Nie zmieniają się OpenAPI, generated transport ani semantyka solverów.

@@ -26,6 +26,11 @@ struct DirectTetraQuadratureOptions {
     std::uint64_t maximum_source_target_pairs = 1'000'000;
 };
 
+struct DirectTetraQuadratureWorkLimits {
+    std::uint64_t maximum_kernel_evaluations;
+    std::uint64_t maximum_ledger_leaf_visits;
+};
+
 struct DirectTetraQuadratureDiagnostics {
     std::uint64_t source_target_pairs = 0;
     std::uint64_t refined_pairs = 0;
@@ -59,6 +64,10 @@ public:
     static constexpr std::uint64_t maximum_final_leaves_per_target = 1'000'000;
     static constexpr std::uint64_t maximum_kernel_evaluations = 100'000'000;
     static constexpr std::uint64_t maximum_ledger_leaf_visits = 100'000'000;
+
+    // The existing pair limit is an ABI-preserving, closed profile selector.
+    static DirectTetraQuadratureWorkLimits ResolveWorkLimits(
+        const DirectTetraQuadratureOptions &options);
 
     static DirectTetraQuadratureResult Evaluate(
         const fullmag::fem::transport::ConservativeCurrentView &source,

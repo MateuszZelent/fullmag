@@ -58,25 +58,25 @@
       "id": "energy",
       "latex": "$E_h$",
       "meaning": "discrete energy",
-      "si_unit": "J"
+      "si_unit": "$\\mathrm{J}$"
     },
     {
       "id": "occupancy",
       "latex": "$\\phi_i$",
       "meaning": "magnetic cell occupancy",
-      "si_unit": "1"
+      "si_unit": "$1$"
     },
     {
       "id": "volume",
       "latex": "$V_\\mathrm{cell}$",
       "meaning": "Cartesian cell volume",
-      "si_unit": "m^3"
+      "si_unit": "$\\mathrm{m^3}$"
     },
     {
       "id": "density",
       "latex": "$w_i$",
       "meaning": "discrete energy density",
-      "si_unit": "J m^-3"
+      "si_unit": "$\\mathrm{J\\,m^{-3}}$"
     }
   ],
   "equations": [
@@ -102,7 +102,7 @@
         "python": "boundary_correction",
         "type": "str | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "`none`, `volume`, or `full`",
         "meaning": "requested correction tier",
         "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
@@ -112,7 +112,7 @@
         "python": "boundary_phi_floor",
         "type": "float | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "strictly in `(0, 1)`",
         "meaning": "requested occupancy floor",
         "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
@@ -122,7 +122,7 @@
         "python": "boundary_delta_min",
         "type": "float | None",
         "default": "None",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "rejects values `< 0.0`; zero, positive values, and `NaN` pass",
         "meaning": "requested length regularizer",
         "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",

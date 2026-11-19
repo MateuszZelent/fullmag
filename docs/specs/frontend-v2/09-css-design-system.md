@@ -11,9 +11,28 @@ Frontend v2 must feel like a **premium professional application** — beautiful,
 
 1. **Tokens (`--fm-*` custom properties)** — the source of truth for all visual decisions: colors, spacing, typography, geometry. Dark and light themes swap Catppuccin Mocha/Latte token values.
 2. **Tailwind CSS** — utility layer for layout, spacing, and responsive behavior. Tailwind utilities consume tokens where possible (`bg-[var(--fm-bg-panel)]`).
-3. **shadcn/ui** — accessible pre-built components and patterns (menu, ribbon controls, command palette, dialogs, dropdowns, context menus, tabs, resizable panels, switches, segmented controls, tooltips). shadcn components are styled through tokens and Tailwind, not through custom CSS overrides.
+3. **shadcn/ui** — accessible pre-built components and patterns (menu, ribbon controls, command palette, dialogs, dropdowns, context menus, tabs, resizable panels, switches, segmented controls, tooltips). Shared primitives retain their accessible behavior. Each primitive has one visual owner: semantic `fm-*` CSS classes selected by CVA, or token-backed utilities. Do not define competing visual properties in both layers. Button and Tabs use semantic classes; utilities remain available for consumer layout.
 
-Custom `fm-*` classes are used for layout geometry and domain-specific component contracts that don't map to shadcn or Tailwind utilities.
+Custom `fm-*` classes define shared primitive variants, layout geometry and domain-specific contracts. They do not replace accessible behavior. Migrate one primitive at a time without globally reordering cascade layers.
+
+### Control and tab contract (design audit, 2026-10-26)
+
+- Compact controls are 28 px, regular controls 30 px; interactive hit areas are at least 24 px. Control labels default to 12 px. Scientific data and dense annotations can use documented smaller roles.
+- Tabs switch a named content panel. Segmented value choices retain radiogroup/radio semantics; independent toggles retain their own semantics.
+- Shared Tabs has line and segmented presentations with one CSS owner. A line tab uses neutral readable text and an accent underline; selected state is not conveyed only by text color. A panel-specific 44 px Inspector row must not become the global minimum height.
+- Tab lists preserve visible overflow and keyboard reachability. Enabled hover styles never replace disabled styles, and focus remains visible.
+- A segmented radiogroup always offers one keyboard entry when any option is enabled, even if its current value is missing or disabled. Focus fallback does not change the value until the user acts.
+
+
+### Readable Inspector controls (design audit, 2026-10-27)
+
+Inspector inputs and selects use a dedicated 35 px control height, 8 px radius
+and 13 px control text. Labels sit above ordinary editable fields; specialized
+vectors, checkboxes and other dense controls retain layouts suited to their
+interaction. Labels, values, units and validation remain visible in both
+Catppuccin themes and in narrow panels. Read-only results remain distinguishable
+from editable controls. These Inspector-specific values do not change the global
+compact or regular control geometry.
 
 ### File ownership
 
@@ -47,7 +66,7 @@ Dark and light themes are implemented through a `data-theme` attribute on `<html
 }
 ```
 
-The active theme is stored in user preferences (layout store). `prefers-color-scheme` sets the default. All components consume tokens, so theme switching is instantaneous with zero re-renders.
+Preferencja `light` / `dark` / `system` jest zapisywana pod dotychczasowym kluczem `fullmag.control-room.theme`. Skrypt w head ustala efektywny motyw przed parsowaniem body; System reaguje na `prefers-color-scheme` bez nadpisywania preferencji użytkownika. Style korzystają z tokenów, a komponent sterujący prezentuje wybór i efektywny motyw. Inter i JetBrains Mono są lokalnymi, licencjonowanymi zasobami w `public/fonts`; manifest zawiera źródła i SHA256.
 
 ## 2. Surface Model
 
@@ -64,39 +83,6 @@ The active theme is stored in user preferences (layout store). `prefers-color-sc
 | `unsupported` | capability gate blocks action |
 
 These states must be visible without relying on color alone.
-
-### Shared Inspector template
-
-All Inspectors follow the existing Visualize property-grid language. The shared
-`InspectorGroup`, `InspectorPropertyRow`, `FormField`, `QuantityUnitSelect` and
-`ColorField` own presentation; individual panels own their scientific content,
-validation and mutation policy. A panel must not introduce its own field palette,
-font, border or focus recipe.
-
-`src/design/styles/inspector-theme.css` is the common Tailwind `@apply` field
-recipe. `tailwind-theme.css` exposes semantic `fm-inspector-*` utilities backed
-by application tokens; `theme.css` resolves surfaces through the active
-Catppuccin Mocha/Latte theme. Inspector geometry and typography come from
-`--fm-inspector-control-height`, `--fm-inspector-control-font-size` and
-`--fm-inspector-label-font-size` in `tokens.css`. Color and text-size utility
-names remain distinct to avoid Tailwind's `text-*` namespace ambiguity. Property
-rows share `--fm-inspector-row-columns` across editable/read-only fields and
-native wrappers, including the same inline inset (`px-fm-2`); the narrow
-container breakpoint stacks the same template.
-
-Use `fm-inspector-input`, `fm-inspector-select` and `fm-inspector-textarea` for
-native fields; selects must use the select recipe, including unit selectors.
-Shared Radix select triggers use the same Inspector theme. Layout utilities
-may change width or grouping without overriding field typography and states.
-Property rows stack at the Inspector's narrow container breakpoint. Scientific
-units and validation messages remain visible; mono is reserved for explicit
-identifiers/code. Color fields pair a picker with editable text; alpha and
-existing Apply semantics remain separate. Unknown/token/automatic values must
-survive rendering without an implicit color write.
-
-Verify dark/light, wide/narrow, keyboard focus, disabled and invalid states.
-The `frontend-controls` browser fixture provides a shared theme matrix;
-successful CSS compilation alone does not establish visual acceptance.
 
 ## 3. Token Families
 

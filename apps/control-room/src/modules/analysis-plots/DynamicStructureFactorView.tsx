@@ -75,7 +75,7 @@ export function DynamicStructureFactorView({
       title="Dynamic structure factor S(k,f)"
       subtitle="k [rad/m] · f [Hz] · bounded heatmap"
     >
-      <div className="fm-analysis-plots__status" aria-label="Dynamic structure factor controls">
+      <div role="group" className="fm-analysis-plots__status" aria-label="Dynamic structure factor controls">
         <label>Scale <Select value={scale} onValueChange={(value) => setScale(value as "linear" | "log")}><SelectTrigger aria-label="Scale"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="log">Log</SelectItem><SelectItem value="linear">Linear</SelectItem></SelectContent></Select></label>
         <label>Spectrum <Select value={spectrum} onValueChange={(value) => setSpectrum(value as "response" | "source")}><SelectTrigger aria-label="Spectrum"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="response">S(k,f)</SelectItem><SelectItem value="source">H(k,f)</SelectItem></SelectContent></Select></label>
         <label>k cut <Select value={String(boundedWavevectorIndex)} onValueChange={(value) => setWavevectorIndex(Number(value))}><SelectTrigger aria-label="Wavevector cut"><SelectValue /></SelectTrigger><SelectContent>{resource?.k_rad_per_m.map((value, index) => <SelectItem key={`wavevector:${value}`} value={String(index)}>{value.toExponential(3)} rad/m</SelectItem>)}</SelectContent></Select></label>

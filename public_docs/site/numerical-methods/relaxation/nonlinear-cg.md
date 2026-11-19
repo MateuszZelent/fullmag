@@ -5,7 +5,7 @@ doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
-source_of_truth: docs/physics/0500-fdm-relaxation-algorithms.md, docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md, docs/physics/0580-canonical-relaxation-equilibrium-contract.md
+source_of_truth: /physics/foundations/micromagnetic-energy, /physics/foundations/effective-field
 ---
 
 (public-docs-numerical-methods-relaxation-nonlinear-cg)=
@@ -279,7 +279,7 @@ The request lowers to this direct-minimizer payload:
 ```
 
 This is an explanatory projection of the serializer, not a hand-written replacement for
-`study.stages.add_relax(...)`). There is intentionally no `dynamics` object for NCG. The
+`study.stages.add_relax(...)`. There is intentionally no `dynamics` object for NCG. The
 planner adds the requested FEM/FDM lane, CPU/GPU device, precision, field realization and
 resolved policy as execution/provenance data.
 
@@ -338,9 +338,9 @@ Source presence and serialization do not prove executed GPU behavior.
 ## Validation
 
 Validation covers tangent orthogonality, unit-norm retraction, PR+ and restart, Armijo halving and
-rollback, line-search exhaustion, accepted-state torque/energy completion, stage-to-ProblemIR
+rollback, line-search exhaustion, accepted-state torque/energy completion, stage-to-`ProblemIR`
 round-trip, and separate FDM CPU, FDM GPU, FEM CPU and FEM GPU planner/runtime gates. Python
-`to_ir()` proves authoring/lowering only; a source-map match proves traceability only.
+`to_ir()` proves authoring/lowering only, not runtime convergence.
 
 (numerical-methods-relaxation-ncg-limitations)=
 ## Limitations
@@ -355,9 +355,7 @@ has no physical-time interpretation.
 
 - J. Nocedal and S. J. Wright, *Numerical Optimization*, 2nd ed., Springer, 2006, DOI: [10.1007/978-0-387-40065-5](https://doi.org/10.1007/978-0-387-40065-5).
 - B. T. Polyak, “The conjugate gradient method in extremal problems,” *USSR Computational Mathematics and Mathematical Physics* 9 (1969), 94–112.
-- Fullmag canonical contracts: 0500-fdm-relaxation-algorithms.md, 0510-fem-relaxation-algorithms-mfem-gpu.md, and 0580-canonical-relaxation-equilibrium-contract.md.
-
-(numerical-methods-relaxation-ncg-source-code-index)=
+- Fullmag public physics contracts: {doc}`/physics/foundations/micromagnetic-energy`, {doc}`/physics/foundations/effective-field`, and {doc}`stopping-criteria`.
 
 ## Control Room workflow
 
@@ -365,15 +363,7 @@ Use the stage editor to select `nonlinear_cg` and configure only direct-minimize
 Inspect the resolved algorithm and completion telemetry; LLG integrator and physical-time controls
 are not valid controls for this stage.
 
-## Control Room crosswalk
-
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
-
-## Where this is implemented
-
-The source-code index below records the Python contract, reference loop, direction and line-search
-policy, native FEM lanes and completion policy used by this page.
-
+(numerical-methods-relaxation-ncg-source-code-index)=
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence |

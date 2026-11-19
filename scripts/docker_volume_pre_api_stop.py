@@ -614,6 +614,8 @@ def _checkpoint_native_init_failure(args, control, selected, root, previous_raw,
 def retained_context(control, previous, document, backend_id, *, fresh_state, removed_container_proof=None):
     """Carry the same first pre-ACK authority after one proved pre-API stop."""
     from docker_volume_pre_ack_retry import _released_snapshot
+    if not previous.get("attempt"):
+        return None
     root = "development/attempts/" + previous["attempt"] + SUFFIX
     record = control.read(root + "receipt.json", optional=True)
     if record is None:

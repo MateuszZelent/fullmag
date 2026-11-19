@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Mapping, Optional
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from typing import Any, Optional
 
 from ._generated.operations import OPERATIONS, Operation
 from ._schema import validate_payload
@@ -122,6 +124,24 @@ class Client:
     def health(self) -> Any:
         return self.call_json("platform_get_platform_health")
 
+    @contextmanager
+    def bind_material_catalog(self) -> Iterator[None]:
+        """Bind this instance's material versions to ``fm.materials`` for a block.
+
+        The Client fetches the catalog once when entering the block.
+        Archived versions remain available by their published keys.
+        """
+        from fullmag._material_versions import _bind_catalog
+
+        resource = self.call_json("workspace_get_workspace_material_library")
+        if not isinstance(resource, Mapping):
+            raise ValueError("material library resource must be an object")
+        versions = resource.get("versions", [])
+        if not isinstance(versions, list):
+            raise ValueError("material library versions must be a list")
+        with _bind_catalog(versions):
+            yield
+
 
 def _expand_path(operation: Operation, values: Mapping[str, Any]) -> str:
     missing = [name for name in operation.path_params if name not in values]
@@ -183,6 +203,24 @@ class _Sessions(_Namespace):
     def status(self) -> Any:
         return self._client.call_json("sessions_get_sessions_current_status")
 
+    def clients(self) -> Any:
+        """External clients (e.g. Python live scripts) seen within the presence TTL."""
+        return self._client.call_json("sessions_get_sessions_current_clients")
+
+    def heartbeat(self, client_id: str, *, kind: str = "python_live", label: Optional[str] = None) -> Any:
+        """Announce or refresh this client's presence in the current session."""
+        return self._client.call_json(
+            "sessions_put_sessions_current_clients_client_id",
+            path_params={"client_id": client_id},
+            body=_drop_none({"kind": kind, "label": label}),
+        )
+
+    def leave(self, client_id: str) -> None:
+        self._client.call(
+            "sessions_delete_sessions_current_clients_client_id",
+            path_params={"client_id": client_id},
+        )
+
 
 class _Model(_Namespace):
     def scene(self) -> Any:
@@ -191,9 +229,25 @@ class _Model(_Namespace):
     def script(self) -> Any:
         return self._client.call_json("model_get_sessions_current_model_script")
 
-    def commit(self, transaction: Mapping[str, Any]) -> Any:
+    def render_script(self, *, expected_scene_revision: Optional[int] = None) -> Any:
+        """Render the current scene as canonical Python (``source``) and record it in the session."""
+        return self._client.call_json(
+            "model_post_sessions_current_model_syncs",
+            body=_drop_none({"expected_scene_revision": expected_scene_revision}),
+        )
+
+    def commit(
+        self,
+        transaction: Mapping[str, Any],
+        *,
+        idempotency_key: Optional[str] = None,
+    ) -> Any:
         """Commit one ``AuthoringTransactionRequest`` and return the response."""
-        return self._client.call_json("model_post_sessions_current_model_transactions", body=dict(transaction))
+        return self._client.call_json(
+            "model_post_sessions_current_model_transactions",
+            body=dict(transaction),
+            headers={"Idempotency-Key": idempotency_key} if idempotency_key else None,
+        )
 
     def replace_scene(self, scene: Mapping[str, Any], *, base_revision: Optional[int] = None) -> Any:
         return self.commit(_drop_none({"kind": "replace_scene", "scene": dict(scene), "base_revision": base_revision}))
@@ -258,6 +312,19 @@ class _Data(_Namespace):
 
     def fields(self, *, stage_id: Optional[str] = None) -> Any:
         return self._client.call_json("data_get_sessions_current_data_fields", query=_drop_none({"stage_id": stage_id}))
+
+    def observation_frames(self) -> Any:
+        """Accepted-run observation frames of the current run (newest last)."""
+        return self._client.call_json("data_get_sessions_current_data_observation_frames")
+
+    def frame_magnetization(self, frame_id: str) -> FieldVector:
+        """Decode the source-qualified magnetization of one observation frame (FMVP v4)."""
+        response = self._client.call(
+            "data_get_sessions_current_data_observation_frames_frame_id_magnetization",
+            path_params={"frame_id": frame_id},
+            accept="application/octet-stream, application/json",
+        )
+        return decode_field_vector(response.body)
 
     def field_meta(self, quantity_id: str) -> Any:
         return self._client.call_json(

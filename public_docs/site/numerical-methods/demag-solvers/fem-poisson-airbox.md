@@ -225,18 +225,9 @@ The weak form is shared by CPU/GPU. The assembled operator, sparse solver librar
 boundary-DOF preparation, reductions and telemetry are separate lane contracts.
 
 (numerical-methods-demag-poisson-implementation-mapping)=
-## Where this is implemented
+## Implementation mapping
 
-| Claim | Repository path | Stable symbol | Responsibility | Lane |
-|---|---|---|---|---|
-| Demag normalization | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L51) | [`class Demag`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L51) | model/variant aliases and IR | public API |
-| FEM solver policy | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L160) | [`class FemLinearSolverPolicy`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L160) | CG/GMRES, preconditioner, tolerances and limits | public API |
-| RHS | [`backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp#L182) | [`assemble_demag_poisson_rhs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp#L182) | magnetic Poisson RHS | FEM CPU |
-| Boundary operator | [`backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp#L77) | [`initialize_demag_poisson_boundary_operator`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp#L77) | Dirichlet/Robin construction | FEM CPU |
-| Linear solve | [`backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp#L209) | [`solve_demag_poisson_hypre`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp#L209) | solver and telemetry | FEM CPU |
-| Field recovery | [`backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp#L130) | [`recover_demag_poisson_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp#L130) | gradient, mask and field handoff | FEM CPU |
-| Energy reduction | [`backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp#L24) | [`demag_poisson_energy_from_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp#L24) | demagnetization energy reduction | FEM CPU |
-| Device RHS/recovery | [`backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu#L13) | [`demag_rhs_csr_kernel`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu#L13) | device CSR RHS and recovery kernels | FEM GPU |
+Public `Demag` and `FemLinearSolverPolicy` normalization, MFEM CPU right-hand side, boundary closure, Hypre/Krylov solves, field recovery, and energy reduction, along with CUDA device RHS/recovery kernels, are mapped in {ref}`numerical-methods-demag-poisson-source-code-index`.
 
 (numerical-methods-demag-poisson-validation)=
 ## Validation
@@ -261,11 +252,6 @@ equivalence between the two closures.
 - Canonical physics owner: {doc}`../../physics/interactions/demagnetization/fem-poisson-airbox`.
 
 (numerical-methods-demag-poisson-source-code-index)=
-
-## Control Room workflow
-
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
-
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence |

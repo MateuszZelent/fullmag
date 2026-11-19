@@ -1,15 +1,19 @@
 "use client";
 
 import { FileUp } from "lucide-react";
-import { useRef, useState, type DragEvent } from "react";
+import { useRef, useState, type DragEvent, type FormEvent } from "react";
 
 import { Button } from "@/shared/ui/Button";
+import { Input } from "@/shared/ui/Input";
 import { cn } from "@/shared/utils/className";
 
+import { stlScaleToSi, type StlLengthUnit } from "@/kernel/authoring/importedStlImport";
 import { IMPORT_ACCEPT, IMPORT_FORMATS, classifyImportFile } from "../model/importFormats";
 import { translateMx3, type Mx3Translation } from "../model/mx3Import";
 import { copyScript, saveScriptFile } from "../model/scriptExport";
-import type { ProjectCreator } from "../model/scriptProject";
+import type { ProjectCreator, ScriptProjectSource } from "../model/scriptProject";
+import { readPythonImport } from "../model/pythonImport";
+import { CreateProjectAction } from "../ui/CreateProjectAction";
 import { buildImportSaveRequest, saveTranslatedMx3, type ScriptSaver } from "../model/scriptOpen";
 
 import { Mx3ImportReport } from "./Mx3ImportReport";
@@ -20,8 +24,11 @@ export interface ImportSectionProps {
   readonly openDisabledReason: string | null;
   /** Saves a translated script as a new file; null where there is no desktop host. */
   readonly scriptSaver?: ScriptSaver | null;
-  /** Creates a project from the translated script after consent; null without a project document service. */
+  /** Creates a project from reviewed Python source after consent; null without a project document service. */
   readonly projectCreator?: ProjectCreator | null;
+  readonly onImportStl: (file: File, units: StlLengthUnit, scale: number) => Promise<string | null>;
+  readonly onCreateFemWorkspace: () => Promise<string | null>;
+  readonly stlWorkspaceState: "active" | "none" | "unconfirmed";
 }
 
 interface StagedImport {
@@ -37,19 +44,56 @@ export function ImportSection({
   openDisabledReason,
   scriptSaver = null,
   projectCreator = null,
+  onImportStl,
+  onCreateFemWorkspace,
+  stlWorkspaceState,
 }: ImportSectionProps) {
   const [dragging, setDragging] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [staged, setStaged] = useState<StagedImport | null>(null);
+  const [pythonSource, setPythonSource] = useState<ScriptProjectSource | null>(null);
+  const [stlFile, setStlFile] = useState<File | null>(null);
+  const [stlUnits, setStlUnits] = useState("");
+  const [stlScale, setStlScale] = useState("1");
+  const [stlScaleInvalid, setStlScaleInvalid] = useState(false);
+  const scaleRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handle = async (file: File | undefined) => {
-    if (!file) return;
+    if (!file || busy) return;
     setStaged(null);
+    setPythonSource(null);
+    setStlFile(null);
     const verdict = classifyImportFile(file.name);
     if (verdict.kind !== "supported") {
       setMessage(verdict.reason);
+      return;
+    }
+    if (verdict.format.id === "stl") {
+      if (stlWorkspaceState !== "active") {
+        setMessage(stlWorkspaceState === "none"
+          ? "Create a FEM workspace first. Then return to Import and choose the STL file again."
+          : "Fullmag could not confirm the active workspace. Refresh the session list before importing STL.");
+        return;
+      }
+      setStlFile(file);
+      setStlUnits("");
+      setStlScale("1");
+      setStlScaleInvalid(false);
+      setMessage(null);
+      return;
+    }
+    if (verdict.format.id === "python") {
+      setBusy(true);
+      setMessage(null);
+      try {
+        setPythonSource(await readPythonImport(file));
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : `Could not read ${file.name}.`);
+      } finally {
+        setBusy(false);
+      }
       return;
     }
     if (verdict.format.id === "mx3") {
@@ -95,6 +139,45 @@ export function ImportSection({
     setMessage((await copyScript(staged.translation.script)) ? null : "The clipboard is not available here.");
   };
 
+  const submitStl = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!stlFile || busy) return;
+    const units = stlUnits as StlLengthUnit;
+    const scale = Number(stlScale);
+    if (!Number.isFinite(scale) || scale <= 0 || stlScaleToSi(scale, units) === null) {
+      setStlScaleInvalid(true);
+      setMessage("Choose a positive scale that remains finite and greater than zero in metres.");
+      scaleRef.current?.focus();
+      return;
+    }
+    setStlScaleInvalid(false);
+    setBusy(true);
+    setMessage(null);
+    try {
+      const failure = await onImportStl(stlFile, units, scale);
+      setMessage(failure);
+      if (!failure) setStlFile(null);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "The STL surface could not be imported.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createFemWorkspace = async () => {
+    if (busy) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const failure = await onCreateFemWorkspace();
+      setMessage(failure ?? "FEM workspace setup was requested. After creating the workspace, return to Import and choose the STL file again.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not open FEM workspace setup.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragging(false);
@@ -108,10 +191,96 @@ export function ImportSection({
           <h1>Import</h1>
           <p>
             Fullmag reads models from the common micromagnetic packages. What cannot be mapped is
-            reported before anything is written. A .mx3 file is translated into a Python script you can review and save.
+            reported before anything is written. Review a .py source file before creating a project,
+            translate a .mx3 file into Python, or import an STL triangle surface into an open workspace.
           </p>
         </div>
       </div>
+
+      <section aria-labelledby="fm-stl-import-title" className="fm-start-report">
+        <h2 className="fm-start-report__title" id="fm-stl-import-title">Import an STL surface</h2>
+        <p className="fm-start-inspector__note">
+          STL stores triangle coordinates without a reliable length unit. Choose the coordinate unit
+          and a positive scale explicitly. FEM is required for volume meshing. This adds geometry only; it does not activate a material
+          or physics module.
+        </p>
+        {stlWorkspaceState === "none" ? (
+          <div>
+            <p className="fm-start-inspector__note">
+              Create a FEM workspace before selecting the STL. Workspace setup does not start a solver.
+              After the workspace opens, return here and choose the file again.
+            </p>
+            <Button disabled={busy} onClick={() => void createFemWorkspace()} type="button" variant="secondary">
+              Create FEM workspace…
+            </Button>
+          </div>
+        ) : stlWorkspaceState === "unconfirmed" ? (
+          <p className="fm-start-inspector__note" role="status">
+            Import is available after Fullmag confirms the active workspace.
+          </p>
+        ) : null}
+        {stlFile ? (
+          <form aria-label="STL import settings" className="fm-start-report" onSubmit={(event) => void submitStl(event)}>
+            <fieldset className="fm-start-run-fieldset">
+              <legend>Surface settings for {stlFile.name}</legend>
+              <label className="fm-start-run-field" htmlFor="fm-stl-units">
+                Coordinate length unit
+                <select
+                  aria-describedby="fm-stl-units-help"
+                  id="fm-stl-units"
+                  name="stl_units"
+                  onChange={(event) => setStlUnits(event.currentTarget.value)}
+                  required
+                  value={stlUnits}
+                >
+                  <option value="">Choose a unit…</option>
+                  <option value="m">Metres (m)</option>
+                  <option value="mm">Millimetres (mm)</option>
+                  <option value="um">Micrometres (µm)</option>
+                  <option value="nm">Nanometres (nm)</option>
+                </select>
+              </label>
+              <p className="fm-start-inspector__note" id="fm-stl-units-help">
+                Pick the unit used by the coordinates stored in this STL. Fullmag does not infer it from the filename.
+              </p>
+              <label className="fm-start-run-field" htmlFor="fm-stl-scale">
+                Positive scale multiplier
+                <Input
+                  aria-describedby="fm-stl-scale-help fm-start-import-status"
+                  aria-invalid={stlScaleInvalid || undefined}
+                  ref={scaleRef}
+                  id="fm-stl-scale"
+                  name="stl_scale"
+                  min="5e-324"
+                  onChange={(event) => {
+                    setStlScale(event.currentTarget.value);
+                    setStlScaleInvalid(false);
+                  }}
+                  required
+                  step="any"
+                  type="number"
+                  value={stlScale}
+                />
+              </label>
+              <p className="fm-start-inspector__note" id="fm-stl-scale-help">
+                Multiplies every STL coordinate after conversion from the selected unit. Default: 1.
+              </p>
+              <Button disabled={busy} type="submit">Import surface</Button>
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  setStlFile(null);
+                  setMessage(null);
+                }}
+                type="button"
+                variant="ghost"
+              >
+                Choose another file
+              </Button>
+            </fieldset>
+          </form>
+        ) : null}
+      </section>
 
       <div
         className={cn("fm-start-drop", dragging && "fm-start-drop--active")}
@@ -146,9 +315,22 @@ export function ImportSection({
         />
       </div>
 
-      <div aria-live="polite" role="status">
+      <div aria-live="polite" id="fm-start-import-status" role="status">
         {message ? <p className="fm-start-notice fm-start-notice--warning">{message}</p> : null}
       </div>
+
+      {pythonSource ? (
+        <section aria-label="Python source review" className="fm-start-report">
+          <h2 className="fm-start-report__title">Review: {pythonSource.fileName}</h2>
+          <p className="fm-start-inspector__note">
+            Self-contained scripts only. Companion files and relative assets are not included.
+            Reading this file does not execute it. Create project asks for consent before running it.
+          </p>
+          <pre aria-label="Python source" className="fm-start-report__source" style={{ maxHeight: "24rem", overflow: "auto" }} tabIndex={0}><code>{pythonSource.text}</code></pre>
+          <CreateProjectAction creator={projectCreator} disabled={busy} source={pythonSource} />
+          <Button onClick={() => setPythonSource(null)} type="button" variant="ghost">Discard</Button>
+        </section>
+      ) : null}
 
       {staged ? (
         <Mx3ImportReport

@@ -23,6 +23,7 @@ import {
   type TestElement,
 } from "./simulationPreparationTestDom.test-support";
 
+import { cancelDomainSetupNavigation, pendingDomainSetupNavigation } from "./domainSetupNavigation";
 import { NewProblemDialog } from "./NewProblemDialog";
 
 const sessionReadbackState = vi.hoisted(() => ({
@@ -133,14 +134,12 @@ describe("NewProblemDialog", () => {
     }
   });
 
-  it("opens the Universe Inspector after ACK only when Configure now is selected", async () => {
+  it("records the Universe navigation at ACK only when Configure now is selected", async () => {
+    // The session connectors apply the request; the dialog itself may be
+    // remounted while the workspace shell changes, so it never selects.
     const create = vi.fn(async () => createResponse(3));
-    const { body, layout, selection, rerender, dispose } = await mountDialog({ create });
-    sessionReadbackState.identity = {
-      requestScopeEpoch: "request-epoch-1",
-      sessionEpoch: "session-epoch-1",
-      sessionId: "scratch-session",
-    };
+    const { body, layout, selection, dispose } = await mountDialog({ create });
+    cancelDomainSetupNavigation();
 
     try {
       await act(async () => findRadio(body, "Configure now").click());
@@ -148,34 +147,26 @@ describe("NewProblemDialog", () => {
       await settle();
 
       expect(create).toHaveBeenCalledWith(expect.objectContaining({ backend: "fdm" }));
+      expect(pendingDomainSetupNavigation()).toBe("scratch-session");
       expect(layout.setPanelVisible).not.toHaveBeenCalled();
       expect(selection.set).not.toHaveBeenCalled();
+    } finally {
+      cancelDomainSetupNavigation();
+      await dispose();
+    }
+  });
 
-      sessionReadbackState.sessions = {
-        schema_version: "1",
-        sessions: [
-          {
-            current: true,
-            name: "Scratch",
-            session_id: "scratch-session",
-            status: "created",
-          },
-        ],
-      };
-      await rerender();
+  it("does not record the Universe navigation when setup is left for later", async () => {
+    const create = vi.fn(async () => createResponse(3));
+    const { body, dispose } = await mountDialog({ create });
+    cancelDomainSetupNavigation();
+
+    try {
+      await act(async () => submitDialog(body));
       await settle();
 
-      expect(layout.setPanelVisible).toHaveBeenCalledWith("right", true);
-      expect(selection.set).toHaveBeenCalledWith(
-        {
-          kind: "universe.root",
-          label: "Universe",
-          nodeId: "model:universe",
-          objectId: null,
-          ref: null,
-        },
-        "ribbon",
-      );
+      expect(create).toHaveBeenCalled();
+      expect(pendingDomainSetupNavigation()).toBeNull();
     } finally {
       await dispose();
     }

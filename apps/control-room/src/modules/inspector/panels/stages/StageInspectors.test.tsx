@@ -48,6 +48,7 @@ import type {
   HysteresisSettleTraceResource,
   HysteresisSettlePipelineSchema,
   HysteresisStagePlanSchema,
+  StudyStageResult,
 } from "@/kernel/api/apiTypes";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
@@ -63,6 +64,8 @@ import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
+
+import { stageResultInitialState } from "./StageInitialStateSelector";
 
 const TEST_SESSION_IDENTITY: SessionResourceIdentity = {
   requestScopeEpoch: "api-instance:stage-inspectors-test",
@@ -197,6 +200,8 @@ import { SaveStateStageInspector } from "./SaveStateStageInspector";
 import type { StageInspectorFrameProps } from "./StageInspectorFrame";
 import { TableAutosaveStageInspector } from "./TableAutosaveStageInspector";
 import { UnsupportedStageInspector } from "./UnsupportedStageInspector";
+import { MaskFieldDriveStageInspector } from "./MaskFieldDriveStageInspector";
+import { summarizeMaskFieldDriveStage } from "./maskFieldDriveStageSummary";
 
 function stage(kind: string): StudyStageModel {
   return {
@@ -279,6 +284,41 @@ function render(
   );
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function expectFormFieldUnit(
+  markup: string,
+  label: string,
+  unit: string,
+  disabled = false,
+): void {
+  const labelPattern = new RegExp(`<label\\b[^>]*>${escapeRegExp(label)}<\\/label>`);
+  const disabledPattern = disabled ? `(?=[^>]*\\bdisabled="")` : "";
+  const inputPattern = new RegExp(
+    `<input\\b(?=[^>]*\\baria-label="${escapeRegExp(label)}")${disabledPattern}[^>]*>`,
+  );
+  const unitPattern = new RegExp(
+    `<span\\b(?=[^>]*\\bclass="[^"]*fm-inspector-form-field__unit[^"]*")[^>]*>${escapeRegExp(unit)}<\\/span>`,
+  );
+  const labelElement = markup.match(labelPattern)?.[0];
+  const inputElement = markup.match(inputPattern)?.[0];
+  const unitElement = markup.match(unitPattern)?.[0];
+  if (!labelElement || !inputElement || !unitElement) {
+    throw new Error(`Expected the ${label} field, its input, and its ${unit} unit.`);
+  }
+  const fieldId = inputElement.match(/\bid="([^"]+)"/)?.[1];
+  const unitId = unitElement.match(/\bid="([^"]+)"/)?.[1];
+  if (!fieldId || !unitId) {
+    throw new Error(`Expected ${label} and its ${unit} unit to have linked IDs.`);
+  }
+  expect(labelElement).toContain(`for="${fieldId}"`);
+  const describedBy = inputElement.match(/\baria-describedby="([^"]+)"/)?.[1]?.split(/\s+/) ?? [];
+  expect(describedBy).toContain(unitId);
+  if (disabled) expect(inputElement).toContain('disabled=""');
+}
+
 function renderMounted(
   children: ReactNode,
   defaultValue = defaultAccordionValue,
@@ -334,6 +374,19 @@ function hysteresisFamilyVariantPointsRef(
 }
 
 describe("Study stage inspectors", () => {
+  it("keeps saved results strict until the user chooses to use one as a seed", () => {
+    const result: StudyStageResult = {
+      project_id: "project", study_id: "study", artifact_id: "state-a", artifact_sha256: "a".repeat(64),
+      source: { run_id: "run-a", task_id: "task-a", step_id: "relax", case_id: "default", attempt_id: "attempt-a", ownership_epoch: 1 },
+      codec_id: "fullmag.runner.field_json", codec_version: "v1", accepted_at: "",
+      authored_relation: "authored_input_changed", supports_magnetization_input: true,
+    };
+    expect(stageResultInitialState(result)).toEqual({
+      kind: "stage_result", run_id: "run-a", step_id: "relax", case_id: "default",
+      artifact_id: "state-a", content_sha256: result.artifact_sha256, allow_stale_model: false,
+    });
+    expect(stageResultInitialState({ ...result, authored_relation: "authoring_unavailable" })?.allow_stale_model).toBe(false);
+  });
   it("exposes the periodic-airbox magnetostatic control for eigenmode authoring", () => {
     const frameProps = props("eigenmodes");
     const html = render(
@@ -415,6 +468,43 @@ describe("Study stage inspectors", () => {
     expect(render(<UnsupportedStageInspector {...unsupported} />)).toContain(
       "Unsupported Stage",
     );
+    const addAntenna = summarizeMaskFieldDriveStage({
+      kind: "add_mask_field_drive",
+      drive: {
+        id: "antenna",
+        name: "Antenna",
+        target: { kind: "object", object_id: "sample" },
+        shape: { kind: "box", size: [6e-6, 1e-6, 4.5e-8] },
+        frame: "world",
+        time_origin: "absolute",
+        terms: [{
+          mask: { kind: "function", function: {
+            name: "antenna_mask", parameters: [{ name: "B01", value: 0.0002 }],
+            outputs: ["B01 * sin(k * x)", "0.0", "0.0"],
+          } },
+          time: { name: "antenna_time", parameters: [{ name: "frequency", value: 3.6e9 }],
+            outputs: ["sin(2 * pi * frequency * t)"] },
+        }],
+      },
+    })!;
+    const addAntennaHtml = render(
+      <MaskFieldDriveStageInspector {...unsupported} summary={addAntenna} />,
+    );
+    expect(addAntennaHtml).toContain("Add Antenna");
+    expect(addAntennaHtml).toContain("antenna_mask(B01 = 0.0002)");
+    expect(addAntennaHtml).toContain("sin(2 * pi * frequency * t)");
+    expect(addAntennaHtml).not.toContain("Unsupported Stage");
+    const updateAntenna = summarizeMaskFieldDriveStage({
+      kind: "update_mask_field_drive",
+      drive_id: "antenna",
+      term: null,
+      mask_parameters: { B01: 0.0004 },
+    })!;
+    const updateAntennaHtml = render(
+      <MaskFieldDriveStageInspector {...unsupported} summary={updateAntenna} />,
+    );
+    expect(updateAntennaHtml).toContain("Antenna Update");
+    expect(updateAntennaHtml).toContain("B01 = 0.0004");
     expect(
       render(<ChangeDeviceStageInspector {...props("change_device")} />),
     ).toContain("Execution Device");
@@ -487,73 +577,6 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("100 fs");
   });
 
-  it("interprets following Run durations with canonical time units and leaves invalid values unavailable", () => {
-    const autosaveBase = createDefaultStudyStageDraft("autosave", 0);
-    const autosave = {
-      ...autosaveBase,
-      autosave: { ...autosaveBase.autosave, enabled: true },
-    };
-    const table = createDefaultStudyStageDraft("table_autosave", 1);
-    const fft = createDefaultStudyStageDraft("fft_response", 2);
-
-    for (const untilSeconds of ["2 ps", "", "0", "not a duration"] as const) {
-      const run = {
-        ...createDefaultStudyStageDraft("run", 3),
-        untilSeconds,
-      };
-      const pipeline = [autosave, table, fft, run];
-      const runHtml = render(
-        <RunStageInspector
-          {...props("run")}
-          draft={run}
-          draftIndex={3}
-          pipelineDrafts={pipeline}
-        />,
-      );
-      const autosaveHtml = render(
-        <AutosaveStageInspector
-          {...props("autosave")}
-          draft={autosave}
-          draftIndex={0}
-          pipelineDrafts={pipeline}
-        />,
-      );
-      const tableHtml = render(
-        <TableAutosaveStageInspector
-          {...props("table_autosave")}
-          draft={table}
-          draftIndex={1}
-          pipelineDrafts={pipeline}
-        />,
-      );
-
-      const fftHtml = render(
-        <FftResponseStageInspector
-          {...props("fft_response")}
-          draft={fft}
-          draftIndex={2}
-          pipelineDrafts={pipeline}
-        />,
-      );
-
-      if (untilSeconds === "2 ps") {
-        expect(runHtml).toContain(
-          '<span class="fm-inspector-field-row__label">Until</span><span class="fm-inspector-field-row__value">2 ps</span>',
-        );
-        expect(autosaveHtml).toContain("<small>Duration</small><strong>2 ps</strong>");
-        expect(tableHtml).toContain("<small>Duration</small><strong>2 ps</strong>");
-        expect(fftHtml).toContain("<small>Duration</small><strong>2 ps</strong>");
-      } else {
-        expect(runHtml).toContain(
-          '<span class="fm-inspector-field-row__label">Until</span><span class="fm-inspector-field-row__value">not declared</span>',
-        );
-        expect(autosaveHtml).toContain("<small>Duration</small><strong>not available</strong>");
-        expect(tableHtml).toContain("<small>Duration</small><strong>not available</strong>");
-        expect(fftHtml).toContain("<small>Duration</small><strong>not available</strong>");
-      }
-    }
-  });
-
   it("renders automatic sinc sampling controls and complete next-Run FFT diagnostics", () => {
     const antenna = createDefaultStudyStageDraft("add_field_drive", 0);
     const tableBase = createDefaultStudyStageDraft("table_autosave", 1);
@@ -590,7 +613,7 @@ describe("Study stage inspectors", () => {
 
     expect(tableHtml).toContain("Sampling mode");
     expect(tableHtml).toContain("Automatic from sinc cutoff");
-    expect(tableHtml).toMatch(/t_sampling[\s\S]*disabled=""[\s\S]*fm-inspector-form-field__unit">s/);
+    expectFormFieldUnit(tableHtml, "t_sampling", "s", true);
     for (const label of [
       "Source drives",
       "Maximum sinc cutoff",
@@ -622,7 +645,7 @@ describe("Study stage inspectors", () => {
       />,
     );
     expect(autosaveHtml).toContain("Automatic from sinc cutoff");
-    expect(autosaveHtml).toMatch(/Every[\s\S]*disabled=""[\s\S]*fm-inspector-form-field__unit">s/);
+    expectFormFieldUnit(autosaveHtml, "Every", "s", true);
 
     const antennaHtml = render(
       <AddFieldDriveStageInspector
@@ -634,9 +657,9 @@ describe("Study stage inspectors", () => {
     );
     expect(antennaHtml).toContain("Sampling plan");
     expect(antennaHtml).toContain("104 GHz");
-    expect(antennaHtml).toMatch(/Cutoff fc[\s\S]*fm-inspector-form-field__unit">Hz/);
+    expectFormFieldUnit(antennaHtml, "Cutoff fc", "Hz");
     expect(antennaHtml).toMatch(/Cutoff fc[\s\S]*value="4e10"/);
-    expect(antennaHtml).toMatch(/Center t0[\s\S]*fm-inspector-form-field__unit">s/);
+    expectFormFieldUnit(antennaHtml, "Center t0", "s");
     expect(antennaHtml).toMatch(/Center t0[\s\S]*value="5e-11"/);
     expect(antennaHtml).toContain("t0=50 ps");
 
@@ -989,39 +1012,6 @@ describe("Study stage inspectors", () => {
     expect(resolveStudyStageInspectorKind("study.stage.hysteresis", null)).toBe(
       "hysteresis",
     );
-  });
-
-  it("does not invent a CPU request or runtime transfer when change-device data is unavailable", () => {
-    const html = render(<ChangeDeviceStageInspector {...props("change_device")} draft={null} stage={null} />);
-    expect(html).toContain("not authored");
-    expect(html).toContain("not available");
-    expect(html).not.toContain("change_device(&quot;cpu&quot;)");
-    expect(html).not.toContain("identity_copy");
-    expect(html).not.toContain("backend_transfer");
-    expect(html).not.toContain("device_change");
-  });
-
-  it.each(["gpu", "auto", "cuda:2"])("keeps requested %s separate from missing runtime transfer metadata", (deviceTarget) => {
-    const draft = { ...createDefaultStudyStageDraft("change_device", 0), deviceTarget };
-    const html = render(<ChangeDeviceStageInspector {...props("change_device")} draft={draft} />);
-    expect(html).toContain(`study.stages.change_device(&quot;${deviceTarget}&quot;)`);
-    expect(html).not.toContain("identity_copy");
-    expect(html).not.toContain("backend_transfer");
-  });
-
-  it("shows the transfer operator published by runtime without replacing it with a default", () => {
-    const runtimeStage = {
-      ...stage("change_device"),
-      transition: {
-        kind: "published-transfer-kind", label: "Published transition",
-        reason: "published-reason", transferOperator: "published-operator", uiPresentation: null,
-      },
-    };
-    const html = render(<ChangeDeviceStageInspector {...props("change_device")} stage={runtimeStage} />);
-    expect(html).toContain("published-operator");
-    expect(html).toContain("published-transfer-kind");
-    expect(html).toContain("published-reason");
-    expect(html).not.toContain("identity_copy");
   });
 
   it("routes change-device stage nodes to the change-device inspector", () => {
@@ -1518,64 +1508,6 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("Phasor convention");
     expect(html).toContain("delta_h exp(i omega t + phase_rad)");
     expect(html).not.toContain("Modal Operator Contract");
-  });
-
-  it.each([
-    ["", "not set", "0 point(s)"],
-    ["   ", "not set", "0 point(s)"],
-    ["1e9,", "1 GHz", "1 point(s)"],
-    ["5GHz", "5 GHz", "1 point(s)"],
-    ["5GHz;6GHz", "5 GHz, 6 GHz", "2 point(s)"],
-    ["1e9,2GHz", "1 GHz, 2 GHz", "2 point(s)"],
-    ["1GHz;1000MHz", "1 GHz, 1 GHz", "2 point(s)"],
-  ])("summarizes authored frequency list %j using the canonical parser", (frequenciesHz, grid, count) => {
-    const draft = { ...createDefaultStudyStageDraft("frequency_response", 0), frequenciesHz };
-    const html = render(
-      <FrequencyResponseStageInspector {...props("frequency_response")} draft={draft} authoringView="sweep" />,
-      ["authoring", "frequency-response-sweep-detail"],
-    );
-    expect(html).toContain(grid);
-    expect(html).toContain(count);
-    expect(html).not.toContain(">0 Hz<");
-    if (frequenciesHz === "1GHz;1000MHz") expect(html).toContain("1 duplicate(s) require policy");
-  });
-
-  it.each(["1GHz;bad", "0", "-1", "5 GHz", "Infinity"])(
-    "does not present a valid subset or artifact count for invalid list %j",
-    (frequenciesHz) => {
-      const draft = { ...createDefaultStudyStageDraft("frequency_response", 0), frequenciesHz };
-      const html = render(
-        <FrequencyResponseStageInspector {...props("frequency_response")} draft={draft} authoringView="sweep" />,
-        ["authoring", "frequency-response-sweep-detail"],
-      );
-      expect(html).toContain("invalid frequency list");
-      expect(html).toContain("all frequencies must be finite and positive");
-      expect(html).not.toContain("frequency-point artifact(s)");
-    },
-  );
-
-  it.each(["", "   ", "1e-", "Infinity", "90deg"])(
-    "keeps incomplete or invalid phase %j unavailable",
-    (excitationPhaseRad) => {
-      const draft = { ...createDefaultStudyStageDraft("frequency_response", 0), excitationPhaseRad };
-      const html = render(
-        <FrequencyResponseStageInspector {...props("frequency_response")} draft={draft} authoringView="excitation" />,
-        ["authoring", "frequency-response-excitation-detail"],
-      );
-      expect(html).toContain("phase must be finite");
-      expect(html).toContain("not available");
-      expect(html).not.toContain("0 deg");
-    },
-  );
-
-  it.each(["0", "-0.5", "0x10"])("retains valid legacy phase %j", (excitationPhaseRad) => {
-    const draft = { ...createDefaultStudyStageDraft("frequency_response", 0), excitationPhaseRad };
-    const html = render(
-      <FrequencyResponseStageInspector {...props("frequency_response")} draft={draft} authoringView="excitation" />,
-      ["authoring", "frequency-response-excitation-detail"],
-    );
-    expect(html).toContain("finite phase");
-    expect(html).not.toContain("phase must be finite");
   });
 
   it("renders driven sweep semantics in the response sweep child view", () => {

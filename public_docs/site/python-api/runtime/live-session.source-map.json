@@ -1,0 +1,242 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/runtime/live-session.md",
+    "reviewed_revision": "4c9424ca0"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/live/__init__.py",
+      "symbol": "connect",
+      "responsibility": "Switch the DSL to live mode."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/live/_session.py",
+      "symbol": "class LiveSession",
+      "responsibility": "Manage live session sync, heartbeats, commands, fields, tables, and script export."
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/live/_scene.py",
+      "symbol": "plan_transactions",
+      "responsibility": "Plan atomic scene transactions between the local DSL state and server revision."
+    },
+    {
+      "id": "source-4",
+      "path": "packages/fullmag-py/src/fullmag/client/events.py",
+      "symbol": "class EventStream",
+      "responsibility": "Maintain WebSocket realtime subscriptions with cursor resume."
+    },
+    {
+      "id": "source-5",
+      "path": "packages/fullmag-py/src/fullmag/live/sweep.py",
+      "symbol": "sweep",
+      "responsibility": "Dispatch parameter sweep points concurrently across running groups."
+    },
+    {
+      "id": "source-6",
+      "path": "packages/fullmag-py/src/fullmag/live/jupyter.py",
+      "symbol": "monitor",
+      "responsibility": "Stream scalar telemetry for live notebook plots and headless capture."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "fm.connect(url)",
+        "type": "`str | None`",
+        "default": "`$FULLMAG_URL`, else `http://127.0.0.1:3197`",
+        "si_unit": "1",
+        "validation": "`http(s)://host[:port]` without query",
+        "meaning": "Origin of the DEV group frontend",
+        "backend_support": "FEM/FDM CPU/GPU; runtime capability checks remain authoritative",
+        "problem_ir": "none (transport)"
+      },
+      {
+        "python": "fm.connect(new_session=...)",
+        "type": "`bool`",
+        "default": "`False`",
+        "si_unit": "1",
+        "validation": "boolean",
+        "meaning": "Replace the current session instead of attaching",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "none"
+      },
+      {
+        "python": "fm.connect(events=...)",
+        "type": "`bool`",
+        "default": "`True`",
+        "si_unit": "1",
+        "validation": "boolean",
+        "meaning": "Start the realtime event stream",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "none"
+      },
+      {
+        "python": "fm.connect(retry_budget_s=...)",
+        "type": "`float`",
+        "default": "`60.0`",
+        "si_unit": "\\mathrm{s}",
+        "validation": ">= 0",
+        "meaning": "Retry budget for requests that provably did not apply",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "none"
+      },
+      {
+        "python": "fm.disconnect()",
+        "type": "function",
+        "default": "—",
+        "si_unit": "1",
+        "validation": "safe when disconnected",
+        "meaning": "Leave client presence, close the WebSocket stream, and return DSL to eager mode",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "none (transport)"
+      },
+      {
+        "python": "fm.sync(reconcile=...)",
+        "type": "function (`bool`)",
+        "default": "`False`",
+        "si_unit": "1",
+        "validation": "live session required",
+        "meaning": "Commit pending DSL changes; reconcile merges disjoint Control Room edits after conflict",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "scene revision"
+      },
+      {
+        "python": "fm.transaction()",
+        "type": "context manager",
+        "default": "—",
+        "si_unit": "1",
+        "validation": "live session required",
+        "meaning": "Group several DSL calls into one transaction",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "scene revision"
+      },
+      {
+        "python": "fm.paused()",
+        "type": "context manager",
+        "default": "—",
+        "si_unit": "1",
+        "validation": "live session required",
+        "meaning": "Pause, apply edits, resume (interactive host only)",
+        "backend_support": "Not in Docker accepted mode",
+        "problem_ir": "scene revision"
+      },
+      {
+        "python": "fm.relax(...) / fm.run(...)",
+        "type": "runtime commands",
+        "default": "`required` stage timing",
+        "si_unit": "\\mathrm{s}",
+        "validation": "explicit timestep (`fix_dt`, `dt`, or adaptive `dt_max`) required",
+        "meaning": "Append a live stage and execute with `stage_index` target",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`study.stages` stage entry"
+      },
+      {
+        "python": "fm.run_until(predicate, chunk_time=...)",
+        "type": "callable, `float`",
+        "default": "`required`",
+        "si_unit": "\\mathrm{s}",
+        "validation": "`chunk_time > 0`; one guard of `max_time`/`max_chunks`",
+        "meaning": "Run in chunks until the predicate holds",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`study.stages` run stage"
+      },
+      {
+        "python": "fm.pause() / fm.resume() / fm.stop() / fm.skip()",
+        "type": "runtime commands",
+        "default": "—",
+        "si_unit": "1",
+        "validation": "live session required",
+        "meaning": "Submit session control commands (`stop`/`resume`/`pause`/`skip`)",
+        "backend_support": "`stop` supported across modes; `pause` and `skip` rejected in Docker accepted mode",
+        "problem_ir": "none (command)"
+      },
+      {
+        "python": "fm.field(quantity)",
+        "type": "`str`",
+        "default": "`required`",
+        "si_unit": "field SI unit",
+        "validation": "quantity id of the session catalog",
+        "meaning": "Fetch FMVP binary field vector (`.to_numpy()`, `.as_grid()`, `.as_complex()`)",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "none (read)"
+      },
+      {
+        "python": "fm.table(table_id)",
+        "type": "`str`",
+        "default": "`required`",
+        "si_unit": "table column SI units",
+        "validation": "valid table id (`scalars` default)",
+        "meaning": "Fetch FMTB binary rows (`.to_numpy()`, `.column()`, `.to_pandas()`)",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "none (read)"
+      },
+      {
+        "python": "fm.on(event_type, callback)",
+        "type": "`str`, callable",
+        "default": "`required`",
+        "si_unit": "1",
+        "validation": "live session with `events=True`",
+        "meaning": "Subscribe to WebSocket `LiveEvent` stream (`scalar.sample`, `resource.batch_changed`, `*`)",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "none (stream)"
+      },
+      {
+        "python": "fm.export_script()",
+        "type": "function",
+        "default": "—",
+        "si_unit": "1",
+        "validation": "live session required",
+        "meaning": "Sync and render canonical editable Python script from the server model",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "round-trip script"
+      },
+      {
+        "python": "fm.sweep(function, groups=[...], **lists)",
+        "type": "callable, `list[str]`",
+        "default": "`required`",
+        "si_unit": "1",
+        "validation": "distinct group URLs; equal-length lists",
+        "meaning": "Run points across several DEV groups",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "one session per group"
+      },
+      {
+        "python": "fullmag.live.jupyter.monitor(...)",
+        "type": "helper",
+        "default": "`columns=('mx', 'my', 'mz')`",
+        "si_unit": "1",
+        "validation": "live session with event stream",
+        "meaning": "Stream scalar samples into a live notebook plot or `.samples` buffer",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "none (read)"
+      }
+    ]
+  }
+}

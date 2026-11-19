@@ -61,7 +61,10 @@ from ._gmsh_types import (
     _infer_axis_aligned_periodic_pairs,
     _count_exact_layer_planes,
     _cell_jacobian_determinants,
+    _cell_jacobian_determinants_batch,
+    _iter_cell_family_batches,
     _mixed_cell_scaled_jacobians,
+    _mixed_cell_scaled_jacobians_batch,
     _mixed_reference_derivative_samples,
     _mixed_v2_deterministic_inputs,
     MIXED_PYRAMID_APEX_SCALE_MAX,
@@ -73,6 +76,7 @@ from ._gmsh_types import (
     _is_sha256_digest,
 )
 from ._gmsh_infra import (
+    _quality_volumes_in_si,
     _import_gmsh,
     _configure_gmsh_threads,
     _GmshProgressLogger,
@@ -104,7 +108,9 @@ from ._gmsh_airbox import (
     _gmsh_require_triangular_shell_interface,
     _mixed_transition_shell_parameters,
 )
+from ._airbox_feature_fields import require_no_airbox_feature_refinement
 from ._airbox_grading import _add_airbox_grading_field
+from ._mixed_face_incidence import MixedFaceIncidence, build_mixed_face_incidence
 
 
 # ---------------------------------------------------------------------------
@@ -207,26 +213,6 @@ def _fresh_scoped_layer_plane_attempt_options(options: MeshOptions) -> MeshOptio
         options,
         size_fields=_clone_descriptors(options.size_fields),
         lower_bound_fields=_clone_descriptors(options.lower_bound_fields),
-    )
-
-
-def _quality_volumes_in_si(
-    quality: MeshQualityReport | None, coordinate_scale: float
-) -> MeshQualityReport | None:
-    """Convert dimensional volumes when Gmsh coordinates are scaled from SI."""
-    if quality is None:
-        return None
-    volume_factor = coordinate_scale ** -3
-    return _dc_replace(
-        quality,
-        volume_min=quality.volume_min * volume_factor,
-        volume_max=quality.volume_max * volume_factor,
-        volume_mean=quality.volume_mean * volume_factor,
-        volume_std=quality.volume_std * volume_factor,
-        element_volume=(
-            [volume * volume_factor for volume in quality.element_volume]
-            if quality.element_volume is not None else None
-        ),
     )
 
 
@@ -2839,6 +2825,7 @@ def generate_swept_tetrahedral_box_airbox_mesh(
     options: MeshOptions,
 ) -> MeshData:
     """Realize a fixed-layer Tet4 Box, partitioning scoped fields by exact z layers."""
+    require_no_airbox_feature_refinement(airbox, route="exact-layer tetrahedral Box")
     if airbox is not None and int(airbox.boundary_marker) == 10:
         raise ValueError(
             "shared-domain interface and outer boundary markers must be distinct"
@@ -2889,6 +2876,7 @@ def _generate_coincident_ring_airbox_mesh(
     bounds: tuple[float, float, float, float, float, float],
 ) -> MeshData:
     """Mesh a Box or ring and exact-cell airbox as synchronized GEO partitions."""
+    require_no_airbox_feature_refinement(airbox, route="exact-cell layered")
     SCALE = 1.0e6
     body_hmax_scaled = float(hmax) * SCALE
     if not math.isfinite(body_hmax_scaled) or body_hmax_scaled <= 0.0:
@@ -3353,7 +3341,7 @@ def _generate_coincident_ring_airbox_mesh(
             )
         nodes = np.asarray(raw_mesh.nodes, dtype=np.float64) / SCALE
         elements = raw_mesh.elements
-        magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.int32) == 1
+        magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.uint32) == 1
         if not np.any(magnetic_mask):
             raise RuntimeError("coincident ring realization produced no magnetic cells")
         magnetic_elements = elements[magnetic_mask]
@@ -3847,7 +3835,7 @@ def generate_swept_box_cylinder_ring_mesh(
 
         nodes = np.asarray(raw_mesh.nodes, dtype=np.float64) / SCALE
         elements = raw_mesh.elements
-        magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.int32) == 1
+        magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.uint32) == 1
         if not np.any(magnetic_mask):
             raise RuntimeError("swept ring realization produced no magnetic cells")
         magnetic_nodes = np.unique(elements[magnetic_mask].reshape(-1))
@@ -4091,7 +4079,7 @@ def generate_swept_cylinder_mesh(
             raise RuntimeError("Swept mesh produced 0 volume elements")
 
         elements = np.vstack(tet_elements).astype(np.int32)
-        element_markers = np.ones(elements.shape[0], dtype=np.int32)
+        element_markers = np.ones(elements.shape[0], dtype=np.uint32)
 
         # Extract boundary faces (triangles on the surface)
         surf_types, surf_tags_list, surf_node_tags_list = gmsh.model.mesh.getElements(2)
@@ -4114,7 +4102,7 @@ def generate_swept_cylinder_mesh(
             boundary_faces = np.vstack(boundary_faces_list)
         else:
             boundary_faces = np.zeros((0, 3), dtype=np.int32)
-        boundary_markers = np.ones(boundary_faces.shape[0], dtype=np.int32)
+        boundary_markers = np.ones(boundary_faces.shape[0], dtype=np.uint32)
 
         quality = None
         if opts.compute_quality:
@@ -4251,6 +4239,32 @@ def _mixed_v2_cell_volume(family: str, coordinates: NDArray[np.float64]) -> floa
     raise ValueError(f"mixed v2 volume does not support {family}")
 
 
+def _mixed_v2_cell_volume_batch(
+    family: str,
+    coordinates: NDArray[np.float64],
+    jacobians: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Evaluate ``_mixed_v2_cell_volume`` for ``(M, k, 3)`` cells.
+
+    ``jacobians`` is ``_cell_jacobian_determinants_batch`` of the same cells.
+    Each row follows the scalar operation order, so the volumes are
+    bit-identical to the per-cell reference.
+    """
+    if family == "tet4":
+        return np.abs(jacobians[:, 0]) / 6.0
+    if family == "prism6":
+        return np.abs(np.mean(jacobians, axis=1))
+    if family == "pyramid5":
+        base = coordinates[:, :4]
+        apex = coordinates[:, 4]
+        volume = np.zeros(coordinates.shape[0], dtype=np.float64)
+        for i, j, k in ((0, 1, 2), (0, 2, 3)):
+            matrix = np.stack((base[:, j] - base[:, i], base[:, k] - base[:, i], apex - base[:, i]), axis=2)
+            volume = volume + np.abs(np.linalg.det(matrix)) / 6.0
+        return volume
+    raise ValueError(f"mixed v2 volume does not support {family}")
+
+
 def _mixed_v2_node_order_digest(node_ids: NDArray[np.int32]) -> str:
     ordered = np.asarray(node_ids, dtype=np.int64).reshape(-1)
     payload = b"fullmag:fem-body-node-order:v1" + struct.pack("<I", int(ordered.size))
@@ -4258,20 +4272,52 @@ def _mixed_v2_node_order_digest(node_ids: NDArray[np.int32]) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
-def _mixed_v2_conformity_counts(mesh: MeshData) -> dict[str, int]:
+def _mixed_v2_face_incidence(mesh: MeshData) -> MixedFaceIncidence:
+    """Group every cell face and explicit facet by its exact node-id set."""
+    return build_mixed_face_incidence(
+        node_count=mesh.n_nodes,
+        cell_types=mesh.cell_types,
+        cell_offsets=mesh.cell_offsets,
+        cell_nodes=mesh.cell_nodes,
+        local_facets=_MIXED_CELL_LOCAL_FACETS,
+        facet_offsets=mesh.facet_offsets,
+        facet_nodes=mesh.facet_nodes,
+    )
+
+
+def _mixed_v2_cell_nodes_where(mesh: MeshData, mask: NDArray[np.bool_]) -> NDArray[np.int32]:
+    """Return the sorted unique node ids of the cells selected by ``mask``."""
+    return np.unique(mesh.cell_nodes[np.repeat(mask, np.diff(mesh.cell_offsets))])
+
+
+def _mixed_v2_transition_interface_tri3_count(
+    mesh: MeshData, incidence: MixedFaceIncidence
+) -> int:
+    """Count tri3 faces owned by exactly one transition and one far-air cell."""
+    face_of_member = np.repeat(
+        np.arange(incidence.arity.size, dtype=np.int64), np.diff(incidence.offsets)
+    )
+    selected = (
+        (incidence.members >= 0)
+        & (incidence.cell_owner_counts[face_of_member] == 2)
+        & (incidence.arity[face_of_member] == 3)
+    )
+    # Cell members of one face stay contiguous after filtering, so each row
+    # is the owner pair of one two-owner face.
+    parts = mesh.cell_mesh_parts[incidence.members[selected]].reshape(-1, 2)
+    transition = parts == "transition_air"
+    far = parts == "far_air"
+    return int(np.count_nonzero((transition[:, 0] & far[:, 1]) | (far[:, 0] & transition[:, 1])))
+
+
+def _mixed_v2_conformity_counts(
+    mesh: MeshData, incidence: MixedFaceIncidence | None = None
+) -> dict[str, int]:
     """Check exact shared-node face ownership and explicit boundary coverage."""
-    adjacency: dict[tuple[int, ...], list[int]] = {}
-    for ordinal, family in enumerate(mesh.cell_types.tolist()):
-        cell = mesh.cell_node_ids(ordinal)
-        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
-            key = tuple(sorted(int(cell[index]) for index in local_face))
-            adjacency.setdefault(key, []).append(ordinal)
-    explicit: dict[tuple[int, ...], list[int]] = {}
-    for ordinal in range(mesh.n_boundary_faces):
-        key = tuple(sorted(int(node) for node in mesh.facet_node_ids(ordinal)))
-        explicit.setdefault(key, []).append(ordinal)
-    nonmanifold = sum(1 for owners in adjacency.values() if len(owners) > 2)
-    orphan = sum(1 for face, owners in adjacency.items() if len(owners) == 1 and face not in explicit)
+    if incidence is None:
+        incidence = _mixed_v2_face_incidence(mesh)
+    nonmanifold = int(np.count_nonzero(incidence.cell_owner_counts > 2))
+    orphan = int(np.count_nonzero((incidence.cell_owner_counts == 1) & (incidence.explicit_counts == 0)))
     # A face is conforming by construction when it has one exact node-id set
     # and at most two owners.  Gmsh's physical interface group then provides
     # the marker proof; no geometric tolerance is used to hide a mismatch.
@@ -4489,7 +4535,86 @@ def _mixed_v2_transition_shell_parameters_m(
     )
 
 
-def _mixed_v2_closed_faceted_magnetic_volume(mesh: MeshData) -> float:
+_MIXED_V2_INTERFACE_TRIANGLES = {
+    "tri3": ((0, 1, 2),),
+    "quad4": ((0, 1, 2), (0, 2, 3)),
+}
+
+
+def _mixed_v2_interface_facet_signed_volumes(
+    mesh: MeshData,
+    incidence: MixedFaceIncidence,
+    interface: NDArray[np.int64],
+    *,
+    magnetic_markers: tuple[int, ...],
+) -> tuple[NDArray[np.int64], NDArray[np.float64]]:
+    """Return the magnetic owner and outward signed volume of each facet.
+
+    Each facet's triangles are oriented away from its single magnetic owner
+    and integrated as ``det(p_i, p_j, p_k) / 6``.  Every per-facet operation
+    keeps the scalar reference layout; a batched orientation dot whose sign is
+    not certain is re-evaluated with the scalar ``np.dot``.
+    """
+    members = incidence.members
+    is_cell = members >= 0
+    member_markers = mesh.element_markers[np.where(is_cell, members, 0)]
+    magnetic = is_cell & np.isin(member_markers, np.asarray(magnetic_markers))
+    face_starts = incidence.offsets[:-1]
+    magnetic_counts = np.add.reduceat(magnetic.astype(np.int64), face_starts)
+    magnetic_owner = np.add.reduceat(np.where(magnetic, members, 0), face_starts)
+
+    faces = incidence.facet_face[interface]
+    families = mesh.facet_types[interface]
+    owner_valid = magnetic_counts[faces] == 1
+    family_valid = np.isin(families, np.asarray(tuple(_MIXED_V2_INTERFACE_TRIANGLES)))
+    invalid = np.flatnonzero(~(owner_valid & family_valid))
+    if invalid.size:
+        first = int(invalid[0])
+        if not owner_valid[first]:
+            raise RuntimeError(
+                "mixed v2 magnetic interface facet does not have exactly one "
+                "magnetic owner"
+            )
+        raise RuntimeError(
+            f"mixed v2 magnetic interface has unsupported facet family {str(families[first])!r}"
+        )
+
+    owners = magnetic_owner[faces]
+    owner_starts = mesh.cell_offsets[owners]
+    owner_arities = mesh.cell_offsets[owners + 1] - owner_starts
+    facet_starts = mesh.facet_offsets[interface]
+    signed = np.empty(interface.size, dtype=np.float64)
+    for family, triangles in _MIXED_V2_INTERFACE_TRIANGLES.items():
+        facet_arity = len(triangles) + 2
+        for owner_arity in np.unique(owner_arities[families == family]).tolist():
+            rows = np.flatnonzero((families == family) & (owner_arities == owner_arity))
+            points = mesh.nodes[
+                mesh.facet_nodes[facet_starts[rows][:, np.newaxis] + np.arange(facet_arity)]
+            ]
+            owner_points = mesh.nodes[
+                mesh.cell_nodes[owner_starts[rows][:, np.newaxis] + np.arange(owner_arity)]
+            ]
+            offset = np.mean(points, axis=1) - np.mean(owner_points, axis=1)
+            value = np.zeros(rows.size, dtype=np.float64)
+            for i, j, k in triangles:
+                normal = np.cross(points[:, j] - points[:, i], points[:, k] - points[:, i])
+                dot = np.einsum("ij,ij->i", normal, offset)
+                uncertain = np.abs(dot) <= 1.0e-10 * (
+                    np.linalg.norm(normal, axis=1) * np.linalg.norm(offset, axis=1)
+                )
+                for row in np.flatnonzero(uncertain).tolist():
+                    dot[row] = float(np.dot(normal[row], offset[row]))
+                swap = (dot < 0.0)[:, np.newaxis]
+                second = np.where(swap, points[:, k], points[:, j])
+                third = np.where(swap, points[:, j], points[:, k])
+                value = value + np.linalg.det(np.stack((points[:, i], second, third), axis=2)) / 6.0
+            signed[rows] = value
+    return owners, signed
+
+
+def _mixed_v2_closed_faceted_magnetic_volume(
+    mesh: MeshData, incidence: MixedFaceIncidence | None = None
+) -> float:
     """Integrate the closed, realized body boundary as an independent oracle.
 
     A curved annulus is represented by a faceted surface in the extracted
@@ -4499,62 +4624,25 @@ def _mixed_v2_closed_faceted_magnetic_volume(mesh: MeshData) -> float:
     interface facets instead; the BRep approximation remains a separate
     convergence concern for the caller.
     """
-    face_owners: dict[tuple[int, ...], list[tuple[int, int]]] = {}
-    for ordinal, family in enumerate(mesh.cell_types.tolist()):
-        cell = mesh.cell_node_ids(ordinal)
-        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
-            key = tuple(sorted(int(cell[index]) for index in local_face))
-            face_owners.setdefault(key, []).append(
-                (ordinal, int(mesh.element_markers[ordinal]))
-            )
+    if incidence is None:
+        incidence = _mixed_v2_face_incidence(mesh)
 
     volumes_by_marker: dict[int, float] = {1: 0.0, 2: 0.0}
     seen_by_marker: dict[int, int] = {1: 0, 2: 0}
-    for ordinal, (family, role, marker) in enumerate(
-        zip(
-            mesh.facet_types.tolist(),
-            mesh.facet_roles.tolist(),
-            mesh.boundary_markers.tolist(),
-            strict=True,
+    interface = np.flatnonzero(
+        (mesh.facet_roles == "material_interface")
+        & (mesh.boundary_markers == MIXED_INTERFACE_MARKER)
+    )
+    if interface.size:
+        owners, signed = _mixed_v2_interface_facet_signed_volumes(
+            mesh, incidence, interface, magnetic_markers=tuple(volumes_by_marker)
         )
-    ):
-        if role != "material_interface" or int(marker) != MIXED_INTERFACE_MARKER:
-            continue
-        nodes = tuple(int(node) for node in mesh.facet_node_ids(ordinal))
-        owners = face_owners.get(tuple(sorted(nodes)), [])
-        magnetic_owners = [owner for owner in owners if owner[1] in volumes_by_marker]
-        if len(magnetic_owners) != 1:
-            raise RuntimeError(
-                "mixed v2 magnetic interface facet does not have exactly one "
-                "magnetic owner"
-            )
-        owner_ordinal, owner_marker = magnetic_owners[0]
-        points = mesh.nodes[np.asarray(nodes, dtype=np.int64)]
-        triangles: tuple[tuple[int, int, int], ...]
-        if family == "tri3":
-            triangles = ((0, 1, 2),)
-        elif family == "quad4":
-            triangles = ((0, 1, 2), (0, 2, 3))
-        else:
-            raise RuntimeError(
-                f"mixed v2 magnetic interface has unsupported facet family {family!r}"
-            )
-        owner_nodes = mesh.cell_node_ids(owner_ordinal)
-        owner_centroid = np.mean(mesh.nodes[owner_nodes], axis=0)
-        face_centroid = np.mean(points, axis=0)
-        signed = 0.0
-        for i, j, k in triangles:
-            normal = np.cross(points[j] - points[i], points[k] - points[i])
-            if float(np.dot(normal, face_centroid - owner_centroid)) < 0.0:
-                j, k = k, j
-            signed += float(
-                np.linalg.det(
-                    np.stack((points[i], points[j], points[k]), axis=1)
-                )
-                / 6.0
-            )
-        volumes_by_marker[owner_marker] += signed
-        seen_by_marker[owner_marker] += 1
+        # Accumulate in facet order so the sums match the per-facet reference.
+        for owner_marker, value in zip(
+            mesh.element_markers[owners].tolist(), signed.tolist(), strict=True
+        ):
+            volumes_by_marker[int(owner_marker)] += value
+            seen_by_marker[int(owner_marker)] += 1
     if any(seen_by_marker[marker] == 0 for marker in volumes_by_marker):
         raise RuntimeError("mixed v2 magnetic interface facets are incomplete")
     volumes = [abs(value) for value in volumes_by_marker.values()]
@@ -4624,54 +4712,42 @@ def attach_disconnected_mixed_p1_certificate_v2(
         by_family[str(family)] = by_family.get(str(family), 0) + 1
 
     cell_volumes = np.zeros(mesh.n_elements, dtype=np.float64)
-    jacobians: dict[str, list[float]] = {}
-    scaled: dict[str, list[float]] = {}
+    jacobians: dict[str, list[NDArray[np.float64]]] = {}
+    scaled: dict[str, list[NDArray[np.float64]]] = {}
     with indeterminate_progress_phase(
         phase="postprocessing",
         progress_label="checking mixed-domain element quality",
         message=f"Checking cell volumes and Jacobians ({mesh.n_elements} cells)",
     ):
-        progress_stride = max(1, (mesh.n_elements + 19) // 20)
-        for ordinal, family in enumerate(mesh.cell_types.tolist()):
-            coordinates = mesh.nodes[mesh.cell_node_ids(ordinal)]
-            cell_volumes[ordinal] = _mixed_v2_cell_volume(str(family), coordinates)
-            jacobians.setdefault(str(family), []).extend(_cell_jacobian_determinants(str(family), coordinates).tolist())
-            scaled.setdefault(str(family), []).extend(_mixed_cell_scaled_jacobians(str(family), coordinates).tolist())
-            if (ordinal + 1) % progress_stride == 0 or ordinal + 1 == mesh.n_elements:
-                emit_progress(f"Cell volume and Jacobian checks: {ordinal + 1}/{mesh.n_elements}")
+        checked = 0
+        for family, ordinals, coordinates in _iter_cell_family_batches(mesh):
+            determinants = _cell_jacobian_determinants_batch(family, coordinates)
+            cell_volumes[ordinals] = _mixed_v2_cell_volume_batch(family, coordinates, determinants)
+            jacobians.setdefault(family, []).append(determinants.reshape(-1))
+            scaled.setdefault(family, []).append(_mixed_cell_scaled_jacobians_batch(family, coordinates).reshape(-1))
+            checked += ordinals.size
+            emit_progress(f"Cell volume and Jacobian checks: {checked}/{mesh.n_elements}")
     if not np.all(np.isfinite(cell_volumes)) or np.any(cell_volumes <= 0.0):
         raise RuntimeError("mixed v2 mesh contains nonpositive cell volume")
-    jacobian_minima = {family: float(np.min(values)) for family, values in sorted(jacobians.items())}
-    scaled_minima = {family: float(np.min(values)) for family, values in sorted(scaled.items())}
-    scaled_p05 = {family: float(np.percentile(values, 5.0)) for family, values in sorted(scaled.items())}
+    jacobian_values = {family: np.concatenate(blocks) for family, blocks in sorted(jacobians.items())}
+    scaled_values = {family: np.concatenate(blocks) for family, blocks in sorted(scaled.items())}
+    jacobian_minima = {family: float(np.min(values)) for family, values in jacobian_values.items()}
+    scaled_minima = {family: float(np.min(values)) for family, values in scaled_values.items()}
+    scaled_p05 = {family: float(np.percentile(values, 5.0)) for family, values in scaled_values.items()}
     if any(value < MIXED_SCALED_JACOBIAN_P05_MIN for value in scaled_p05.values()):
         raise RuntimeError("mixed v2 mesh scaled Jacobian p05 is below the qualified minimum")
 
     magnetic_mask = np.isin(mesh.element_markers, np.asarray([1, 2], dtype=np.int32))
-    magnetic_nodes = np.unique(np.concatenate([mesh.cell_node_ids(int(index)) for index in np.flatnonzero(magnetic_mask)]))
+    magnetic_nodes = _mixed_v2_cell_nodes_where(mesh, magnetic_mask)
     # The shared exact-layer evidence belongs to the swept prism body.  The
     # second body is an independent annulus tetrahedral mesh and naturally
     # contains many coordinates along the requested axis; combining its
     # coordinates here would make a valid one-layer Box appear to have a
     # non-deterministic layer count.
-    swept_nodes = np.unique(
-        np.concatenate(
-            [
-                mesh.cell_node_ids(int(index))
-                for index in np.flatnonzero(mesh.element_markers == 1)
-            ]
-        )
-    )
+    swept_nodes = _mixed_v2_cell_nodes_where(mesh, mesh.element_markers == 1)
     body_bounds: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     for marker in (1, 2):
-        nodes = np.unique(
-            np.concatenate(
-                [
-                    mesh.cell_node_ids(int(index))
-                    for index in np.flatnonzero(mesh.element_markers == marker)
-                ]
-            )
-        )
+        nodes = _mixed_v2_cell_nodes_where(mesh, mesh.element_markers == marker)
         if nodes.size == 0:
             raise RuntimeError(f"mixed v2 body marker {marker} has no mesh nodes")
         body_bounds[marker] = (
@@ -4693,7 +4769,8 @@ def attach_disconnected_mixed_p1_certificate_v2(
     realized_magnetic_max = tuple(float(value) for value in np.max(mesh.nodes[magnetic_nodes], axis=0))
     shared_volume = float(np.sum(cell_volumes))
     magnetic_volume = float(np.sum(cell_volumes[magnetic_mask]))
-    faceted_magnetic_volume = _mixed_v2_closed_faceted_magnetic_volume(mesh)
+    incidence = _mixed_v2_face_incidence(mesh)
+    faceted_magnetic_volume = _mixed_v2_closed_faceted_magnetic_volume(mesh, incidence)
     if not math.isfinite(faceted_magnetic_volume) or faceted_magnetic_volume <= 0.0:
         raise RuntimeError("mixed v2 closed faceted magnetic volume is invalid")
     expected_shared_volume = float(np.prod(np.asarray(airbox_bounds_max_m) - np.asarray(airbox_bounds_min_m)))
@@ -4720,45 +4797,21 @@ def attach_disconnected_mixed_p1_certificate_v2(
     if len(clustered) != requested_layers + 1:
         raise RuntimeError("mixed v2 exact sweep has an incorrect number of magnetic planes")
 
-    transition_faces = 0
-    adjacency: dict[tuple[int, ...], list[int]] = {}
-    for ordinal, family in enumerate(mesh.cell_types.tolist()):
-        cell = mesh.cell_node_ids(ordinal)
-        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
-            key = tuple(sorted(int(cell[index]) for index in local_face))
-            adjacency.setdefault(key, []).append(ordinal)
-    for owners in adjacency.values():
-        if len(owners) == 2:
-            parts = {str(mesh.cell_mesh_parts[index]) for index in owners}
-            if parts == {"transition_air", "far_air"}:
-                face = tuple(sorted(int(node) for node in mesh.cell_node_ids(owners[0])))
-                # Count the canonical transition interface from explicit
-                # facets below; face arity is checked by the facet itself.
-                del face
-    transition_face_keys = {
-        tuple(sorted(int(node) for node in mesh.facet_node_ids(index)))
-        for index, (role, marker, family) in enumerate(zip(mesh.facet_roles.tolist(), mesh.boundary_markers.tolist(), mesh.facet_types.tolist(), strict=True))
-        if role == "material_interface" and int(marker) == MIXED_INTERFACE_MARKER and family == "tri3"
-    }
     # The transition/far interface is internal and therefore not in the
     # explicit physical facet list; use exact owner sets and the local face
     # arity to count it.
-    for key, owners in adjacency.items():
-        if len(owners) == 2 and {str(mesh.cell_mesh_parts[index]) for index in owners} == {"transition_air", "far_air"} and len(key) == 3:
-            transition_faces += 1
-    del transition_face_keys
+    transition_faces = _mixed_v2_transition_interface_tri3_count(mesh, incidence)
     with indeterminate_progress_phase(
         phase="postprocessing",
         progress_label="checking mixed-domain conformity",
         message="Checking mixed-domain interfaces and face conformity",
     ):
-        conformity = _mixed_v2_conformity_counts(mesh)
+        conformity = _mixed_v2_conformity_counts(mesh, incidence)
     if any(conformity.values()):
         raise RuntimeError(f"mixed v2 conformity proof failed: {conformity}")
 
     def region_nodes(marker: int) -> NDArray[np.int32]:
-        mask = mesh.element_markers == marker
-        return np.unique(np.concatenate([mesh.cell_node_ids(int(index)) for index in np.flatnonzero(mask)]))
+        return _mixed_v2_cell_nodes_where(mesh, mesh.element_markers == marker)
 
     regions: list[MagneticRegionV2] = []
     material_fields: list[BodyMaterialFieldV2] = []
@@ -4876,6 +4929,7 @@ def generate_disconnected_mixed_p1_mesh(
     options: MeshOptions | None = None,
 ) -> MeshData:
     """Generate a conforming Box-prism plus disconnected annulus-tet domain."""
+    require_no_airbox_feature_refinement(airbox, route="mixed-v2 prism/tetrahedral")
     opts = options or MeshOptions()
     if opts.algorithm_2d != 6 or opts.algorithm_3d not in (1, 10) or opts.periodic_pair_ids:
         raise ValueError(
@@ -5072,9 +5126,53 @@ def generate_disconnected_mixed_p1_mesh(
             mixed_tet_report = _repair_mixed_tetrahedra(gmsh)
         with indeterminate_progress_phase(phase="meshing", progress_label="optimizing mixed-pyramid apices", message="Optimizing mixed-pyramid apices"):
             _optimize_mixed_pyramid_apices(gmsh, initial_tet_report=mixed_tet_report)
-        raw = _extract_mesh_data(gmsh, has_physical_groups=True, boundary_role_markers=(MIXED_INTERFACE_MARKER, int(airbox.boundary_marker)))
+        quality, per_domain_quality = (
+            _extract_quality_metrics(gmsh, opts)
+            if opts.compute_quality
+            else (None, None)
+        )
+        quality = _quality_volumes_in_si(quality, scale)
+        if per_domain_quality is not None:
+            per_domain_quality = {
+                marker: _quality_volumes_in_si(report, scale)
+                for marker, report in per_domain_quality.items()
+            }
+        raw = _extract_mesh_data(
+            gmsh,
+            quality=quality,
+            has_physical_groups=True,
+            per_domain_quality=per_domain_quality,
+            boundary_role_markers=(
+                MIXED_INTERFACE_MARKER,
+                int(airbox.boundary_marker),
+            ),
+        )
         raw = _compact_uncertified_volume_nodes(raw)
-        mesh = MeshData(nodes=np.asarray(raw.nodes, dtype=np.float64) / scale, vertex_identity=raw.vertex_identity, cell_types=raw.cell_types, cell_offsets=raw.cell_offsets, cell_nodes=raw.cell_nodes, element_markers=raw.element_markers, facet_types=raw.facet_types, facet_roles=raw.facet_roles, facet_offsets=raw.facet_offsets, facet_nodes=raw.facet_nodes, boundary_markers=raw.boundary_markers, cell_global_ordinals=raw.cell_global_ordinals, facet_global_ordinals=raw.facet_global_ordinals, cell_mesh_parts=_gmsh_cell_parts_in_extraction_order(gmsh, {"magnetic": [box_volume, ring_volume], "transition_air": [int(tag) for tag in transition_volumes], "far_air": [far_air_volume]}))
+        mesh = MeshData(
+            nodes=np.asarray(raw.nodes, dtype=np.float64) / scale,
+            vertex_identity=raw.vertex_identity,
+            cell_types=raw.cell_types,
+            cell_offsets=raw.cell_offsets,
+            cell_nodes=raw.cell_nodes,
+            element_markers=raw.element_markers,
+            facet_types=raw.facet_types,
+            facet_roles=raw.facet_roles,
+            facet_offsets=raw.facet_offsets,
+            facet_nodes=raw.facet_nodes,
+            boundary_markers=raw.boundary_markers,
+            cell_global_ordinals=raw.cell_global_ordinals,
+            facet_global_ordinals=raw.facet_global_ordinals,
+            cell_mesh_parts=_gmsh_cell_parts_in_extraction_order(
+                gmsh,
+                {
+                    "magnetic": [box_volume, ring_volume],
+                    "transition_air": [int(tag) for tag in transition_volumes],
+                    "far_air": [far_air_volume],
+                },
+            ),
+            quality=raw.quality,
+            per_domain_quality=raw.per_domain_quality,
+        )
         if mesh.cell_mesh_parts.shape != (mesh.n_elements,):
             raise RuntimeError("mixed v2 cell mesh-part identity is incomplete")
         with indeterminate_progress_phase(

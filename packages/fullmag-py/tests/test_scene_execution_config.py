@@ -587,6 +587,7 @@ def test_helper_forwards_execution_geometry_opt_in(tmp_path, monkeypatch, materi
     assert calls == [({}, {
         "requested_backend": "fem", "requested_device": "cpu", "requested_precision": "double",
         "requested_mode": "strict", "source_root": None, "materialize_geometry_assets": materialize,
+        "_accepted_preparation": None,
     })]
 
 

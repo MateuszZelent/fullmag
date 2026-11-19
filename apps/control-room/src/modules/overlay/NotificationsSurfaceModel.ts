@@ -24,6 +24,8 @@ export interface NotificationItem {
   detail: string;
   id: string;
   kind: "error" | "success";
+  /** Diagnostic text kept out of the headline, shown on demand. */
+  technical?: string;
   title: string;
 }
 
@@ -46,9 +48,10 @@ export function buildNotificationItem(
       : "Runtime resource request failed.";
 
     return {
-      detail: `${detailPrefix} Resource ${event.resourceKey}. Status ${status}. Cause ${event.errorName}: ${event.cause}. Situation ${event.situation}. Log ${log}.`,
+      detail: `${detailPrefix} ${summarizeFailureCause(event.cause)}`,
       id: notificationId(event),
       kind: "error",
+      technical: `Resource ${event.resourceKey}. Status ${status}. Cause ${event.errorName}: ${event.cause}. Situation ${event.situation}. Log ${log}.`,
       title: fieldContext ? "Quantity data unavailable" : "Resource load failed",
     };
   }
@@ -59,6 +62,18 @@ export function buildNotificationItem(
     kind: "success",
     title: "Mesh built",
   };
+}
+
+const SUMMARY_LIMIT = 140;
+
+/** First clause of an API cause, without its `code:` prefix or nested causes. */
+function summarizeFailureCause(cause: string): string {
+  const withoutCode = cause.replace(/^[a-z][a-z0-9_]*:\s*/, "");
+  const firstClause = withoutCode.split(/\s\(|;\s/)[0]?.trim() ?? "";
+  if (!firstClause) return "The request failed.";
+  const sentence = firstClause.charAt(0).toUpperCase() + firstClause.slice(1);
+  const bounded = sentence.length > SUMMARY_LIMIT ? `${sentence.slice(0, SUMMARY_LIMIT - 1)}…` : sentence;
+  return /[.!?…]$/.test(bounded) ? bounded : `${bounded}.`;
 }
 
 export function pushNotificationItem(

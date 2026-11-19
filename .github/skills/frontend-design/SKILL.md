@@ -6,6 +6,6 @@ license: Complete terms in LICENSE.txt
 
 # frontend-design
 
-Use the [canonical frontend-design instructions](../../../.agents/skills/frontend-design/SKILL.md).
-Resolve its references and relative paths against that canonical skill directory.
-This entry preserves the GitHub skill mirror without duplicating the skill package.
+Read and follow the canonical [frontend-design skill](../../../.agents/skills/frontend-design/SKILL.md).
+Resolve its references and scripts relative to that canonical directory.
+This entrypoint shares the existing implementation without duplicating it.

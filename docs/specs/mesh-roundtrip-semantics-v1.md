@@ -116,3 +116,25 @@ sidecar requires explicit semantic maps and external geometric-entity maps. In
 all cases the accepted topology enters
 the existing `fem_domain_mesh_asset`; neither representation replaces universe
 or per-object authoring intent.
+
+
+(mesh-object-id-recipe)=
+## Per-object recipe by immutable ID
+
+Zaimplementowane rozszerzenie publiczne: `study.objects.mesh.by_id(object_id)`
+zwraca istniejący GeometryMeshHandle zarówno dla magnetic, jak auxiliary
+geometry. Lookup używa exact immutable ID, odmawia unknown/ambiguous ID i
+handle z innego study. Dotychczasowy raw geometry return pozostaje bez zmian.
+Canonical recipe pozostaje `mesh_workflow.per_geometry`, bez nowego IR dialect.
+Scene object_mesh/mesh_override → builder geometry.mesh → canonical Python
+by_id(exact_id) → ten sam per_geometry intent. Eksport nie może pominąć recipe
+nonmagnetic geometry ani inferować physics z nazwy. Independent sampling
+recipe zachowuje actual XYZ/connectivity podczas refinements source.
+Owner: note0105 DOC-ANCHOR:fem-object-mesh-by-id; runtime/science qualification
+nie wynika z authoring lookup ani Gmsh proof.
+
+Dowód E2/E4: publiczne auxiliary ID lookup, recipe, Python i Scene export/reimport
+mają interpretowane regresje w `packages/fullmag-py/tests/test_auxiliary_geometry_mesh.py`.
+Bitowa stabilność stałego sampling przy source min=max 0.15/0.10/0.075 um dotyczy
+Gmsh 4.15.2 z `FULLMAG_GMSH_THREADS=1`; domyślne wielowątkowe ordering/coords
+nie są kwalifikowane. To dowód authoring/meshing, bez rozwiązania V/J/H.

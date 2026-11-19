@@ -21,6 +21,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
@@ -34,10 +35,117 @@ use crate::repository_path::{
 };
 use crate::solution_set_catalog::SolutionSetCatalog;
 use crate::types::*;
-use crate::writer::{WriteTransaction, Writer};
+use crate::writer::{ReadTransaction, WriteTransaction, Writer};
+
+mod claimed_worker_interruption;
 
 const MAX_TASK_ADMISSION_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_PROVIDER_JOB_SUBMISSION_BYTES: usize = 64 * 1024;
+const WINDOWS_FOLDER_OBSERVATION_RETRY_WINDOW: Duration = Duration::from_secs(2);
+const WINDOWS_FOLDER_OBSERVATION_RETRY_INTERVAL: Duration = Duration::from_millis(20);
+
+fn has_raw_os_error(error: &anyhow::Error, code: i32) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.raw_os_error() == Some(code))
+    })
+}
+
+fn retry_windows_folder_observation_with<T>(
+    operation: &str,
+    mut is_attested_windows_folder: impl FnMut() -> Result<bool>,
+    mut observe: impl FnMut() -> Result<T>,
+    retry_window: Duration,
+    retry_interval: Duration,
+) -> Result<T> {
+    let first_error = match observe() {
+        Ok(value) => return Ok(value),
+        Err(error) => error,
+    };
+    if !has_raw_os_error(&first_error, 61) {
+        return Err(first_error).with_context(|| format!("observing {operation}"));
+    }
+
+    let initial_error_context = format!("{first_error:#}");
+    let deadline = Instant::now() + retry_window;
+    let mut last_error = first_error;
+    match is_attested_windows_folder() {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(last_error).with_context(|| {
+                format!(
+                    "{operation} failed with raw errno 61; scoped retry requires an admitted Docker Desktop Windows folder; initial error: {initial_error_context}"
+                )
+            });
+        }
+        Err(validation_error) => {
+            return Err(last_error).with_context(|| {
+                format!(
+                    "{operation} failed with raw errno 61; scoped retry filesystem admission failed: {validation_error:#}; initial error: {initial_error_context}"
+                )
+            });
+        }
+    }
+
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(last_error).with_context(|| {
+                format!(
+                    "{operation} remained at raw errno 61 through the bounded Windows folder observation retry window; initial error: {initial_error_context}"
+                )
+            });
+        }
+        std::thread::sleep(retry_interval.min(deadline.duration_since(now)));
+        if Instant::now() >= deadline {
+            return Err(last_error).with_context(|| {
+                format!(
+                    "{operation} remained at raw errno 61 through the bounded Windows folder observation retry window; initial error: {initial_error_context}"
+                )
+            });
+        }
+
+        // Revalidate the actual mount and its admission before every whole
+        // observation retry; the folder may have been remounted meanwhile.
+        match is_attested_windows_folder() {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(last_error).with_context(|| {
+                    format!(
+                        "{operation} retry stopped because the current filesystem is not an admitted Docker Desktop Windows folder; initial error: {initial_error_context}"
+                    )
+                });
+            }
+            Err(validation_error) => {
+                return Err(last_error).with_context(|| {
+                    format!(
+                        "{operation} retry stopped because filesystem admission failed: {validation_error:#}; initial error: {initial_error_context}"
+                    )
+                });
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(last_error).with_context(|| {
+                format!(
+                    "{operation} remained at raw errno 61 through the bounded Windows folder observation retry window; initial error: {initial_error_context}"
+                )
+            });
+        }
+
+        match observe() {
+            Ok(value) => return Ok(value),
+            Err(error) if has_raw_os_error(&error, 61) => last_error = error,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "{operation} retry returned a different error after initial raw errno 61: {initial_error_context}"
+                    )
+                });
+            }
+        }
+    }
+}
 
 fn read_present_directory(root: &Path, relative: &str, label: &str) -> Result<Option<PathBuf>> {
     let path = checked_path(root, relative)?;
@@ -67,15 +175,29 @@ fn read_optional_bounded_regular_file(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).with_context(|| format!("checking {label}")),
     }
-    Ok(Some(
-        read_bounded_regular_file(root, relative, maximum)
-            .with_context(|| format!("reading {label}"))?,
-    ))
+    // Lock-free readers race writers that remove the file (e.g. a released
+    // lease being finalized); a file gone between the check and the open is
+    // the same observation as a file that was already absent.
+    match read_bounded_regular_file(root, relative, maximum) {
+        Ok(data) => Ok(Some(data)),
+        Err(error) if is_not_found(&error) => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("reading {label}")),
+    }
+}
+
+fn is_not_found(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    })
 }
 
 #[path = "accepted_start_gate.rs"]
 mod accepted_start_gate;
-pub use accepted_start_gate::{ACCEPTED_RUN_START_POLICY_KEY, AcceptedRunStartRelease};
+pub use accepted_start_gate::{
+    ACCEPTED_RUN_START_POLICY_KEY, AcceptedRunStartRelease, LiveComputeRequestReceipt, accepted_run_start_policy_is_manual,
+};
 mod development_commit;
 mod development_completion;
 mod development_fence;
@@ -161,6 +283,27 @@ fn register_solution_object(
 }
 
 impl SessionStore {
+    /// Retry one complete read-only observation after raw errno 61 only when
+    /// the current store root is an admitted Docker Desktop Windows folder.
+    pub fn retry_windows_folder_observation<T>(
+        &self,
+        operation: &str,
+        observe: impl FnMut() -> Result<T>,
+    ) -> Result<T> {
+        retry_windows_folder_observation_with(
+            operation,
+            || {
+                Ok(matches!(
+                    crate::writer::classify_local_filesystem(&self.root)?,
+                    crate::writer::LocalFilesystemKind::DockerDesktopWindowsFolder
+                ))
+            },
+            observe,
+            WINDOWS_FOLDER_OBSERVATION_RETRY_WINDOW,
+            WINDOWS_FOLDER_OBSERVATION_RETRY_INTERVAL,
+        )
+    }
+
     /// Open or initialize a `SessionStore` at the given root directory.
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
@@ -309,6 +452,11 @@ impl SessionStore {
     /// Bind a multi-file operation to one native writer lease.
     pub fn write_transaction(&self) -> Result<WriteTransaction> {
         self.writer.acquire()
+    }
+
+    /// Fence a consistent read without creating files or changing writer ownership.
+    pub fn read_transaction(&self) -> Result<ReadTransaction> {
+        ReadTransaction::acquire(&self.root)
     }
 
     // ── Sessions ───────────────────────────────────────────────────────
@@ -917,7 +1065,11 @@ impl SessionStore {
             &self.root,
             &relative,
             crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize,
-        )?;
+        )
+        .map_err(|error| {
+            let message = format!("reading run intent {relative}: {error}");
+            error.context(message)
+        })?;
         let intent: FmsRunIntent = serde_json::from_slice(&data)?;
         intent.validate()?;
         if intent.run_id != run_id {
@@ -930,6 +1082,44 @@ impl SessionStore {
     pub fn find_run_intent(&self, idempotency_key: &str) -> Result<Option<FmsRunIntent>> {
         validate_store_id(idempotency_key)?;
         self.find_run_intent_unlocked(idempotency_key)
+    }
+
+    /// Discover run identifiers without loading or authorizing their intents.
+    /// Every consumer that acts on a run must still read and validate its
+    /// immutable intent and current catalog at its existing authority boundary.
+    pub fn list_run_intent_ids(&self) -> Result<Vec<String>> {
+        let runs = checked_path(&self.root, "runs")?;
+        match fs::symlink_metadata(&runs) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => anyhow::bail!("runs path is not a directory"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error).context("reading runs directory metadata"),
+        }
+        reject_link(&runs)?;
+        let mut run_ids = Vec::new();
+        for entry in fs::read_dir(&runs)? {
+            let entry = entry?;
+            reject_link(&entry.path())?;
+            if !entry.file_type()?.is_dir() {
+                anyhow::bail!("unsupported runs entry `{}`", entry.path().display());
+            }
+            let run_id = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("non-UTF8 run identifier"))?;
+            validate_store_id(&run_id)?;
+            let path = checked_path(&self.root, &format!("runs/{run_id}/run_intent.json"))?;
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.is_file() => {}
+                Ok(_) => anyhow::bail!("run intent path is not a file"),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error).context("reading run intent metadata"),
+            }
+            reject_link(&path)?;
+            run_ids.push(run_id);
+        }
+        run_ids.sort();
+        Ok(run_ids)
     }
 
     /// Enumerate accepted intents from the durable store without reading a
@@ -1388,8 +1578,39 @@ impl SessionStore {
     /// Read the durable task catalog for one run, if present.
     pub fn read_run_catalog(&self, run_id: &str) -> Result<Option<FmsRunCatalog>> {
         validate_store_id(run_id)?;
+        // On a host-shared folder (Docker Desktop over NTFS) a file that is
+        // atomically replaced can read as missing for a moment, even under
+        // the writer lock. A run with an intent always has a catalog, so a
+        // missing catalog next to its intent is re-read briefly before it is
+        // reported absent.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let observed = self.read_run_catalog_once(run_id);
+            let transiently_missing = match &observed {
+                Ok(None) => self.run_intent_file_exists(run_id)?,
+                Ok(Some(_)) => false,
+                Err(error) => error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                }),
+            };
+            if !transiently_missing || std::time::Instant::now() >= deadline {
+                return observed;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    fn run_intent_file_exists(&self, run_id: &str) -> Result<bool> {
+        let path = checked_path(&self.root, &format!("runs/{run_id}/run_intent.json"))?;
+        Ok(fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file()))
+    }
+
+    fn read_run_catalog_once(&self, run_id: &str) -> Result<Option<FmsRunCatalog>> {
         let relative = format!("runs/{run_id}/run_catalog.json");
-        let path = checked_path(&self.root, &relative)?;
+        let path = checked_path(&self.root, &relative)
+            .with_context(|| format!("resolving run catalog {relative}"))?;
         match fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.is_file() => {}
             Ok(_) => anyhow::bail!("run catalog path is not a file"),
@@ -1400,9 +1621,13 @@ impl SessionStore {
             &self.root,
             &relative,
             crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize,
-        )?;
-        let catalog: FmsRunCatalog = serde_json::from_slice(&data)?;
-        catalog.validate()?;
+        )
+        .with_context(|| format!("reading run catalog {relative}"))?;
+        let catalog: FmsRunCatalog = serde_json::from_slice(&data)
+            .with_context(|| format!("decoding run catalog {relative}"))?;
+        catalog
+            .validate()
+            .with_context(|| format!("validating run catalog {relative}"))?;
         if catalog.run_id != run_id {
             anyhow::bail!("run catalog identity does not match its path");
         }
@@ -1573,6 +1798,87 @@ impl SessionStore {
         let json = serde_json::to_vec_pretty(receipt)?;
         atomic_write(&path, &json)?;
         Ok(PreparationReceiptCommitDisposition::Accepted)
+    }
+
+    /// Publish the prepared-state observation of one task under the active
+    /// preparation lease that owns the task's preparation (ADR 0071). Every
+    /// referenced CAS object must already exist; the record is immutable.
+    pub fn commit_task_prepared_observation_with_preparation_lease(
+        &self,
+        record: &FmsTaskPreparedObservation,
+        resource_id: &str,
+        preparation_attempt_id: &str,
+        lease_token: &str,
+    ) -> Result<PreparationReceiptCommitDisposition> {
+        let relative = record.relative_path()?;
+        for value in [resource_id, preparation_attempt_id, lease_token] {
+            validate_store_id(value)?;
+        }
+        let _writer_lease = self.write_transaction()?;
+        let lease = self
+            .read_preparation_resource_lease(&record.run_id, resource_id, lease_token)?
+            .context("prepared observation publication requires a durable resource lease")?;
+        if lease.task_id != record.task_id
+            || lease.preparation_attempt_id != preparation_attempt_id
+            || lease.state != FmsResourceLeaseState::Active
+        {
+            anyhow::bail!(
+                "prepared observation publication is not owned by the active preparation lease"
+            );
+        }
+        if let Some(object_ref) = record
+            .object_refs()
+            .iter()
+            .find(|object_ref| !self.cas().contains(object_ref))
+        {
+            anyhow::bail!("prepared observation references missing CAS object `{object_ref}`");
+        }
+        let path = checked_path(&self.root, &relative)?;
+        if path.exists() {
+            let existing = self
+                .read_task_prepared_observation(&record.run_id, &record.task_id)?
+                .context("prepared observation disappeared during publication")?;
+            if existing.same_immutable_payload(record) {
+                return Ok(PreparationReceiptCommitDisposition::Replayed);
+            }
+            anyhow::bail!(
+                "prepared observation for task `{}` is immutable and cannot be replaced",
+                record.task_id
+            );
+        }
+        self.validate_preparation_resource_lease_owner_unlocked(&lease)?;
+        let path = create_parent(&self.root, &relative)?;
+        atomic_write(&path, &serde_json::to_vec_pretty(record)?)?;
+        Ok(PreparationReceiptCommitDisposition::Accepted)
+    }
+
+    /// Read and validate one task's prepared-state observation record.
+    pub fn read_task_prepared_observation(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<Option<FmsTaskPreparedObservation>> {
+        validate_store_id(run_id)?;
+        validate_store_id(task_id)?;
+        let relative = format!("runs/{run_id}/task_prepared_observations/{task_id}.json");
+        let path = checked_path(&self.root, &relative)?;
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_file() => {}
+            Ok(_) => anyhow::bail!("task prepared observation path is not a file"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).with_context(|| format!("checking {relative}")),
+        }
+        let data = crate::repository_path::read_bounded_regular_file(
+            &self.root,
+            &relative,
+            crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize,
+        )?;
+        let record: FmsTaskPreparedObservation = serde_json::from_slice(&data)
+            .with_context(|| format!("parsing task prepared observation {}", path.display()))?;
+        if record.relative_path()? != relative {
+            anyhow::bail!("task prepared observation identity does not match its path");
+        }
+        Ok(Some(record))
     }
 
     /// Read and validate one immutable accepted-run task receipt.
@@ -3173,42 +3479,130 @@ impl SessionStore {
         self.read_coordinator_journal_unlocked(run_id)
     }
 
-    fn read_coordinator_journal_unlocked(
+    /// Read under the caller's shared fence, including nested cold integrity checks.
+    pub fn read_coordinator_journal_readonly(
         &self,
         run_id: &str,
+        transaction: &ReadTransaction,
     ) -> Result<Vec<FmsCoordinatorJournalEntry>> {
+        transaction.require_root(&self.root)?;
+        self.read_coordinator_journal_unlocked(run_id)
+    }
+
+    fn coordinator_journal_index(
+        &self, run_id: &str,
+    ) -> Result<Vec<(FmsCoordinatorJournalDirection, String, String)>> {
         validate_store_id(run_id)?;
-        self.read_run_catalog(run_id)?
-            .context("coordinator journal snapshot requires a durable run catalog")?;
-        let mut entries = Vec::new();
-        for direction in [
-            FmsCoordinatorJournalDirection::Command,
-            FmsCoordinatorJournalDirection::Event,
-        ] {
-            let Some(root) = read_present_directory(
-                &self.root,
+        let mut index = Vec::new();
+        for direction in [FmsCoordinatorJournalDirection::Command, FmsCoordinatorJournalDirection::Event] {
+            let Some(root) = read_present_directory(&self.root,
                 &format!("runs/{run_id}/coordinator_journal/{}", direction.as_str()),
-                "coordinator journal",
-            )? else {
-                continue;
-            };
+                "coordinator journal")? else { continue; };
             for file in fs::read_dir(root)? {
                 let file = file?;
                 reject_link(&file.path())?;
-                if !file.file_type()?.is_file() {
-                    anyhow::bail!("coordinator journal entry is not a file");
-                }
+                let metadata = fs::symlink_metadata(file.path())?;
+                if !metadata.is_file() { anyhow::bail!("coordinator journal entry is not a file"); }
                 let name = file.file_name();
-                let id = name
-                    .to_str()
-                    .and_then(|name| name.strip_suffix(".json"))
+                let id = name.to_str().and_then(|name| name.strip_suffix(".json"))
                     .context("coordinator journal entry must be UTF-8 JSON")?;
-                let entry = self
-                    .read_coordinator_journal_entry(run_id, direction, id)?
-                    .context("coordinator journal entry disappeared during snapshot")?;
-                entries.push(entry);
+                validate_store_id(id)?;
+                let mut pin = format!("{}:{:?}", metadata.len(), metadata.modified()?);
+                #[cfg(unix)] {
+                    use std::os::unix::fs::MetadataExt;
+                    pin.push_str(&format!(":{}:{}:{}:{}", metadata.dev(), metadata.ino(), metadata.ctime(), metadata.ctime_nsec()));
+                }
+                #[cfg(windows)] {
+                    use std::os::windows::fs::MetadataExt;
+                    pin.push_str(&format!(":{}:{}", metadata.creation_time(), metadata.file_attributes()));
+                }
+                index.push((direction, id.to_owned(), pin));
             }
         }
+        index.sort_by(|a, b| (a.0.as_str(), &a.1).cmp(&(b.0.as_str(), &b.1)));
+        Ok(index)
+    }
+
+    /// Ignore only the catalog's heartbeat revision and publication timestamp.
+    /// A different admitted task set/input is corruption; mutable task authority
+    /// advancing means this optional capture must be retried against a new core.
+    fn journal_catalog_matches(&self, expected: &FmsRunCatalog) -> Result<bool> {
+        let current = self.read_run_catalog(&expected.run_id)?
+            .context("accepted stage catalog disappeared during journal capture")?;
+        if current.schema_version != expected.schema_version || current.run_id != expected.run_id
+            || current.tasks.len() != expected.tasks.len()
+            || current.tasks.iter().zip(&expected.tasks).any(|(next, prior)|
+                next.task_id != prior.task_id || next.input_fingerprint != prior.input_fingerprint) {
+            anyhow::bail!("accepted stage catalog journal identity mismatch");
+        }
+        if current.revision < expected.revision {
+            anyhow::bail!("accepted stage catalog revision regressed during journal capture");
+        }
+        Ok(current.tasks == expected.tasks)
+    }
+
+    /// Capture an immutable journal without holding a shared fence across the
+    /// whole file scan. Each entry is read under a genuine shared transaction;
+    /// its catalog and inventory (including file identity/change stamps) must
+    /// still match at the final fence. Writers get a window between entries.
+    /// `None` means a legitimate task-authority snapshot advance, requiring a
+    /// new core snapshot; `Some(empty)` is a successfully verified empty journal.
+    /// Identity/corruption errors and native lock errors are never downgraded.
+    pub fn read_coordinator_journal_batched_readonly(
+        &self, expected: &FmsRunCatalog,
+    ) -> Result<Option<Vec<FmsCoordinatorJournalEntry>>> {
+        self.read_coordinator_journal_batched_with(expected, || {
+            std::thread::sleep(Duration::from_millis(20));
+        })
+    }
+
+    fn read_coordinator_journal_batched_with(
+        &self, expected: &FmsRunCatalog, mut between_entries: impl FnMut(),
+    ) -> Result<Option<Vec<FmsCoordinatorJournalEntry>>> {
+        expected.validate()?;
+        let index = {
+            let _read = self.read_transaction()?;
+            if !self.journal_catalog_matches(expected)? { return Ok(None); }
+            self.coordinator_journal_index(&expected.run_id)?
+        };
+        let mut entries = Vec::with_capacity(index.len());
+        // Publication is append-only (a conflicting replay is rejected by the
+        // writer). The final inventory also rejects replacement/change while
+        // the independent shared transactions were released.
+        for (direction, id, _) in &index {
+            {
+                let _read = self.read_transaction()?;
+                entries.push(self.read_coordinator_journal_entry(&expected.run_id, *direction, id)?
+                    .context("coordinator journal entry disappeared during snapshot")?);
+            }
+            between_entries();
+        }
+        let entries = Self::validate_coordinator_journal_snapshot(entries)?;
+        {
+            let _read = self.read_transaction()?;
+            if !self.journal_catalog_matches(expected)? { return Ok(None); }
+            if self.coordinator_journal_index(&expected.run_id)? != index {
+                anyhow::bail!("coordinator journal inventory changed during snapshot");
+            }
+        }
+        Ok(Some(entries))
+    }
+
+    fn read_coordinator_journal_unlocked(
+        &self, run_id: &str,
+    ) -> Result<Vec<FmsCoordinatorJournalEntry>> {
+        self.read_run_catalog(run_id)?.context("coordinator journal snapshot requires a durable run catalog")?;
+        let mut entries = Vec::new();
+        for (direction, id, _) in self.coordinator_journal_index(run_id)? {
+            entries.push(self.read_coordinator_journal_entry(run_id, direction, &id)?
+                .context("coordinator journal entry disappeared during snapshot")?);
+        }
+        Self::validate_coordinator_journal_snapshot(entries)
+    }
+
+    fn validate_coordinator_journal_snapshot(
+        mut entries: Vec<FmsCoordinatorJournalEntry>,
+    ) -> Result<Vec<FmsCoordinatorJournalEntry>> {
         entries.sort_by(|a, b| {
             (
                 a.direction.as_str(),
@@ -3488,7 +3882,7 @@ impl SessionStore {
         }
         let _writer_lease = self.write_transaction()?;
         let lease_path = self.resource_lease_path(lease)?;
-        let lease_bytes = fs::read(&lease_path)
+        let lease_bytes = read_file_held_under_writer(&lease_path)
             .with_context(|| format!("reading resource lease {}", lease_path.display()))?;
         let current_lease: FmsResourceLease = serde_json::from_slice(&lease_bytes)
             .with_context(|| format!("parsing resource lease {}", lease_path.display()))?;
@@ -3538,8 +3932,16 @@ impl SessionStore {
                         entry.artifact_type.as_str(),
                         "study_output_manifest"
                             | "accepted_quantity_bundle"
+                            | "accepted_terminal_scalar_stats"
+                            | FMS_ACCEPTED_TERMINAL_LAYOUT_ARTIFACT_TYPE
+                            | FMS_ACCEPTED_SCALAR_HISTORY_INDEX_ARTIFACT_TYPE
+                            | FMS_ACCEPTED_SCALAR_HISTORY_PAGE_ARTIFACT_TYPE
                             | FMS_OBSERVATION_SNAPSHOT_ARTIFACT_TYPE
                             | FMS_OBSERVATION_STATE_ARTIFACT_TYPE
+                            | "accepted_primary_carrier"
+                            | "output_history_index"
+                            | "output_history_page"
+                            | "output_history_sample"
                     );
                 let exact_existing_entry = existing
                     .entries
@@ -4350,22 +4752,66 @@ impl SessionStore {
             Option<&FmsPreparationProcessExitReceipt>,
         ) -> Result<Option<&'static str>>,
     {
+        self.recovery_run_evidence_value_locked(run_id, worker_proof, preparation_proof, false)
+    }
+
+    /// Separate v4 evidence for a never-released manual run. Completed
+    /// preparation is preserved and validated by the same execution fences.
+    pub(crate) fn held_manual_run_evidence_value_locked<WF, PF>(
+        &self,
+        run_id: &str,
+        worker_proof: WF,
+        preparation_proof: PF,
+    ) -> Result<serde_json::Value>
+    where
+        WF: Fn(&FmsResourceLease, Option<&FmsWorkerProcessExitReceipt>) -> Result<Option<&'static str>>,
+        PF: Fn(
+            &FmsPreparationResourceLease,
+            Option<&FmsPreparationProcessExitReceipt>,
+        ) -> Result<Option<&'static str>>,
+    {
+        self.recovery_run_evidence_value_locked(run_id, worker_proof, preparation_proof, true)
+    }
+
+    fn recovery_run_evidence_value_locked<WF, PF>(
+        &self,
+        run_id: &str,
+        worker_proof: WF,
+        preparation_proof: PF,
+        held_manual: bool,
+    ) -> Result<serde_json::Value>
+    where
+        WF: Fn(&FmsResourceLease, Option<&FmsWorkerProcessExitReceipt>) -> Result<Option<&'static str>>,
+        PF: Fn(
+            &FmsPreparationResourceLease,
+            Option<&FmsPreparationProcessExitReceipt>,
+        ) -> Result<Option<&'static str>>,
+    {
         validate_store_id(run_id)?;
         let catalog = self
             .read_run_catalog(run_id)?
             .context("terminal evidence requires a durable run catalog")?;
         catalog.validate()?;
-        if catalog.tasks.is_empty()
-            || catalog
-                .tasks
-                .iter()
-                .any(|task| !matches!(
-                    task.lifecycle,
-                    FmsTaskLifecycle::Succeeded
-                        | FmsTaskLifecycle::Failed
-                        | FmsTaskLifecycle::Cancelled
-                        | FmsTaskLifecycle::Interrupted
-                ))
+        if held_manual {
+            // Automatic/missing/invalid policies and any existing release are
+            // refused by the canonical gate; no record is rewritten here.
+            if self.accepted_run_start_permitted(run_id)? || catalog.tasks.is_empty()
+                || catalog.tasks.iter().any(|task| {
+                    !matches!(task.lifecycle, FmsTaskLifecycle::Accepted | FmsTaskLifecycle::Queued)
+                        || task.attempt_id.is_some() || task.ownership_epoch.is_some()
+                        || task.resource_id.is_some() || task.resolved_input_fingerprint.is_some()
+                        || task.coordinator_genesis.is_some() || task.coordinator_watermark.is_some()
+                        || !task.artifact_ids.is_empty()
+                })
+            {
+                anyhow::bail!("held evidence requires an unreleased manual run without solver ownership");
+            }
+        } else if catalog.tasks.is_empty()
+            || catalog.tasks.iter().any(|task| !matches!(
+                task.lifecycle,
+                FmsTaskLifecycle::Succeeded | FmsTaskLifecycle::Failed
+                    | FmsTaskLifecycle::Cancelled | FmsTaskLifecycle::Interrupted
+            ))
         {
             anyhow::bail!("terminal evidence requires every catalog task to be terminal");
         }
@@ -4404,6 +4850,9 @@ impl SessionStore {
 
         let admissions = self.list_task_admissions_for_run_locked(run_id)?;
         let leases = self.list_resource_leases_for_run_locked(run_id)?;
+        if held_manual && (!admissions.is_empty() || !leases.is_empty()) {
+            anyhow::bail!("held manual run has historical solver admission or lease");
+        }
         if leases
             .iter()
             .any(|lease| lease.state == FmsResourceLeaseState::Active)
@@ -5976,7 +6425,7 @@ impl SessionStore {
         // below remain unchanged.
         self.validate_resource_lease_owner_unlocked(lease, true)?;
         let path = self.resource_lease_path(lease)?;
-        let data = fs::read(&path)
+        let data = read_file_held_under_writer(&path)
             .with_context(|| format!("reading resource lease {}", path.display()))?;
         let current: FmsResourceLease = serde_json::from_slice(&data)?;
         current.validate()?;
@@ -6025,7 +6474,7 @@ impl SessionStore {
             anyhow::bail!("resource lease release requires the active lease identity");
         }
         let path = self.resource_lease_path(lease)?;
-        let data = fs::read(&path)
+        let data = read_file_held_under_writer(&path)
             .with_context(|| format!("reading resource lease {}", path.display()))?;
         let mut current: FmsResourceLease = serde_json::from_slice(&data)?;
         current.validate()?;
@@ -6270,7 +6719,13 @@ impl SessionStore {
             if !resource_dir.is_dir() {
                 anyhow::bail!("resource lease identity path is not a directory");
             }
-            for lease_entry in fs::read_dir(&resource_dir)? {
+            let lease_entries = fs::read_dir(&resource_dir).with_context(|| {
+                format!(
+                    "listing resource lease directory {}",
+                    resource_dir.display()
+                )
+            })?;
+            for lease_entry in lease_entries {
                 let lease_entry = lease_entry?;
                 if is_atomic_write_staging_filename(&lease_entry.file_name()) {
                     continue;
@@ -6279,7 +6734,9 @@ impl SessionStore {
                 if !lease_entry.file_type()?.is_file() {
                     anyhow::bail!("resource lease entry is not a file");
                 }
-                let data = fs::read(lease_entry.path())?;
+                let lease_path = lease_entry.path();
+                let data = fs::read(&lease_path)
+                    .with_context(|| format!("reading resource lease {}", lease_path.display()))?;
                 let lease: FmsResourceLease = serde_json::from_slice(&data)?;
                 lease.validate()?;
                 if lease.run_id != run_id || lease.resource_id != resource_id {
@@ -7133,10 +7590,41 @@ fn magnetization_from_bytes(data: &[u8]) -> Vec<[f64; 3]> {
     m
 }
 
+
+/// Read a file that must exist while the caller holds the store writer, such
+/// as an active resource lease: no other writer can remove it. On a Docker
+/// Desktop host folder (NTFS) an atomic replace can still read as missing for
+/// a moment, so such a read is retried briefly before it is reported.
+fn read_file_held_under_writer(path: &Path) -> std::io::Result<Vec<u8>> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match fs::read(path) {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            result => return result,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Utc;
+
+    #[test]
+    fn optional_reads_treat_a_file_removed_after_the_check_as_absent() {
+        let removed = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::NotFound))
+            .context("opening resource lease");
+        assert!(is_not_found(&removed));
+        let denied =
+            anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        assert!(!is_not_found(&denied));
+        assert!(!is_not_found(&anyhow::anyhow!("resource lease is malformed")));
+    }
 
     #[test]
     fn live_command_journal_replaces_current_generation_and_reopens() {
@@ -9475,6 +9963,16 @@ mod tests {
                 case_id: "late".into(),
             }),
         };
+        let late_layout = FmsArtifactCatalogEntry {
+            artifact_type: FMS_ACCEPTED_TERMINAL_LAYOUT_ARTIFACT_TYPE.into(),
+            required: false,
+            study_output: None,
+            ..late_entry.clone()
+        };
+        let error = store
+            .append_artifact_catalog_entries_for_lease(&lease, &[late_layout])
+            .unwrap_err();
+        assert!(error.to_string().contains("immutable allow-list"));
         assert!(
             store
                 .append_artifact_catalog_entries_for_lease(&lease, &[late_entry])
@@ -11393,6 +11891,134 @@ mod admission_tests {
         );
     }
 
+    #[test]
+    fn held_manual_evidence_preserves_completed_preparation_retry_and_refuses_active_lease() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("session-store")).unwrap();
+        let run_id = "run-admission";
+        let task_id = "task-terminal-historical-prep-retry";
+        let mut task = queued_task(task_id);
+        task.lifecycle = FmsTaskLifecycle::Accepted;
+        task.readiness = FmsTaskReadiness::Blocked {
+            reason: FMS_TASK_AWAITING_PREPARATION_REASON.into(),
+        };
+        seed_catalog(&store, vec![task]);
+        store.commit_run_intent(&FmsRunIntent::new(
+            run_id, "submit-held-preparation", serde_json::json!({
+                "run_id": run_id, "parameters": {"fullmag.accepted_run_start": {
+                    "schema_version": "accepted_run_start_policy.v1", "mode": "manual"
+                }}
+            }),
+        )).unwrap();
+        let now = Utc::now();
+        let lease = FmsPreparationResourceLease {
+            schema_version: FMS_PREPARATION_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "cpu-terminal-historical-prep".into(),
+            budget: FmsResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1024,
+                gpu_memory_bytes: 0,
+                storage_bytes: 4096,
+            },
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            preparation_attempt_id: "prep-terminal-historical-first".into(),
+            lease_token: "prep-lease-terminal-historical-first".into(),
+            state: FmsResourceLeaseState::Active,
+            acquired_at: now,
+            heartbeat_at: now,
+            heartbeat_sequence: 0,
+            released_at: None,
+            host_launch_binding: None,
+        };
+        store.commit_preparation_resource_lease(&lease).unwrap();
+        {
+            let _writer = store.write_transaction().unwrap();
+            let error = store.held_manual_run_evidence_value_locked(run_id,
+                |_lease, _exit| Ok(None), |_lease, _exit| Ok(None)).unwrap_err();
+            assert!(error.to_string().contains("active preparation lease"));
+        }
+        let launch = FmsPreparationProcessLaunch {
+            schema_version: FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA.into(),
+            launch_id: "prep-launch-terminal-historical-first".into(),
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            preparation_attempt_id: lease.preparation_attempt_id.clone(),
+            resource_id: lease.resource_id.clone(),
+            lease_token: lease.lease_token.clone(),
+            lease_heartbeat_sequence: lease.heartbeat_sequence,
+            supervisor_process_id: 501,
+            supervisor_start_token: Some("historical-prep".into()),
+            created_at: now,
+        };
+        store.commit_preparation_process_launch(&launch).unwrap();
+        let exit = FmsPreparationProcessExitReceipt {
+            schema_version: FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA.into(),
+            receipt_id: "prep-exit-terminal-historical-first".into(),
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            preparation_attempt_id: lease.preparation_attempt_id.clone(),
+            resource_id: lease.resource_id.clone(),
+            lease_token: lease.lease_token.clone(),
+            lease_heartbeat_sequence: lease.heartbeat_sequence,
+            process_id: 502,
+            process_start_token: Some("historical-prep-child".into()),
+            status_success: false,
+            exit_code: Some(1),
+            timed_out: false,
+            failure_reason: Some("fixture preparation failure".into()),
+            observed_at: now,
+        };
+        store.commit_preparation_process_exit_receipt(&exit).unwrap();
+        assert_eq!(
+            store.finalize_preparation_process_exit(&exit).unwrap(),
+            PreparationProcessFinalizationDisposition::Failed
+        );
+        let decision = FmsPreparationRetryDecision {
+            schema_version: FMS_PREPARATION_RETRY_DECISION_SCHEMA.into(),
+            decision_id: "prep-retry-terminal-historical-first".into(),
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            failed_preparation_attempt_id: lease.preparation_attempt_id.clone(),
+            retry_sequence: 1,
+            max_attempts: 2,
+            reason: "fixture preparation retry".into(),
+            created_at: Utc::now(),
+        };
+        store.commit_preparation_retry_decision(&decision).unwrap();
+        let mut terminal = store.read_run_catalog(run_id).unwrap().unwrap();
+        terminal.revision += 1;
+        terminal.updated_at = Utc::now();
+        terminal.tasks[0].lifecycle = FmsTaskLifecycle::Accepted;
+        terminal.tasks[0].readiness = FmsTaskReadiness::Blocked {
+            reason: FMS_TASK_AWAITING_PREPARATION_REASON.into(),
+        };
+        store.commit_run_catalog(&terminal).unwrap();
+
+        let catalog_before = fs::read(store.root().join(format!("runs/{run_id}/run_catalog.json"))).unwrap();
+        let _writer = store.write_transaction().unwrap();
+        let evidence = store
+            .held_manual_run_evidence_value_locked(
+                run_id,
+                |_lease, exit| Ok(exit.map(|_| "worker")),
+                |_lease, exit| Ok(exit.map(|_| "preparation")),
+            )
+            .unwrap();
+        assert_eq!(
+            evidence["preparation_retry_decisions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            evidence["preparation_evidence"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(fs::read(store.root().join(format!("runs/{run_id}/run_catalog.json"))).unwrap(), catalog_before);
+        assert!(!store.root().join(format!("runs/{run_id}/start_release.json")).exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn exact_run_lease_reader_rejects_dangling_directory_link_as_missing_state() {
@@ -11425,4 +12051,410 @@ mod admission_tests {
             .is_err());
     }
 
+}
+
+#[cfg(test)]
+mod read_transaction_tests {
+    use super::*;
+
+    fn journal_fixture(sequences: &[u64]) -> (tempfile::TempDir, SessionStore, FmsRunCatalog) {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let catalog = FmsRunCatalog { schema_version: FMS_RUN_CATALOG_SCHEMA.into(), run_id: "run-read".into(),
+            revision: 1, updated_at: chrono::Utc::now(), tasks: Vec::new() };
+        store.commit_run_catalog(&catalog).unwrap();
+        let root = store.root().join("runs/run-read/coordinator_journal/event");
+        fs::create_dir_all(&root).unwrap();
+        for sequence in sequences {
+            let payload = serde_json::json!({"fixture": sequence});
+            let entry = FmsCoordinatorJournalEntry {
+                schema_version: crate::FMS_COORDINATOR_JOURNAL_SCHEMA.into(), entry_id: format!("event-{sequence}"),
+                run_id: catalog.run_id.clone(), task_id: "task-history".into(), attempt_id: "attempt-history".into(),
+                ownership_epoch: 1, lease_token: "lease-history".into(),
+                direction: FmsCoordinatorJournalDirection::Event, sequence: *sequence, terminal: false,
+                payload_sha256: crate::canonical_json_sha256(&payload), payload, created_at: chrono::Utc::now(),
+            };
+            fs::write(root.join(format!("event-{sequence}.json")), serde_json::to_vec(&entry).unwrap()).unwrap();
+        }
+        (directory, store, catalog)
+    }
+
+    #[test]
+    fn batched_journal_releases_shared_fence_for_writer_between_every_entry() {
+        let (_directory, store, catalog) = journal_fixture(&[1, 2]);
+        let rival = SessionStore::open_existing(store.root()).unwrap();
+        let mut writer_windows = 0;
+        let entries = store.read_coordinator_journal_batched_with(&catalog, || {
+            let writer = rival.write_transaction().expect("reader must release its shared fence between entries");
+            writer_windows += 1;
+            drop(writer);
+        }).unwrap().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(writer_windows, 2);
+    }
+
+    #[test]
+    fn batched_journal_preserves_typed_native_busy() {
+        let (_directory, store, catalog) = journal_fixture(&[1]);
+        let rival = SessionStore::open_existing(store.root()).unwrap();
+        let _writer = rival.write_transaction().unwrap();
+        let error = store.read_coordinator_journal_batched_readonly(&catalog).unwrap_err();
+        assert!(error.chain().any(|cause| matches!(cause.downcast_ref::<std::fs::TryLockError>(),
+            Some(std::fs::TryLockError::WouldBlock))));
+    }
+
+    #[test]
+    fn batched_journal_accepts_heartbeat_only_revision_between_entries() {
+        let (_directory, store, catalog) = journal_fixture(&[1]);
+        let rival = SessionStore::open_existing(store.root()).unwrap();
+        let entries = store.read_coordinator_journal_batched_with(&catalog, || {
+            let mut changed = catalog.clone();
+            changed.revision += 1;
+            changed.updated_at = chrono::Utc::now();
+            rival.commit_run_catalog(&changed).unwrap();
+        }).unwrap().unwrap();
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn batched_journal_distinguishes_task_advance_from_identity_corruption() {
+        let (_directory, store, mut catalog) = journal_fixture(&[1]);
+        catalog.tasks.push(FmsTaskCatalogEntry {
+            task_id: "task-history".into(), input_fingerprint: "a".repeat(64),
+            lifecycle: crate::FmsTaskLifecycle::Accepted, readiness: Default::default(),
+            observation: None, attempt_id: None, ownership_epoch: None,
+            resolved_input_fingerprint: None, artifact_ids: vec![], resource_id: None,
+            coordinator_watermark: None, coordinator_genesis: None,
+        });
+        catalog.revision += 1;
+        store.commit_run_catalog(&catalog).unwrap();
+        let rival = SessionStore::open_existing(store.root()).unwrap();
+        let advanced = store.read_coordinator_journal_batched_with(&catalog, || {
+            let mut changed = catalog.clone();
+            changed.revision += 1;
+            changed.tasks[0].lifecycle = crate::FmsTaskLifecycle::Preparing;
+            rival.commit_run_catalog(&changed).unwrap();
+        }).unwrap();
+        assert!(advanced.is_none());
+        let mut corrupt = catalog.clone();
+        corrupt.revision += 2;
+        corrupt.tasks[0].input_fingerprint = "b".repeat(64);
+        rival.commit_run_catalog(&corrupt).unwrap();
+        assert!(store.read_coordinator_journal_batched_readonly(&catalog).unwrap_err()
+            .to_string().contains("identity mismatch"));
+    }
+
+    #[test]
+    fn batched_journal_rejects_replacement_after_an_entry_was_read() {
+        let (_directory, store, catalog) = journal_fixture(&[1]);
+        let rival = SessionStore::open_existing(store.root()).unwrap();
+        let error = store.read_coordinator_journal_batched_with(&catalog, || {
+            let _writer = rival.write_transaction().unwrap();
+            fs::write(store.root().join("runs/run-read/coordinator_journal/event/event-1.json"), b"corrupt replacement").unwrap();
+        }).unwrap_err();
+        assert!(error.to_string().contains("inventory changed"));
+    }
+
+    #[test]
+    fn batched_journal_keeps_payload_hash_and_contiguous_sequence_validation() {
+        let (_directory, store, catalog) = journal_fixture(&[2]);
+        let error = store.read_coordinator_journal_batched_readonly(&catalog).unwrap_err();
+        assert!(error.to_string().contains("gap or duplicate"));
+        let (_directory, store, catalog) = journal_fixture(&[1]);
+        let path = store.root().join("runs/run-read/coordinator_journal/event/event-1.json");
+        let mut entry: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        entry["payload_sha256"] = serde_json::json!("f".repeat(64));
+        fs::write(path, serde_json::to_vec(&entry).unwrap()).unwrap();
+        let error = store.read_coordinator_journal_batched_readonly(&catalog).unwrap_err();
+        assert!(error.to_string().contains("payload digest mismatch"));
+    }
+
+    #[test]
+    fn read_transaction_reuses_shared_fence_without_owner_writes() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        store.commit_run_catalog(&FmsRunCatalog {
+            schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+            run_id: "run-read".into(), revision: 1,
+            updated_at: chrono::Utc::now(), tasks: Vec::new(),
+        }).unwrap();
+        let lock_before = fs::read(store.root().join("WRITER.lock")).unwrap();
+        let owner_before = fs::read(store.root().join("WRITER.owner.json")).unwrap();
+        let other = SessionStore::open_existing(store.root()).unwrap();
+        let first = store.read_transaction().unwrap();
+        let second = other.read_transaction().unwrap();
+        for _ in 0..2 {
+            assert!(store.read_coordinator_journal_readonly("run-read", &first).unwrap().is_empty());
+            assert!(other.read_coordinator_journal_readonly("run-read", &second).unwrap().is_empty());
+        }
+        assert!(other.write_transaction().err().unwrap().is::<crate::StoreWriterBusy>());
+        assert_eq!(fs::read(store.root().join("WRITER.lock")).unwrap(), lock_before);
+        assert_eq!(fs::read(store.root().join("WRITER.owner.json")).unwrap(), owner_before);
+        drop(first);
+        assert!(other.write_transaction().is_err());
+        drop(second);
+        assert_eq!(fs::read(store.root().join("WRITER.owner.json")).unwrap(), owner_before);
+        let writer = other.write_transaction().unwrap();
+        assert!(store.read_transaction().is_err());
+        drop(writer);
+        assert!(store.read_transaction().is_ok());
+    }
+
+    #[test]
+    fn read_transaction_rejects_another_store_guard() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = SessionStore::open(directory.path().join("first")).unwrap();
+        let second = SessionStore::open(directory.path().join("second")).unwrap();
+        let transaction = first.read_transaction().unwrap();
+        let error = second.read_coordinator_journal_readonly("run-read", &transaction).unwrap_err();
+        assert!(error.to_string().contains("another store"));
+    }
+}
+
+#[cfg(test)]
+mod windows_folder_observation_retry_tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+
+    fn raw_error(code: i32) -> anyhow::Error {
+        std::io::Error::from_raw_os_error(code).into()
+    }
+
+    #[test]
+    fn scoped_retry_revalidates_before_each_whole_observation_attempt() {
+        let validations = Cell::new(0usize);
+        let observations = Cell::new(0usize);
+        let events = RefCell::new(Vec::new());
+        let result = retry_windows_folder_observation_with(
+            "test observation",
+            || {
+                validations.set(validations.get() + 1);
+                events.borrow_mut().push("validate");
+                Ok(true)
+            },
+            || {
+                observations.set(observations.get() + 1);
+                events.borrow_mut().push("observe");
+                if observations.get() < 3 {
+                    Err(raw_error(61))
+                } else {
+                    Ok("fresh observation")
+                }
+            },
+            Duration::from_millis(100),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert_eq!(result, "fresh observation");
+        assert_eq!(observations.get(), 3);
+        assert_eq!(validations.get(), 3);
+        assert_eq!(
+            events.into_inner(),
+            ["observe", "validate", "validate", "observe", "validate", "observe"]
+        );
+    }
+
+    #[test]
+    fn scoped_retry_does_not_replay_non_enodata_errors() {
+        let validations = Cell::new(0usize);
+        let observations = Cell::new(0usize);
+        let error = retry_windows_folder_observation_with(
+            "non-ENODATA observation",
+            || {
+                validations.set(validations.get() + 1);
+                Ok(true)
+            },
+            || {
+                observations.set(observations.get() + 1);
+                Err::<(), _>(raw_error(13))
+            },
+            Duration::from_millis(100),
+            Duration::from_millis(1),
+        )
+        .unwrap_err();
+
+        assert_eq!(observations.get(), 1);
+        assert_eq!(validations.get(), 0);
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.raw_os_error() == Some(13))
+        }));
+        assert!(format!("{error:#}").contains("non-ENODATA observation"));
+    }
+
+    #[test]
+    fn scoped_retry_stops_at_deadline_and_preserves_raw_enodata_cause() {
+        let observations = Cell::new(0usize);
+        let started = Instant::now();
+        let error = retry_windows_folder_observation_with(
+            "permanent ENODATA observation",
+            || Ok(true),
+            || {
+                observations.set(observations.get() + 1);
+                Err::<(), _>(raw_error(61))
+            },
+            Duration::from_millis(100),
+            Duration::from_millis(3),
+        )
+        .unwrap_err();
+        let elapsed = started.elapsed();
+
+        assert!(observations.get() >= 1);
+        assert!(
+            observations.get() <= 50,
+            "unexpected retries: {}",
+            observations.get()
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "retry exceeded its test deadline: {elapsed:?}"
+        );
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.raw_os_error() == Some(61))
+        }));
+        assert!(format!("{error:#}").contains("permanent ENODATA observation"));
+    }
+
+    #[test]
+    fn unattested_filesystem_does_not_retry_raw_enodata() {
+        let validations = Cell::new(0usize);
+        let observations = Cell::new(0usize);
+        let error = retry_windows_folder_observation_with(
+            "unattested observation",
+            || {
+                validations.set(validations.get() + 1);
+                Ok(false)
+            },
+            || {
+                observations.set(observations.get() + 1);
+                Err::<(), _>(raw_error(61))
+            },
+            Duration::from_millis(100),
+            Duration::from_millis(1),
+        )
+        .unwrap_err();
+
+        assert_eq!(observations.get(), 1);
+        assert_eq!(validations.get(), 1);
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.raw_os_error() == Some(61))
+        }));
+    }
+
+    #[test]
+    fn retry_stops_if_filesystem_revalidation_changes_to_unattested() {
+        let validations = Cell::new(0usize);
+        let observations = Cell::new(0usize);
+        let error = retry_windows_folder_observation_with(
+            "mount changed observation",
+            || {
+                validations.set(validations.get() + 1);
+                Ok(validations.get() == 1)
+            },
+            || {
+                observations.set(observations.get() + 1);
+                Err::<(), _>(raw_error(61))
+            },
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+        )
+        .unwrap_err();
+
+        assert_eq!(observations.get(), 1);
+        assert_eq!(validations.get(), 2);
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.raw_os_error() == Some(61))
+        }));
+    }
+
+    #[test]
+    fn retry_stops_if_filesystem_revalidation_errors() {
+        let validations = Cell::new(0usize);
+        let observations = Cell::new(0usize);
+        let error = retry_windows_folder_observation_with(
+            "admission changed observation",
+            || {
+                validations.set(validations.get() + 1);
+                if validations.get() == 1 {
+                    Ok(true)
+                } else {
+                    Err(anyhow::anyhow!("Windows folder grant is no longer valid"))
+                }
+            },
+            || {
+                observations.set(observations.get() + 1);
+                Err::<(), _>(raw_error(61))
+            },
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+        )
+        .unwrap_err();
+
+        assert_eq!(observations.get(), 1);
+        assert_eq!(validations.get(), 2);
+        assert!(format!("{error:#}").contains("Windows folder grant is no longer valid"));
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.raw_os_error() == Some(61))
+        }));
+    }
+
+    #[test]
+    fn retry_preserves_a_newer_nonretryable_observation_error() {
+        let observations = Cell::new(0usize);
+        let error = retry_windows_folder_observation_with(
+            "lease observation",
+            || Ok(true),
+            || {
+                observations.set(observations.get() + 1);
+                if observations.get() == 1 {
+                    Err::<(), _>(raw_error(61))
+                } else {
+                    Err::<(), _>(anyhow::anyhow!("active resource lease is corrupt"))
+                }
+            },
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+        )
+        .unwrap_err();
+
+        assert_eq!(observations.get(), 2);
+        assert!(format!("{error:#}").contains("active resource lease is corrupt"));
+        assert!(format!("{error:#}").contains("initial raw errno 61"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn non_windows_folder_store_root_does_not_retry_raw_enodata() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("session-store")).unwrap();
+        assert_ne!(
+            crate::writer::classify_local_filesystem(store.root()).unwrap(),
+            crate::writer::LocalFilesystemKind::DockerDesktopWindowsFolder
+        );
+
+        let observations = Cell::new(0usize);
+        let error = store
+            .retry_windows_folder_observation("non-Windows-folder observation", || {
+                observations.set(observations.get() + 1);
+                Err::<(), _>(raw_error(61))
+            })
+            .unwrap_err();
+
+        assert_eq!(observations.get(), 1);
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.raw_os_error() == Some(61))
+        }));
+    }
 }

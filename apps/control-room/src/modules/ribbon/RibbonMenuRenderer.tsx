@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent,
   type ReactNode,
 } from "react";
 
@@ -79,6 +80,7 @@ function renderNode(
           key={node.id}
           checked={node.checked}
           disabled={node.disabled}
+          title={node.tooltip}
           onCheckedChange={(checked) => {
             const next = Boolean(checked);
             if (node.commandId) {
@@ -93,6 +95,9 @@ function renderNode(
           onSelect={(event) => event.preventDefault()}
         >
           {node.label}
+          {node.disabled && node.tooltip ? (
+            <span className="fm-dropdown-reason">{node.tooltip}</span>
+          ) : null}
         </DropdownMenuCheckboxItem>
       );
 
@@ -105,6 +110,7 @@ function renderNode(
               <DropdownMenuRadioItem
                 key={`${node.id}:${item.value}`}
                 disabled={node.disabled || item.disabled}
+                title={item.tooltip}
                 value={item.value}
                 onSelect={() => {
                   if (item.value === node.value) return;
@@ -112,6 +118,9 @@ function renderNode(
                 }}
               >
                 {item.label}
+                {item.disabled && item.tooltip ? (
+                  <span className="fm-dropdown-reason">{item.tooltip}</span>
+                ) : null}
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
@@ -133,8 +142,11 @@ function renderNode(
     case "submenu":
       return (
         <DropdownMenuSub key={node.id}>
-          <DropdownMenuSubTrigger disabled={node.disabled}>
+          <DropdownMenuSubTrigger disabled={node.disabled} title={node.tooltip}>
             {node.label}
+            {node.disabled && node.tooltip ? (
+              <span className="fm-dropdown-reason">{node.tooltip}</span>
+            ) : null}
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
             <RibbonMenuRenderer nodes={node.nodes} onCommand={onCommand} />
@@ -210,6 +222,7 @@ function SliderMenuItem({
     draftState?.sourceValue === node.value ? draftState.value : node.value;
 
   const pct = ((draftValue - node.min) / (node.max - node.min)) * 100;
+  const valueText = `${Number.isInteger(node.step) ? Math.round(draftValue) : draftValue.toFixed(1)}${node.unit ?? ""}`;
 
   return (
     <div
@@ -218,20 +231,18 @@ function SliderMenuItem({
     >
       <div className="fm-dropdown-slider__header">
         <span className="fm-dropdown-slider__label">{node.label}</span>
-        <span className="fm-dropdown-slider__value">
-          {Number.isInteger(node.step) ? Math.round(draftValue) : draftValue.toFixed(1)}
-          {node.unit ?? ""}
-        </span>
+        <span className="fm-dropdown-slider__value">{valueText}</span>
       </div>
       <input
         type="range"
+        aria-label={node.label}
+        aria-valuetext={valueText}
         className="fm-dropdown-slider__track"
         min={node.min}
         max={node.max}
         step={node.step}
         value={draftValue}
         disabled={node.disabled}
-        aria-label={node.label}
         style={{ "--pct": `${pct}%` } as CSSProperties}
         onChange={(e) => {
           const next = Number(e.target.value);
@@ -318,9 +329,18 @@ function ColorMenuItem({
   node: ColorNode;
   onCommand?: (commandId: string, input?: unknown) => void;
 }) {
+  const inputRef = useRef<HTMLInputElement>(null);
   const pickerValue = isColorPickerValue(node.value)
     ? node.value
     : colorInputValue(255, 255, 255);
+
+  const handleSwatchClick = useCallback(
+    (e: MouseEvent) => {
+      e.stopPropagation();
+      if (!node.disabled) inputRef.current?.click();
+    },
+    [node.disabled],
+  );
 
   return (
     <div
@@ -331,34 +351,39 @@ function ColorMenuItem({
       <span
         className="fm-dropdown-color__swatch"
         style={{ background: node.value }}
+        onClick={handleSwatchClick}
+        role="button"
+        aria-label={`Pick color: ${node.label}`}
+        tabIndex={node.disabled ? -1 : 0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!node.disabled) inputRef.current?.click();
+          }
+        }}
       >
-        <DropdownMenuItem
-          asChild
+        <input
+          ref={inputRef}
+          type="color"
+          className="fm-dropdown-color__input"
+          value={pickerValue}
           disabled={node.disabled}
-          textValue={node.label}
-          onSelect={(event) => event.preventDefault()}
-        >
-          <input
-            type="color"
-            className="fm-dropdown-color__input"
-            aria-label={`Pick color: ${node.label}`}
-            value={pickerValue}
-            disabled={node.disabled}
-            readOnly={!node.commandId}
-            onChange={(e) => {
-              const next = e.target.value;
-              if (node.commandId) {
-                onCommand?.(
-                  node.commandId,
-                  resolveCommandInput(node.commandInput, next),
-                );
-                return;
-              }
-              onCommand?.(node.id, resolveCommandInput(node.commandInput, next));
-            }}
-            onClick={(e) => e.stopPropagation()}
-          />
-        </DropdownMenuItem>
+          readOnly={!node.commandId}
+          tabIndex={-1}
+          onChange={(e) => {
+            const next = e.target.value;
+            if (node.commandId) {
+              onCommand?.(
+                node.commandId,
+                resolveCommandInput(node.commandInput, next),
+              );
+              return;
+            }
+            onCommand?.(node.id, resolveCommandInput(node.commandInput, next));
+          }}
+          onClick={(e) => e.stopPropagation()}
+        />
       </span>
     </div>
   );
@@ -422,7 +447,7 @@ function TextMenuItem({
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           event.stopPropagation();
-          if (event.key === "Enter") {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
             event.preventDefault();
             commit();
           }

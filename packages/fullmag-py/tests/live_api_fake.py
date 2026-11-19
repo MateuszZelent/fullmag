@@ -14,7 +14,7 @@ from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, urlsplit
 
 Reply = tuple[int, Any, dict[str, str]]
-Handler = Callable[["RecordedRequest"], Reply]
+Handler = Callable[["RecordedRequest"], Optional[Reply]]
 
 
 @dataclass
@@ -85,7 +85,11 @@ class FakeFullmagApi:
                 if handler is None:
                     status, payload, headers = 404, {"code": "not_found", "error": "no route", "message": "no route"}, {}
                 else:
-                    status, payload, headers = handler(request)
+                    reply = handler(request)
+                    if reply is None:
+                        self.close_connection = True
+                        return
+                    status, payload, headers = reply
                 if isinstance(payload, (bytes, bytearray)):
                     data = bytes(payload)
                     content_type = headers.pop("Content-Type", "application/octet-stream")

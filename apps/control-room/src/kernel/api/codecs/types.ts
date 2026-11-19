@@ -28,8 +28,7 @@ export interface DecodedArtifactFieldMapping {
   localVertexIndices: Uint8Array | null;
 }
 
-export interface DecodedFieldVector {
-  dtype: "float64";
+interface DecodedFieldVectorBase {
   domainGenerationId?: string | null;
   fieldGenerationId?: string | null;
   formatVersion?: 2 | 3 | 4 | 5 | 6;
@@ -50,8 +49,13 @@ export interface DecodedFieldVector {
   sourceKind?: DecodedFieldVectorSourceKind | null;
   sourceRevision?: string | null;
   valueCount: number;
-  values: Float64Array;
 }
+
+export type DecodedFieldVector = DecodedFieldVectorBase &
+  (
+    | { dtype: "float32"; values: Float32Array }
+    | { dtype: "float64"; values: Float64Array }
+  );
 
 export interface DecodedComplexFieldVector {
   componentCount: number;

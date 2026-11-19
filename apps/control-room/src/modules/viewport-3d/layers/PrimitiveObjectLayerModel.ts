@@ -115,6 +115,16 @@ export function resolvePrimitiveObjectRenderSettings(
 export function createPrimitiveObjectGeometry(
   object: Viewport3DPrimitiveObject,
 ): BufferGeometry {
+  if (object.kind === "imported-surface") {
+    if (!object.importedSurface) throw new Error("Imported geometry requires its source triangles.");
+    const geometry = new BufferGeometry();
+    geometry.setAttribute("position", new BufferAttribute(Float32Array.from(
+      object.importedSurface.positions, (value, index) => value - object.importedSurface!.bounds.center[index % 3],
+    ), 3));
+    geometry.setIndex(new BufferAttribute(object.importedSurface.triangles, 1));
+    geometry.computeVertexNormals();
+    return geometry;
+  }
   if (object.kind === "microstrip" || object.kind === "cpw") {
     if (!object.antennaPreview) throw new Error("Antenna layout requires an authored section preview.");
     const preview = object.antennaPreview;
@@ -123,6 +133,17 @@ export function createPrimitiveObjectGeometry(
       preview.positions, (value, index) => value - object.bounds.center[index % 3],
     ), 3));
     geometry.setIndex(preview.indices);
+    geometry.setAttribute("uv", new BufferAttribute(Float32Array.from(
+      preview.positions.flatMap((_, index) => {
+        if (index % 3 !== 0) return [];
+        return [
+          (preview.positions[index] - object.bounds.center[0]) / Math.max(object.bounds.size[0], 1e-12),
+          ((preview.positions[index + 1] - object.bounds.center[1]) +
+            (preview.positions[index + 2] - object.bounds.center[2])) /
+            Math.max(object.bounds.size[1] + object.bounds.size[2], 1e-12),
+        ];
+      }),
+    ), 2));
     geometry.userData.conductorParts = preview.parts;
     geometry.computeVertexNormals();
     return geometry;

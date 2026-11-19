@@ -18,7 +18,8 @@ import { LayoutController } from "@/kernel/layout/LayoutController";
 import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
-import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+import { SESSION_STATUS_RESOURCE_KEY, useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { useStageExecutionResource } from "@/kernel/resources/studyRuntimeResources";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import type { KernelApi } from "@/kernel/types";
@@ -31,7 +32,9 @@ import { VISUALIZATION_TARGET_COMMANDS } from "@/kernel/visualization/visualizat
 import { InspectorEditSessionProvider } from "@/modules/inspector/InspectorEditSession";
 import { ObjectGeneralPanel } from "@/modules/inspector/panels/ObjectGeneralPanel";
 import { ObjectVisualizationPanel } from "@/modules/inspector/panels/ObjectVisualizationPanel";
-import { FooterTelemetry } from "@/modules/footer/FooterTelemetry";
+import {
+  FooterTelemetry, footerTelemetryStatusEquals, selectFooterTelemetryStatus,
+} from "@/modules/footer/FooterTelemetry";
 import { Button } from "@/shared/ui/Button";
 
 const API_INSTANCE = "55555555-5555-4555-8555-555555555555";
@@ -123,7 +126,7 @@ function makeFixture() {
       summary = mode === "empty" || state.objectZero ? {} : { demag: 2, zeeman: 0 };
       state.telemetryRevision++;
       resources.invalidate(SESSION_STATUS_RESOURCE_KEY, state.telemetryRevision);
-      bus.emit("telemetry:scalar-sample", { revision: state.telemetryRevision, sessionId: "primitive-fixture", runId: "telemetry-fixture-run", step: 0, time: 0, row: mode === "empty" ? {} : { mx: 0.25, my: 0, mz: 0.5, ...(state.objectZero ? {} : { e_total: 0 }) } });
+      bus.emit("telemetry:scalar-sample", { requestScopeEpoch: `${API_INSTANCE}:1`, revision: state.telemetryRevision, sessionId: "primitive-fixture", runId: "telemetry-fixture-run", step: 0, time: 0, row: mode === "empty" ? {} : { mx: 0.25, my: 0, mz: 0.5, ...(state.objectZero ? {} : { e_total: 0 }) } });
     },
     read: () => ({ calls: [...calls], renders: state.renders, pending: pending.length, pendingWrites: pendingWrites.length, unexpected: [...unexpected], settings: resolveTargetVisualization({ snapshot: visualization.getSnapshot(), target, visualizationState: remote }).settings, airboxSettings: resolveTargetVisualization({ snapshot: visualization.getSnapshot(), target: { kind: "airbox", id: "airbox", label: "Airbox" }, visualizationState: remote }).settings }),
     invalidate: () => { state.hold = true; remote = { ...remote, revision: ++state.revision }; resources.invalidate(VISUALIZATION_STATE_PATH, state.revision); },
@@ -152,7 +155,16 @@ export default function PrimitiveColorInspectorFixturePage() {
           <div style={{ height: 600 }} aria-hidden="true" />
         </div>
       </div>
-      <section aria-label="Allocated telemetry panel" style={{ height: 680 }}><FooterTelemetry bus={fixture.kernel.bus} /></section>
+      <section aria-label="Allocated telemetry panel" style={{ height: 680 }}><FixtureFooterTelemetry bus={fixture.kernel.bus} /></section>
     </InspectorEditSessionProvider></KernelContext.Provider> : <p role="status">Loading fixture…</p>}
   </main>;
+}
+
+
+function FixtureFooterTelemetry({ bus }: { bus: EventBus<KernelEventMap> }) {
+  const status = useSessionStatusSelector(selectFooterTelemetryStatus, {
+    isEqual: footerTelemetryStatusEquals,
+  });
+  const stageExecution = useStageExecutionResource({ enabled: Boolean(status) });
+  return <FooterTelemetry bus={bus} status={status} stageExecution={stageExecution} view="overview" />;
 }

@@ -51,6 +51,18 @@ export const SESSION_STATUS_PATH = openApiV2Path(
   "/v2/sessions/current/status",
 );
 
+/** External clients (e.g. Python live scripts) present in the current session. */
+export const SESSION_CLIENTS_PATH = openApiV2Path(
+  "/v2/sessions/current/clients",
+);
+
+export const SESSION_CLIENT_PATH = openApiV2Path(
+  "/v2/sessions/current/clients/{client_id}",
+);
+
+/** Fullmag instances on this host, one per Control Room origin (ADR 0069). */
+export const PLATFORM_INSTANCES_PATH = openApiV2Path("/v2/platform/instances");
+
 export const ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1",
 );
@@ -316,6 +328,10 @@ export const DATA_PLANAR_FIELD_PROBE_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/probe",
 );
 
+export const DATA_PLANAR_FIELD_PROFILE_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/profile",
+);
+
 export const DATA_PLANAR_FIELD_RENDER_PNG_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/render.png",
 );
@@ -342,6 +358,10 @@ export const DATA_PLANAR_DEFAULT_FIELD_MESH_OVERLAY_PATH = openApiV2Path(
 
 export const DATA_PLANAR_DEFAULT_FIELD_PROBE_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields/{quantity_id}/planar-default/probe",
+);
+
+export const DATA_PLANAR_DEFAULT_FIELD_PROFILE_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-default/profile",
 );
 
 export const DATA_PLANAR_DEFAULT_FIELD_RENDER_PNG_PATH = openApiV2Path(
@@ -552,6 +572,10 @@ export const DIAGNOSTICS_GPU_PATH = openApiV2Path(
 
 export const DIAGNOSTICS_SOLVER_PROFILE_PATH = openApiV2Path(
   "/v2/sessions/current/diagnostics/solver-profile",
+);
+
+export const DIAGNOSTICS_RUN_PERFORMANCE_PATH = openApiV2Path(
+  "/v2/sessions/current/diagnostics/performance",
 );
 
 export const MESHING_SHARED_DOMAIN_MANIFEST_PATH = openApiV2Path(
@@ -878,6 +902,22 @@ export const MODEL_FIELD_DRIVE_PATH = openApiV2Path(
   "/v2/sessions/current/model/field-drives/{drive_id}",
 );
 
+export const MODEL_MASK_FIELD_DRIVES_PATH = openApiV2Path(
+  "/v2/sessions/current/model/mask-field-drives",
+);
+
+export const MODEL_MASK_FIELD_DRIVE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/mask-field-drives/{drive_id}",
+);
+
+export const MODEL_READY_ANTENNAS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/ready-antennas",
+);
+
+export const MODEL_READY_ANTENNA_TERMS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/ready-antennas/terms",
+);
+
 export const MODEL_REGION_PATH = openApiV2Path(
   "/v2/sessions/current/model/regions/{region_id}",
 );
@@ -972,6 +1012,14 @@ export const SIMULATION_RUN_PATH = openApiV2Path(
 
 export const SIMULATION_STAGES_EXECUTION_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/stages/execution",
+);
+
+export const SIMULATION_STAGES_RESULTS_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/stages/results",
+);
+
+export const SIMULATION_STAGES_RESULTS_SCALARS_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/stages/results/scalars",
 );
 
 export const SIMULATION_STAGE_HYSTERESIS_PLAN_PATH = openApiV2Path(
@@ -1108,6 +1156,14 @@ export const PROJECT_RUN_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs/{run_id}",
 );
 
+// The Study result routes are registered in the API and await managed OpenAPI export.
+export const PROJECT_STUDY_RESULTS_PATH = "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results";
+export const PROJECT_STUDY_RESULT_STATE_PATH = `${PROJECT_STUDY_RESULTS_PATH}/{artifact_id}` as const;
+export const PROJECT_STUDY_RESULT_MAGNETIZATION_PATH = `${PROJECT_STUDY_RESULT_STATE_PATH}/magnetization` as const;
+export const PROJECT_STUDY_RESULT_TOPOLOGY_PATH = `${PROJECT_STUDY_RESULT_STATE_PATH}/topology` as const;
+export const PROJECT_STUDY_RESULT_SUPPORT_PATH = `${PROJECT_STUDY_RESULT_STATE_PATH}/support` as const;
+export const PROJECT_STUDY_RESULT_SCALARS_PATH = `${PROJECT_STUDY_RESULT_STATE_PATH}/scalars` as const;
+
 export const PROJECT_SOLUTION_SET_DISCOVERY_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets",
 );
@@ -1160,6 +1216,10 @@ export const PERSISTENCE_RECOVERY_PATH = openApiV2Path(
 export const PLATFORM_OUTPUT_STORAGE_PATH = openApiV2Path("/v2/platform/output-storage");
 
 // Workspace database routes (start screen).
+export const WORKSPACE_ITEM_PLAYBACK_PATH = openApiV2Path("/v2/workspace/items/{id}/playback");
+export const WORKSPACE_ITEM_PLAYBACK_GEOMETRY_PATH = openApiV2Path("/v2/workspace/items/{id}/playback/geometry");
+export const WORKSPACE_ITEM_PLAYBACK_FRAME_PATH = openApiV2Path("/v2/workspace/items/{id}/playback/frames/{frame_index}");
+
 
 export const WORKSPACE_ITEMS_PATH = openApiV2Path("/v2/workspace/items");
 export const WORKSPACE_ITEM_PATH = openApiV2Path("/v2/workspace/items/{id}");
@@ -1197,3 +1257,15 @@ export const PLATFORM_COMPUTE_PREVIEW_PATH = openApiV2Path("/v2/platform/compute
 export const PLATFORM_COMPUTE_NODES_PATH = openApiV2Path("/v2/platform/compute/nodes");
 export const PLATFORM_COMPUTE_NODE_PATH = openApiV2Path("/v2/platform/compute/nodes/{node_id}");
 export const PLATFORM_COMPUTE_NODE_POLICY_PATH = openApiV2Path("/v2/platform/compute/nodes/{node_id}/policy");
+
+export const MODEL_OBJECT_SOURCE_SURFACE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/objects/{object_id}/source-surface",
+);
+export const MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH = openApiV2Path(
+  "/v2/sessions/current/model/objects/{object_id}/source-surface/topology",
+);
+
+export const WORKSPACE_MATERIAL_LIBRARY_PATH = openApiV2Path("/v2/workspace/material-library");
+export const WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH = openApiV2Path("/v2/workspace/material-library/{id}");
+export const WORKSPACE_MATERIAL_LIBRARY_VERSIONS_PATH = openApiV2Path("/v2/workspace/material-library/versions");
+export const WORKSPACE_MATERIAL_LIBRARY_VERSION_PATH = openApiV2Path("/v2/workspace/material-library/versions/{family}/{version}");

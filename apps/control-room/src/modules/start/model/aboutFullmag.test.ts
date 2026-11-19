@@ -5,9 +5,11 @@ import { describe, expect, it } from "vitest";
 import {
   FULLMAG_AUTHORS,
   FULLMAG_BIBTEX,
+  FULLMAG_CAPABILITY_MATRIX_URL,
   FULLMAG_CITATION,
   FULLMAG_CITATION_NOTE,
   FULLMAG_COORDINATION,
+  FULLMAG_EXTENDED_AUTHORS,
   FULLMAG_FUNDING,
   FULLMAG_LICENSE,
   FULLMAG_OVERVIEW,
@@ -18,6 +20,10 @@ import {
 // A Windows checkout may use CRLF line endings; the content is what matters.
 const readme = readFileSync(
   new URL("../../../../../../readme.md", import.meta.url),
+  "utf8",
+).split("\r\n").join("\n");
+const docsIndex = readFileSync(
+  new URL("../../../../../../public_docs/site/index.md", import.meta.url),
   "utf8",
 ).split("\r\n").join("\n");
 const flat = (text: string) => text.replace(/\s+/g, " ").trim();
@@ -35,7 +41,11 @@ describe("About page content", () => {
   it("lists every author with the affiliation the README gives", () => {
     for (const author of FULLMAG_AUTHORS) {
       expect(readme).toContain(`| ${author.name} | ${author.affiliation} |`);
+      expect(docsIndex).toContain(`<strong>${author.name}</strong>`);
     }
+    expect(
+      FULLMAG_EXTENDED_AUTHORS.map(({ name, affiliation }) => ({ name, affiliation })),
+    ).toEqual(FULLMAG_AUTHORS);
     expect(prose).toContain(FULLMAG_COORDINATION);
   });
 
@@ -48,5 +58,8 @@ describe("About page content", () => {
     expect(readme).toContain(FULLMAG_BIBTEX);
     expect(prose).toContain(flat(FULLMAG_LICENSE));
     expect(prose).toContain(flat(FULLMAG_FUNDING));
+    expect(FULLMAG_CAPABILITY_MATRIX_URL).toBe(
+      "https://fullmag.mzelent.pl/architecture/planner-and-capabilities.html",
+    );
   });
 });

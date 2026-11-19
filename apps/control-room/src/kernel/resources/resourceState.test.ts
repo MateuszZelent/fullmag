@@ -4,6 +4,8 @@ import {
   markResourceError,
   markResourceLoading,
   markResourceReady,
+  resourceDataRevision,
+  resourceHasDisplayableData,
   type ResourceState,
 } from "./resourceState";
 
@@ -18,6 +20,7 @@ describe("resource state transitions", () => {
 
     expect(markResourceLoading(current, 2)).toEqual({
       data: { value: "old" },
+      dataRevision: 1,
       error: null,
       revision: 2,
       status: "stale",
@@ -39,6 +42,7 @@ describe("resource state transitions", () => {
 
     expect(markResourceError(current, error)).toEqual({
       data: { value: "fresh" },
+      dataRevision: 3,
       error,
       revision: 3,
       status: "error",
@@ -90,5 +94,46 @@ describe("resource state transitions", () => {
 
     expect(next.status).toBe("loading");
     expect(next.refreshError).toBeUndefined();
+  });
+
+  it("keeps the data revision stable across repeated background refreshes", () => {
+    const ready = markResourceReady<{ value: string }>(
+      { data: null, error: null, revision: null, status: "loading" },
+      { value: "first" },
+      "etag-1",
+    );
+    const firstRefresh = markResourceLoading(ready, 7);
+    const secondRefresh = markResourceLoading(firstRefresh, 8);
+
+    expect(resourceDataRevision(ready)).toBe("etag-1");
+    expect(resourceDataRevision(firstRefresh)).toBe("etag-1");
+    expect(resourceDataRevision(secondRefresh)).toBe("etag-1");
+    expect(secondRefresh.revision).toBe(8);
+
+    const settled = markResourceReady(secondRefresh, { value: "second" }, "etag-2");
+    expect(resourceDataRevision(settled)).toBe("etag-2");
+  });
+
+  it("reports no data revision without data and falls back to revision for hand-built states", () => {
+    expect(
+      resourceDataRevision({ data: null, dataRevision: 4, revision: 4 }),
+    ).toBeNull();
+    expect(resourceDataRevision({ data: { value: "x" }, revision: 5 })).toBe(5);
+    expect(
+      resourceDataRevision(
+        markResourceLoading(
+          { data: { value: "x" }, error: null, revision: 5, status: "ready" },
+          6,
+        ),
+      ),
+    ).toBe(5);
+  });
+
+  it("treats stale data as displayable but not loading or errored states", () => {
+    expect(resourceHasDisplayableData({ data: { v: 1 }, status: "ready" })).toBe(true);
+    expect(resourceHasDisplayableData({ data: { v: 1 }, status: "stale" })).toBe(true);
+    expect(resourceHasDisplayableData({ data: null, status: "stale" })).toBe(false);
+    expect(resourceHasDisplayableData({ data: { v: 1 }, status: "error" })).toBe(false);
+    expect(resourceHasDisplayableData({ data: null, status: "loading" })).toBe(false);
   });
 });

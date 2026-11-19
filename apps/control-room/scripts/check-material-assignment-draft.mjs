@@ -1,33 +1,39 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { stripTypeScriptTypes } from "node:module";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { registerHooks } from "node:module";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const sourceRoot = new URL("../src/", import.meta.url);
+const panelsRoot = new URL("modules/inspector/panels/", sourceRoot);
+const panelPath = new URL("ObjectMaterialPanel.tsx", panelsRoot);
+
+export async function loadMaterialAssignmentDraftSources() {
+  const hook = registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (context.parentURL?.startsWith(sourceRoot.href)) {
+        const target = specifier.startsWith("@/") ? new URL(specifier.slice(2), sourceRoot)
+          : specifier.startsWith(".") ? new URL(specifier, context.parentURL) : null;
+        if (target?.href.startsWith(sourceRoot.href)) {
+          const candidate = new URL(target.href + ".ts");
+          if (existsSync(candidate)) return nextResolve(candidate.href, context);
+        }
+      }
+      return nextResolve(specifier, context);
+    },
+  });
+  try {
+    const model = await import(new URL("ObjectMaterialPanelModel.ts", panelsRoot).href);
+    const inspectorDraftState = await import(new URL("inspectorDraftState.ts", panelsRoot).href);
+    return { model, inspectorDraftState };
+  } finally {
+    hook.deregister();
+  }
+}
 
 export async function runMaterialAssignmentDraftCheck() {
-const scriptsRoot = dirname(fileURLToPath(import.meta.url));
-const appRoot = resolve(scriptsRoot, "..");
-const modelPath = resolve(appRoot, "src/modules/inspector/panels/ObjectMaterialPanelModel.ts");
-const panelPath = resolve(appRoot, "src/modules/inspector/panels/ObjectMaterialPanel.tsx");
-const source = await readFile(modelPath, "utf8");
-const executableSource = stripTypeScriptTypes(source, {
-  mode: "strip",
-  sourceUrl: pathToFileURL(modelPath).href,
-});
-const model = await import(
-  "data:text/javascript;base64," + Buffer.from(executableSource, "utf8").toString("base64")
-);
-const inspectorDraftStatePath = resolve(appRoot, "src/modules/inspector/panels/inspectorDraftState.ts");
-const inspectorDraftStateSource = await readFile(inspectorDraftStatePath, "utf8");
-const inspectorDraftState = await import(
-  "data:text/javascript;base64," + Buffer.from(
-    stripTypeScriptTypes(inspectorDraftStateSource, {
-      mode: "strip",
-      sourceUrl: pathToFileURL(inspectorDraftStatePath).href,
-    }),
-    "utf8",
-  ).toString("base64")
-);
+const { model, inspectorDraftState } = await loadMaterialAssignmentDraftSources();
 
 const emptyBase = model.magneticParametersDraftFromResource(null, null);
 const assignedScene = {
@@ -55,6 +61,8 @@ assert.deepEqual(committedMaterialResource, {
   id: "mat:object",
   name: "Object material",
   properties: { Aex: 1.3e-11, Dbulk: null, Dind: null, Ms: 8e5, alpha: 0.01 },
+  references: [],
+  source: null,
   scene_revision: 9,
 });
 assert.equal(
@@ -422,7 +430,7 @@ assert.ok(!updateDraftSource.includes("draftStateForResolution.draft"),
   "the first field edit must resolve the functional updater's current state");
 const createStart = panelSource.indexOf("async function createAndAssignMaterial");
 const createRebase = panelSource.indexOf("rebaseAssignedMaterialDraft(", createStart);
-const createCatch = panelSource.indexOf("} catch (error)", createStart);
+const createCatch = panelSource.indexOf("\n    } catch (error)", createStart);
 assert.ok(createStart >= 0 && createRebase > createStart && createRebase < createCatch);
 const createFailureBranch = panelSource.slice(createCatch, panelSource.indexOf("finally", createCatch));
 assert.ok(!createFailureBranch.includes("rebaseAssignedMaterialDraft"),
@@ -430,7 +438,7 @@ assert.ok(!createFailureBranch.includes("rebaseAssignedMaterialDraft"),
 
 const retryStart = panelSource.indexOf("async function retryFailedAssignment");
 const retryRebase = panelSource.indexOf("rebaseAssignedMaterialDraft(", retryStart);
-const retryCatch = panelSource.indexOf("} catch (error)", retryStart);
+const retryCatch = panelSource.indexOf("\n    } catch (error)", retryStart);
 assert.ok(retryStart >= 0 && retryRebase > retryStart && retryRebase < retryCatch,
   "successful retry must use the same acknowledged material rebase");
 const retryFailureBranch = panelSource.slice(retryCatch, panelSource.indexOf("finally", retryCatch));

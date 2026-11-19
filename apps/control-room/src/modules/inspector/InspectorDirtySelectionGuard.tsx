@@ -221,9 +221,11 @@ export function InspectorDirtySelectionGuard({
       }
       transition.acknowledged = true;
       continueWhenReady(transition);
-    } catch {
-      if (isCurrent(transition)) setError("The Inspector changes could not be applied or discarded. The selection was kept; review the draft and retry.");
-      else if (pendingRef.current === transition) dismiss();
+    } catch (cause) {
+      if (isCurrent(transition)) {
+        const detail = cause instanceof Error ? cause.message : "The Inspector changes could not be applied or discarded.";
+        setError(`${detail} The selection was kept; review the draft before retrying.`);
+      } else if (pendingRef.current === transition) dismiss();
     } finally {
       transition.running = false;
       if (pendingRef.current === transition && !transition.acknowledged) setBusy(false);
@@ -240,6 +242,11 @@ export function InspectorDirtySelectionGuard({
             <DialogDescription>
               {pending?.resolveBuild ? "Apply or discard the current draft before reviewing the mesh build." : "Apply or discard the current draft before changing the Explorer selection."}
             </DialogDescription>
+            {pending && (session?.lockReason || session?.applyBlockReason || !session?.valid) ? (
+              <p role="status">
+                {session?.lockReason ?? session?.applyBlockReason ?? "Resolve validation errors before applying."}
+              </p>
+            ) : null}
             {error ? <p role="alert">{error}</p> : null}
           </DialogHeader>
           <DialogFooter>

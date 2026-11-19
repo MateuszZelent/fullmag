@@ -17,6 +17,7 @@ import type { KernelEventMap } from "../events/eventTypes";
 import { KernelContext } from "../KernelContext";
 import { ModuleRegistry } from "../module/ModuleRegistry";
 import { DiagnosticRecorderController } from "../performance/diagnostic-recorder/DiagnosticRecorderController";
+import { RealtimeConnectionController } from "../realtime/RealtimeConnectionController";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { resetSharedResourceRuntimeStoreForTests } from "../resources/ResourceRuntimeStore";
 import type { KernelApi } from "../types";
@@ -37,7 +38,7 @@ import { SHELL_COMMANDS } from "./shellCommands";
 import { WorkspaceShellClient } from "./WorkspaceShellClient";
 
 vi.mock("@/design/theme/ThemeProvider", () => ({
-  useTheme: () => ({ theme: "dark", setTheme: vi.fn() }),
+  useTheme: () => ({ theme: "dark", preference: "system", setTheme: vi.fn() }),
 }));
 
 vi.mock("@/shared/ui/Dialog", () => ({
@@ -92,6 +93,10 @@ vi.mock("@/shared/ui/DropdownMenu", () => {
       </button>
     ),
     DropdownMenuLabel: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+    DropdownMenuRadioGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+    DropdownMenuRadioItem: ({ children }: { children: ReactNode }) => (
+      <button type="button" role="radio" aria-checked={false}>{children}</button>
+    ),
     DropdownMenuSeparator: () => <hr />,
     DropdownMenuSub: ({ children }: { children: ReactNode }) => <>{children}</>,
     DropdownMenuSubContent: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -278,13 +283,20 @@ function makeKernel(): KernelApi {
         gpuTelemetry: async () => { throw new Error("telemetry is not served in this test"); },
       },
       platform: {
-        health: async () => ({
-          active_session: true,
-          api_contract_version: "1.0.0",
-          status: "ok",
-          uptime_seconds: 12,
-        }),
         capabilities: async () => { throw new Error("capabilities are not served in this test"); },
+        instances: async () => ({
+          schema_version: "1.0.0",
+          self_api_instance_id: "test-instance",
+          first_port: 3197,
+          last_port: 3260,
+          instances: [],
+        }),
+        health: async () => ({
+          status: "ok",
+          uptime_seconds: 0,
+          api_contract_version: "1.0.0",
+          active_session: false,
+        }),
         computeNodes: async () => ({
           nodes: [],
           schema_version: "compute_nodes.v1",
@@ -308,6 +320,7 @@ function makeKernel(): KernelApi {
     diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
     layout: new LayoutController(bus),
     modules,
+    realtimeConnection: new RealtimeConnectionController(),
     resources: new ResourceInvalidationController(bus),
   } as unknown as KernelApi;
 }

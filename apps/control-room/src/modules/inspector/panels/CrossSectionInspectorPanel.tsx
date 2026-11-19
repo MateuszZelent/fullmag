@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 
 import type {
   CrossSectionQualityMetric,
@@ -11,8 +11,6 @@ import {
   useCrossSectionQualityResource,
   useCrossSectionResource,
 } from "@/kernel/resources/crossSectionResources";
-import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
-import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import {
@@ -30,18 +28,10 @@ import {
 } from "@/shared/domain/mesh/crossSectionStatistics";
 import { Button } from "@/shared/ui/Button";
 
-import { useRegisterInspectorEditSession } from "../InspectorEditSession";
-import {
-  QuantityFieldDraftScope,
-  useQuantityFieldDraftScope,
-} from "../primitives/QuantityField";
-import {
-  quantityFieldDraftBlockReason,
-  type QuantityFieldDraftStore,
-} from "../primitives/quantityFieldDraftStore";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import {
   formatCount,
   formatValue,
@@ -51,15 +41,28 @@ import {
 import { CrossSectionDraftEditor } from "./CrossSectionDraftEditor";
 import { CrossSectionQualityChart } from "./CrossSectionQualityChart";
 import { CrossSectionSettingsEditor } from "./CrossSectionSettingsEditor";
+import { resourceHasDisplayableData } from "@/kernel/resources/resourceState";
 
 const DEFAULT_METRIC: CrossSectionQualityMetric = "skewness";
 const QUALITY_THRESHOLD = 0.1;
 
-export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
+export type CrossSectionInspectorSectionScope =
+  | "all"
+  | "overview"
+  | "draft"
+  | "plot";
+
+export function CrossSectionInspectorPanel({
+  selection,
+  sectionScope = "all",
+}: InspectorPanelProps & {
+  sectionScope?: CrossSectionInspectorSectionScope;
+}) {
   const kernel = useKernel();
   const visualizationState = useVisualizationStateResource();
   const workspace = useCrossSectionWorkspaceSelector((state) => state);
-  const draftMode = selection.ref?.type === "cross-section-draft";
+  const draftMode =
+    sectionScope === "draft" || selection.ref?.type === "cross-section-draft";
   const selectedPlotId =
     selection.ref?.type === "cross-section-plot" ? selection.ref.plotId : null;
   const selectedPlot =
@@ -86,15 +89,27 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
     enabled: !draftMode,
   });
   const quality = useCrossSectionQualityResource(qualityQuery, {
-    enabled:
-      !draftMode && crossSection.status === "ready" && Boolean(crossSection.data),
+    enabled: !draftMode && resourceHasDisplayableData(crossSection),
   });
 
   if (draftMode) {
     return (
-      <CrossSectionDraftEditor
-        draft={workspace.draft}
-      />
+      <div className="fm-cross-section-inspector grid min-w-0 gap-fm-inspector-group">
+        <InspectorMetricStrip
+          metrics={[
+            { label: "Mode", tone: "neutral", value: "draft" },
+            { label: "Plane", value: (workspace.draft?.plane ?? query.plane).toUpperCase() },
+            {
+              label: "Position",
+              value: `${formatValue(workspace.draft?.positionPercent ?? query.positionPercent)}%`,
+            },
+            { label: "Metric", value: workspace.draft?.metric ?? metric },
+          ]}
+        />
+        <CrossSectionDraftEditor
+          draft={workspace.draft}
+        />
+      </div>
     );
   }
 
@@ -127,7 +142,8 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
       />
     );
   }
-  if (crossSection.status !== "ready") {
+  // A background refresh keeps the previous section visible (`stale`).
+  if (crossSection.status !== "ready" && !resourceHasDisplayableData(crossSection)) {
     return <MeshResourceEmpty label="Loading cross-section resources." />;
   }
   if (!crossSection.data) {
@@ -146,8 +162,7 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
     crossSection.data.parentElementIds,
     quality.data?.perElementQuality ?? null,
   );
-  const duplicateSelectedPlot = (numericDraftStore: QuantityFieldDraftStore) => {
-    if (numericDraftStore.getSummary().pendingCount > 0) return;
+  const duplicateSelectedPlot = () => {
     if (!selectedPlot) return;
     const draft = beginCrossSectionDraftFromPlot(selectedPlot.id);
     if (!draft) return;
@@ -171,16 +186,38 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
     kernel.layout.setPanelVisible("right", true);
   };
 
+  const isPlotScope =
+    sectionScope === "plot" ||
+    selection.kind === "mesh.cross-section.plot" ||
+    Boolean(selectedPlot);
+
   return (
-    <div className="fm-cross-section-inspector">
+    <div className="fm-cross-section-inspector grid min-w-0 gap-fm-inspector-group">
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Plane", tone: "neutral", value: query.plane.toUpperCase() },
+          { label: "Position", value: `${formatValue(query.positionPercent)}%` },
+          { label: "Polygons", value: formatCount(statistics.polygonCount) },
+          { label: "Metric", value: metric },
+        ]}
+      />
       {selectedPlot ? (
-        <CrossSectionPlotSettingsEditor
-          plot={selectedPlot}
+        <CrossSectionSettingsEditor
+          value={settingsValueFromPlot(selectedPlot)}
           onChange={(patch) => updateCrossSectionPlot(selectedPlot.id, patch)}
-          onDuplicate={duplicateSelectedPlot}
+          action={
+            <Button
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={duplicateSelectedPlot}
+            >
+              New Image
+            </Button>
+          }
         />
       ) : (
-        <InspectorGroup title="Cut Plane">
+        <InspectorGroup title="Cut Plane" collapsible defaultOpen>
           <MeshResourceFields
             fields={[
               { label: "Plane", value: query.plane.toUpperCase() },
@@ -202,7 +239,11 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
         </InspectorGroup>
       )}
 
-      <InspectorGroup title="Cross-Section Statistics">
+      <InspectorGroup
+        title="Cross-Section Statistics"
+        collapsible
+        defaultOpen={!isPlotScope || Boolean(selectedPlot)}
+      >
         <MeshResourceFields
           fields={[
             {
@@ -243,7 +284,11 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
         ) : null}
       </InspectorGroup>
 
-      <InspectorGroup title="Selected Element">
+      <InspectorGroup
+        title="Selected Element"
+        collapsible
+        defaultOpen={Boolean(selectedElement)}
+      >
         {selectedElement ? (
           <MeshResourceFields
             fields={[
@@ -257,62 +302,6 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
         )}
       </InspectorGroup>
     </div>
-  );
-}
-
-function CrossSectionPlotSettingsEditor({
-  onChange,
-  onDuplicate,
-  plot,
-}: {
-  onChange: (patch: Partial<CrossSectionDraft>) => void;
-  onDuplicate: (store: QuantityFieldDraftStore) => void;
-  plot: CrossSectionPlot;
-}) {
-  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
-  const numericDrafts = useQuantityFieldDraftScope(
-    JSON.stringify([sessionScopeKey, "cross-section-plot", plot.id]),
-  );
-  const pendingNumericDraft = numericDrafts.summary.pendingCount > 0;
-  const blockReason =
-    quantityFieldDraftBlockReason(numericDrafts.summary) ??
-    (pendingNumericDraft
-      ? "Commit or discard the pending cross-section numeric edits."
-      : sessionScopeKey
-        ? undefined
-        : "Session identity is not ready.");
-  const apply = useCallback(() => false, []);
-  const reset = useCallback(() => numericDrafts.store.clear(), [numericDrafts.store]);
-
-  useRegisterInspectorEditSession(
-    pendingNumericDraft ? "staged" : null,
-    false,
-    pendingNumericDraft,
-    !pendingNumericDraft && Boolean(sessionScopeKey),
-    undefined,
-    apply,
-    reset,
-    { applyBlockReason: blockReason },
-  );
-
-  return (
-    <QuantityFieldDraftScope store={numericDrafts.store}>
-      <CrossSectionSettingsEditor
-        value={settingsValueFromPlot(plot)}
-        onChange={onChange}
-        action={
-          <Button
-            disabled={pendingNumericDraft}
-            size="sm"
-            type="button"
-            variant="secondary"
-            onClick={() => onDuplicate(numericDrafts.store)}
-          >
-            New Image
-          </Button>
-        }
-      />
-    </QuantityFieldDraftScope>
   );
 }
 

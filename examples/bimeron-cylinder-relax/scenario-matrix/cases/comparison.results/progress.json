@@ -1,0 +1,79 @@
+{
+  "case_count": 12,
+  "cases": [
+    {
+      "case_id": "material_rdmi_current__film_bimeron__cylinder_plus_x",
+      "run_id": "run-live-7ff17d43b5eaeb2fdd1621ede4b9aa718aa40cb566b77dbf0f1a97892fd0fa6f",
+      "state": "captured"
+    },
+    {
+      "case_id": "material_rdmi_current__film_bimeron__cylinder_minus_x",
+      "run_id": "run-live-1521a3d82076ab5a1f7c6c37fe46ce5856eec3cb2e2bbfcd913898a57a6af3e0",
+      "state": "captured"
+    },
+    {
+      "case_id": "material_rdmi_current__film_uniform_plus_x__cylinder_plus_x",
+      "run_id": "run-live-7a2087a5cfafb0344f8f3d9d41c180020dd5a3e7ad51c6131f4b24ce70d070e0",
+      "state": "captured"
+    },
+    {
+      "case_id": "material_rdmi_current__film_uniform_plus_x__cylinder_minus_x",
+      "run_id": "run-live-b122281b890729c4f37eb4fc57f4edc0b527883b1781e056087769e75a3591a6",
+      "state": "captured"
+    },
+    {
+      "case_id": "material_yig__film_bimeron__cylinder_plus_x",
+      "run_id": "run-live-c1b7588aa42f8001a81f4472fc6e5822177b9e11e4581b214bbb87824c1523f3",
+      "state": "captured"
+    },
+    {
+      "case_id": "material_yig__film_bimeron__cylinder_minus_x",
+      "run_id": "run-live-81c2f743975ce2fcfe65aa88ee12f4aff778dd148e9221f833e9662369fa5caf",
+      "state": "captured"
+    },
+    {
+      "case_id": "material_yig__film_uniform_plus_x__cylinder_plus_x",
+      "run_id": "run-live-9f3ebad95d783af89846478864f43310c3ac9ac21d1da10834a08e5cf2c80ce2",
+      "state": "captured"
+    },
+    {
+      "case_id": "material_yig__film_uniform_plus_x__cylinder_minus_x",
+      "run_id": "run-live-207e33c9022ab919ba4193382d91d4d49c93e6b6bbe20c2839691d8cf807e8f9",
+      "state": "captured"
+    },
+    {
+      "case_id": "material_permalloy__film_bimeron__cylinder_plus_x",
+      "run_id": "run-live-156d0f833572f0821c0002e0ab2a97be22f73f46e7ae6ec06082dbc73c6078bb",
+      "state": "captured"
+    },
+    {
+      "case_id": "material_permalloy__film_bimeron__cylinder_minus_x",
+      "run_id": "run-live-74dd4c623d73811ccda5c3f91cd9837639e3443c1a7e007b45a2fe2df55b91cc",
+      "state": "captured"
+    },
+    {
+      "case_id": "material_permalloy__film_uniform_plus_x__cylinder_plus_x",
+      "run_id": "run-live-e65e71b7d5641f2b54559a11244fa78a73dde4161e23b366df2ce084ccb25eef",
+      "state": "captured"
+    },
+    {
+      "case_id": "material_permalloy__film_uniform_plus_x__cylinder_minus_x",
+      "run_id": null,
+      "state": "not_started"
+    }
+  ],
+  "cases_completed": 11,
+  "cases_started": 11,
+  "max_steps": 3000,
+  "note_pl": "Status operacyjny; nie stanowi wyniku naukowego ani potwierdzenia zbieznosci.",
+  "requested_execution": {
+    "backend": "fdm",
+    "device": "gpu",
+    "fallback_cpu": false,
+    "precision": "double"
+  },
+  "results_index_available": false,
+  "schema_version": "fullmag.bimeron-matrix-progress.v1",
+  "series_state": "partial",
+  "updated_at_utc": "2026-11-05T17:03:36.006+00:00"
+}
