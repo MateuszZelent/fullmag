@@ -1116,7 +1116,7 @@
     {
       "id": "robin_beta",
       "latex": "$\\beta$",
-      "meaning": "współczynnik Robina na brzegu zewnętrznym",
+      "meaning": "Robin coefficient",
       "si_unit": "$\\mathrm{m^{-1}}$"
     },
     {
@@ -1133,8 +1133,8 @@
     },
     {
       "id": "identity_classes",
-      "latex": "$\\kappa_\\phi,\\kappa_m$",
-      "meaning": "tożsamościowe klasy węzłów trybu otwartego",
+      "latex": "$\\kappa_\\phi$, $\\kappa_m$",
+      "meaning": "odwzorowania węzłów na klasy skalarne i magnetyczne",
       "si_unit": "$1$"
     },
     {
@@ -1158,30 +1158,30 @@
     {
       "id": "robin_film_demag",
       "latex": "$N_{zz}^{\\mathrm{Robin}}$",
-      "meaning": "współczynnik odmagnesowania filmu z brzegiem Robina",
+      "meaning": "współczynnik odmagnesowania z brzegiem Robina",
       "si_unit": "$1$"
     },
     {
       "id": "static_potential_p1",
       "latex": "$\\phi_0^{\\mathrm{P1}}$",
-      "meaning": "statyczny potencjał P1 dla m0",
+      "meaning": "statyczny potencjał P1 dla $\\mathbf m_0$",
       "si_unit": "$\\mathrm A$"
     },
     {
       "id": "static_source",
       "latex": "$\\mathbf b$",
-      "meaning": "źródło ładunków magnetycznych",
+      "meaning": "wektor źródła ładunków magnetycznych",
       "si_unit": "$\\mathrm{A\\,m}$"
     },
     {
       "id": "static_demag_p1",
-      "latex": "$\\mathbf H^{\\mathrm{P1}}_{d,0}$",
+      "latex": "$\\mathbf H^{\\mathrm{P1}}_{d,0,i}$",
       "meaning": "węzłowe statyczne pole demag P1",
       "si_unit": "$\\mathrm{A\\,m^{-1}}$"
     },
     {
       "id": "static_demag_producer",
-      "latex": "$\\mathbf H^{\\mathrm{prod}}_{d,0}$",
+      "latex": "$\\mathbf H^{\\mathrm{prod}}_{d,0,i}$",
       "meaning": "pole demag producenta równowagi",
       "si_unit": "$\\mathrm{A\\,m^{-1}}$"
     }
