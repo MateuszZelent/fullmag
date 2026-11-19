@@ -1492,10 +1492,12 @@ def preview(control, source, request):
     time.sleep(1)
     second = history(request, original)
     require(second == first, "BuildKit terminal observation is unstable")
-    _validate_host_client_environment(request)
+    desktop_profile = _is_qualified_desktop_profile(request)
+    if desktop_profile:
+        _validate_host_client_environment(request)
     _validate_source_and_control_pins(control, source, request, original_raw,
                                       original, root, helper_id)
-    clients = host_clients(source, request, final=True, environment_validated=True)
+    clients = host_clients(source, request, final=True, environment_validated=desktop_profile)
     return original_raw, first, clients
 
 

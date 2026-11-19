@@ -970,6 +970,24 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(len([args for args in capture_calls if args[:2] == ("exec", "helper")]), 3)
         self.assertIn(("active", False), raw_reads)
 
+        legacy_request = copy.deepcopy(self.request)
+        for key in ("controller_inputs", "compose_sha256", "unknown_receipt_sha256"):
+            legacy_request[key] = request[key]
+        with patch.object(subject, "read_raw", side_effect=read), \
+             patch.object(subject, "pin_file", return_value=compose_raw), \
+             patch.object(subject, "_validate_helper", return_value=(helper, "helper")), \
+             patch.object(subject, "_validate_helper_logged"), \
+             patch.object(subject, "fingerprint", return_value=request["helper_fingerprint"]), \
+             patch.object(subject, "docker_capture", side_effect=docker), \
+             patch.object(subject, "_linux_process_snapshot", return_value=({"linux_boot_id": "boot"}, ())) as linux, \
+             patch.object(subject, "_legacy_windows_process_snapshot", return_value=({}, ())) as windows, \
+             patch.object(subject, "history", return_value=self.record), \
+             patch.object(subject.time, "sleep"), \
+             patch.object(bootstrap_docker_toolchain, "tracked_input_files", return_value=[]):
+            _, _, observed_clients = subject.preview(control, source, legacy_request)
+        self.assertEqual(observed_clients["host_process_census_passes"], 2)
+        self.assertEqual((linux.call_count, windows.call_count), (3, 3))
+
         request["controller_inputs"]["scripts/docker_volume_toolchain_reconcile.py"] = "0" * 64
         histories = [copy.deepcopy(self.record), copy.deepcopy(self.record)]
         with patch.object(subject, "read_raw", side_effect=read), \
