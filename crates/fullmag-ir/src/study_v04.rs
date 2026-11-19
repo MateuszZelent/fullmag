@@ -595,7 +595,10 @@ pub(crate) fn validate_v04_study_wire(value: &Value) -> Result<(), String> {
             let boundary = value.as_str().ok_or_else(|| {
                 "/study/magnetostatic_bc: expected a non-null boundary condition string".to_string()
             })?;
-            if !matches!(boundary, "open" | "periodic_airbox_k0" | "floquet_airbox") {
+            if !matches!(
+                boundary,
+                "open" | "periodic_airbox_k0" | "floquet_airbox" | "open_airbox_k0"
+            ) {
                 return Err(format!(
                     "/study/magnetostatic_bc: unsupported boundary condition '{boundary}'"
                 ));

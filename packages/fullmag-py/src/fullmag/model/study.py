@@ -54,7 +54,9 @@ SUPPORTED_EQUILIBRIUM_SOURCES = {"provided", "relax", "artifact"}
 SUPPORTED_EIGEN_NORMALIZATIONS = {"unit_l2", "unit_max_amplitude"}
 SUPPORTED_EIGEN_DAMPING_POLICIES = {"ignore", "include"}
 SUPPORTED_SPIN_WAVE_BCS = {"free", "pinned", "periodic", "floquet", "surface_anisotropy"}
-SUPPORTED_MAGNETOSTATIC_BCS = {"open", "periodic_airbox_k0", "floquet_airbox"}
+SUPPORTED_MAGNETOSTATIC_BCS = {"open", "periodic_airbox_k0", "floquet_airbox", "open_airbox_k0"}
+# Modal-only boundary: an isolated body in a Robin airbox without periodic seams.
+EIGEN_ONLY_MAGNETOSTATIC_BCS = {"open_airbox_k0"}
 SUPPORTED_FIELD_SEGMENT_ENDPOINT_POLICIES = {"include_stop", "skip_start", "include_both"}
 SUPPORTED_SETTLE_NON_CONVERGENCE_POLICIES = {
     "continue_with_warning",
@@ -1173,6 +1175,9 @@ class Eigenmodes:
     spin_wave_bc: SpinWaveBoundarySpec = "free"
     magnetostatic_bc: str = "open"
     solver_policy: FemEigenSolverPolicy | None = None
+    # Note 0830, eq-k0-forced-residual-torque: "force" linearizes around a relax
+    # state that stopped without converging. Diagnostic only; never the default.
+    equilibrium_acceptance: str = "certified"
     dynamics: LLG = field(default_factory=LLG)
 
     def __post_init__(self) -> None:
@@ -1230,6 +1235,12 @@ class Eigenmodes:
             FemEigenSolverPolicy,
         ):
             raise TypeError("solver_policy must be FemEigenSolverPolicy")
+        if self.equilibrium_acceptance not in {"certified", "force"}:
+            raise ValueError("equilibrium_acceptance must be 'certified' or 'force'")
+        if self.equilibrium_acceptance == "force" and self.equilibrium_source != "relax":
+            raise ValueError(
+                "equilibrium_acceptance='force' requires equilibrium_source='relax'"
+            )
         if magnetostatic_bc == "periodic_airbox_k0":
             if not self.include_demag:
                 raise ValueError("periodic_airbox_k0 requires include_demag=True")
@@ -1240,6 +1251,16 @@ class Eigenmodes:
                 raise ValueError("periodic_airbox_k0 requires k_vector=(0.0, 0.0, 0.0)")
             if self.damping_policy != "ignore":
                 raise ValueError("periodic_airbox_k0 requires damping_policy='ignore'")
+        if magnetostatic_bc == "open_airbox_k0":
+            if not self.include_demag:
+                raise ValueError("open_airbox_k0 requires include_demag=True")
+            if _spin_wave_bc_kind(self.spin_wave_bc) != "free":
+                raise ValueError("open_airbox_k0 requires spin_wave_bc='free'")
+            sampling = coerce_k_sampling(k_sampling=self.k_sampling, legacy_k_vector=self.k_vector)
+            if sampling != {"kind": "single", "k_vector": [0.0, 0.0, 0.0]}:
+                raise ValueError("open_airbox_k0 requires k_vector=(0.0, 0.0, 0.0)")
+            if self.damping_policy != "ignore":
+                raise ValueError("open_airbox_k0 requires damping_policy='ignore'")
         # Validate alias / primary representation early to fail loudly.
         sampling = coerce_k_sampling(k_sampling=self.k_sampling, legacy_k_vector=self.k_vector)
         if self.bias_field_sweep is not None:
@@ -1366,6 +1387,8 @@ class FrequencyResponse:
         if magnetostatic_bc not in SUPPORTED_MAGNETOSTATIC_BCS:
             supported = ", ".join(sorted(SUPPORTED_MAGNETOSTATIC_BCS))
             raise ValueError(f"magnetostatic_bc must be one of: {supported}")
+        if magnetostatic_bc in EIGEN_ONLY_MAGNETOSTATIC_BCS:
+            raise ValueError(f"magnetostatic_bc={magnetostatic_bc!r} is supported only by Eigenmodes")
         object.__setattr__(self, "magnetostatic_bc", magnetostatic_bc)
         if self.solver_policy is not None and not isinstance(
             self.solver_policy,

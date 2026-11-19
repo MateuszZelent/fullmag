@@ -7523,6 +7523,112 @@ class MeshScaffoldTests(unittest.TestCase):
             [ALGO_3D_HXT, ALGO_3D_DELAUNAY, ALGO_3D_FRONTAL],
         )
 
+    def test_stl_surface_meshing_reparametrizes_after_overlapping_ordinary_patches(self) -> None:
+        mesh = self._unit_tet_mesh()
+        attempts: list[tuple[int, bool]] = []
+
+        def _fake_stl_once(*_args: object, **kwargs: object) -> MeshData:
+            options = kwargs.get("options")
+            force = bool(kwargs.get("force_reparametrize"))
+            attempts.append((int(options.algorithm_3d), force))
+            kwargs["reparametrize_log"].append(force)
+            if not force:
+                raise Exception("Invalid boundary mesh (overlapping facets) on surface 2 surface 3")
+            return mesh
+
+        with patch(
+            "fullmag.meshing._gmsh_generators._mesh_stl_surface_once",
+            side_effect=_fake_stl_once,
+        ):
+            result = _mesh_stl_surface(
+                Path("shape.stl"),
+                hmax=100e-9,
+                order=1,
+                options=MeshOptions(algorithm_3d=ALGO_3D_DELAUNAY),
+            )
+
+        self.assertIs(result, mesh)
+        self.assertEqual(attempts, [(ALGO_3D_DELAUNAY, False), (ALGO_3D_DELAUNAY, True)])
+
+    def test_stl_surface_meshing_switches_algorithm_after_reparametrized_failure(self) -> None:
+        mesh = self._unit_tet_mesh()
+        attempts: list[tuple[int, bool]] = []
+
+        def _fake_stl_once(*_args: object, **kwargs: object) -> MeshData:
+            options = kwargs.get("options")
+            force = bool(kwargs.get("force_reparametrize"))
+            attempts.append((int(options.algorithm_3d), force))
+            kwargs["reparametrize_log"].append(force)
+            if len(attempts) < 3:
+                raise Exception("Invalid boundary mesh (overlapping facets) on surface 2 surface 3")
+            return mesh
+
+        with patch(
+            "fullmag.meshing._gmsh_generators._mesh_stl_surface_once",
+            side_effect=_fake_stl_once,
+        ):
+            result = _mesh_stl_surface(
+                Path("shape.stl"),
+                hmax=100e-9,
+                order=1,
+                options=MeshOptions(algorithm_3d=ALGO_3D_DELAUNAY),
+            )
+
+        self.assertIs(result, mesh)
+        self.assertEqual(
+            attempts,
+            [(ALGO_3D_DELAUNAY, False), (ALGO_3D_DELAUNAY, True), (ALGO_3D_HXT, True)],
+        )
+
+    def test_component_mesh_reparametrizes_after_overlapping_ordinary_patches(self) -> None:
+        from fullmag.meshing import _gmsh_generators as generators
+
+        sentinel = object()
+        forces: list[bool] = []
+
+        def _fake_once(*_args: object, **kwargs: object) -> object:
+            force = bool(kwargs["force_reparametrize"])
+            forces.append(force)
+            if kwargs["reparametrize_log"] is not None:
+                kwargs["reparametrize_log"].append(force)
+            if not force:
+                raise Exception("Invalid boundary mesh (overlapping facets) on surface 2 surface 3")
+            return sentinel
+
+        with patch.object(
+            generators,
+            "_generate_shared_domain_mesh_from_components_once",
+            side_effect=_fake_once,
+        ):
+            result = generators.generate_shared_domain_mesh_from_components(
+                [object()], hmax=1e-7,
+            )
+
+        self.assertIs(result, sentinel)
+        self.assertEqual(forces, [False, True])
+
+    def test_component_mesh_does_not_repeat_an_already_reparametrized_failure(self) -> None:
+        from fullmag.meshing import _gmsh_generators as generators
+
+        forces: list[bool] = []
+
+        def _fake_once(*_args: object, **kwargs: object) -> object:
+            forces.append(bool(kwargs["force_reparametrize"]))
+            kwargs["reparametrize_log"].append(True)
+            raise Exception("Invalid boundary mesh (overlapping facets) on surface 2 surface 3")
+
+        with patch.object(
+            generators,
+            "_generate_shared_domain_mesh_from_components_once",
+            side_effect=_fake_once,
+        ):
+            with self.assertRaisesRegex(Exception, "overlapping facets"):
+                generators.generate_shared_domain_mesh_from_components(
+                    [object()], hmax=1e-7,
+                )
+
+        self.assertEqual(forces, [False])
+
     def test_stl_volume_model_retries_geometry_recovery_with_reparametrization(self) -> None:
         test_case = self
 

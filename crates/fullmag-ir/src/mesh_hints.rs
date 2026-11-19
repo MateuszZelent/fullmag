@@ -2995,6 +2995,52 @@ impl MeshIR {
     /// face bijection, opposite outward normals, material-domain agreement, or
     /// closed multi-axis equivalence classes is not a certificate.
     pub fn periodic_mesh_certificate_v6(&self) -> Result<PeriodicMeshCertificateV6IR, Vec<String>> {
+        self.mesh_certificate_v6_impl(false)
+    }
+
+    /// Identity v6 certificate for an isolated (non-periodic) airbox mesh used
+    /// by the `open_airbox_k0` modal lane. It runs the same tet4/tri3,
+    /// magnetic-prefix and marker checks as the periodic certificate but
+    /// requires the absence of periodic metadata, so every equivalence class is
+    /// a single node and all pair counts are zero.
+    pub fn open_mesh_identity_certificate_v6(
+        &self,
+    ) -> Result<PeriodicMeshCertificateV6IR, Vec<String>> {
+        if !self.periodic_boundary_pairs.is_empty() || !self.periodic_node_pairs.is_empty() {
+            return Err(vec![
+                "open-mesh identity certificate requires a mesh without periodic pair metadata"
+                    .to_string(),
+            ]);
+        }
+        self.mesh_certificate_v6_impl(true)
+    }
+
+    /// Identity counterpart of
+    /// [`Self::periodic_mesh_certificate_v6_with_material_and_nodal_fields`]:
+    /// without seams there is no coefficient residual to check, but the
+    /// material realization fingerprint is bound in the same way.
+    pub fn open_mesh_identity_certificate_v6_with_material_and_nodal_fields(
+        &self,
+        ms_element_field: Option<&[f64]>,
+        a_element_field: Option<&[f64]>,
+        ms_nodal_field: Option<&[f64]>,
+        a_nodal_field: Option<&[f64]>,
+    ) -> Result<PeriodicMeshCertificateV6IR, Vec<String>> {
+        let mut certificate = self.open_mesh_identity_certificate_v6()?;
+        certificate.material_realization_fingerprint = material_realization_fingerprint_with_nodal(
+            ms_element_field,
+            a_element_field,
+            ms_nodal_field,
+            a_nodal_field,
+        );
+        certificate.max_material_residual = 0.0;
+        Ok(certificate)
+    }
+
+    fn mesh_certificate_v6_impl(
+        &self,
+        allow_identity: bool,
+    ) -> Result<PeriodicMeshCertificateV6IR, Vec<String>> {
         let mut errors = Vec::new();
         let boundary_faces = match self.require_tri3_boundary_faces() {
             Ok(faces) => faces,
@@ -3006,10 +3052,10 @@ impl MeshIR {
         if let Err(error) = self.require_tet4_elements() {
             errors.push(format!("periodic v6 certification is tet4-only: {error}"));
         }
-        if self.periodic_boundary_pairs.is_empty() {
+        if !allow_identity && self.periodic_boundary_pairs.is_empty() {
             errors.push("periodic v6 certificate requires boundary pair metadata".to_string());
         }
-        if self.periodic_node_pairs.is_empty() {
+        if !allow_identity && self.periodic_node_pairs.is_empty() {
             errors.push("periodic v6 certificate requires node pair metadata".to_string());
         }
 

@@ -3452,7 +3452,15 @@ static FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve_impl(
                 "native FEM shared-domain payload is missing certificate-bound reduction maps",
                 "missing_certificate_map_binding_data");
         }
-        if (payload->magnetic_pair_count == 0u || payload->airbox_pair_count == 0u ||
+        // open_airbox_k0 (note 0830): both pair counts are zero, the mesh has
+        // no periodic pairs and the whole outer boundary is Robin.
+        const bool open_airbox_identity =
+            payload->magnetic_pair_count == 0u && payload->airbox_pair_count == 0u &&
+            payload->mesh != nullptr && payload->mesh->periodic_node_pairs_len == 0u &&
+            payload->boundary_kind != nullptr &&
+            std::strcmp(payload->boundary_kind, "robin") == 0;
+        if ((!open_airbox_identity &&
+             (payload->magnetic_pair_count == 0u || payload->airbox_pair_count == 0u)) ||
             (request->poisson_airbox_magnetic_pair_count != 0u &&
              request->poisson_airbox_magnetic_pair_count != payload->magnetic_pair_count) ||
             (request->poisson_airbox_airbox_pair_count != 0u &&

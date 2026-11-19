@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -352,9 +352,12 @@ describe("LiveChartsModule resource flow", () => {
     const followRange = { mode: "follow" } as const;
     let view: ReturnType<typeof useLiveTableData> | null = null;
     function Probe({ paused }: { paused: boolean }) {
-      view = useLiveTableData({
+      const committedView = useLiveTableData({
         active: true, paused, range: followRange, targetPoints: 800, xAxisId: "step",
       });
+      useEffect(() => {
+        view = committedView;
+      }, [committedView]);
       return null;
     }
     const read = () => view!;

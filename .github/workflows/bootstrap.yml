@@ -1267,9 +1267,12 @@ jobs:
       - name: Verify managed Make native contract ordering
         run: python -B -m pytest -q scripts/test_backend_dev_build_policy.py
 
-      - name: Run canonical material library script roundtrip contracts
-        run: |
-          python -m pytest -q packages/fullmag-py/tests/test_material_assets_roundtrip.py packages/fullmag-py/tests/test_accepted_source_capture.py
+      - name: Run canonical script roundtrip contracts
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_material_assets_roundtrip.py
+          packages/fullmag-py/tests/test_accepted_source_capture.py
+          packages/fullmag-py/tests/test_stage_external_field_roundtrip.py
 
       - name: Run real Gmsh exact-layer airbox grading regressions
         run: |

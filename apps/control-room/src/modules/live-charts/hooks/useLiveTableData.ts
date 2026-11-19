@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef } from "react";
 
 import type { StudyResultSeriesIdentity } from "@/kernel/api/apiTypes";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
@@ -179,10 +179,19 @@ export function useLiveTableData({
 }) {
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const resourceEnabled = active && !paused;
-  const [stored, setStored] = useState(EMPTY_LIVE_TABLE_STATE);
+  const [stored, dispatch] = useReducer(
+    (previous: LiveTableStateWithIdentity, next: Parameters<typeof liveTableReducer>[1] | null) => {
+      if (next === null) return EMPTY_LIVE_TABLE_STATE;
+      return liveTableReducer(
+        previous.sessionScopeKey === next.sessionScopeKey ? previous : EMPTY_LIVE_TABLE_STATE,
+        next,
+      );
+    },
+    EMPTY_LIVE_TABLE_STATE,
+  );
   const state = resourceEnabled && sessionScopeKey !== null && stored.sessionScopeKey === sessionScopeKey
     ? stored : EMPTY_LIVE_TABLE_STATE;
-  if (stored !== state) setStored(EMPTY_LIVE_TABLE_STATE);
+  if (stored !== state) dispatch(null);
 
   const tableList = useTableListResource({ enabled: resourceEnabled });
   const table = useTableResource("default", { enabled: resourceEnabled });
@@ -227,18 +236,15 @@ export function useLiveTableData({
     if (selected.length !== decoded.data.columnCount) return;
     const seriesIdentity = decoded.responseMetadata;
     const identityIsStale = seriesIdentity !== undefined && responseSeriesMismatch(currentSeriesIdentity, seriesIdentity);
-    setStored((previous) => liveTableReducer(
-      previous.sessionScopeKey === sessionScopeKey ? previous : EMPTY_LIVE_TABLE_STATE,
-      {
-        expectedSeriesIdentity: currentSeriesIdentity,
-        queryKey,
-        replace,
-        requestCursor: query.cursor,
-        seriesIdentity,
-        sessionScopeKey,
-        table: chartTableWindowFromBinary({ columns: selected, decoded: decoded.data, tableId: "default" }),
-      },
-    ));
+    dispatch({
+      expectedSeriesIdentity: currentSeriesIdentity,
+      queryKey,
+      replace,
+      requestCursor: query.cursor,
+      seriesIdentity,
+      sessionScopeKey,
+      table: chartTableWindowFromBinary({ columns: selected, decoded: decoded.data, tableId: "default" }),
+    });
     if (identityIsStale) {
       const staleResponseKey = JSON.stringify([queryKey, decoded.data.revision, seriesIdentity]);
       if (rejectedBinaryIdentityRef.current !== staleResponseKey) {

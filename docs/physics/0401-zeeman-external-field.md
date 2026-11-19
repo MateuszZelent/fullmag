@@ -124,10 +124,21 @@ Validation errors include non-finite or wrong-length `B`, duplicate Zeeman terms
 field output unavailable in the selected lane. Unsupported combinations remain explicit and must
 not silently fall back to another backend or scope.
 
+A script-imported Run or Relax captures the uniform flux density active when the stage is declared.
+The Study payload carries `external_field` in tesla when it differs from the base model. An omitted
+key inherits the current base value. An explicit zero vector retains the Zeeman term, while `null`
+retains a stage without a Zeeman term. Replay applies the captured value to the stage's own
+`ProblemIR` before the existing planner conversion. Canonical script export preserves the final
+base value and reports an error if an edited sequence asks to clear a field after setting it.
+A global script rewrite override replaces the captured defaults, including with an absent term.
+Explicit per-stage values in a supplied Study pipeline take precedence over that global default.
+
 (discrete-realization)=
 ## 5. Validation strategy
 
 - Verify exact Python validation and `{"kind":"zeeman","B":[...]}` lowering.
+- Verify staged fields in the Python and SceneDocument round trips and accepted application input,
+  including an absent term, explicit zero, per-stage values, and the final base value.
 - Verify planner conversion against `MU0` in both FDM and FEM paths.
 - Verify duplicate-term rejection and fail-closed output validation.
 - Compare FDM CPU and qualified CUDA field/energy values for a uniform magnetization.
@@ -170,7 +181,9 @@ executed-device and parity evidence for the current revision.
 | Repository path | Stable symbol | Responsibility | Lane | Evidence status |
 |---|---|---|---|---|
 | `packages/fullmag-py/src/fullmag/model/energy.py` | `class Zeeman` | Public Zeeman authoring and lowering. | Python | source contract |
+| `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_export_stage_draft_with_identity` | Captures a stage-local uniform field in tesla for script-imported Run and Relax. | Python | source contract |
+| `crates/fullmag-application/src/script_stage_materialization.rs` | `apply_stage_external_field` | Applies the captured field to a stage-local IR, including an absent term. | Shared planner input | source contract |
 | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | Resolves `B / \mu_0` and validates FDM execution. | FDM CPU/GPU planner | source contract |
-| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `external_field_add_into_soa` | Adds the field to active-cell FDM LLG assembly. | FDM CPU | source contract |
-| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `external_energy_from_fields` | Reduces Zeeman energy over active cells. | FDM CPU | source contract |
+| `crates/fullmag-engine/src/fdm/cpu/fields/zeeman.rs` | `external_field_add_into_soa` | Adds the field to active-cell FDM LLG assembly. | FDM CPU | source contract |
+| `crates/fullmag-engine/src/fdm/cpu/fields/energy.rs` | `external_energy_from_fields` | Reduces Zeeman energy over active cells. | FDM CPU | source contract |
 | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `observe_state_with_antenna_field` | Builds the separate full-domain uniform `H_ext` observable. | FDM CPU | source contract; not CUDA or atomic-batch proof |

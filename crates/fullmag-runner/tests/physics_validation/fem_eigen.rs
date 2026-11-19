@@ -49,6 +49,7 @@ fn fem_eigen_smoke_completes_without_errors() {
         air_box_config: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let outputs = vec![
@@ -147,6 +148,7 @@ fn fem_eigen_lowest_mode_order_of_magnitude() {
         air_box_config: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let outputs = vec![OutputIR::EigenSpectrum {
@@ -220,6 +222,7 @@ fn fem_eigen_modes_are_non_trivial() {
         air_box_config: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let outputs = vec![
@@ -339,6 +342,7 @@ fn fem_eigen_frequency_is_stable_across_resolutions() {
             air_box_config: None,
             dmi_interface_normal: None,
             mode_tracking: None,
+            magnetostatic_bc: Default::default(),
         };
         let outputs = vec![OutputIR::EigenSpectrum {
             quantity: "eigenfrequency".to_string(),
@@ -424,6 +428,7 @@ fn fem_eigen_periodic_k_zero_runs_with_periodic_node_pairs() {
         air_box_config: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -498,6 +503,7 @@ fn fem_eigen_floquet_runs_with_phase_aware_metadata() {
         air_box_config: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -564,6 +570,7 @@ fn fem_eigen_damping_include_emits_nonzero_imaginary_frequency() {
         air_box_config: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        magnetostatic_bc: Default::default(),
     };
     let result = fullmag_runner::run_reference_fem_eigen(
         &plan,
@@ -630,6 +637,7 @@ fn fem_eigen_surface_anisotropy_runs_and_reports_term() {
         air_box_config: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        magnetostatic_bc: Default::default(),
     };
     let result = fullmag_runner::run_reference_fem_eigen(
         &plan,
@@ -705,6 +713,7 @@ fn fem_eigen_floquet_exchange_only_is_reciprocal_for_plus_minus_k() {
             air_box_config: None,
             dmi_interface_normal: None,
             mode_tracking: None,
+            magnetostatic_bc: Default::default(),
         }
     };
 
@@ -792,6 +801,7 @@ fn fem_eigen_floquet_bulk_dmi_is_nonreciprocal_for_plus_minus_k() {
             air_box_config: None,
             dmi_interface_normal: None,
             mode_tracking: None,
+            magnetostatic_bc: Default::default(),
         }
     };
 
@@ -881,6 +891,7 @@ fn fem_eigen_demag_lowers_frequency() {
             air_box_config: None,
             dmi_interface_normal: None,
             mode_tracking: None,
+            magnetostatic_bc: Default::default(),
         }
     };
 
@@ -986,6 +997,7 @@ fn fem_eigen_poisson_robin_demag_runs_on_shared_domain_mesh() {
         air_box_config: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let outputs = [OutputIR::EigenSpectrum {
@@ -1064,6 +1076,7 @@ fn eigen_bc_free_baseline() {
         air_box_config: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1171,6 +1184,7 @@ fn eigen_bc_pinned_higher_frequency() {
             air_box_config: None,
             dmi_interface_normal: None,
             mode_tracking: None,
+            magnetostatic_bc: Default::default(),
         }
     };
 
@@ -1285,6 +1299,7 @@ fn eigen_bc_periodic_requires_pairs_error() {
         air_box_config: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1374,6 +1389,7 @@ fn eigen_bc_periodic_k_zero_matches_free() {
             air_box_config: None,
             dmi_interface_normal: None,
             mode_tracking: None,
+            magnetostatic_bc: Default::default(),
         }
     };
 
@@ -1468,6 +1484,7 @@ fn floquet_k0_equals_periodic() {
             air_box_config: None,
             dmi_interface_normal: None,
             mode_tracking: None,
+            magnetostatic_bc: Default::default(),
         }
     };
 
@@ -1560,6 +1577,7 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
         air_box_config: None,
         dmi_interface_normal: None,
         mode_tracking: Some(fullmag_ir::ModeTrackingIR::default()),
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1684,6 +1702,7 @@ fn fem_eigen_single_k_dispersion_request_writes_v2_dispersion_artifact() {
         air_box_config: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(

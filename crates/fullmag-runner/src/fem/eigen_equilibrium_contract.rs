@@ -1028,6 +1028,83 @@ impl AcceptedFemRelaxStageHandoff {
         producer_provenance: FemRelaxationProducerProvenance,
         producer_provenance_json: Vec<u8>,
     ) -> Result<Self, RunError> {
+        Self::from_completed_relax_verified_exact_impl(
+            source_run_id,
+            source_stage_id,
+            source_stage_kind,
+            source_stage_is_relaxation,
+            source_plan,
+            source_mesh,
+            completion,
+            equilibrium_magnetization,
+            accepted_fields,
+            certified_fields,
+            recomputed_certificate,
+            exact_artifacts,
+            producer_provenance,
+            producer_provenance_json,
+            false,
+        )
+    }
+
+    /// Note 0830, eq-k0-forced-residual-torque: verified handoff from a relax
+    /// stage that stopped without converging, for an eigen stage that
+    /// explicitly requested `equilibrium_acceptance="force"`. The certificate
+    /// records the measured residual torque, `converged=false`, the true stop
+    /// reason and `forced=true`.
+    pub fn from_completed_relax_verified_with_exact_artifacts_and_provenance_forced(
+        source_run_id: &str,
+        source_stage_id: &str,
+        source_stage_kind: &str,
+        source_stage_is_relaxation: bool,
+        source_plan: &fullmag_ir::FemPlanIR,
+        source_mesh: &crate::types::FemMeshPayload,
+        completion: &fullmag_ir::StageCompletionIR,
+        equilibrium_magnetization: Vec<Vector3>,
+        accepted_fields: crate::types::CertifiedFemEquilibriumFields,
+        certified_fields: crate::types::CertifiedFemEquilibriumFields,
+        recomputed_certificate: crate::types::RecomputedFemLinearizationCertificateV1,
+        exact_artifacts: AcceptedFemRelaxExactArtifacts,
+        producer_provenance: FemRelaxationProducerProvenance,
+        producer_provenance_json: Vec<u8>,
+    ) -> Result<Self, RunError> {
+        Self::from_completed_relax_verified_exact_impl(
+            source_run_id,
+            source_stage_id,
+            source_stage_kind,
+            source_stage_is_relaxation,
+            source_plan,
+            source_mesh,
+            completion,
+            equilibrium_magnetization,
+            accepted_fields,
+            certified_fields,
+            recomputed_certificate,
+            exact_artifacts,
+            producer_provenance,
+            producer_provenance_json,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_completed_relax_verified_exact_impl(
+        source_run_id: &str,
+        source_stage_id: &str,
+        source_stage_kind: &str,
+        source_stage_is_relaxation: bool,
+        source_plan: &fullmag_ir::FemPlanIR,
+        source_mesh: &crate::types::FemMeshPayload,
+        completion: &fullmag_ir::StageCompletionIR,
+        equilibrium_magnetization: Vec<Vector3>,
+        accepted_fields: crate::types::CertifiedFemEquilibriumFields,
+        certified_fields: crate::types::CertifiedFemEquilibriumFields,
+        recomputed_certificate: crate::types::RecomputedFemLinearizationCertificateV1,
+        exact_artifacts: AcceptedFemRelaxExactArtifacts,
+        producer_provenance: FemRelaxationProducerProvenance,
+        producer_provenance_json: Vec<u8>,
+        forced: bool,
+    ) -> Result<Self, RunError> {
         crate::validate_recomputed_fem_linearization_certificate(
             source_plan,
             source_mesh,
@@ -1048,7 +1125,7 @@ impl AcceptedFemRelaxStageHandoff {
             producer_provenance,
             producer_provenance_json,
         )?;
-        let mut handoff = Self::from_completed_relax(
+        let mut handoff = Self::from_completed_relax_impl(
             source_run_id,
             source_stage_id,
             source_stage_kind,
@@ -1058,6 +1135,7 @@ impl AcceptedFemRelaxStageHandoff {
             completion,
             equilibrium_magnetization,
             certified_fields,
+            forced,
         )?;
         handoff.verified_replay = Some(replay);
         Ok(handoff)
@@ -1074,6 +1152,33 @@ impl AcceptedFemRelaxStageHandoff {
         equilibrium_magnetization: Vec<Vector3>,
         certified_fields: crate::types::CertifiedFemEquilibriumFields,
     ) -> Result<Self, RunError> {
+        Self::from_completed_relax_impl(
+            source_run_id,
+            source_stage_id,
+            source_stage_kind,
+            source_stage_is_relaxation,
+            source_plan,
+            source_mesh,
+            completion,
+            equilibrium_magnetization,
+            certified_fields,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_completed_relax_impl(
+        source_run_id: &str,
+        source_stage_id: &str,
+        source_stage_kind: &str,
+        source_stage_is_relaxation: bool,
+        source_plan: &fullmag_ir::FemPlanIR,
+        source_mesh: &crate::types::FemMeshPayload,
+        completion: &fullmag_ir::StageCompletionIR,
+        equilibrium_magnetization: Vec<Vector3>,
+        certified_fields: crate::types::CertifiedFemEquilibriumFields,
+        forced: bool,
+    ) -> Result<Self, RunError> {
         if source_run_id.trim().is_empty()
             || source_stage_id.trim().is_empty()
             || source_stage_kind.trim().is_empty()
@@ -1084,7 +1189,11 @@ impl AcceptedFemRelaxStageHandoff {
                     .to_string(),
             });
         }
-        let acceptance = accepted_equilibrium_criterion(completion)?;
+        let certified_acceptance = if forced {
+            None
+        } else {
+            Some(accepted_equilibrium_criterion(completion)?)
+        };
         if equilibrium_magnetization.len() != source_mesh.nodes.len()
             || equilibrium_magnetization
                 .iter()
@@ -1128,6 +1237,15 @@ impl AcceptedFemRelaxStageHandoff {
             crate::preview::mesh_quantity_active_mask("m", &source_plan.mesh)
                 .expect("magnetization has a magnetic-only spatial domain");
         validate_handoff_m0_norms(&equilibrium_magnetization, &source_magnetic_nodes)?;
+        let acceptance = match certified_acceptance {
+            Some(acceptance) => acceptance,
+            None => forced_equilibrium_criterion(
+                completion,
+                &equilibrium_magnetization,
+                &certified_fields.h_eff_a_per_m,
+                &source_magnetic_nodes,
+            )?,
+        };
         let source_signatures =
             crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(
                 source_plan,
@@ -1283,7 +1401,21 @@ impl AcceptedFemRelaxStageHandoff {
                 message: "relax_stage_handoff_v3_schema_version_mismatch".to_string(),
             });
         }
-        let accepted = accepted_equilibrium_criterion(&self.completion)?;
+        let accepted = if self.acceptance.forced {
+            let magnetic_nodes = crate::preview::mesh_quantity_active_mask("m", &plan.mesh)
+                .ok_or_else(|| RunError {
+                    message: "relax_stage_handoff_forced_acceptance_invalid: the eigen mesh has no magnetic domain"
+                        .to_string(),
+                })?;
+            forced_equilibrium_criterion(
+                &self.completion,
+                &self.equilibrium_magnetization,
+                &self.certified_fields.h_eff_a_per_m,
+                &magnetic_nodes,
+            )?
+        } else {
+            accepted_equilibrium_criterion(&self.completion)?
+        };
         if accepted != self.acceptance {
             return Err(RunError {
                 message: "relax_stage_handoff_acceptance_certificate_mismatch".to_string(),
@@ -2094,6 +2226,70 @@ fn accepted_equilibrium_criterion(
         stop_reason: completion
             .reason
             .expect("accepted completion has a stop reason"),
+        forced: false,
+    })
+}
+
+/// Relative margin between the recorded residual torque and the threshold
+/// handed to the native transverse-field gate (Rust |m x h| and C++ |h_perp|
+/// differ only by rounding).
+const FORCED_ACCEPTANCE_THRESHOLD_MARGIN: f64 = 1.0e-6;
+
+/// Note 0830, eq-k0-forced-residual-torque: a torque certificate for a relax
+/// stage that completed without converging. The certificate states the
+/// measured residual torque honestly (`converged=false`, true stop reason) and
+/// marks itself `forced`; the threshold only admits that measured torque.
+fn forced_equilibrium_criterion(
+    completion: &fullmag_ir::StageCompletionIR,
+    equilibrium_magnetization: &[Vector3],
+    h_eff_a_per_m: &[Vector3],
+    magnetic_nodes: &[bool],
+) -> Result<AcceptedEquilibriumCriterion, RunError> {
+    let invalid = |detail: &str| RunError {
+        message: format!("relax_stage_handoff_forced_acceptance_invalid: {detail}"),
+    };
+    if completion.status != "completed" {
+        return Err(invalid("the relax stage did not complete"));
+    }
+    let stop_reason = completion
+        .reason
+        .ok_or_else(|| invalid("the relax completion has no stop reason"))?;
+    if equilibrium_magnetization.len() != magnetic_nodes.len()
+        || h_eff_a_per_m.len() != magnetic_nodes.len()
+    {
+        return Err(invalid("equilibrium and field lengths differ from the mesh"));
+    }
+    let mut max_torque = 0.0_f64;
+    for ((m, h), magnetic) in equilibrium_magnetization
+        .iter()
+        .zip(h_eff_a_per_m)
+        .zip(magnetic_nodes)
+    {
+        if !*magnetic {
+            continue;
+        }
+        let torque = [
+            m[1] * h[2] - m[2] * h[1],
+            m[2] * h[0] - m[0] * h[2],
+            m[0] * h[1] - m[1] * h[0],
+        ];
+        let norm = (torque[0] * torque[0] + torque[1] * torque[1] + torque[2] * torque[2]).sqrt();
+        if !norm.is_finite() {
+            return Err(invalid("the residual torque is not finite"));
+        }
+        max_torque = max_torque.max(norm);
+    }
+    let metric_kind = fullmag_ir::StageMetricKind::MaxTorqueApm;
+    Ok(AcceptedEquilibriumCriterion {
+        criterion: "torque".to_string(),
+        metric_kind,
+        metric_value: max_torque,
+        threshold: max_torque * (1.0 + FORCED_ACCEPTANCE_THRESHOLD_MARGIN) + 1.0e-9,
+        unit: metric_kind.unit().to_string(),
+        status: completion.status.clone(),
+        converged: completion.converged,
+        stop_reason,
+        forced: true,
     })
 }
 

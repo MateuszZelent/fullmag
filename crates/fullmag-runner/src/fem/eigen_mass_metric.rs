@@ -20,6 +20,13 @@ pub(super) fn canonical_shared_domain_phases(
     topology: &MeshTopology,
     plan: &FemEigenPlanIR,
 ) -> Result<Vec<Complex64>, RunError> {
+    // open_airbox_k0 has identity classes and no Bloch phase: every node is
+    // its own representative with unit phase (note 0830).
+    if topology.periodic_node_pairs.is_empty()
+        && super::eigen_policy::open_airbox_k0_modal_requested(plan)
+    {
+        return Ok(vec![Complex64::new(1.0, 0.0); topology.n_nodes]);
+    }
     if topology.periodic_node_pairs.is_empty() {
         return Err(RunError {
             message: "shared-domain modal phase map requires periodic node pairs".to_string(),
