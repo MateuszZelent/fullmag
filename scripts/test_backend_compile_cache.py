@@ -116,7 +116,7 @@ class SharedCompileCacheTests(unittest.TestCase):
         stats = {"stats": {
             "cache_hits": {"counts": {"Rust": 410}},
             "cache_misses": {"counts": {"Rust": 12}},
-            "non_cacheable_compilations": 31,
+            "requests_not_cacheable": 31,
         }}
         calls = []
 
@@ -131,9 +131,13 @@ class SharedCompileCacheTests(unittest.TestCase):
                     self.workspace, self.build_root, self.base, backend.BACKEND_CARGO_PROFILE
                 ) as selected:
                     self.assertEqual(selected["RUSTC_WRAPPER"], str(self.sccache))
+                    # Real ccache 4.5 logs carry several counters per invocation.
                     Path(selected["CCACHE_STATSLOG"]).write_text(
-                        "# a.cpp\ndirect_cache_hit\n# b.cu\ncache_miss\n"
-                        "# c.cpp\npreprocessed_cache_hit\n# d\nunsupported_compiler_option\n",
+                        "# a.cpp\nprimary_storage_hit\ndirect_cache_hit\n"
+                        "# b.cu\nprimary_storage_miss\ndirect_cache_miss\n"
+                        "preprocessed_cache_miss\ncache_miss\n"
+                        "# c.cpp\ndirect_cache_miss\npreprocessed_cache_hit\n"
+                        "# test_mpi.cpp\npreprocessor_error\n",
                         encoding="utf-8",
                     )
         self.assertEqual(

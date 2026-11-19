@@ -3818,6 +3818,48 @@ class LiveSourceCopyErrorTests(unittest.TestCase):
                 ):
                     backend._copy_live_regular_file(source, root / "shadow/source.rs", "source.rs", entry)
 
+    def test_parallel_live_source_copies_publish_every_verified_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contents = {f"crate/file{index}.rs": f"fn f{index}() {{}}".encode() for index in range(40)}
+            inventory = backend._source_manifest_inventory(
+                BackendPackageTests._capsule("a" * 64, contents)
+            )
+            (root / "shadow" / "crate").mkdir(parents=True)
+            copies = []
+            for relative, content in contents.items():
+                source = root / "live" / relative
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_bytes(content)
+                copies.append((source, root / "shadow" / relative, relative, inventory[relative]))
+            backend._copy_live_regular_files(copies)
+            for relative, content in contents.items():
+                self.assertEqual((root / "shadow" / relative).read_bytes(), content)
+
+    def test_parallel_live_source_copy_reports_a_changed_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contents = {f"file{index}.rs": b"source" for index in range(20)}
+            inventory = backend._source_manifest_inventory(
+                BackendPackageTests._capsule("a" * 64, contents)
+            )
+            (root / "shadow").mkdir()
+            copies = []
+            for relative in contents:
+                source = root / "live" / relative
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_bytes(b"edited" if relative == "file7.rs" else b"source")
+                copies.append((source, root / "shadow" / relative, relative, inventory[relative]))
+            with self.assertRaisesRegex(backend.LiveSourceSyncChanged, "file7.rs"):
+                backend._copy_live_regular_files(copies)
+            self.assertFalse((root / "shadow" / "file7.rs").exists())
+
+    def test_workspace_filesystem_sync_falls_back_to_global_sync(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(backend.ctypes, "CDLL", side_effect=OSError("no libc")),                     patch.object(backend.os, "sync") as global_sync:
+                backend._sync_workspace_filesystem(Path(directory))
+            global_sync.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()

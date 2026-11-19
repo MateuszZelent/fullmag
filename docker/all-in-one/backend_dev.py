@@ -22,7 +22,9 @@ from __future__ import annotations
 import argparse
 import errno
 from collections.abc import Mapping
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from contextlib import contextmanager
+import ctypes
 import hashlib
 import json
 import os
@@ -1076,6 +1078,28 @@ def _live_source_path(source_root: Path, relative: str) -> Path:
     return path
 
 
+# Each copy is still atomic (temporary file + rename) and verified against the
+# manifest. Durability comes from one syncfs before the workspace marker turns
+# ``ready``; an interrupted sync leaves ``preparing`` and the next start rehashes
+# every shadow file, so per-file fsync only added journal-commit waits.
+LIVE_SOURCE_SYNC_WORKERS = 8
+
+
+def _sync_workspace_filesystem(workspace: Path) -> None:
+    """Flush the shadow workspace filesystem once before it is marked ready."""
+
+    descriptor = os.open(workspace, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        try:
+            syncfs = ctypes.CDLL(None, use_errno=True).syncfs
+        except (AttributeError, OSError):
+            syncfs = None
+        if syncfs is None or syncfs(descriptor) != 0:
+            os.sync()
+    finally:
+        os.close(descriptor)
+
+
 def _publish_shadow_bytes(target: Path, data: bytes, mode: int, label: str) -> None:
     _ensure_directory(target.parent, f"shadow source directory {target.parent}")
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
@@ -1084,7 +1108,6 @@ def _publish_shadow_bytes(target: Path, data: bytes, mode: int, label: str) -> N
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(data)
             stream.flush()
-            os.fsync(stream.fileno())
         os.chmod(temporary, mode)
         os.replace(temporary, target)
     except OSError as error:
@@ -1111,7 +1134,6 @@ def _copy_live_regular_file(source: Path, target: Path, relative: str, entry: Ma
                 digest.update(block)
                 output.write(block)
             output.flush()
-            os.fsync(output.fileno())
         after = os.fstat(source_descriptor)
         if total != entry["size"] or digest.hexdigest() != entry["sha256"] or _file_signature(before) != _file_signature(after):
             raise LiveSourceSyncChanged(f"live source changed while synchronizing: {relative}")
@@ -1122,6 +1144,37 @@ def _copy_live_regular_file(source: Path, target: Path, relative: str, entry: Ma
     finally:
         os.close(source_descriptor)
         temporary.unlink(missing_ok=True)
+
+
+def _copy_live_regular_files(copies: list[tuple[Path, Path, str, Mapping[str, Any]]]) -> None:
+    """Copy verified live files with bounded parallel reads.
+
+    Bind-mounted Windows checkouts reach the container through 9p, where each
+    open/read is a round trip; a few in-flight copies hide that latency. Target
+    directories already exist, and the first failure stops further copies.
+    """
+
+    if len(copies) <= 1:
+        for copy in copies:
+            _copy_live_regular_file(*copy)
+        return
+    iterator = iter(copies)
+    with ThreadPoolExecutor(max_workers=LIVE_SOURCE_SYNC_WORKERS) as executor:
+        pending = {executor.submit(_copy_live_regular_file, *copy)
+                   for copy in (next(iterator, None) for _ in range(LIVE_SOURCE_SYNC_WORKERS))
+                   if copy is not None}
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_EXCEPTION)
+            for future in done:
+                error = future.exception()
+                if error is not None:
+                    for remaining in pending:
+                        remaining.cancel()
+                    wait(pending)
+                    raise error
+                copy = next(iterator, None)
+                if copy is not None:
+                    pending.add(executor.submit(_copy_live_regular_file, *copy))
 
 
 def _make_shadow_source_read_only(workspace: Path, expected: Mapping[str, Mapping[str, Any]]) -> None:
@@ -1194,6 +1247,7 @@ def _sync_live_source_tree(
     }, "backend workspace owner")
 
     sparse_object_ids: dict[str, str] = {}
+    copies: list[tuple[Path, Path, str, Mapping[str, Any]]] = []
     for relative, entry in expected.items():
         target = workspace.joinpath(*PurePosixPath(relative).parts)
         _ensure_directory(target.parent, f"shadow source directory {target.parent}")
@@ -1211,7 +1265,8 @@ def _sync_live_source_tree(
                 _fail(f"live source is missing manifest file: {relative}")
             sparse_object_ids[relative] = object_id
         else:
-            _copy_live_regular_file(source, target, relative, entry)
+            copies.append((source, target, relative, entry))
+    _copy_live_regular_files(copies)
 
     sparse_blobs = _read_git_blobs(git_common_root, sparse_object_ids)
     for relative, object_id in sparse_object_ids.items():
@@ -1231,6 +1286,7 @@ def _sync_live_source_tree(
     stale_directories = {relative for relative in existing_directories if relative not in expected_directories}
     _remove_workspace_relative_entries(workspace, stale_files, stale_directories)
     _make_shadow_source_read_only(workspace, expected)
+    _sync_workspace_filesystem(workspace)
     _write_json(marker_path, {
         "schema": "fullmag.direct-compose.backend-workspace.v1",
         "state": "ready",
@@ -2077,7 +2133,7 @@ SCCACHE_CACHE_SIZE = "32G"
 CCACHE_MAX_SIZE = "16G"
 COMPILE_CACHE_TOOL_TIMEOUT_SECONDS = 60
 _CCACHE_HIT_COUNTERS = frozenset({"direct_cache_hit", "preprocessed_cache_hit"})
-_CCACHE_MISS_COUNTERS = frozenset({"cache_miss"})
+_CCACHE_MISS_COUNTER = "cache_miss"
 
 
 def _compile_cache_unavailable(reason: str) -> None:
@@ -2166,31 +2222,37 @@ def _sccache_counts(raw: bytes) -> tuple[int, int, int] | None:
         stats = json.loads(raw.decode("utf-8"))["stats"]
         hits = stats.get("cache_hits", {}).get("counts", {})
         misses = stats.get("cache_misses", {}).get("counts", {})
-        uncacheable = stats.get("non_cacheable_compilations", 0)
+        # bin/cdylib/proc-macro crates and build scripts invoke the linker.
+        uncacheable = stats.get("requests_not_cacheable", 0)
         return int(hits.get("Rust", 0)), int(misses.get("Rust", 0)), int(uncacheable)
     except (AttributeError, KeyError, TypeError, ValueError, UnicodeDecodeError):
         return None
 
 
 def _ccache_counts(stats_log: Path) -> tuple[int, int, int]:
-    """Count this build's native results from its private ccache stats log."""
+    """Count this build's native compilations from its private stats log.
 
-    hits = misses = other = 0
+    ccache appends one ``# <input>`` header per invocation followed by all of
+    its counters (for example ``direct_cache_miss`` and ``cache_miss``).
+    """
+
     try:
         lines = stats_log.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return 0, 0, 0
+    invocations: list[set[str]] = []
     for line in lines:
         counter = line.strip()
-        if not counter or counter.startswith("#"):
-            continue
-        if counter in _CCACHE_HIT_COUNTERS:
-            hits += 1
-        elif counter in _CCACHE_MISS_COUNTERS:
-            misses += 1
-        else:
-            other += 1
-    return hits, misses, other
+        if counter.startswith("#"):
+            invocations.append(set())
+        elif counter and invocations:
+            invocations[-1].add(counter)
+    hits = sum(1 for counters in invocations if counters & _CCACHE_HIT_COUNTERS)
+    misses = sum(
+        1 for counters in invocations
+        if _CCACHE_MISS_COUNTER in counters and not counters & _CCACHE_HIT_COUNTERS
+    )
+    return hits, misses, len(invocations) - hits - misses
 
 
 @contextmanager
