@@ -1,4 +1,4 @@
-"""Matched-torque comparison using a prescribed Spin Hall source."""
+"""CoFeB(1.7 nm)/beta-W(4 nm) comparison with prescribed Spin Hall torque."""
 
 from math import cos, pi, radians, sin
 
@@ -8,10 +8,13 @@ GRID = (512, 256, 1)
 SIZE = (1600e-9, 800e-9, 1.7e-9)
 CELL = (3.125e-9, 3.125e-9, 1.7e-9)
 FIELD_AZIMUTH = radians(88.0)
-# Positive x is the drive axis. The normal from HM to FM is +z.
-# With sigma = z cross x = +y, negative current flows along -x.
-XI_DL = 0.21  # Assumed effective spin Hall efficiency, including transmission.
-J_HM = -(0.21 / XI_DL) * 2.6e10
+# W is below CoFeB. Positive conventional current flows along x, so the
+# fixed polarization axis z cross x is +y. W's negative sign enters via xi.
+# Set the effective efficiency to -0.21 for the matched-torque comparison.
+# In a transport calculation the bulk Hall angle and interface transmission
+# contribute separately. The W layer is implicit in this prescribed source.
+XI_DL = -0.21
+J_HM = 2.6e10  # A/m² in W during the pulse
 PREPARATION_DURATION = 20e-9
 BEFORE_PULSE_DURATION = 50e-9  # Advance the physical clock from 20 to 70 ns.
 PULSE_DURATION = 200e-9
