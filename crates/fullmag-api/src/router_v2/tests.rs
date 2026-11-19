@@ -22940,6 +22940,7 @@ async fn prepared_absorber_fixture(region: &str) -> (Arc<AppState>, tempfile::Te
 study = fm.study("absorber")
 study.engine("fdm")
 study.device("cpu", precision="double")
+study.universe(mode="manual", size=(40e-9, 5e-9, 5e-9), center=(0, 0, 0), padding=(0, 0, 0))
 study.cell(5e-9, 5e-9, 5e-9)
 film = study.geometry(fm.Box(40e-9, 5e-9, 5e-9), name="film")
 film.Ms = 800e3
@@ -22956,10 +22957,16 @@ study.stages.add_run(stage_id="run", until=1e-12)
         backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
         mode: "strict".into(), minimum_resources: None,
     };
-    let problem = crate::script::scene_document_to_problem_ir(&state.repo_root, workspace.path(), &scene, &execution).unwrap();
+    let config = crate::script::scene_document_to_prepared_script_config(
+        &state.repo_root, workspace.path(), &scene, &execution,
+    ).unwrap();
+    let mut problem = config.ir;
+    problem.geometry_assets = problem.geometry_assets.or(config.shared_geometry_assets);
+    let problem = fullmag_application::bind_declared_execution(&problem, vec![]).unwrap();
     let plan = fullmag_plan::plan(&problem).unwrap();
-    // Use the same compact metadata as the CLI's real Build Grid publication.
+    // Desktop Build Grid publishes the voxelized universe and its compact summary.
     let fullmag_ir::BackendPlanIR::Fdm(fdm) = &plan.backend_plan else { panic!("expected FDM fixture") };
+    assert_eq!(fdm.active_mask.as_deref(), Some([true; 8].as_slice()));
     let layout = fullmag_runner::live_fdm_grid_layout(fdm);
     let (scope, mesh_revision) = {
         let mut current = state.current_live_state.write().await;
@@ -23012,6 +23019,10 @@ async fn absorbing_boundary_patch_moves_and_clears_live_alpha_without_rebuilding
         let current = state.current_live_state.read().await;
         let snapshot = current.as_ref().unwrap();
         assert_eq!(snapshot.mesh_revision, mesh_revision);
+        let fingerprint = snapshot.metadata.as_ref().unwrap()
+            .pointer("/execution_plan/backend_plan/grid_certificate/grid_fingerprint").unwrap().as_str().unwrap();
+        let field = snapshot.latest_fields.get("mat_alpha").unwrap();
+        assert_eq!(field["layout"]["grid_fingerprint"].as_str(), Some(fingerprint));
         assert_eq!(snapshot.scene_document.as_ref().unwrap().objects[0].absorbing_boundary.is_some(), face.is_some());
     }
 }
