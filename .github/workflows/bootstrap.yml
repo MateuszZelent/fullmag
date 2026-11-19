@@ -124,6 +124,12 @@ jobs:
       - name: Run material provenance and authoring roundtrip contracts
         run: cargo test --locked -p fullmag-authoring --lib material_library_roundtrip
 
+      - name: Verify interleaved Zarr sample indexes after writer drain
+        shell: bash
+        run: |
+          cargo test --locked -p fullmag-runner --lib artifact_pipeline::tests::zarr_field_sample_indexes_survive_interleaved_buffer_flushes -- --exact | tee "$RUNNER_TEMP/zarr-sample-index-test.log"
+          grep -F "test result: ok. 1 passed" "$RUNNER_TEMP/zarr-sample-index-test.log"
+
       - name: Check FEM CPU runner contracts
         # Type-check the CPU native lane independently of fem-gpu, including
         # its tests. This does not link or qualify the MFEM runtime.
