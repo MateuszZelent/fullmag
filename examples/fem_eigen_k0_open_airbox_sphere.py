@@ -54,14 +54,16 @@ body.mesh(maximum_element_size=MAG_HMAX_M, order=1)
 study.b_ext(BIAS_T, 0.0, 0.0)
 study.exchange()
 study.demag(realization="poisson_robin")
-study.fem_demag_solver(rtol=1e-10, max_iterations=1000)
+study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1e-12, max_iterations=1000)
 study.build_domain_mesh()
 
 study.save("spectrum")
 study.save("mode", indices=(0,))
 
 # %% Relax, then the open-airbox k=0 modal stage
-study.stages.add_relax(algorithm="llg_overdamped", dt=1e-15, max_steps=8, tolA=1e-3, relax_alpha=1.0)
+# A faceted sphere is not exactly uniform at equilibrium; the eigen stage
+# requires an accepted (converged) relaxation handoff.
+study.stages.add_relax(algorithm="projected_gradient_bb", max_steps=20_000, tolT=1e-6)
 study.stages.add_eigenmodes(
     count=1,
     target="nearest",
