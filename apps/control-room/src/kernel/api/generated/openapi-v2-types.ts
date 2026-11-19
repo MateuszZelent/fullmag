@@ -17428,6 +17428,7 @@ export interface components {
             rows: number[][];
             /** Format: int64 */
             schema_revision: number;
+            series?: null | components["schemas"]["ScalarSeriesIdentity"];
             table_id: string;
             /** Format: int64 */
             total_rows: number;
@@ -27756,6 +27757,8 @@ export interface operations {
             /** @description Binary table row window */
             200: {
                 headers: {
+                    /** @description none, or v1 followed by base64url JSON for the exact accepted scalar series owning this payload */
+                    "x-fullmag-table-series"?: string;
                     [name: string]: unknown;
                 };
                 content: {

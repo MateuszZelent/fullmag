@@ -47666,6 +47666,17 @@
             "minimum": 0,
             "type": "integer"
           },
+          "series": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScalarSeriesIdentity",
+                "description": "Exact accepted worker series owning the live rows, when verified."
+              }
+            ]
+          },
           "table_id": {
             "type": "string"
           },
@@ -67870,7 +67881,15 @@
                 }
               }
             },
-            "description": "Binary table row window"
+            "description": "Binary table row window",
+            "headers": {
+              "x-fullmag-table-series": {
+                "description": "none, or v1 followed by base64url JSON for the exact accepted scalar series owning this payload",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "description": "Unknown table id"
