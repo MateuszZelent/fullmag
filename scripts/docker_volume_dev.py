@@ -2906,6 +2906,12 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             service["volumes"].append({"type": "volume", "source": compose_name,
                 "target": descriptor["target"], "volume": {"nocopy": True, "subpath": subpath}})
             service["environment"][variable] = descriptor["target"]
+        # Backend-only content-addressed compiler cache (ADR 0085). The
+        # frontend never receives it; the initializer created the subpath.
+        compile_cache = shared.compile_cache_mount_descriptor(cache["project_id"])
+        backend["volumes"].append({"type": "volume", "source": "shared-cargo",
+            "target": compile_cache["target"], "volume": dict(compile_cache["volume"])})
+        backend["environment"]["FULLMAG_SHARED_COMPILE_CACHE"] = compile_cache["target"]
         operation["receipt"]["shared_storage"] = {
             "schema": shared.SCHEMA, "project_id": cache["project_id"],
             "package_group": cache["shared_package_subpath"],

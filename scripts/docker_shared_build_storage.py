@@ -42,6 +42,9 @@ PACKAGE_ROOT_TARGET = "/opt/fullmag/package"
 SHARED_BACKEND_TARGET = "/opt/fullmag/shared-backend"
 SHARED_CARGO_TARGET = "/opt/fullmag/shared-cargo"
 SHARED_PNPM_TARGET = "/opt/fullmag/shared-pnpm"
+# Content-addressed compiler caches (ADR 0085) live beside CARGO_HOME in the
+# project-scoped Cargo volume: Rust through sccache, C/C++/CUDA through ccache.
+SHARED_COMPILE_CACHE_TARGET = "/opt/fullmag/shared-compile-cache"
 SHARED_GROUPS_DIRECTORY = "groups"
 SHARED_ARTIFACTS_DIRECTORY = "artifacts"
 SHARED_LOCKS_DIRECTORY = "locks"
@@ -49,6 +52,7 @@ SHARED_STAGING_DIRECTORY = "staging"
 SHARED_GC_LOCK = ".gc.lock"
 CARGO_HOME_DIRECTORY = "home"
 CARGO_CACHE_DIRECTORIES = ("registry", "git")
+COMPILE_CACHE_DIRECTORY = "compile-cache"
 PNPM_STORE_DIRECTORY = "store"
 OWNER_UID = 65532
 OWNER_GID = 65532
@@ -171,6 +175,19 @@ def dependency_mount_descriptors(project_id: str) -> list[dict[str, Any]]:
         }
         for role in (CARGO_ROLE, PNPM_ROLE)
     ]
+
+
+def compile_cache_mount_descriptor(project_id: str) -> dict[str, Any]:
+    """Describe the backend-only compiler cache subpath of the Cargo volume."""
+
+    descriptor = volume_descriptors(project_id)[CARGO_ROLE]
+    return {
+        "type": "volume",
+        "source": descriptor["name"],
+        "target": SHARED_COMPILE_CACHE_TARGET,
+        "read_only": False,
+        "volume": {"nocopy": True, "subpath": COMPILE_CACHE_DIRECTORY},
+    }
 
 
 def initializer_labels(project_id: str, unit_key: str) -> dict[str, str]:
@@ -367,6 +384,13 @@ _INITIALIZER_PYTHON = textwrap.dedent(r'''
                     os.close(directory)
             finally:
                 os.close(cargo_home)
+            compile_cache = _ensure_directory(cargo, "compile-cache", uid, gid)
+            try:
+                for component in ("sccache", "ccache"):
+                    directory = _ensure_directory(compile_cache, component, uid, gid)
+                    os.close(directory)
+            finally:
+                os.close(compile_cache)
             store = _ensure_directory(pnpm, "store", uid, gid)
             os.close(store)
             return {

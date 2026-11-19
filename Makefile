@@ -157,6 +157,9 @@ install-cli install-cli-dev install-cli-static:
 	managed_export_timeout="$${FULLMAG_MANAGED_FEM_GPU_EXPORT_TIMEOUT_SEC:-1800}"; \
 	cpu_only="$${FULLMAG_BUILD_CPU_ONLY:-0}"; \
 	build_incremental="$(FULLMAG_BUILD_INCREMENTAL)"; \
+	case "$${RUSTC_WRAPPER:-}" in \
+		*/sccache|sccache) build_incremental=0; echo "Shared sccache compiler cache active; Cargo incremental compilation disabled (ADR 0085)." ;; \
+	esac; \
 	cargo_target_dir="$${FULLMAG_CARGO_TARGET_DIR:?storage resolver did not provide FULLMAG_CARGO_TARGET_DIR}"; \
 	backend_cargo_profile="$${FULLMAG_BACKEND_CARGO_PROFILE:-release}"; \
 	case "$$backend_cargo_profile" in \

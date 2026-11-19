@@ -55,6 +55,9 @@ fizyczną tożsamość prywatnego volume.
    Nieudany build może pozostawić najwyżej jedną generację w tym samym katalogu
    do następnego prebuild; nie twórz volume’ów ani katalogów per-profile/attempt,
    runtime uruchamia verified package, a zmiana źródeł może wymagać pełnej kompilacji.
+   Koszt tej pełnej kompilacji ogranicza project-scoped cache kompilatora z
+   [ADR 0085](0085-shared-compile-cache-for-docker-dev.md); prywatne outputs nadal
+   są czyszczone zgodnie z tym punktem.
 
 ## Migracja i zgodność wsteczna
 

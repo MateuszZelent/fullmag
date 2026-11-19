@@ -12,6 +12,7 @@ dopóki nie istnieje receipt z docelowego hosta.
 | --- | --- | --- |
 | Obraz toolchaina | zgodne wejścia i immutable image ID | warstwy BuildKit |
 | Cargo registry/git | projekt, named volume `fullmag-shared-cargo-v1-*` | Cargo zarządza blokadami swojego cache; bez hostowych credentials/config |
+| Cache kompilatora (sccache/ccache) | projekt, subpath `compile-cache/` tego samego wolumenu `fullmag-shared-cargo-v1-*`, tylko usługa `backend` | Narzędzia współdzielą katalog z atomowym zapisem wpisów i własnym LRU; klucze obejmują kompilator i treść wejść ([ADR 0085](../adr/0085-shared-compile-cache-for-docker-dev.md)) |
 | Store pnpm | projekt, `fullmag-shared-pnpm-v1-*` | flock tylko podczas instalacji; import `copy` |
 | Gotowy pakiet backendu | dokładny klucz wejść, `fullmag-shared-packages-v1-*` | jeden publisher na klucz; atomowa publikacja i walidacja SHA-256 |
 | Bieżący pakiet / rollback | `groups/<unit_key>` w wolumenie pakietów | regularne, zapieczętowane hardlinki do payloadu; prywatne receipty |

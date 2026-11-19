@@ -120,6 +120,12 @@ class SharedBuildStorageTests(unittest.TestCase):
             [mount["volume"]["subpath"] for mount in runtime_dependencies],
             [storage.CARGO_HOME_DIRECTORY, storage.PNPM_STORE_DIRECTORY],
         )
+        compile_cache = storage.compile_cache_mount_descriptor("fullmag")
+        self.assertEqual(compile_cache["source"], descriptors[storage.CARGO_ROLE]["name"])
+        self.assertEqual(compile_cache["target"], storage.SHARED_COMPILE_CACHE_TARGET)
+        self.assertEqual(compile_cache["volume"],
+                         {"nocopy": True, "subpath": storage.COMPILE_CACHE_DIRECTORY})
+        self.assertFalse(compile_cache["read_only"])
         self.assertEqual(
             storage.initializer_environment(key)["FULLMAG_SHARED_BACKEND_GROUP"],
             f"groups/{key}",
@@ -195,6 +201,9 @@ class SharedBuildStorageTests(unittest.TestCase):
                 cargo / "home",
                 cargo / "home" / "registry",
                 cargo / "home" / "git",
+                cargo / "compile-cache",
+                cargo / "compile-cache" / "sccache",
+                cargo / "compile-cache" / "ccache",
                 pnpm / "store",
             ]
             for path in expected:

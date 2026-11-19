@@ -57,5 +57,6 @@ Raporter zachowuje ten manifest w `installed_manifest`; nie zamienia deklaracji 
 | Node | `tools.node` + `artifact_hashes.node` | osobny SHA dla amd64/arm64 |
 | CMake | `tools.cmake` | wersja używana przez instalację pip |
 | Rust | `tools.rust` | `nightly` jest kanałem, bez exact commit |
+| sccache, ccache | `FULLMAG_SCCACHE_VERSION` + `FULLMAG_SCCACHE_SHA256_*` w Dockerfile; `actual.compile_cache` | sccache: przypięte wydanie GitHub z SHA-256 (Apache-2.0); ccache: pakiet Ubuntu obrazu bazowego (GPL-3.0). Tylko cache kompilacji Docker DEV, [ADR 0085](../docs/adr/0085-shared-compile-cache-for-docker-dev.md) |
 
 `latest` służy do obserwacji różnicy między pinem a bieżącym wydaniem. Nie aktualizuje zależności automatycznie, nie zmienia manifestu i nie zastępuje testów, manifestu obrazu ani kwalifikacji FEM/GPU.

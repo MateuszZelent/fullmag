@@ -227,7 +227,9 @@ Przed każdym recreate ponów kontrolę aktywności i receipts. Działające gru
 innych wątków odłóż do ich naturalnego zatrzymania; brak drain lub osierocony
 lease wymaga właściwego recovery, bez kasowania markerów i powtarzania Solve.
 Cargo target/CMake, node_modules i `.next` pozostają prywatne w subpaths tej
-grupy. Przy cleanupie pojedynczego zadania nie usuwaj całego `fullmag-shared-*`;
+grupy. Adresowany treścią cache kompilatora (sccache/ccache) jest project-scoped:
+`compile-cache/` w `fullmag-shared-cargo-v1-*`, tylko dla backendu
+([ADR 0085](docs/adr/0085-shared-compile-cache-for-docker-dev.md)). Przy cleanupie pojedynczego zadania nie usuwaj całego `fullmag-shared-*`;
 prywatny package jest subpath `groups/<unit_key>`. `just docker-dev-maintain-cache
 <attempt> <config_sha256> <source_root>` wykonuj wyłącznie z aktualnymi pinami
 i kontrolą odbiorców; nieznany konsument lub aktywna publikacja wymaga

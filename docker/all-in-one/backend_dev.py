@@ -270,6 +270,14 @@ def _log_phase(phase: str, state: str, **fields: object) -> None:
             "cargo_jobs",
             "native_parallelism",
             "native_fallback_jobs",
+            "rust",
+            "native",
+            "rust_hits",
+            "rust_misses",
+            "rust_uncacheable",
+            "native_hits",
+            "native_misses",
+            "native_uncacheable",
         }
     )
     parts = [f"phase={phase}", f"state={state}"]
@@ -2057,6 +2065,177 @@ def _cargo_home(build_root: Path) -> str:
     _assert_no_links(Path(value), "shared Cargo cache")
     _ensure_directory(Path(value), "shared Cargo cache")
     return value
+
+
+# ADR 0085: project-shared, content-addressed compiler caches. The launcher
+# mounts the backend-only ``compile-cache`` subpath of the shared Cargo volume.
+# Both tools key every entry by compiler identity and input content, so a hit
+# reproduces a cold compile; any cache failure only falls back to an uncached
+# build and never changes the package identity.
+SHARED_COMPILE_CACHE_ROOT = "/opt/fullmag/shared-compile-cache"
+SCCACHE_CACHE_SIZE = "32G"
+CCACHE_MAX_SIZE = "16G"
+COMPILE_CACHE_TOOL_TIMEOUT_SECONDS = 60
+_CCACHE_HIT_COUNTERS = frozenset({"direct_cache_hit", "preprocessed_cache_hit"})
+_CCACHE_MISS_COUNTERS = frozenset({"cache_miss"})
+
+
+def _compile_cache_unavailable(reason: str) -> None:
+    _log_phase("compile-cache", "disabled", reason=reason)
+
+
+def _shared_compile_cache_environment(
+    workspace: Path, build_root: Path, environment: Mapping[str, str]
+) -> dict[str, str] | None:
+    """Return wrapper variables for the mounted shared cache, or None.
+
+    A missing mount, tool or unsafe directory leaves the ordinary uncached
+    build unchanged.
+    """
+
+    configured = os.environ.get("FULLMAG_SHARED_COMPILE_CACHE", "")
+    if not configured:
+        _compile_cache_unavailable("not-mounted")
+        return None
+    if configured != SHARED_COMPILE_CACHE_ROOT:
+        _compile_cache_unavailable("unexpected-mount")
+        return None
+    root = Path(configured)
+    directories = {name: root / name for name in ("sccache", "ccache")}
+    for directory in directories.values():
+        try:
+            _assert_no_links(directory, "shared compile cache")
+            metadata = directory.lstat()
+        except (BackendBuildError, OSError):
+            _compile_cache_unavailable("unsafe-directory")
+            return None
+        if not stat.S_ISDIR(metadata.st_mode) or not os.access(directory, os.W_OK | os.X_OK):
+            _compile_cache_unavailable("unwritable-directory")
+            return None
+    search_path = environment.get("PATH", os.defpath)
+    sccache = shutil.which("sccache", path=search_path)
+    ccache = shutil.which("ccache", path=search_path)
+    if sccache is None or ccache is None:
+        _compile_cache_unavailable("tool-missing")
+        return None
+    temporary = build_root / "tmp"
+    return {
+        "RUSTC_WRAPPER": sccache,
+        # sccache refuses incremental crates. The private target is cleaned
+        # before every compile (ADR 0076), so incremental state is never reused.
+        "CARGO_INCREMENTAL": "0",
+        "SCCACHE_DIR": str(directories["sccache"]),
+        "SCCACHE_CACHE_SIZE": SCCACHE_CACHE_SIZE,
+        # The session stops the server explicitly; a long native build step
+        # can leave rustc idle for longer than the default timeout.
+        "SCCACHE_IDLE_TIMEOUT": "0",
+        "SCCACHE_ERROR_LOG": str(temporary / "sccache-error.log"),
+        "CCACHE_DIR": str(directories["ccache"]),
+        "CCACHE_MAXSIZE": CCACHE_MAX_SIZE,
+        "CCACHE_BASEDIR": str(workspace),
+        # Hash the compiler binary itself, not its mtime: toolchain images are
+        # rebuilt, and a changed gcc/nvcc must never reuse older objects.
+        "CCACHE_COMPILERCHECK": "content",
+        "CCACHE_STATSLOG": str(temporary / "ccache-stats.log"),
+        "CMAKE_C_COMPILER_LAUNCHER": ccache,
+        "CMAKE_CXX_COMPILER_LAUNCHER": ccache,
+        "CMAKE_CUDA_COMPILER_LAUNCHER": ccache,
+    }
+
+
+def _compile_cache_tool(
+    arguments: list[str], environment: Mapping[str, str], *, capture: bool = False
+) -> subprocess.CompletedProcess[bytes] | None:
+    # The started sccache server is a daemon: never hand it a pipe that the
+    # caller would wait on.
+    output = subprocess.PIPE if capture else subprocess.DEVNULL
+    try:
+        return subprocess.run(
+            arguments, env=dict(environment), stdin=subprocess.DEVNULL,
+            stdout=output, stderr=subprocess.DEVNULL,
+            timeout=COMPILE_CACHE_TOOL_TIMEOUT_SECONDS, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _sccache_counts(raw: bytes) -> tuple[int, int, int] | None:
+    """Return Rust (hits, misses, uncacheable) from ``--stats-format=json``."""
+
+    try:
+        stats = json.loads(raw.decode("utf-8"))["stats"]
+        hits = stats.get("cache_hits", {}).get("counts", {})
+        misses = stats.get("cache_misses", {}).get("counts", {})
+        uncacheable = stats.get("non_cacheable_compilations", 0)
+        return int(hits.get("Rust", 0)), int(misses.get("Rust", 0)), int(uncacheable)
+    except (AttributeError, KeyError, TypeError, ValueError, UnicodeDecodeError):
+        return None
+
+
+def _ccache_counts(stats_log: Path) -> tuple[int, int, int]:
+    """Count this build's native results from its private ccache stats log."""
+
+    hits = misses = other = 0
+    try:
+        lines = stats_log.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return 0, 0, 0
+    for line in lines:
+        counter = line.strip()
+        if not counter or counter.startswith("#"):
+            continue
+        if counter in _CCACHE_HIT_COUNTERS:
+            hits += 1
+        elif counter in _CCACHE_MISS_COUNTERS:
+            misses += 1
+        else:
+            other += 1
+    return hits, misses, other
+
+
+@contextmanager
+def _shared_compile_cache(
+    workspace: Path, build_root: Path, environment: Mapping[str, str], cargo_profile: str
+):
+    """Yield the Make environment, with the shared compiler caches when usable."""
+
+    if cargo_profile != BACKEND_CARGO_PROFILE:
+        yield dict(environment)
+        return
+    variables = _shared_compile_cache_environment(workspace, build_root, environment)
+    if variables is None:
+        yield dict(environment)
+        return
+    selected = {**environment, **variables}
+    stats_log = Path(variables["CCACHE_STATSLOG"])
+    try:
+        stats_log.unlink(missing_ok=True)
+    except OSError:
+        _compile_cache_unavailable("stats-log-unavailable")
+        yield dict(environment)
+        return
+    sccache = variables["RUSTC_WRAPPER"]
+    started = _compile_cache_tool([sccache, "--start-server"], selected)
+    if started is None or started.returncode != 0:
+        _compile_cache_unavailable("sccache-server-unavailable")
+        yield dict(environment)
+        return
+    _log_phase("compile-cache", "enabled", rust="sccache", native="ccache")
+    try:
+        yield selected
+    finally:
+        shown = _compile_cache_tool([sccache, "--show-stats", "--stats-format=json"], selected, capture=True)
+        rust = _sccache_counts(shown.stdout) if shown is not None and shown.returncode == 0 else None
+        _compile_cache_tool([sccache, "--stop-server"], selected)
+        native_hits, native_misses, native_other = _ccache_counts(stats_log)
+        fields: dict[str, object] = {
+            "native_hits": native_hits,
+            "native_misses": native_misses,
+            "native_uncacheable": native_other,
+        }
+        if rust is not None:
+            fields.update(rust_hits=rust[0], rust_misses=rust[1], rust_uncacheable=rust[2])
+        _log_phase("compile-cache", "stats", **fields)
 
 
 def _build_environment(
@@ -6166,7 +6345,8 @@ def _prepare_locked(
     assert build_log is not None
     if on_actual_build is not None:
         on_actual_build()
-    return_code = _run_canonical_make(command, workspace, environment, build_log)
+    with _shared_compile_cache(workspace, build_root, environment, cargo_profile) as make_environment:
+        return_code = _run_canonical_make(command, workspace, make_environment, build_log)
     if direct_install:
         _finish_failed_make_attempt(build_root, output, return_code)
     if direct_install:

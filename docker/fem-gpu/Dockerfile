@@ -527,6 +527,37 @@ RUN set -eu; \
     python3 -c 'import json,os,sys; from pathlib import Path; p=Path(sys.argv[1]); value=json.loads(p.read_text()); declared=value.setdefault("declared", {}); actual=value.setdefault("actual", {}); declared["cupti"]={"version":os.environ["FULLMAG_CUPTI_VERSION"],"api_version":int(os.environ["FULLMAG_CUPTI_API_VERSION"]),"redistribution_url":os.environ["FULLMAG_CUPTI_REDIST_URL"],"redistribution_archive_sha256":os.environ["FULLMAG_CUPTI_REDIST_SHA256"]}; actual["cupti"]={"version":os.environ["FULLMAG_CUPTI_VERSION"],"api_version":int(os.environ["FULLMAG_CUPTI_API_VERSION"]),"library_path":os.environ["FULLMAG_CUPTI_LIBRARY_PATH"],"library_sha256":os.environ["FULLMAG_CUPTI_LIBRARY_SHA256"]}; p.write_text(json.dumps(value,indent=2,sort_keys=True)+chr(10))' \
       "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
 
+# DOC-ANCHOR: shared-compile-cache-tools (ADR 0085)
+# Content-addressed compiler caches for the Docker DEV backend build: sccache
+# wraps rustc, ccache launches the native C/C++/CUDA compilers. Both key every
+# entry by compiler identity and input content. Kept after the heavy layers so
+# a version bump rebuilds only this tail.
+ARG FULLMAG_SCCACHE_VERSION=0.18.0
+ARG FULLMAG_SCCACHE_SHA256_AMD64=45f1447fbe231e3037bde351ef70677dd212216c8d62ae7ca409fecc4d6acc89
+ARG FULLMAG_SCCACHE_SHA256_ARM64=2b3284d5da3b46a47dc4229e75bb7b88ac4aa99c8d754fb7d2f84997e5a4354a
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) sccache_target=x86_64-unknown-linux-musl; sccache_sha256="${FULLMAG_SCCACHE_SHA256_AMD64}" ;; \
+      arm64) sccache_target=aarch64-unknown-linux-musl; sccache_sha256="${FULLMAG_SCCACHE_SHA256_ARM64}" ;; \
+      *) echo "Unsupported sccache architecture: $(dpkg --print-architecture)" >&2; exit 2 ;; \
+    esac; \
+    sccache_name="sccache-v${FULLMAG_SCCACHE_VERSION}-${sccache_target}"; \
+    curl -fsSL --connect-timeout 30 --max-time 600 --retry 2 --retry-delay 2 --retry-connrefused \
+      -o "/tmp/${sccache_name}.tar.gz" \
+      "https://github.com/mozilla/sccache/releases/download/v${FULLMAG_SCCACHE_VERSION}/${sccache_name}.tar.gz"; \
+    echo "${sccache_sha256}  /tmp/${sccache_name}.tar.gz" | sha256sum -c -; \
+    tar -xzf "/tmp/${sccache_name}.tar.gz" -C /tmp "${sccache_name}/sccache"; \
+    install -m 0755 "/tmp/${sccache_name}/sccache" /usr/local/bin/sccache; \
+    rm -rf "/tmp/${sccache_name}" "/tmp/${sccache_name}.tar.gz"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ccache; \
+    rm -rf /var/lib/apt/lists/*; \
+    test "$(command -v ccache)" = /usr/bin/ccache; \
+    sccache --version; \
+    ccache --version | head -n 1; \
+    python3 -c 'import json,re,subprocess,sys; from pathlib import Path; p=Path(sys.argv[1]); value=json.loads(p.read_text()); version=lambda command, pattern: re.search(pattern, subprocess.check_output(command, text=True)).group(1); value.setdefault("actual", {})["compile_cache"]={"sccache":version(["sccache","--version"], r"sccache ([0-9][^ \n]*)"),"ccache":version(["ccache","--version"], r"ccache version ([0-9][^ \n]*)")}; p.write_text(json.dumps(value,indent=2,sort_keys=True)+chr(10))' \
+      "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
+
 ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"
 ENV FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}
 
