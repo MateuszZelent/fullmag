@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 import tempfile
@@ -75,6 +76,15 @@ class GatePlanTests(unittest.TestCase):
             {"bootstrap": True, "contract_guard": True, "docs": True},
         )
 
+    def test_unsupported_glob_syntax_fails_closed(self):
+        rules = ci_required.load_rules()
+        rules["abl_live_browser"][0] = "apps/control-room/?/app.ts"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rules.json"
+            path.write_text(json.dumps(rules), encoding="utf-8")
+            with self.assertRaises(ci_required.GateSelectionError):
+                ci_required.load_rules(path)
+
     def test_path_patterns_cover_root_and_nested_globstar_paths(self):
         self.assertTrue(ci_required.path_matches("README.md", "**/README.md"))
         self.assertTrue(ci_required.path_matches("a/b/README.md", "**/README.md"))
@@ -115,10 +125,7 @@ class GatePlanTests(unittest.TestCase):
             rules,
             event_name="pull_request",
         )
-        self.assertTrue(plan["bootstrap"])
-        self.assertTrue(plan["contract_guard"])
-        self.assertTrue(plan["documentation"])
-        self.assertTrue(plan["python"])
+        self.assertTrue(all(plan.values()))
 
     def test_docs_only_plan_allows_only_the_planned_bootstrap_skip(self):
         expected = {
