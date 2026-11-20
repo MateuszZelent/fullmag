@@ -11,6 +11,8 @@ import {
   Gauge,
   Layers,
   Maximize,
+  Orbit,
+  Plane,
   Settings,
   Sparkles,
 } from "lucide-react";
@@ -36,13 +38,30 @@ import {
   VIEWPORT_3D_QUALITY_PROFILE_SUMMARIES,
 } from "@/shared/viewport3dQualityLabels";
 
-import { useViewport3DCommandState } from "../viewport3dStore";
+import { useViewport3DCommandState, viewport3dStore } from "../viewport3dStore";
 import { selectViewport3DRenderMode } from "./Viewport3DVisualizationModeControl";
 
 import { VIEW_DIRECTION_COMMANDS } from "../viewport3dViewDirections";
 import type { Viewport3DVisualProfileId } from "../viewport3dVisualProfile";
 
 const ICON_SIZE = 16;
+
+/* Orbit turns the scene around its target; a free camera flies with the
+   wheel (through objects too) and looks around from where it stands. */
+const CAMERA_MODES = [
+  {
+    description: "Orbit: drag turns the view around the model; the wheel zooms towards it.",
+    icon: Orbit,
+    label: "Orbit",
+    value: "object",
+  },
+  {
+    description: "Free camera: the wheel flies forward and back at a steady speed, also into and through objects; drag looks around from the camera.",
+    icon: Plane,
+    label: "Free camera",
+    value: "camera",
+  },
+] as const;
 
 /* Scientific keeps exact field colors; Presentation adds studio light,
    soft shadows, ambient occlusion and tone mapping. */
@@ -81,7 +100,7 @@ export function Viewport3DToolbar({
   layersContent,
   fitDisabledReason,
 }: Viewport3DToolbarProps) {
-  const { appearance } = useViewport3DCommandState();
+  const { appearance, widgets } = useViewport3DCommandState();
   const toolbarRef = useRef<HTMLDivElement>(null);
   const toolbarKeyDown = useToolbarRovingFocus(toolbarRef);
   const fitReason = fitDisabledReason?.trim() || null;
@@ -218,6 +237,29 @@ export function Viewport3DToolbar({
               {layersContent}
             </PopoverContent>
           </Popover>
+        </div>
+
+        <Separator className="fm-viewport-3d-toolbar__separator" orientation="vertical" />
+
+        <div aria-label="Camera mode" className="fm-viewport-3d-toolbar__group fm-viewport-3d-toolbar__mode" role="radiogroup">
+          {CAMERA_MODES.map(({ description, icon: Icon, label, value }) => (
+            <ToolbarTooltip content={description} key={value}>
+              <Button
+                aria-checked={widgets.rotationMode === value}
+                aria-label={label}
+                className="fm-viewport-3d-toolbar__button fm-viewport-3d-toolbar__mode-item"
+                data-camera-mode={value}
+                role="radio"
+                size="icon"
+                type="button"
+                variant="ghost"
+                onClick={() => viewport3dStore.setRotationMode(value)}
+              >
+                <Icon aria-hidden="true" size={ICON_SIZE} />
+                <span className="fm-viewport-3d-toolbar__label">{label}</span>
+              </Button>
+            </ToolbarTooltip>
+          ))}
         </div>
 
         <Separator className="fm-viewport-3d-toolbar__separator" orientation="vertical" />
