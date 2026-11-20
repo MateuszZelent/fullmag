@@ -33,7 +33,7 @@ function readyTerm(amplitude: number, callIndex = 0): MaskTermResource {
         expression_version: "field_expr.v1",
         locals: [
           { expression: "2 * pi / wavelength", name: "k" },
-          { expression: "exp(-(x - center_x) ^ 2 / (2 * wavelength ^ 2))", name: "g" },
+          { expression: "exp(-(x - center_x) ** 2 / (2 * wavelength ** 2))", name: "g" },
         ],
         name: "gaussian_k_source_mask",
         outputs: ["amplitude * g * sin(k * x - pi / 2)", "0.0", "amplitude * g * sin(k * x)"],
@@ -116,12 +116,12 @@ describe("mask antenna panel model", () => {
 
   it("edits one local or output without reordering the others", () => {
     const drive = antenna([readyTerm(2e-4)]);
-    const local = setTermLocal(drive, 0, "mask", 1, "exp(-x ^ 2)");
+    const local = setTermLocal(drive, 0, "mask", 1, "exp(-x ** 2)");
     const output = setTermOutput(local, 0, "time", 0, "cos(2 * pi * frequency * t)");
     const mask = output.terms[0].mask;
     if (mask.kind !== "function") throw new Error("function mask");
     expect(mask.function.locals?.map((item) => item.name)).toEqual(["k", "g"]);
-    expect(mask.function.locals?.[1].expression).toBe("exp(-x ^ 2)");
+    expect(mask.function.locals?.[1].expression).toBe("exp(-x ** 2)");
     expect(output.terms[0].time?.outputs).toEqual(["cos(2 * pi * frequency * t)"]);
   });
 
