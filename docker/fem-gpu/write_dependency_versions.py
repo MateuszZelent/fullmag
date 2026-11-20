@@ -105,6 +105,8 @@ def _declared() -> dict[str, Any]:
             "gpu_architectures": _env("FULLMAG_HYPRE_GPU_ARCHITECTURES"),
             "memory_variant": _env("FULLMAG_HYPRE_MEMORY_VARIANT"),
         },
+        "petsc": {"cuda_architectures": _env("FULLMAG_PETSC_CUDA_ARCHITECTURES")},
+        "libceed": {"cuda_architecture": _env("FULLMAG_LIBCEED_CUDA_ARCHITECTURE")},
         "dependencies": _declared_dependencies(),
         "tools": {
             "cmake": _env("CMAKE_VERSION"),

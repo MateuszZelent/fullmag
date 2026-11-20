@@ -905,18 +905,25 @@ class StartupRejectionTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(startup.StartupScriptError):
                 startup.validate_rejection_receipt(altered, authorization)
 
-    def test_output_mapping_rejection_is_durable_and_replays_without_posting(self):
+    def test_preflight_rejection_is_durable_and_replays_without_posting(self):
         import io
         import urllib.error
 
         authorization = self.authorization()
-        for code in ("docker_startup_output_mapping_required", "docker_startup_output_mapping_invalid"):
+        for code, message in (
+            ("docker_startup_output_mapping_required", "output alias is unavailable"),
+            ("docker_startup_output_mapping_invalid", "output alias is unavailable"),
+            (
+                "accepted_frequency_response_unsupported",
+                "estimated compact sweep index exceeds the 1 MiB index bound",
+            ),
+        ):
             with self.subTest(code=code):
                 self.receipt_path.unlink(missing_ok=True)
                 opener = mock.Mock()
                 opener.open.side_effect = urllib.error.HTTPError(
                     "http://127.0.0.1:8081", 422, "error", {},
-                    io.BytesIO(json.dumps({"code": code, "message": "output alias is unavailable"}).encode()),
+                    io.BytesIO(json.dumps({"code": code, "message": message}).encode()),
                 )
                 with self.run_environment(), mock.patch.object(
                     startup, "_load_provenance_with_digest", return_value=(authorization, "a" * 64),

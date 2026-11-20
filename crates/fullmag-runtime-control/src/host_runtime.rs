@@ -35,6 +35,9 @@ pub struct HostRuntimeAdmission {
 }
 
 #[cfg(test)]
+pub(crate) use recovery_tests::with_admission_fixture;
+
+#[cfg(test)]
 mod recovery_tests {
     use super::*;
     use fullmag_session::host_resource_ledger::{
@@ -65,6 +68,11 @@ mod recovery_tests {
 
     fn recovery_fixture() -> RecoveryFixture {
         recovery_fixture_with_sample(true)
+    }
+
+    pub(crate) fn with_admission_fixture(test: impl FnOnce(&HostRuntimeAdmission)) {
+        let fixture = recovery_fixture();
+        test(&fixture.context);
     }
 
     fn recovery_fixture_without_sample() -> RecoveryFixture {

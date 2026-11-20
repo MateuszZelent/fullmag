@@ -1041,6 +1041,7 @@ mod tests {
                 projection_policy: None,
             }),
             fem: Some(FemHintsIR {
+                gpu_bb_preconditioner: None,
                 order: 1,
                 hmax: 2e-9,
                 mesh: Some("meshes/unit_tet.msh".to_string()),
@@ -6890,6 +6891,7 @@ fn fem_gpu_execution_provenance(
         &mut provenance,
         plan.relaxation.as_ref(),
         matches!(native_fem_backend_id(plan), FemBackendId::GpuNative),
+        plan.gpu_bb_preconditioner,
     );
     Ok(provenance)
 }

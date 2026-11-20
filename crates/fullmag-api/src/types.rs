@@ -2292,6 +2292,7 @@ mod tests {
             parallel_execution: None,
             pbc: None,
             fem_demag_solver_policy: None,
+            fem_bb_preconditioner: None,
             fem_demag_accuracy_contract: None,
             fem_domain_mesh: None,
             exchange_enabled: true,

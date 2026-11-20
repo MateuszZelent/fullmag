@@ -30,6 +30,9 @@ pub(crate) mod accepted_antenna_progress;
 #[path = "completed_inspection_recovery.rs"]
 pub(crate) mod completed_inspection_recovery;
 
+#[path = "accepted_frequency_response_lifecycle.rs"]
+pub(crate) mod frequency_response_lifecycle;
+
 #[path = "accepted_scalar_history.rs"]
 pub(crate) mod scalar_history;
 
@@ -48,6 +51,10 @@ mod accepted_live_layout_mask;
 #[cfg(test)]
 #[path = "accepted_live_layout_tests.rs"]
 mod accepted_live_layout_tests;
+
+#[cfg(test)]
+#[path = "accepted_frequency_response_receipt_tests.rs"]
+mod frequency_response_receipt_tests;
 
 const RUNNER_INITIAL_STATE_FILE: &str = "m_initial.json";
 pub(crate) const RUNNER_FINAL_STATE_FILE: &str = "m_final.json";
@@ -2219,6 +2226,16 @@ fn expected_output_binding(
     port: &StudyOutputPort,
 ) -> Result<(&'static str, &'static str, &'static str)> {
     match port.data_kind {
+        StudyPortDataKind::Artifact if port.port_id == "response" => Ok((
+            "artifact", fullmag_application::FREQUENCY_RESPONSE_INDEX_CODEC_ID,
+            fullmag_application::FREQUENCY_RESPONSE_CODEC_VERSION,
+        )),
+        StudyPortDataKind::Artifact if port.port_id.strip_prefix("response-frequency-")
+            .and_then(|suffix| suffix.parse::<u64>().ok())
+            .is_some_and(|index| port.port_id == format!("response-frequency-{index:06}")) => Ok((
+            "artifact", fullmag_application::FREQUENCY_RESPONSE_POINT_CODEC_ID,
+            fullmag_application::FREQUENCY_RESPONSE_CODEC_VERSION,
+        )),
         StudyPortDataKind::Artifact if port.port_id == "inspection" => Ok((
             "artifact", fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID,
             fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION,
@@ -3075,6 +3092,11 @@ fn execute_accepted_worker_start_with_snapshot(
             interrupt_requested,
         );
     }
+    if matches!(&accepted_step.execution_plan.backend_plan,
+        fullmag_ir::BackendPlanIR::FemFrequencyResponse(_)) {
+        return frequency_response_lifecycle::execute(
+            store, accepted, start, accepted_step, study_step, case_id, interrupt_requested);
+    }
     if study_step.outputs.iter().any(|port| port.data_kind == StudyPortDataKind::Artifact) {
         bail!("legacy solver steps cannot publish an inspection artifact");
     }
@@ -3456,7 +3478,9 @@ fn validate_inspection_run_parameters(
         "api_instance_id", "session_id", "session_epoch", "scene_revision", "command_id",
         "request_idempotency_key", "step_id", "command", "startup_source_sha256",
     ].into_iter().collect();
-    if live.keys().map(String::as_str).filter(|key| !matches!(*key, "execution_input" | "study_history_parent"))
+    // The shared worker validator above has already decoded and validated the
+    // HTTP receipt, including its command ID. It is orchestration evidence.
+    if live.keys().map(String::as_str).filter(|key| !matches!(*key, "execution_input" | "study_history_parent" | "request_receipt"))
         .collect::<BTreeSet<_>>() != expected_keys {
         bail!("inspection live workspace binding has unsupported fields");
     }
@@ -4374,7 +4398,9 @@ fn apply_accepted_start_effect(
     }
     // Evaluate immutable terminal observables while this process still owns
     // the solver's resource lease. HTTP handlers only adopt the CAS bundle.
-    if !control.interrupt_requested.load(Ordering::Acquire) {
+    if !control.interrupt_requested.load(Ordering::Acquire)
+        && !matches!(accepted_step.execution_plan.backend_plan, fullmag_ir::BackendPlanIR::FemFrequencyResponse(_))
+    {
         if accepted.run.specification.parameters.get("live_workspace").is_some() {
             let receipt = worker_execution_receipt_identity(start, &accepted_step, DEFAULT_ACCEPTED_CASE_ID)?;
             scalar_history::publish_scalar_history(
@@ -5460,6 +5486,49 @@ mod closed_loop_run_parameter_tests {
                 });
                 validate_accepted_inspection_run_parameters(&specification, "inspect").unwrap();
             }
+        }
+    }
+
+    #[test]
+    fn solve_inspection_accepts_validated_http_receipt_and_rejects_unbound_metadata() {
+        let mut solve = startup();
+        solve.parameters["live_workspace"]["command"] = json!({
+            "kind": "solve", "command_id": "request",
+        });
+        solve.parameters["live_workspace"]["startup_source_sha256"] = json!(null);
+        let receipt = fullmag_session::LiveComputeRequestReceipt {
+            key_sha256: "a".repeat(64),
+            request_sha256: "b".repeat(64),
+            command_id: "request".into(),
+            request_id: Some("http-request".into()),
+            command_kind: Some("solve".into()),
+            client_intent_id: Some("client-intent".into()),
+            requested_target: Some(json!({"kind": "study"})),
+        };
+        solve.parameters["live_workspace"]["request_receipt"] = serde_json::to_value(receipt).unwrap();
+        validate_accepted_inspection_run_parameters(&solve, "inspect").unwrap();
+        for allow_profile in [false, true] {
+            super::validate_inspection_run_parameters(&solve, "inspect", allow_profile).unwrap();
+        }
+        for (key, value) in [
+            ("key_sha256", json!("invalid")),
+            ("request_sha256", json!("invalid")),
+            ("command_id", json!("another-command")),
+            ("command_kind", json!("unknown")),
+            ("requested_target", json!({})),
+            ("unexpected", json!(true)),
+        ] {
+            let mut invalid = solve.clone();
+            invalid.parameters["live_workspace"]["request_receipt"][key] = value;
+            assert!(validate_accepted_inspection_run_parameters(&invalid, "inspect").is_err(), "{key}");
+        }
+        let mut invalid = solve.clone();
+        invalid.parameters["live_workspace"]["request_receipt"] = json!(null);
+        assert!(validate_accepted_inspection_run_parameters(&invalid, "inspect").is_err());
+        for key in ["unexpected", "initial_state_source"] {
+            let mut invalid = solve.clone();
+            invalid.parameters["live_workspace"][key] = json!({});
+            assert!(validate_accepted_inspection_run_parameters(&invalid, "inspect").is_err(), "{key}");
         }
     }
 

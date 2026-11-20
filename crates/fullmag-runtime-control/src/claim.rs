@@ -829,17 +829,44 @@ fn load_current_task_claim_once(
         bail!("durable resource lease differs from the task claim in the run catalog");
     }
 
+    let claim = task_claim_from_lease(run_id, &durable_lease)?;
+    store.require_active_resource_lease(
+        run_id.as_str(),
+        task_id,
+        claim.attempt_id.as_str(),
+        claim.ownership_epoch.value(),
+        claim.lease.resource_id.as_str(),
+        claim.lease.lease_token.as_str(),
+        claim.lease.heartbeat_sequence,
+    )?;
+    Ok(claim)
+}
+
+/// Observe a claim without acquiring a writer or renewing the resource lease.
+pub fn load_current_task_claim_readonly(
+    store: &SessionStore,
+    run_id: &RunId,
+    task_id: &str,
+    transaction: &fullmag_session::ReadTransaction,
+) -> Result<TaskClaim> {
+    let lease = store
+        .read_active_resource_lease_for_task_readonly(run_id.as_str(), task_id, transaction)?
+        .context("claimed task has no active durable resource lease")?;
+    task_claim_from_lease(run_id, &lease)
+}
+
+fn task_claim_from_lease(run_id: &RunId, durable_lease: &FmsResourceLease) -> Result<TaskClaim> {
     let kind = match durable_lease.kind {
         FmsResourceKind::Cpu => ResourceKind::Cpu,
         FmsResourceKind::Gpu => ResourceKind::Gpu,
         FmsResourceKind::Storage => ResourceKind::Storage,
         FmsResourceKind::Meshing => ResourceKind::Meshing,
     };
-    let claim = TaskClaim {
+    Ok(TaskClaim {
         run_id: run_id.clone(),
-        task_id: TaskId::parse(task_id).context("invalid durable task id")?,
-        attempt_id: AttemptId::parse(attempt_id).context("invalid durable attempt id")?,
-        ownership_epoch: OwnershipEpoch::new(ownership_epoch)
+        task_id: TaskId::parse(&durable_lease.task_id).context("invalid durable task id")?,
+        attempt_id: AttemptId::parse(&durable_lease.attempt_id).context("invalid durable attempt id")?,
+        ownership_epoch: OwnershipEpoch::new(durable_lease.ownership_epoch)
             .context("invalid durable ownership epoch")?,
         lease: ResourceLease {
             resource_id: durable_lease.resource_id.clone(),
@@ -854,17 +881,7 @@ fn load_current_task_claim_once(
                 .context("invalid durable lease token")?,
             heartbeat_sequence: durable_lease.heartbeat_sequence,
         },
-    };
-    store.require_active_resource_lease(
-        run_id.as_str(),
-        task_id,
-        claim.attempt_id.as_str(),
-        claim.ownership_epoch.value(),
-        claim.lease.resource_id.as_str(),
-        claim.lease.lease_token.as_str(),
-        claim.lease.heartbeat_sequence,
-    )?;
-    Ok(claim)
+    })
 }
 
 #[cfg(test)]

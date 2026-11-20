@@ -891,7 +891,7 @@ pub(crate) fn load_accepted_worker_step_from_snapshot(
         envelope.claim.task_id.as_str(),
     )
     .context("worker Prepare has no current durable task claim")?;
-    validate_accepted_worker_step_locked(store, accepted, envelope, &prepared, &current_claim)?;
+    validate_accepted_worker_step_fenced(store, accepted, envelope, &prepared, &current_claim, None)?;
     Ok(prepared.bind_claim(current_claim))
 }
 
@@ -934,10 +934,53 @@ fn rehydrate_worker_start(
         if current_prepare != prepare {
             bail!("worker Start preceding Prepare changed during immutable validation");
         }
-        validate_accepted_worker_step_locked(store, accepted, &prepare, &prepared, &current_claim)?;
+        validate_accepted_worker_step_fenced(store, accepted, &prepare, &prepared, &current_claim, None)?;
         Ok(current_claim)
     })?;
     Ok(prepared.bind_claim(current_claim))
+}
+
+/// Rehydrate accepted Start for a passive reader under shared store fences.
+/// The immutable validation stays outside the fences, as on the worker path.
+pub fn load_accepted_worker_step_for_observation(
+    store: &SessionStore,
+    accepted: &AcceptedStudySnapshot,
+    start_envelope: &WorkerCommandEnvelope,
+    read_wait: std::time::Duration,
+) -> Result<AcceptedWorkerStep> {
+    validate_start_envelope(accepted, start_envelope)?;
+    let load_prepare = |transaction: &fullmag_session::ReadTransaction| {
+        require_current_accepted_study_intent(store, accepted)?;
+        let claim = crate::load_current_task_claim_readonly(
+            store,
+            &start_envelope.claim.run_id,
+            start_envelope.claim.task_id.as_str(),
+            transaction,
+        )?;
+        if !start_envelope.claim.matches_claim(&claim) {
+            bail!("worker Start command belongs to a stale task claim");
+        }
+        let recovered = crate::recover_coordinator_readonly(store, &claim, transaction)
+            .context("worker Start coordinator journal could not be recovered")?;
+        let prepare = preceding_prepare_for_start(&recovered.commands, &claim, start_envelope)?;
+        Ok((claim, prepare))
+    };
+
+    let prepare = {
+        let transaction = crate::acquire_store_read_transaction(store, read_wait)?;
+        load_prepare(&transaction)?.1
+    };
+    let prepared = prevalidate_accepted_worker_step(store, accepted, &prepare)?;
+    let claim = {
+        let transaction = crate::acquire_store_read_transaction(store, read_wait)?;
+        let (claim, current_prepare) = load_prepare(&transaction)?;
+        if current_prepare != prepare {
+            bail!("worker Start preceding Prepare changed during immutable validation");
+        }
+        validate_accepted_worker_step_fenced(store, accepted, &prepare, &prepared, &claim, Some(&transaction))?;
+        claim
+    };
+    Ok(prepared.bind_claim(claim))
 }
 
 /// Compatibility facade for callers that do not already own a validated
@@ -1074,12 +1117,13 @@ fn prevalidate_accepted_worker_step(
     })
 }
 
-fn validate_accepted_worker_step_locked(
+fn validate_accepted_worker_step_fenced(
     store: &SessionStore,
     accepted: &AcceptedStudySnapshot,
     envelope: &WorkerCommandEnvelope,
     prepared: &PrevalidatedAcceptedWorkerStep,
     current_claim: &TaskClaim,
+    read_transaction: Option<&fullmag_session::ReadTransaction>,
 ) -> Result<()> {
     if prepared.prepare != *envelope {
         bail!("prevalidated worker step belongs to a different Prepare envelope");
@@ -1108,7 +1152,7 @@ fn validate_accepted_worker_step_locked(
     ) {
         bail!("worker Prepare requires a ready task under an active claim");
     }
-    if !crate::study_completion::dependencies_ready_locked(
+    if !crate::study_completion::dependencies_ready_fenced(
         store,
         accepted,
         accepted
@@ -1117,6 +1161,7 @@ fn validate_accepted_worker_step_locked(
             .iter()
             .find(|step| step.step_id == prepared.step_id)
             .context("prevalidated worker step is missing from the accepted study")?,
+        read_transaction,
     )? {
         bail!("worker Prepare is blocked by completion dependencies");
     }
@@ -1444,8 +1489,15 @@ fn preceding_prepare_for_start_locked(
 ) -> Result<WorkerCommandEnvelope> {
     let recovered = crate::recover_coordinator_locked(store, current_claim)
         .context("worker Start coordinator journal could not be recovered")?;
-    let starts = recovered
-        .commands
+    preceding_prepare_for_start(&recovered.commands, current_claim, start_envelope)
+}
+
+fn preceding_prepare_for_start(
+    commands: &[WorkerCommandEnvelope],
+    current_claim: &TaskClaim,
+    start_envelope: &WorkerCommandEnvelope,
+) -> Result<WorkerCommandEnvelope> {
+    let starts = commands
         .iter()
         .enumerate()
         .filter(|(_, command)| {
@@ -1457,7 +1509,7 @@ fn preceding_prepare_for_start_locked(
         bail!("worker Start is not the exact unique Start in the current coordinator journal");
     }
     let start_index = starts[0].0;
-    let prepares = recovered.commands[..start_index]
+    let prepares = commands[..start_index]
         .iter()
         .filter(|command| {
             command.claim.matches_claim(current_claim)
@@ -3536,6 +3588,38 @@ pub(crate) fn cold_accepted_worker_step(store: &SessionStore,
         problem, execution_plan: plan, until_seconds: lowered.until_seconds, resolved_input: resolved })
 }
 
+pub(super) fn ensure_accepted_prepare_genesis(
+    store: &SessionStore,
+    checkpoint: &fullmag_application::CoordinatorCheckpoint,
+) -> Result<()> {
+    let _writer = store.write_transaction()?;
+    let run_id = checkpoint.claim.run_id.as_str();
+    let task_id = checkpoint.claim.task_id.as_str();
+    let catalog = store
+        .read_run_catalog(run_id)?
+        .context("coordinator genesis requires a durable run catalog")?;
+    let task = catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .context("coordinator genesis task is missing from the run catalog")?;
+    let Some(genesis) = &task.coordinator_genesis else {
+        crate::commit_coordinator_genesis(store, checkpoint)?;
+        return Ok(());
+    };
+    let original: fullmag_application::CoordinatorCheckpoint =
+        serde_json::from_value(genesis.checkpoint.clone())
+            .context("decoding the persisted coordinator genesis checkpoint")?;
+    let restored = fullmag_application::WorkerCoordinator::restore(original.clone(), &[], &[])?;
+    if &original != checkpoint && &restored.checkpoint() != checkpoint {
+        bail!("Prepare coordinator checkpoint differs from its immutable genesis");
+    }
+    // Restore marks the in-memory observation as reconciling. Replay the
+    // original genesis so the store still fences the current lease and epoch.
+    store.commit_coordinator_genesis(run_id, task_id, genesis)?;
+    Ok(())
+}
+
 /// Publish a worker Prepare command only after resolving its task input from
 /// the durable receipt and immutable accepted-study snapshot. The coordinator
 /// journal is the outbox boundary: this does not send a transport message,
@@ -3563,7 +3647,7 @@ pub fn publish_accepted_task_prepare(
         }
     }
 
-    retry_store_writer_busy(|| crate::commit_coordinator_genesis(store, &checkpoint))
+    retry_store_writer_busy(|| ensure_accepted_prepare_genesis(store, &checkpoint))
         .context("publishing accepted task coordinator genesis")?;
 
     let mut publication_error = None;

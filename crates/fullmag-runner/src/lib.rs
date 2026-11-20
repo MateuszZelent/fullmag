@@ -160,8 +160,13 @@ pub(crate) mod fem;
 mod fem_baseline;
 mod fem_eigen;
 mod frequency_response;
-#[cfg(any(feature = "fem-gpu", test))]
 pub use frequency_response::{frequency_response_input_descriptor, FrequencyResponseInputDescriptor};
+pub use frequency_response::{
+    collect_publish_accepted_frequency_response_artifacts,
+    preflight_frequency_response_artifact_resources, AcceptedFrequencyResponseArtifactLimits,
+    AcceptedFrequencyResponseArtifacts, AcceptedFrequencyResponsePoint,
+    AcceptedFrequencyResponseResourceEstimate, AcceptedFrequencyResponseArtifactRole, ArtifactFileBytes,
+};
 pub mod frames_index;
 pub mod hysteresis;
 pub mod interactive;
@@ -7952,6 +7957,7 @@ mod tests {
         problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
             fdm: None,
             fem: Some(fullmag_ir::FemHintsIR {
+                gpu_bb_preconditioner: None,
                 order: 1,
                 hmax: 2e-9,
                 mesh: Some("meshes/unit_tet.msh".to_string()),
@@ -11694,6 +11700,7 @@ mod tests {
         problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
             fdm: None,
             fem: Some(fullmag_ir::FemHintsIR {
+                gpu_bb_preconditioner: None,
                 order: 1,
                 hmax: 2e-9,
                 mesh: Some("meshes/unit_tet.msh".to_string()),

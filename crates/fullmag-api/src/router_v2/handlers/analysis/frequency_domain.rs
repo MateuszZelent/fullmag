@@ -1485,6 +1485,7 @@ pub async fn get_frequency_domain_response_magnetic_sweep(
         &state,
         "frequency_domain_response_sweep_resource.v1",
         &[
+            "response/magnetic_response_sweep.v3.json",
             "response/magnetic_response_sweep.v2.json",
             "response/magnetic_response_sweep.v1.json",
         ],
@@ -1542,6 +1543,29 @@ async fn response_cancel_requested_resource(
 async fn response_progress_resource(
     state: &Arc<AppState>,
 ) -> Result<FrequencyDomainSweepProgressResource, ApiError> {
+    if let Some(progress) = crate::live_accepted_projection::read_current_accepted_frequency_progress(state).await? {
+        let progress_json = serde_json::to_string(&serde_json::json!({
+            "schema_version": "fullmag.accepted_frequency_response_progress.v1",
+            "status": progress.status,
+            "total_frequency_count": progress.total_frequency_count,
+            "completed_frequency_count": progress.completed_frequency_count,
+            "frequency_index": progress.frequency_index,
+            "frequency_hz": progress.current_frequency_hz,
+            "iteration": progress.iteration,
+            "relative_residual_l2_norm": progress.relative_residual_l2_norm,
+        })).map_err(|error| ApiError::internal(format!("encode accepted frequency response progress: {error}")))?;
+        return Ok(FrequencyDomainSweepProgressResource {
+            schema_version: "frequency_response_progress.v1".into(),
+            status: progress.status.clone(), state: progress.status, complete: false,
+            total_frequency_points: progress.total_frequency_count,
+            completed_frequency_points: progress.completed_frequency_count,
+            written_frequency_point_artifacts: 0,
+            current_frequency_hz: progress.current_frequency_hz,
+            frequency_min_hz: None, frequency_max_hz: None, demag_mode: None,
+            partial_artifacts_available: false, latest_artifact_manifest_path: None,
+            missing_reason: None, progress_json: Some(progress_json),
+        });
+    }
     let request_context = crate::capture_current_live_request_context(state).await?;
     let artifact_dir = require_current_live_artifact_dir(&state).await?;
     if try_resolve_artifact_path(&artifact_dir, "response/progress.v1.json")?.is_some() {
@@ -1557,7 +1581,7 @@ async fn response_progress_resource(
 
     let captured = capture_frequency_domain_artifact_set(
         state,
-        &["response/magnetic_response_sweep.v2.json"],
+        &["response/magnetic_response_sweep.v3.json", "response/magnetic_response_sweep.v2.json"],
     )
     .await?;
     let artifact_dir = &captured.artifact_dir;
@@ -1711,6 +1735,7 @@ fn response_progress_artifact_snapshot(
 ) -> Result<ResponseProgressArtifactSnapshot, ApiError> {
     let mut snapshot = ResponseProgressArtifactSnapshot::default();
     for artifact_path in [
+        "response/magnetic_response_sweep.v3.json",
         "response/magnetic_response_sweep.v2.json",
         "response/magnetic_response_sweep.v1.json",
     ] {
@@ -1801,7 +1826,7 @@ pub async fn get_frequency_domain_response_frequency_point(
 ) -> Result<Json<FrequencyDomainJsonArtifactResource>, ApiError> {
     let mut captured = capture_frequency_domain_artifact_set(
         &state,
-        &["response/magnetic_response_sweep.v2.json"],
+        &["response/magnetic_response_sweep.v3.json", "response/magnetic_response_sweep.v2.json"],
     )
     .await?;
     let artifact_path = response_frequency_point_artifact_path_from_sweep(
@@ -1834,11 +1859,7 @@ fn response_frequency_point_artifact_path_from_sweep(
     frequency_index: u32,
     generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
 ) -> Result<Option<String>, ApiError> {
-    let Some((sweep, _)) = super::results::read_result_artifact_snapshot_in_generation(
-        artifact_dir,
-        "response/magnetic_response_sweep.v2.json",
-        generation,
-    )?
+    let Some((sweep, _)) = read_preferred_response_sweep(artifact_dir, generation)?
     else {
         return Ok(None);
     };
@@ -2009,6 +2030,18 @@ fn response_field_payload_path_from_point_artifact(
         })
 }
 
+pub(crate) fn read_preferred_response_sweep(
+    artifact_dir: &std::path::Path,
+    generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
+) -> Result<Option<(Value, String)>, ApiError> {
+    for path in ["response/magnetic_response_sweep.v3.json", "response/magnetic_response_sweep.v2.json", "response/magnetic_response_sweep.v1.json"] {
+        if let Some(snapshot) = super::results::read_result_artifact_snapshot_in_generation(artifact_dir, path, generation)? {
+            return Ok(Some(snapshot));
+        }
+    }
+    Ok(None)
+}
+
 fn response_sweep_linked_path(
     artifact_dir: &std::path::Path,
     frequency_index: u32,
@@ -2016,11 +2049,7 @@ fn response_sweep_linked_path(
     list_field: &str,
     generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
 ) -> Result<Option<String>, ApiError> {
-    let Some((sweep, _)) = super::results::read_result_artifact_snapshot_in_generation(
-        artifact_dir,
-        "response/magnetic_response_sweep.v2.json",
-        generation,
-    )?
+    let Some((sweep, _)) = read_preferred_response_sweep(artifact_dir, generation)?
     else {
         return Ok(None);
     };
@@ -2507,15 +2536,16 @@ pub(crate) fn decode_frequency_domain_artifact_payload(
         )
     } else if artifact_path == "response/magnetic_response_sweep.v1.json"
         || artifact_path == "response/magnetic_response_sweep.v2.json"
+        || artifact_path == "response/magnetic_response_sweep.v3.json"
     {
         (
-            &["magnetic_response_sweep.v1", "magnetic_response_sweep.v2"][..],
+            &["magnetic_response_sweep.v1", "magnetic_response_sweep.v2", "magnetic_response_sweep.v3"][..],
             serde_json::from_value::<FrequencyDomainResponseSweepArtifactPayload>(value)
                 .map(FrequencyDomainJsonArtifactPayload::ResponseSweep),
         )
     } else if artifact_path.starts_with("response/frequency_points/") {
         (
-            &["frequency_response_point.v1" as &str][..],
+            &["frequency_response_point.v1", "fullmag.fem.driven_response_point.v1"][..],
             serde_json::from_value::<FrequencyDomainResponsePointPayload>(value)
                 .map(FrequencyDomainJsonArtifactPayload::ResponsePoint),
         )
@@ -3183,12 +3213,14 @@ fn response_frequency_point_artifacts(
     generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
 ) -> Result<Vec<String>, ApiError> {
     if let Some(generation) = generation {
-        if let Some((sweep, _)) = super::results::read_result_artifact_snapshot_in_generation(
-            artifact_dir,
-            "response/magnetic_response_sweep.v2.json",
-            Some(generation),
-        )? {
-            if let Some(raw_paths) = sweep.get("frequency_point_artifact_paths") {
+        if let Some((sweep, _)) = read_preferred_response_sweep(artifact_dir, Some(generation))? {
+            let compact_paths = if sweep.get("schema_version").and_then(Value::as_str) == Some("magnetic_response_sweep.v3") {
+                Some(Value::Array(sweep.get("points").and_then(Value::as_array).ok_or_else(|| ApiError::conflict("frequency_domain_response_sweep_points_missing"))?
+                    .iter().map(|point| point.get("frequency_point_artifact_path").or_else(|| point.get("point_path")).cloned()
+                        .ok_or_else(|| ApiError::conflict("frequency_domain_response_sweep_point_link_missing")))
+                    .collect::<Result<Vec<_>,ApiError>>()?))
+            } else { None };
+            if let Some(raw_paths) = compact_paths.as_ref().or_else(|| sweep.get("frequency_point_artifact_paths")) {
                 let raw_paths = raw_paths.as_array().ok_or_else(|| {
                     ApiError::conflict(
                         "frequency_domain_response_sweep_point_links_malformed",
@@ -3247,30 +3279,29 @@ fn response_frequency_point_artifacts(
         return Ok(paths);
     }
 
-    if try_resolve_artifact_path(artifact_dir, "response/magnetic_response_sweep.v2.json")?
-        .is_some()
-    {
-        let sweep =
-            read_json_artifact_value(artifact_dir, "response/magnetic_response_sweep.v2.json")?;
-        let linked_paths = sweep
-            .get("frequency_point_artifact_paths")
-            .and_then(Value::as_array)
-            .map(|paths| {
-                paths
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .filter_map(|path| {
-                        try_resolve_artifact_path(artifact_dir, path)
-                            .ok()
-                            .flatten()
-                            .map(|_| path.to_string())
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        if !linked_paths.is_empty() {
+    if let Some((sweep,_)) = read_preferred_response_sweep(artifact_dir, None)? {
+        let compact = sweep.get("schema_version").and_then(Value::as_str) == Some("magnetic_response_sweep.v3");
+        let mut linked_paths = if compact {
+            sweep.get("points").and_then(Value::as_array)
+                .ok_or_else(|| ApiError::conflict("frequency_domain_response_sweep_points_missing"))?
+                .iter().map(|point| point.get("frequency_point_artifact_path").or_else(|| point.get("point_path"))
+                    .and_then(Value::as_str).map(str::to_string)
+                    .ok_or_else(|| ApiError::conflict("frequency_domain_response_sweep_point_link_missing")))
+                .collect::<Result<Vec<_>,ApiError>>()?
+        } else {
+            sweep.get("frequency_point_artifact_paths").and_then(Value::as_array)
+                .map(|paths| paths.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
+        };
+        if compact {
+            for path in &linked_paths {
+                if try_resolve_artifact_path(artifact_dir, path)?.is_none() {
+                    return Err(ApiError::conflict("frequency_domain_response_sweep_point_link_missing"));
+                }
+            }
             return Ok(linked_paths);
         }
+        linked_paths.retain(|path| try_resolve_artifact_path(artifact_dir, path).ok().flatten().is_some());
+        if !linked_paths.is_empty() { return Ok(linked_paths); }
     }
 
     let frequency_points_dir = artifact_dir.join("response").join("frequency_points");
@@ -3729,6 +3760,18 @@ fn frequency_domain_field_content_digest(
             }
         })?;
         digest.update(b"fullmag.frequency-domain-field-resource.committed.v1\0");
+        if generation.commit.content.members.contains_key("response/magnetic_response_sweep.v3.json") {
+            digest.update(b"fullmag.frequency-domain-field-source-map.v1\0");
+            for path in ["input/descriptor.v1.json", "input/magnetic_node_indices.u64le"] {
+                let source = generation.commit.content.members.get(path)
+                    .ok_or_else(|| ApiError::conflict("response_field_source_map_member_missing"))?;
+                generation.verify_member(artifact_dir, path).map_err(|error| ApiError::conflict(format!(
+                    "response_field_source_map_member_mismatch: {path}: {error}")))?;
+                digest.update(source.byte_length.to_le_bytes());
+                digest.update(source.sha256.as_bytes());
+            }
+        }
+
         digest.update((metadata.len() as u64).to_le_bytes());
         digest.update(metadata);
         digest.update(member.byte_length.to_le_bytes());
@@ -3985,7 +4028,7 @@ fn response_field_payload_metadata(
     frequency_point_artifact_path: &str,
     generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
 ) -> Result<FrequencyDomainFieldMetadata, ApiError> {
-    let Some((payload, _)) = super::results::read_result_artifact_snapshot_in_generation(
+    let Some((mut payload, _)) = super::results::read_result_artifact_snapshot_in_generation(
         artifact_dir,
         frequency_point_artifact_path,
         generation,
@@ -3998,6 +4041,15 @@ fn response_field_payload_metadata(
         }
         return Ok(FrequencyDomainFieldMetadata::default());
     };
+    if payload.get("schema_version").and_then(Value::as_str) == Some("fullmag.fem.driven_response_point.v1") {
+        if let Some(field) = payload.get("field").and_then(Value::as_object).cloned() {
+            let point = payload.as_object_mut().ok_or_else(|| ApiError::conflict("response_field_point_metadata_invalid"))?;
+            for (key,value) in field {
+                let public_key = match key.as_str() { "dtype" => "zarr_dtype", "shape" => "zarr_shape", _ => key.as_str() };
+                point.entry(public_key.to_string()).or_insert(value);
+            }
+        }
+    }
     let mut metadata = FrequencyDomainFieldMetadata::default();
     metadata.value_kind = payload
         .get("value_kind")
@@ -4866,5 +4918,34 @@ mod response_progress_generation_tests {
                 Some(&generation),
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod accepted_response_reader_tests {
+    use super::*;
+
+    #[test]
+    fn accepted_compact_response_versions_remain_truthful_in_public_payloads() {
+        let sweep = decode_frequency_domain_artifact_payload("response/magnetic_response_sweep.v3.json",
+            serde_json::json!({"schema_version":"magnetic_response_sweep.v3", "complete":true,
+                "points":[{"frequency_index":0,"frequency_hz":1e9,"response_amplitude":0.5}]})).unwrap();
+        let FrequencyDomainJsonArtifactPayload::ResponseSweep(sweep) = sweep else { panic!("response sweep expected"); };
+        assert_eq!(sweep.schema_version, "magnetic_response_sweep.v3");
+        assert_eq!(sweep.points.unwrap()[0].frequency_hz, Some(1e9));
+        let point = decode_frequency_domain_artifact_payload("response/frequency_points/frequency_0000.json",
+            serde_json::json!({"schema_version":"fullmag.fem.driven_response_point.v1", "frequency_index":0,"frequency_hz":1e9})).unwrap();
+        assert!(matches!(point, FrequencyDomainJsonArtifactPayload::ResponsePoint(_)));
+    }
+
+    #[test]
+    fn accepted_compact_sweep_does_not_read_redundant_dense_v2() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("response")).unwrap();
+        std::fs::write(root.path().join("response/magnetic_response_sweep.v3.json"),
+            br#"{"schema_version":"magnetic_response_sweep.v3","points":[]}"#).unwrap();
+        std::fs::write(root.path().join("response/magnetic_response_sweep.v2.json"), b"invalid redundant dense JSON").unwrap();
+        let (sweep,_) = read_preferred_response_sweep(root.path(), None).unwrap().unwrap();
+        assert_eq!(sweep["schema_version"], "magnetic_response_sweep.v3");
     }
 }

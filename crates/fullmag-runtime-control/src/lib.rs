@@ -851,7 +851,7 @@ pub mod python_runtime;
 mod claim;
 pub use claim::{
     commit_claimed_task_admission, commit_claimed_task_admission_with_host,
-    load_current_task_claim, try_commit_claimed_task_admission_with_host,
+    load_current_task_claim, load_current_task_claim_readonly, try_commit_claimed_task_admission_with_host,
     StaleTaskAdmissionCandidate,
 };
 
@@ -886,7 +886,8 @@ pub use study::{
     materialize_accepted_worker_execution_plan,
     materialize_accepted_worker_execution_plan_with_source,
     load_accepted_study_snapshot, load_accepted_study_snapshot_from_run, load_accepted_worker_step,
-    load_accepted_worker_step_for_start, load_accepted_worker_step_for_start_from_snapshot,
+    load_accepted_worker_step_for_observation, load_accepted_worker_step_for_start,
+    load_accepted_worker_step_for_start_from_snapshot,
     load_study_observation_runtime, publish_accepted_task_prepare, publish_accepted_task_start,
     publish_study_outputs, publish_terminal_study_outputs, queue_accepted_study_task, resolve_accepted_study_inputs,
     validate_requested_execution, validate_study_task_completion, AcceptedStudySnapshot,

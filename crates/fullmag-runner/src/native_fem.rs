@@ -2443,6 +2443,7 @@ fn make_test_plan() -> fullmag_ir::FemPlanIR {
     };
 
     FemPlanIR {
+        gpu_bb_preconditioner: None,
         frozen_spins: None,
         mesh_name: "unit_tet".to_string(),
         mesh_source: Some("meshes/unit_tet.msh".to_string()),
@@ -3550,16 +3551,24 @@ impl NativeFemBackend {
 
         let mut cpu_plan = plan.clone();
         cpu_plan.mfem_device_string = Some("cpu".to_string());
-        Self::create_backend_with_initial_effective_field(
-            &cpu_plan,
-            eager_initial_effective_field,
-        )
+        Self::create_backend_with_initial_effective_field(&cpu_plan, eager_initial_effective_field)
     }
 
     fn create_backend_with_initial_effective_field(
         plan: &fullmag_ir::FemPlanIR,
         eager_initial_effective_field: bool,
     ) -> Result<Self, RunError> {
+        if plan.gpu_bb_preconditioner.is_some()
+            && (!native_fem_plan_requests_gpu_mfem_device(plan)
+                || !plan.relaxation.as_ref().is_some_and(|control| {
+                    control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                }))
+        {
+            return Err(RunError {
+                message: "gpu_bb_preconditioner requires GPU projected_gradient_bb execution"
+                    .to_string(),
+            });
+        }
         let backend_create_started = std::time::Instant::now();
         // Resolve ownership before runtime marker normalization can merge
         // authored domain markers into magnetic/nonmagnetic attributes.
@@ -4395,6 +4404,14 @@ impl NativeFemBackend {
                 && plan.dbulk_field.is_none(),
             local_node_map_identity: std::sync::Mutex::new(None),
         };
+        if let Some(policy) = plan.gpu_bb_preconditioner {
+            let rc = unsafe {
+                ffi::fullmag_fem_backend_set_gpu_bb_preconditioner(backend.handle, policy.native_id())
+            };
+            if rc != ffi::FULLMAG_FEM_OK {
+                return Err(backend.last_error_or("setting GPU BB preconditioner policy failed"));
+            }
+        }
         if native_fem_plan_requests_gpu_mfem_device(plan) {
             // Prepare object ownership before the first accepted step. This
             // reads the resident initial magnetization without changing it;
@@ -8888,6 +8905,7 @@ mod tests {
 
     fn make_exchange_only_plan() -> FemPlanIR {
         FemPlanIR {
+            gpu_bb_preconditioner: None,
             frozen_spins: None,
             mesh_name: "two_tets".to_string(),
             mesh_source: Some("meshes/two_tets.msh".to_string()),

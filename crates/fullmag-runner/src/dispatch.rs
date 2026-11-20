@@ -3804,6 +3804,7 @@ fn execute_native_fem(
         &mut provenance,
         plan.relaxation.as_ref(),
         execution_engine == "fem_native_gpu",
+        plan.gpu_bb_preconditioner,
     );
     crate::fem::relax::llg_overdamped::fill_provenance(&mut provenance, plan);
     if native_relaxation_step.is_some() {
@@ -4813,6 +4814,7 @@ mod tests {
                 projection_policy: None,
             }),
             fem: Some(FemHintsIR {
+                gpu_bb_preconditioner: None,
                 order: 1,
                 hmax: 2e-9,
                 mesh: None,
@@ -4833,6 +4835,7 @@ mod tests {
 
     pub(crate) fn tiny_fem_plan() -> FemPlanIR {
         FemPlanIR {
+            gpu_bb_preconditioner: None,
             mesh_name: "unit_tet".to_string(),
             mesh_source: None,
             mesh: MeshIR {

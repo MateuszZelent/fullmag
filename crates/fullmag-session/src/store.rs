@@ -6275,9 +6275,28 @@ impl SessionStore {
         run_id: &str,
         task_id: &str,
     ) -> Result<Option<FmsResourceLease>> {
+        let _writer_lease = self.write_transaction()?;
+        self.read_active_resource_lease_for_task_fenced(run_id, task_id)
+    }
+
+    /// Read the same exact active lease under an existing shared store fence.
+    pub fn read_active_resource_lease_for_task_readonly(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        transaction: &ReadTransaction,
+    ) -> Result<Option<FmsResourceLease>> {
+        transaction.require_root(&self.root)?;
+        self.read_active_resource_lease_for_task_fenced(run_id, task_id)
+    }
+
+    fn read_active_resource_lease_for_task_fenced(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<Option<FmsResourceLease>> {
         validate_store_id(run_id)?;
         validate_store_id(task_id)?;
-        let _writer_lease = self.write_transaction()?;
         let Some(catalog) = self.read_run_catalog(run_id)? else {
             return Ok(None);
         };

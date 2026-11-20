@@ -73,7 +73,7 @@ def test_direct_compose_keeps_native_fem_release_for_backend_dev():
                     reason="The extracted Makefile recipe is a Linux-container regression")
 @pytest.mark.parametrize("contract_id", ["fem-demag-poisson", "fem-cuda-activity-trace",
                                         "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
-                                        "fem-cpu-pgbb-reuse"])
+                                        "fem-cpu-pgbb-reuse", "fem-cuda-bb-exchange-mass"])
 def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(tmp_path, contract_id):
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     recipe_start = makefile.index("install-cli install-cli-dev install-cli-static:\n")

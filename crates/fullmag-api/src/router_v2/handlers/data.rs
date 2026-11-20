@@ -22,6 +22,7 @@ pub mod planar_fields;
 pub mod quantities;
 pub(crate) mod resolved_spatial_field;
 pub(crate) mod resolved_vector_field;
+pub(crate) mod response_source_map;
 pub mod scalars;
 pub mod stage_results;
 pub mod tables;
