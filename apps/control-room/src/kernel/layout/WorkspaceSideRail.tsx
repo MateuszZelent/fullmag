@@ -10,7 +10,6 @@ import {
   History,
   LayoutGrid,
   Move3d,
-  PanelRight,
   ShieldCheck,
   SlidersHorizontal,
   type LucideIcon,
@@ -26,6 +25,10 @@ import {
   useInspectorActiveTab,
   useInspectorTabs,
 } from "@/modules/inspector/public";
+import {
+  setViewport3DInspectorContext,
+  useViewport3DInspectorContext,
+} from "@/modules/viewport-3d/public";
 import { useKernel } from "../KernelContext";
 import { useLayoutSelector } from "./useLayout";
 
@@ -62,6 +65,7 @@ export function WorkspaceSideRail({ side }: { side: "left" | "right" }) {
   const explorerTab = useExplorerStoreSelector((explorer) => explorer.activeTab);
   const inspectorTab = useInspectorActiveTab();
   const inspectorTabs = useInspectorTabs();
+  const inspectorContext = useViewport3DInspectorContext();
   const open = side === "left" ? panelVisible.left : panelVisible.right;
   const setOpen = (visible: boolean) =>
     kernel.layout.setPanelVisible(side === "left" ? "left" : "right", visible);
@@ -79,18 +83,33 @@ export function WorkspaceSideRail({ side }: { side: "left" | "right" }) {
         const active = explorerTab === id;
         return { active, icon, id, label, onSelect: choose(active, () => setExplorerActiveTab(id)) };
       })
-    : inspectorTabs.length > 0
-      ? inspectorTabs.map(({ id, label }) => {
+    : [
+        {
+          active: inspectorContext === "selection",
+          icon: Box,
+          id: "selection",
+          label: "Selection",
+          onSelect: choose(inspectorContext === "selection", () => setViewport3DInspectorContext("selection")),
+        },
+        {
+          active: inspectorContext === "view",
+          icon: SlidersHorizontal,
+          id: "view",
+          label: "3D View",
+          onSelect: choose(inspectorContext === "view", () => setViewport3DInspectorContext("view")),
+        },
+        // The selected object's Inspector tabs follow the two contexts.
+        ...(inspectorContext === "selection" ? inspectorTabs : []).map(({ id, label }) => {
           const active = inspectorTab === id;
           return {
             active,
-            icon: INSPECTOR_TAB_ICONS[id] ?? SlidersHorizontal,
-            id,
+            icon: INSPECTOR_TAB_ICONS[id] ?? LayoutGrid,
+            id: `tab:${id}`,
             label,
             onSelect: choose(active, () => setInspectorActiveTab(id)),
           };
-        })
-      : [{ active: true, icon: PanelRight, id: "inspector", label: "Inspector", onSelect: choose(true, () => undefined) }];
+        }),
+      ];
 
   return (
     <nav

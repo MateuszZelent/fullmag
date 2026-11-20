@@ -164,7 +164,7 @@ export function WorkspaceDockLayout() {
   const visible = (id: string) => playbackOnly && id === "panel-right"
     ? true
     : id === "panel-left" ? panelVisible.left : id === "panel-right" ? panelVisible.right : true;
-  const isDrawer = (id: string) => id === "panel-right" && windowWidth < 1180 || id === "panel-left" && windowWidth < 760;
+  const isDrawer = (id: string) => (id === "panel-right" || id === "panel-left") && windowWidth < 760;
   // Explorer and Inspector drawers open together only below 760px; they then split the width.
   const drawersShared = isDrawer("panel-left") && isDrawer("panel-right") && visible("panel-left") && visible("panel-right");
   const move = (id: string, direction: -1 | 1) => {
