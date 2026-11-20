@@ -4126,6 +4126,14 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
                 "{prefix}.solver carries unsupported operator/residual version"
             ));
         }
+        if !matches!(
+            module.solver.default_external_boundary.as_str(),
+            "spin_insulating" | "reject_unassigned"
+        ) {
+            errors.push(format!(
+                "{prefix}.solver.default_external_boundary must be 'spin_insulating' or 'reject_unassigned'"
+            ));
+        }
         if reciprocal {
             let bounded_fem_m2 = module.solver.operator_version
                 == "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"

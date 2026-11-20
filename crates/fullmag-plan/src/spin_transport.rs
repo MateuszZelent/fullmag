@@ -445,6 +445,14 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
             time_envelope,
             active_graph,
         );
+        // Every external face defaulted means the planner, not the author,
+        // supplied the spin boundary condition; provenance must say so.
+        let inserted_all_spin_defaults = descriptor.as_ref().is_ok_and(|descriptor| {
+            descriptor
+                .spin_boundaries
+                .iter()
+                .all(|face| face.source_id == DEFAULT_SPIN_INSULATING_SOURCE_ID)
+        });
         let (fdm_cpu_double, fdm_gpu_double, fdm_cpu_double_reciprocal, fdm_cpu_double_transient) =
             match descriptor {
                 Ok(descriptor) if public_gpu_m1_candidate => (None, Some(descriptor), None, None),
@@ -524,9 +532,7 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
                     "transport.coupling.one_way".to_string(),
                 ]
             },
-            inserted_default_boundaries: if module.boundaries.is_empty()
-                && module.solver.default_external_boundary == "spin_insulating"
-            {
+            inserted_default_boundaries: if inserted_all_spin_defaults {
                 vec!["all_unassigned_external_surfaces".to_string()]
             } else {
                 Vec::new()
@@ -2779,7 +2785,12 @@ fn materialize_fdm_descriptor(
     )?;
     let structured_current_closure =
         materialize_structured_current_closure(problem, charge, &charge_active_cells, context)?;
-    let spin_boundaries = resolve_spin_boundaries(&module.boundaries, &spin_active_cells, context)?;
+    let spin_boundaries = resolve_spin_boundaries(
+        &module.boundaries,
+        &module.solver.default_external_boundary,
+        &spin_active_cells,
+        context,
+    )?;
     let interfaces = resolve_interfaces(module, context)?;
 
     let mut matching_torques = Vec::new();
@@ -3928,8 +3939,13 @@ fn spin_condition_is_neutral(condition: &ResolvedSpinBoundaryConditionIR) -> boo
     }
 }
 
+/// Source id of a SpinInsulating face inserted by the planner rather than
+/// authored. Provenance derives `inserted_default_boundaries` from it.
+const DEFAULT_SPIN_INSULATING_SOURCE_ID: &str = "default:spin_insulating";
+
 fn resolve_spin_boundaries(
     boundaries: &[SpinBoundaryIR],
+    default_external_boundary: &str,
     spin_active_cells: &[bool],
     context: &FdmSpinTransportResolutionContext<'_>,
 ) -> Result<Vec<ResolvedSpinBoundaryFaceIR>, Vec<String>> {
@@ -4024,10 +4040,15 @@ fn resolve_spin_boundaries(
     }
 
     if claims.is_empty() {
+        if default_external_boundary != "spin_insulating" {
+            return Err(vec![format!(
+                "no authored spin boundary claims an active external FDM face and default_external_boundary='{default_external_boundary}' forbids inserting SpinInsulating; fallback=none"
+            )]);
+        }
         return Ok(all_boundary_faces()
             .into_iter()
             .map(|face| ResolvedSpinBoundaryFaceIR {
-                source_id: "default:spin_insulating".to_string(),
+                source_id: DEFAULT_SPIN_INSULATING_SOURCE_ID.to_string(),
                 face,
                 condition: ResolvedSpinBoundaryConditionIR::SpinInsulating,
             })
@@ -4043,7 +4064,7 @@ fn resolve_spin_boundaries(
             .collect::<Vec<_>>();
         if active.is_empty() {
             resolved.push(ResolvedSpinBoundaryFaceIR {
-                source_id: "default:spin_insulating".to_string(),
+                source_id: DEFAULT_SPIN_INSULATING_SOURCE_ID.to_string(),
                 face,
                 condition: ResolvedSpinBoundaryConditionIR::SpinInsulating,
             });
@@ -4784,6 +4805,32 @@ mod tests {
         )
         .expect_err("open conductor must have no return path");
         assert!(errors.iter().any(|error| error.contains("return path")));
+    }
+
+    #[test]
+    fn reject_unassigned_spin_boundary_policy_fails_closed_without_claims() {
+        let owners = ["strip"];
+        let region_mask = [0];
+        let magnetization = [[0.0, 0.0, 1.0]];
+        let ms = [8.0e5];
+        let region_ids = BTreeMap::new();
+        let context = context(&owners, &region_mask, &magnetization, &ms, &region_ids);
+        let mut problem = problem(ExecutionDevice::Cpu);
+        assert!(problem.spin_transport_modules[0].boundaries.is_empty());
+        problem.spin_transport_modules[0]
+            .solver
+            .default_external_boundary = "reject_unassigned".into();
+
+        let error = resolve_spin_transport(&problem, BackendTarget::Fdm, &context)
+            .expect_err("reject_unassigned must not be silently replaced by SpinInsulating");
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("reject_unassigned") && reason.contains("fallback=none")),
+            "{:?}",
+            error.reasons
+        );
     }
 
     #[test]
