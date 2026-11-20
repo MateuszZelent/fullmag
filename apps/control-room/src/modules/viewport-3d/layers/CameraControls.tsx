@@ -4,7 +4,7 @@ import { OrbitControls as DreiOrbitControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useRef } from "react";
 import type { ComponentRef } from "react";
-import { MathUtils, PerspectiveCamera, type Camera } from "three";
+import { MathUtils, PerspectiveCamera, Vector3, type Camera } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import {
@@ -14,6 +14,12 @@ import {
 import { nearTuple3, sameTuple3 } from "../viewport3dMath";
 import { scheduleViewport3DCameraRestCommit, VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS } from "./viewport3DCameraRestCommit";
 import { resolveViewport3DCameraDepthRange } from "./viewport3DCameraClip";
+import {
+  resolveViewport3DFlyStep,
+  resolveViewport3DOrbitReturn,
+  VIEWPORT_3D_FREE_PIVOT_FRACTION,
+  type Viewport3DRotationModeForFly,
+} from "./viewport3DCameraFly";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import {
@@ -892,6 +898,8 @@ interface OrbitCameraControlsProps {
   onOrbitDebugAnglesChange?: (angles: Viewport3DOrbitDebugAngles) => void;
   tracker: Viewport3DResourceTracker;
   interactionBlocked?: boolean;
+  /** "camera" flies and looks around from the camera; "object" orbits the target. */
+  rotationMode?: Viewport3DRotationModeForFly;
 }
 
 
@@ -909,6 +917,8 @@ function useOrbitCameraControlsModel({
   onCameraInteractionStart,
   onOrbitDebugAnglesChange,
   tracker,
+  interactionBlocked = false,
+  rotationMode = "object",
 }: OrbitCameraControlsProps) {
   const { camera, size } = useThree();
   const invalidate = useBatchedInvalidate("camera");
@@ -1384,6 +1394,68 @@ function useOrbitCameraControlsModel({
     cameraGestureEndedRef.current = true;
     scheduleCameraControlsPoseCommit(epoch, { restart: true });
   }, [scheduleCameraControlsPoseCommit]);
+
+  // Wheel navigation that does not stall at the orbit target
+  // (viewport3DCameraFly.ts). It runs in the capture phase so the orbit dolly
+  // never sees the events it replaces, and reuses the gesture callbacks so
+  // commits, damping tails and diagnostics follow the ordinary path.
+  const sceneRadius = bounds?.radius ?? FALLBACK_CAMERA_BOUNDS.radius;
+  useEffect(() => {
+    const element = gl.domElement;
+    const forward = new Vector3();
+    const onWheel = (event: WheelEvent) => {
+      const controls = controlsRef.current;
+      if (!controls || interactionBlocked) return;
+      const step = resolveViewport3DFlyStep({
+        deltaY: event.deltaMode === 1 ? event.deltaY * 33 : event.deltaY,
+        mode: rotationMode,
+        orthographic: cameraProjection === "orthographic",
+        sceneRadius,
+        targetDistance: camera.position.distanceTo(controls.target),
+      });
+      if (!step) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      handleTransitionStart();
+      camera.getWorldDirection(forward).multiplyScalar(step.distance);
+      camera.position.add(forward);
+      controls.target.add(forward);
+      controls.update();
+      handleEnd();
+      invalidate();
+    };
+    element.addEventListener("wheel", onWheel, { capture: true, passive: false });
+    return () => element.removeEventListener("wheel", onWheel, { capture: true });
+  }, [camera, cameraProjection, gl, handleEnd, handleTransitionStart, interactionBlocked, invalidate, rotationMode, sceneRadius]);
+
+  // A free camera looks around from where it stands: its orbit pivot sits just
+  // in front of it. Returning to object orbit re-centres on the scene: the
+  // pivot goes back to the scene centre and the camera turns to face it,
+  // stepping back to a working distance when it flew far away or inside.
+  const pivotModeRef = useRef(rotationMode);
+  useEffect(() => {
+    if (pivotModeRef.current === rotationMode) return;
+    pivotModeRef.current = rotationMode;
+    const controls = controlsRef.current;
+    if (!controls || cameraProjection === "orthographic") return;
+    handleTransitionStart();
+    if (rotationMode === "camera") {
+      const forward = camera.getWorldDirection(new Vector3());
+      controls.target.copy(camera.position).addScaledVector(forward, sceneRadius * VIEWPORT_3D_FREE_PIVOT_FRACTION);
+    } else {
+      const center = new Vector3(...(bounds?.center ?? FALLBACK_CAMERA_BOUNDS.center));
+      const placement = resolveViewport3DOrbitReturn({
+        camera: camera.position.toArray() as [number, number, number],
+        center: center.toArray() as [number, number, number],
+        sceneRadius,
+      });
+      controls.target.copy(center);
+      camera.position.set(...placement);
+    }
+    controls.update();
+    handleEnd();
+    invalidate();
+  }, [bounds?.center, camera, cameraProjection, handleEnd, handleTransitionStart, invalidate, rotationMode, sceneRadius]);
 
   return {
     controlsRef,

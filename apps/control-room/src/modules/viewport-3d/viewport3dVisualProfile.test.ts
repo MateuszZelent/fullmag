@@ -70,6 +70,14 @@ describe("viewport3d visual profiles", () => {
     ).toBe(1.25);
   });
 
+  it("supersamples Detailed at 1.5x so it differs from Standard at 100% zoom", () => {
+    const detailed = getViewport3DVisualProfile("balanced");
+    const standard = getViewport3DVisualProfile("interactive");
+    expect(resolveViewport3DCanvasDpr({ devicePixelRatio: 1, profile: detailed })).toBe(1.5);
+    expect(resolveViewport3DCanvasDpr({ devicePixelRatio: 3, profile: detailed })).toBe(1.5);
+    expect(resolveViewport3DCanvasDpr({ devicePixelRatio: 1, profile: standard })).toBe(1);
+  });
+
   it("supersamples Figure at 2x even on a standard-density display", () => {
     const figure = getViewport3DVisualProfile("figure");
     for (const devicePixelRatio of [1, 1.25, 2, 3, Number.NaN]) {
