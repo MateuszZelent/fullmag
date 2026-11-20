@@ -227,4 +227,63 @@ describe("Viewport3DExportPanel", () => {
       dom.restore();
     }
   });
+
+  it("returns to the idle state after a 3D export is cancelled", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    let exportSignal: AbortSignal | null = null;
+    export3DModelMock.mockImplementation(
+      ({ options }: { options: { signal: AbortSignal } }) =>
+        new Promise((_resolve, reject) => {
+          exportSignal = options.signal;
+          options.signal.addEventListener(
+            "abort",
+            () => reject(new Error("Export cancelled")),
+            { once: true },
+          );
+        }),
+    );
+
+    try {
+      await act(async () => {
+        root.render(
+          <Viewport3DExportPanel
+            activeMode="3d"
+            getSource={async () => makeModelSource()}
+            onCommand={() => undefined}
+            onModeChange={() => undefined}
+          />,
+        );
+      });
+
+      const exportButton = findElement(
+        container,
+        (element) => element.tagName === "BUTTON" && element.textContent === "Export 3D",
+        "Export 3D",
+      );
+      await act(async () => exportButton.click());
+      expect(exportSignal).toBeInstanceOf(AbortSignal);
+      expect(container.textContent).toContain("Cancel");
+
+      const cancelButton = findElement(
+        container,
+        (element) => element.tagName === "BUTTON" && element.textContent === "Cancel",
+        "Cancel",
+      );
+      await act(async () => cancelButton.click());
+
+      expect(container.textContent).not.toContain("Cancel");
+      const idleButton = findElement(
+        container,
+        (element) => element.tagName === "BUTTON" && element.textContent === "Export 3D",
+        "Export 3D",
+      );
+      expect(idleButton.disabled).toBe(false);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });

@@ -51,7 +51,13 @@ export default function Viewport3DExportDialog({ getSource }: { getSource: () =>
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const job = useRef<AbortController | null>(null);
-  useEffect(() => () => job.current?.abort(), []);
+  useEffect(() => {
+    return () => {
+      const controller = job.current;
+      job.current = null;
+      controller?.abort();
+    };
+  }, []);
 
   const {
     canAnimate,
@@ -87,8 +93,10 @@ export default function Viewport3DExportDialog({ getSource }: { getSource: () =>
         setError(cause instanceof Error ? cause.message : "Could not export the 3D model.");
       }
     } finally {
-      job.current = null;
-      if (!controller.signal.aborted) setExporting(false);
+      if (job.current === controller) {
+        job.current = null;
+        setExporting(false);
+      }
     }
   }
 

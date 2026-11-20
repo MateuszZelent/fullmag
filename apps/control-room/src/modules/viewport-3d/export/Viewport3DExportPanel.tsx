@@ -109,7 +109,13 @@ export function Viewport3DExportPanel({
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const job = useRef<AbortController | null>(null);
-  useEffect(() => () => job.current?.abort(), []);
+  useEffect(() => {
+    return () => {
+      const controller = job.current;
+      job.current = null;
+      controller?.abort();
+    };
+  }, []);
 
   const source = sourceState.source;
   const sourceError = sourceState.error;
@@ -167,8 +173,10 @@ export function Viewport3DExportPanel({
         );
       }
     } finally {
-      job.current = null;
-      if (!controller.signal.aborted) setExporting(false);
+      if (job.current === controller) {
+        job.current = null;
+        setExporting(false);
+      }
     }
   }
 

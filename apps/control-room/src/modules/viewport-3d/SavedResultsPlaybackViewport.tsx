@@ -12,9 +12,11 @@ import { useStudyResultPlaybackResources } from "@/kernel/resources/studyResultP
 import { Button } from "@/shared/ui/Button";
 import { useSavedResultsFrameResource, useSavedResultsManifestResource, useSavedResultsGeometryResource } from "@/kernel/resources/savedResultsPlaybackResources";
 import { scalarColorPaletteGradientCss } from "@/shared/visualization/scalarColorPalette";
+import { Viewport3DCaptureSource } from "./layers/Viewport3DCaptureSource";
 import { Viewport3DCanvas } from "./Viewport3DCanvas";
 import { Viewport3DExportPanel } from "./export/Viewport3DExportPanel";
 import { Viewport3DExportMenu, Viewport3DExportOutlet } from "./export/Viewport3DExportSurface";
+import { downloadSavedPlaybackPng } from "./savedPlaybackPngExport";
 import { useBatchedInvalidate } from "./viewport3dBatchedInvalidate";
 import { Viewport3DErrorBoundary } from "./Viewport3DErrorBoundary";
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
@@ -142,6 +144,8 @@ function SavedViewportExportButton({ onCommand }: { onCommand: (id: string) => v
 
 function SavedFolderPlayback({ source }: { source: SavedFolderPlaybackSelection }) {
   const onCommand = useSavedViewportCommand();
+  const inspectorDestination = useViewport3DInspectorDestination();
+  const canvasHostRef = useRef<HTMLDivElement | null>(null);
   const metadata=useSavedResultsManifestResource(source.itemId);
   const manifest=metadata.data;
   const stage=manifest?.stages.find(s=>s.stage_id===source?.stageId) ?? (!source?.stageId ? manifest?.stages[0] : undefined);
@@ -156,6 +160,39 @@ function SavedFolderPlayback({ source }: { source: SavedFolderPlaybackSelection 
   const presentation=useMemo(()=>frame.data && source && geometry ? savedFrameColors(frame.data,source.component,source.colorLimit,geometry.activeNodes):null,[frame.data,source,geometry]);
   const error=metadata.error?.message ?? geometryResult.error ?? mesh.error?.message ?? frame.error?.message ?? (!stage && manifest ? "This saved stage is unavailable." : null);
   const currentReady=frame.status==="ready" && !error && Boolean(presentation);
+  const getExportSource = async () => {
+    if (!manifest || !stage || !frame.data || !currentReady) {
+      throw new Error("Wait for the selected saved frame to finish loading, then reopen Export.");
+    }
+    const { extractSavedFolderPlaybackExportSource } = await import("./export/extractSavedPlaybackExportSource");
+    return extractSavedFolderPlaybackExportSource({
+      itemId: source.itemId,
+      manifest,
+      stage,
+      name: source.name,
+      component: source.component,
+      colorLimit: presentation?.limit,
+      frameIndex: index,
+      frameData: frame.data,
+      femTopology: mesh.data?.topology,
+      femSupport: mesh.data?.support,
+    });
+  };
+  const exportSavedFolderPng = async () => {
+    const canvas = canvasHostRef.current?.querySelector("canvas");
+    if (!canvas || !currentReady) {
+      viewport3dStore.setCaptureError("Wait for the saved result frame to finish loading before exporting PNG.");
+      return;
+    }
+    viewport3dStore.setCaptureError(null);
+    try {
+      await downloadSavedPlaybackPng(canvas, `${source.name}-saved-frame-${index + 1}.png`);
+    } catch (cause) {
+      viewport3dStore.setCaptureError(
+        cause instanceof Error ? cause.message : "Viewport PNG export failed.",
+      );
+    }
+  };
   return <section className="fm-saved-playback-viewport" aria-label="Saved simulation 3D"
     data-saved-frame-index={index} data-saved-frame-state={currentReady ? "ready" : error ? "error" : "loading"}>
     <div className="fm-saved-playback-caption" role="status">
@@ -164,28 +201,26 @@ function SavedFolderPlayback({ source }: { source: SavedFolderPlaybackSelection 
       {error ? <span role="alert"> · {error}</span> : !currentReady ? " · Loading selected frame…" : null}
     </div>
     {geometry ? (
-      <SavedPlaybackCanvas geometry={geometry} frameIndex={index} colors={currentReady ? presentation?.colors ?? null : null} onCommand={onCommand} />
+      <SavedPlaybackCanvas containerRef={canvasHostRef} geometry={geometry} frameIndex={index} colors={currentReady ? presentation?.colors ?? null : null} onCommand={onCommand} />
     ) : null}
-    <Viewport3DExportOutlet key={source.itemId} getSource={async () => {
-      if (!manifest || !stage || !frame.data || !currentReady) {
-        throw new Error("Wait for the selected saved frame to finish loading, then reopen Export.");
-      }
-      const { extractSavedFolderPlaybackExportSource } = await import("./export/extractSavedPlaybackExportSource");
-      return extractSavedFolderPlaybackExportSource({
-        itemId: source.itemId,
-        manifest,
-        stage,
-        name: source.name,
-        component: source.component,
-        colorLimit: presentation?.limit,
-        frameIndex: index,
-        frameData: frame.data,
-        femTopology: mesh.data?.topology,
-        femSupport: mesh.data?.support,
-      });
-    }} />
+    {inspectorDestination.exportHost ? createPortal(
+      <Viewport3DExportPanel
+        key={`${source.itemId}:${stage?.stage_id ?? ""}`}
+        activeMode={inspectorDestination.exportMode}
+        getSource={getExportSource}
+        onCommand={onCommand}
+        onExportPng={exportSavedFolderPng}
+        onModeChange={setViewport3DExportMode}
+        sourceRevisionKey={`${source.itemId}:${stage?.stage_id ?? ""}:${index}:${source.component}:${String(source.colorLimit)}:${String(currentReady)}`}
+        visible={inspectorDestination.context === "export"}
+      />,
+      inspectorDestination.exportHost,
+    ) : null}
+    <Viewport3DExportOutlet key={source.itemId} getSource={getExportSource} />
     {presentation && currentReady ? <div className="fm-saved-playback-legend" role="group" aria-label="Magnetization color scale">
-      −{presentation.limit.toExponential(3)} <span aria-hidden="true" className="fm-saved-playback-gradient" style={{background:scalarColorPaletteGradientCss("coolwarm")}}/> +{presentation.limit.toExponential(3)} · m_{["x","y","z"][source?.component ?? 2]} [1] · {source?.colorLimit === null ? "automatic per frame" : "fixed scale"} · dimensions in µm
+      <span data-export-annotation-text>−{presentation.limit.toExponential(3)}</span>
+      <span aria-hidden="true" className="fm-saved-playback-gradient" style={{background:scalarColorPaletteGradientCss("coolwarm")}}/>
+      <span data-export-annotation-text>+{presentation.limit.toExponential(3)} · m_{["x","y","z"][source?.component ?? 2]} [1] · {source?.colorLimit === null ? "automatic per frame" : "fixed scale"} · dimensions in µm</span>
     </div> : null}
   </section>;
 }
@@ -233,21 +268,15 @@ function StudyResultPlayback({ source }: { source: SavedStudyPlaybackSelection }
       return;
     }
     viewport3dStore.setCaptureError(null);
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob((next) => resolve(next), "image/png"));
-    if (!blob) {
-      viewport3dStore.setCaptureError("Viewport PNG export failed.");
-      return;
-    }
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.download = `${source.name}-study-${source.studyResult.source.case_id}.png`;
-    link.href = url;
     try {
-      document.body.append(link);
-      link.click();
-    } finally {
-      link.remove();
-      URL.revokeObjectURL(url);
+      await downloadSavedPlaybackPng(
+        canvas,
+        `${source.name}-study-${source.studyResult.source.case_id}.png`,
+      );
+    } catch (cause) {
+      viewport3dStore.setCaptureError(
+        cause instanceof Error ? cause.message : "Viewport PNG export failed.",
+      );
     }
   };
   return (
@@ -288,9 +317,9 @@ function StudyResultPlayback({ source }: { source: SavedStudyPlaybackSelection }
       <Viewport3DExportOutlet getSource={getExportSource} />
       {presentation && ready ? (
         <div aria-label="Magnetization color scale" className="fm-saved-playback-legend" role="group">
-          −{presentation.limit.toExponential(3)}{" "}
+          <span data-export-annotation-text>−{presentation.limit.toExponential(3)}</span>
           <span aria-hidden="true" className="fm-saved-playback-gradient" style={{ background: scalarColorPaletteGradientCss("coolwarm") }} />
-          {" "}+{presentation.limit.toExponential(3)} · m_{["x", "y", "z"][source.component]} [1] · dimensions in µm
+          <span data-export-annotation-text>+{presentation.limit.toExponential(3)} · m_{["x", "y", "z"][source.component]} [1] · dimensions in µm</span>
         </div>
       ) : null}
     </section>
@@ -308,6 +337,10 @@ function SavedPlaybackCanvas({
 }) {
   const { diagnosticRecorder } = useKernel();
   const { colors: themeColors } = useViewport3DColors();
+  const sceneBackground = useMemo(
+    () => themeColors ? new Color(themeColors.background) : null,
+    [themeColors?.background],
+  );
   const camera = useMemo(() => {
     const radius = Math.max(...geometry.size);
     const center = geometry.center;
@@ -320,8 +353,10 @@ function SavedPlaybackCanvas({
     <Viewport3DExportMenu onCommand={onCommand}>
       <div ref={containerRef} className="fm-saved-playback-canvas" tabIndex={0} role="region" aria-label="Saved result 3D view">
         <Viewport3DErrorBoundary diagnosticRecorder={diagnosticRecorder}>
-          <Viewport3DCanvas camera={camera} frameloop="demand" gl={{ preserveDrawingBuffer: true, antialias: true }}
+          <Viewport3DCanvas camera={camera} className="fm-viewport-3d" frameloop="demand" gl={{ preserveDrawingBuffer: true, antialias: true }}
             style={{ background: typeof themeColors?.background === "string" ? themeColors.background : "var(--fm-bg-viewport)" }}>
+            {sceneBackground ? <primitive attach="background" object={sceneBackground} /> : null}
+            <Viewport3DCaptureSource />
             <SavedCamera geometry={geometry} frameIndex={frameIndex} />
             {geometry.kind === "instances" ? <SavedGridLayer geometry={geometry} colors={colors} /> : null}
             {geometry.kind === "grids" ? geometry.grids.map((grid) => (

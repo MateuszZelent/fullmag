@@ -33,9 +33,9 @@ const SETTING_SECTIONS_BY_LABEL = Object.freeze({
   "PNG resolution": "Export",
 });
 
-export async function readViewportInspectorState(page) {
+export async function readViewportInspectorState(page, timeout = MAX_ACTION_TIMEOUT_MS) {
   const rightRail = page.locator(RIGHT_RAIL_SELECTOR);
-  await rightRail.waitFor({ state: "attached", timeout: MAX_ACTION_TIMEOUT_MS });
+  await rightRail.waitFor({ state: "attached", timeout });
   const activeContext = await page.evaluate((railSelector) => {
     const rail = document.querySelector(railSelector);
     if (!rail) return null;
@@ -55,12 +55,10 @@ export async function readViewportInspectorState(page) {
     throw new Error("Viewport Inspector right rail must expose an active context item");
   }
   const { context, open } = activeContext;
-  if (!open || context === "selection") {
-    return { context, open, section: null };
-  }
+  if (context === "selection") return { context, open, section: null };
   if (context === "export") {
-    const exportRegion = getViewportExportRegion(page);
-    await exportRegion.waitFor({ state: "visible" });
+    const exportRegion = page.locator(`[aria-label="${VIEWPORT_EXPORT_REGION_NAME}"]`);
+    await exportRegion.waitFor({ state: "attached", timeout });
     const selectedModeTabs = exportRegion.locator('[role="tab"][aria-selected="true"]');
     if (await selectedModeTabs.count() !== 1) {
       throw new Error("3D Export must expose exactly one selected mode tab");
@@ -72,8 +70,8 @@ export async function readViewportInspectorState(page) {
     return { context, open, section: mode };
   }
 
-  const settings = getViewportSettingsRegion(page);
-  await settings.waitFor({ state: "visible" });
+  const settings = page.locator(`[aria-label="${VIEWPORT_SETTINGS_REGION_NAME}"]`);
+  await settings.waitFor({ state: "attached", timeout });
   const selectedSectionTabs = settings.locator('[role="tab"][aria-selected="true"]');
   if (await selectedSectionTabs.count() !== 1) {
     throw new Error("3D View Settings must expose exactly one selected section tab");
@@ -155,10 +153,10 @@ export async function ensureViewportSettingsSection(page, section, timeout, {
   if (!SETTINGS_SECTIONS.has(section)) {
     throw new Error(`Unknown 3D View Settings section ${section}`);
   }
-  let inspectorState = await readViewportInspectorState(page);
+  let inspectorState = await readViewportInspectorState(page, timeout);
   if (forceCommand && inspectorState.context === "view" && inspectorState.open) {
     await selectViewportInspectorContext(page, "selection", timeout);
-    inspectorState = await readViewportInspectorState(page);
+    inspectorState = await readViewportInspectorState(page, timeout);
   }
   if (inspectorState.context !== "view" || !inspectorState.open) {
     if (forceCommand) {
