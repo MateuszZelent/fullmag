@@ -806,8 +806,8 @@ mod tests {
 
     #[test]
     fn function_field_is_sampled_in_its_frame_at_cells_and_nodes() {
-        let points = [[0.0, 0.0, 0.0], [1.0, 2.0, 0.0], [3.0, 0.0, 1.0]];
-        let translation = [1.0, -1.0, 0.0];
+        let points: [[f64; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 2.0, 0.0], [3.0, 0.0, 1.0]];
+        let translation: [f64; 3] = [1.0, -1.0, 0.0];
         for (frame, origin) in [("object", translation), ("world", [0.0; 3])] {
             let mut problem = ProblemIR::bootstrap_example();
             problem
