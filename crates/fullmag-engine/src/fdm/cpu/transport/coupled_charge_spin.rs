@@ -113,6 +113,10 @@ pub struct CoupledChargeSpinTelemetry {
     pub relative_spin_potential_update: f64,
     pub charge_balance_relative: f64,
     pub spin_balance_relative: f64,
+    /// Signed outward charge current through the external boundary [A].
+    pub charge_net_boundary_current_a: f64,
+    /// Largest local charge-conservation defect over active cells [A/m^3].
+    pub charge_max_abs_divergence_a_per_m3: f64,
     pub warm_start_used: bool,
     pub transport_torque_delta_l2_per_s: Option<f64>,
     pub transport_outer_error_ratio: Option<f64>,
@@ -511,7 +515,15 @@ impl CoupledChargeSpinProblem {
         let (charge_current, spin_current) = self.cell_currents(&state)?;
         let interface_observations = self.interface_observations(&potential, &spin_potential)?;
         let reaction_channels = self.reaction_channels(&spin_potential);
-        let (charge_balance_relative, spin_balance_relative) = self.balance_metrics(
+        let charge_max_abs_divergence_a_per_m3 = self
+            .active_cells
+            .iter()
+            .enumerate()
+            .filter(|(_, active)| **active)
+            .map(|(cell, _)| residual[4 * cell].abs())
+            .fold(0.0, f64::max);
+        let (charge_balance_relative, spin_balance_relative, charge_net_boundary_current_a) = self
+            .balance_metrics(
             &potential,
             &spin_potential,
             &reaction_channels,
@@ -586,6 +598,8 @@ impl CoupledChargeSpinProblem {
                 relative_spin_potential_update: relative_spin_update,
                 charge_balance_relative,
                 spin_balance_relative,
+                charge_net_boundary_current_a,
+                charge_max_abs_divergence_a_per_m3,
                 warm_start_used,
                 transport_torque_delta_l2_per_s,
                 transport_outer_error_ratio,
@@ -1557,7 +1571,7 @@ impl CoupledChargeSpinProblem {
         spin: &[Vector3],
         reactions: &ReactionChannels,
         interfaces: &[SpinInterfaceFluxObservation],
-    ) -> Result<(f64, f64)> {
+    ) -> Result<(f64, f64, f64)> {
         let gradients = self.cell_gradients(potential, spin);
         let mut charge_closure_a: f64 = 0.0;
         let mut charge_scale_a: f64 = 0.0;
@@ -1616,6 +1630,7 @@ impl CoupledChargeSpinProblem {
         Ok((
             charge_closure_a.abs() / charge_scale_a.max(reference_current_a),
             norm3(spin_closure_a) / spin_scale_a.max(reference_current_a),
+            charge_closure_a,
         ))
     }
 

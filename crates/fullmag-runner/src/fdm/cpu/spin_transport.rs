@@ -2207,8 +2207,10 @@ fn solve_coupled_module(
         telemetry: FdmSpinTransportTelemetry {
             charge_iterations: 0,
             charge_residual_l2: solution.telemetry.scaled_charge_residual,
-            charge_net_boundary_current_a: 0.0,
-            charge_max_abs_divergence_a_per_m3: 0.0,
+            charge_net_boundary_current_a: solution.telemetry.charge_net_boundary_current_a,
+            charge_max_abs_divergence_a_per_m3: solution
+                .telemetry
+                .charge_max_abs_divergence_a_per_m3,
             spin_iterations: solution.telemetry.linear_iterations,
             spin_initial_residual_l2: solution
                 .telemetry
