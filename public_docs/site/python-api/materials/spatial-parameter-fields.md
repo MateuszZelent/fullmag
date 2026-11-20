@@ -140,6 +140,11 @@ second free choice.
   parameter's range rules (`Ms > 0`, `Aex >= 0`, `alpha >= 0`, finite) are checked at every
   sample point by the planner, not by the Python constructor.
 
+The planner resolves spatial `Ms`, `Aex`, and `Alpha`. Other scalar parameters
+in the vocabulary below can be authored, but an active spatial assignment
+to one of them fails planning. Single-grid CUDA also applies its existing
+combination checks. Function-field solver runs on hardware remain unqualified.
+
 ### Supported material parameter names
 
 The canonical authoring vocabulary is:
@@ -253,6 +258,10 @@ study.exchange()
 study.stages.add_run(stage_id="inspect_material_field", until=1.0e-15)
 ```
 
+This field changes `Ms` only inside `gradient_window`. The rest of `permalloy_track` retains the
+base value `800e3 A/m`. Because the region belongs to the same object, ordinary exchange remains an
+intra-object interaction; no inter-object coupling is created.
+
 ### Function field example: a damping ramp
 
 The main form is an equation string in Python syntax with named parameters; the `def` form is the
@@ -297,15 +306,11 @@ $x_f=1.4\,\mu\mathrm m$, $\alpha=0.0725$ at $x_f=1.7\,\mu\mathrm m$ and $\alpha=
 end. This example was executed through `fm.load_problem_from_script` (lowering to `ProblemIR`)
 on 2026-11-20; it was not run on a solver.
 
-This field changes `Ms` only inside `gradient_window`. The rest of `permalloy_track` retains the
-base value `800e3 A/m`. Because the region belongs to the same object, ordinary exchange remains an
-intra-object interaction; no inter-object coupling is created.
-
 (python-api-materials-spatial-parameter-fields-problem-ir)=
 ## ProblemIR
 
 The field remains typed in `material_parameter_fields`; it is not flattened to mesh arrays before
-planning. The example above lowers conceptually to:
+planning. The regional `Ms` example lowers to the following assignment:
 
 ```json
 {
@@ -386,7 +391,7 @@ such a change is not a legal round-trip.
 
 | Solver | Device | Realization contract | Qualification boundary |
 |---|---|---|---|
-| FDM | CPU | evaluate constant, linear, and radial fields on active cells under object/region masks; sampled fields are authoring-only | cell-centre frame transform, overlap policy, cardinality, and stencil use must be tested |
+| FDM | CPU | evaluate constant, linear, radial, and function fields at cell centres under object/region masks; sampled fields are authoring-only | cell-centre frame transform, overlap policy, cardinality, and stencil use must be tested |
 | FDM | GPU | single-grid CUDA consumes the cellwise `Ms`, `Aex`, and `Alpha` arrays resolved by the planner, function fields included; multilayer CUDA rejects them before upload | no device qualification of spatial fields on CUDA yet; the combinations blocked by the physics note stay blocked |
 | FEM | CPU | evaluate analytic fields on the selected FEM representation; sampled fields are authoring-only | interpolation, projection, discontinuities, mass/quadrature ownership, and mesh convergence are explicit |
 | FEM | GPU | consume only a resolved FEM field representation that the selected GPU planner/runtime accepts; sampled fields are authoring-only | residency, precision, projection, and reduction parity require executed-device evidence |
