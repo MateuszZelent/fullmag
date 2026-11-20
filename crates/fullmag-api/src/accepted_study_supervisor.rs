@@ -1197,23 +1197,23 @@ fn authorize_host_worker_launch(
     store: &SessionStore,
     lease: &FmsResourceLease,
 ) -> Result<String> {
-    authorize_host_worker_launch_with_timeout(
+    authorize_host_worker_launch_with_budget(
         host,
         store,
         lease,
-        Duration::from_secs(30),
+        remaining_retry_time(Duration::from_secs(30)),
         || {},
     )
 }
 
-fn authorize_host_worker_launch_with_timeout(
+fn authorize_host_worker_launch_with_budget(
     host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
     store: &SessionStore,
     lease: &FmsResourceLease,
-    retry_timeout: Duration,
+    remaining: impl Fn() -> Duration,
     on_retry: impl FnMut(),
 ) -> Result<String> {
-    retry_host_worker_launch_with_timeout(
+    retry_host_worker_launch_with_budget(
         || {
             // Preserve the sampler's unavailable reason if the sample ages
             // between the second preflight read and the locked launch CAS.
@@ -1221,7 +1221,7 @@ fn authorize_host_worker_launch_with_timeout(
             host.ledger().authorize_worker_launch(store, lease)
         },
         on_retry,
-        retry_timeout,
+        remaining,
     )
     .context("authorize host worker launch")
 }
@@ -1233,22 +1233,34 @@ fn retry_host_worker_launch<T>(
     retry_host_worker_launch_with_timeout(operation, on_retry, Duration::from_secs(30))
 }
 
+fn remaining_retry_time(timeout: Duration) -> impl Fn() -> Duration {
+    let deadline = Instant::now() + timeout;
+    move || deadline.saturating_duration_since(Instant::now())
+}
+
 fn retry_host_worker_launch_with_timeout<T>(
+    operation: impl FnMut() -> Result<T>,
+    on_retry: impl FnMut(),
+    timeout: Duration,
+) -> Result<T> {
+    retry_host_worker_launch_with_budget(operation, on_retry, remaining_retry_time(timeout))
+}
+
+fn retry_host_worker_launch_with_budget<T>(
     mut operation: impl FnMut() -> Result<T>,
     mut on_retry: impl FnMut(),
-    retry_timeout: Duration,
+    remaining: impl Fn() -> Duration,
 ) -> Result<T> {
     use std::hash::{Hash, Hasher};
 
     // Both retryable errors precede one-shot permit consumption: writer
     // contention prevents admission locks, while an unavailable compute-node
     // sample and transient GPU inventory are read-only validation failures.
-    let deadline = Instant::now() + retry_timeout;
     let mut attempt = 0_u64;
     loop {
         match operation() {
             Ok(value) => return Ok(value),
-            Err(error) if is_retryable_pre_spawn_host_error(&error) && Instant::now() < deadline =>
+            Err(error) if is_retryable_pre_spawn_host_error(&error) && !remaining().is_zero() =>
             {
                 on_retry();
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1265,7 +1277,7 @@ fn retry_host_worker_launch_with_timeout<T>(
                     Duration::from_millis(5 + hasher.finish() % 36)
                 };
                 attempt = attempt.saturating_add(1);
-                std::thread::sleep(delay.min(deadline.saturating_duration_since(Instant::now())));
+                std::thread::sleep(delay.min(remaining()));
             }
             Err(error) => return Err(error),
         }
@@ -1275,22 +1287,22 @@ fn retry_host_worker_launch_with_timeout<T>(
 fn current_compute_snapshot_before_worker_launch(
     host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
 ) -> Result<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot> {
-    current_compute_snapshot_before_worker_launch_with_timeout(
+    current_compute_snapshot_before_worker_launch_with_budget(
         host,
-        Duration::from_secs(30),
+        remaining_retry_time(Duration::from_secs(30)),
         || {},
     )
 }
 
-fn current_compute_snapshot_before_worker_launch_with_timeout(
+fn current_compute_snapshot_before_worker_launch_with_budget(
     host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
-    retry_timeout: Duration,
+    remaining: impl Fn() -> Duration,
     on_retry: impl FnMut(),
 ) -> Result<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot> {
-    retry_host_worker_launch_with_timeout(
+    retry_host_worker_launch_with_budget(
         || host.required_current_compute_node_snapshot(),
         on_retry,
-        retry_timeout,
+        remaining,
     )
 }
 
@@ -4276,15 +4288,25 @@ accepted worker failed: execute accepted worker Start: controlled failure\n";
             .publish_compute_node_snapshot_with_owner(&fixture._inventory_owner, &stale)
             .unwrap();
 
-        let mut sample_read_retries = 0;
-        let second_read_error = current_compute_snapshot_before_worker_launch_with_timeout(
+        // Keep the real store and ledger reads, but advance the retry budget on
+        // the first retry so a slow runner cannot exhaust it on the first read.
+        fn budget_for_one_retry(retries: usize) -> Duration {
+            if retries == 0 {
+                Duration::from_secs(1)
+            } else {
+                Duration::ZERO
+            }
+        }
+
+        let sample_read_retries = std::cell::Cell::new(0);
+        let second_read_error = current_compute_snapshot_before_worker_launch_with_budget(
             &fixture.host,
-            Duration::from_millis(250),
-            || sample_read_retries += 1,
+            || budget_for_one_retry(sample_read_retries.get()),
+            || sample_read_retries.set(sample_read_retries.get() + 1),
         )
         .unwrap_err();
-        assert!(
-            sample_read_retries > 0,
+        assert_eq!(
+            sample_read_retries.get(), 1,
             "the sample read should be retried before deferral"
         );
         assert!(second_read_error.chain().any(|cause| {
@@ -4292,17 +4314,17 @@ accepted worker failed: execute accepted worker Start: controlled failure\n";
         }));
         assert!(format!("{second_read_error:#}").contains("freshness is Stale"));
 
-        let mut authorization_retries = 0;
-        let error = authorize_host_worker_launch_with_timeout(
+        let authorization_retries = std::cell::Cell::new(0);
+        let error = authorize_host_worker_launch_with_budget(
             &fixture.host,
             &fixture.store,
             &fixture.lease,
-            Duration::from_millis(100),
-            || authorization_retries += 1,
+            || budget_for_one_retry(authorization_retries.get()),
+            || authorization_retries.set(authorization_retries.get() + 1),
         )
         .unwrap_err();
-        assert!(
-            authorization_retries > 0,
+        assert_eq!(
+            authorization_retries.get(), 1,
             "stale authorization should be retried before deferral"
         );
         assert!(error.chain().any(|cause| {
