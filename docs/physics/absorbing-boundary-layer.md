@@ -2,8 +2,8 @@
 
 - Status: draft
 - Owners: Fullmag backend team
-- Last updated: 2026-11-18
-- Related ADRs: none
+- Last updated: 2026-11-20
+- Related ADRs: [ADR 0085](../adr/0085-one-formula-engine-for-antennas-and-absorbing-boundary.md)
 - Related specs: `docs/superpowers/specs/2026-08-04-absorbing-boundary-layer-design.md`
 
 (problem-statement)=
@@ -104,10 +104,38 @@ p_{\mathrm{tanh}}(t)=\frac{1+\tanh(4t-2)/\tanh 2}{2}.
 The constants 9 and 4 are dimensionless and fixed for these presets. The
 `custom` choice evaluates the authored scalar `expression`, with `u` equal to
 the dimensionless ramp coordinate $t_f$. For example, `u**3` is a cubic taper.
-The accepted operators are `+ - * / **` and parentheses. Available single-argument
-functions are `abs`, `sqrt`, `exp`, `log` (natural logarithm), `log1p`, `tanh`,
-`sin`, and `cos`. Numeric literals use decimal or scientific notation. The
-expression is limited to 256 ASCII characters.
+
+(abl-formula-language)=
+The expression is written in the formula language shared with the antenna
+masks and time functions, `field_expr.v1`
+([mask-function contract](../specs/mask-function-v1.md), sections 3 and 8;
+[ADR 0085](../adr/0085-one-formula-engine-for-antennas-and-absorbing-boundary.md)).
+It is a profile formula: its only variable is `u`. The crate `fullmag-expr`
+parses and evaluates it for the IR validator and the planner; the Python
+package checks it with the same syntax-tree rules as the antenna functions and
+evaluates the checked tree with the same IEEE-754 operations. The language
+provides:
+
+- the operators `+ - * / **` and parentheses, with Python's precedence
+  (`-u**2` is $-(u^2)$; `u**2**0.5` is $u^{(2^{0.5})}$; the exponent may
+  carry a sign, `2**-u**2`);
+- the constant `pi`;
+- the one-argument functions `sin cos tan asin acos atan sinh cosh tanh exp log
+  log1p sqrt abs` (`log` is the natural logarithm, `log1p(a)` is
+  $\ln(1+a)$) and the two-argument functions `atan2 min max`;
+- decimal and scientific literals (`2`, `0.5`, `.5`, `5.`, `5e-1`). As in
+  Python, a decimal integer literal must not start with `0` unless all its
+  digits are zeros (`01` is rejected, `00`, `0.5` and `01.5` are accepted).
+
+Every other text is rejected, among them attribute access (`math.sin(u)`,
+`u.real`), a parenthesized function name (`(tanh)(u)`), the legacy power
+spelling `^`, `heaviside`, the variables `x`, `y`, `z` and `t`, other names,
+hexadecimal, octal, binary and underscore literals (`0x2`, `1_0`), comments,
+comparisons, conditional expressions and a trailing comma in an argument
+list. Arithmetic is IEEE-754 binary64: an intermediate value may be infinite
+(`1/exp(999)` is $0$), and only the value of the expression is checked. The
+expression is limited to 256 printable ASCII characters (tabs allowed) and to
+128 levels of nesting.
 
 The expression must give $p(0)=0$ and $p(1)=1$ within $10^{-12}$ and output
 finite values in $[0,1]$ within the same tolerance. Validation probes 257 evenly
@@ -116,6 +144,11 @@ evaluated ramp sample and rejects invalid values. The probe is a finite
 validation check. Continuity and monotonicity between samples are properties
 of the user's formula. The adjoining plateau has width $W-R$ and exact weight
 one. Points outside the layer receive zero weight.
+
+The presets, written as profile formulas, are `u`, `u**2`,
+`6*u**5 - 15*u**4 + 10*u**3`, `log1p(9*u)/log(10)` and
+`(1 + tanh(4*u - 2)/tanh(2))/2`; the presets themselves are evaluated by fixed
+code, not by the formula engine.
 
 At corners the face contributions are combined by `max`, so the requested
 maximum damping is not multiplied by the number of faces.
@@ -148,7 +181,7 @@ A region mask clips the chosen band in the region's own frame. With `region_boun
 
 For constructive solid geometry the planner compiles exact distances on the sampled side. It supports translated metric primitives, interior intersections and differences with a supported exterior distance for the subtracted solid. An interior union requires disjoint bounding boxes. The boxes establish separation only. The component surfaces determine the actual distance. Overlapping branches of a Y-junction, unsupported transforms or imported contours require an explicit coordinate or suitable analytic layer plus a supported mask. The UI checks an enabled boundary region against the same metric evaluator before saving, even before a mesh is available. Planning checks the same geometry when a script is run. A translated Boolean difference such as `fm.Sphere(R) - fm.Sphere(r)` is supported for a spherical shell. At a nominal plane, radial surface or metric region boundary, the zero-distance comparison accounts for roundoff in the geometry operations. A custom coordinate uses the sign returned by its mathematical expression.
 
-A custom `geometry.expression` accepts decimal literals, `x`, `y`, `z`, parentheses, the same arithmetic operators and unary functions as the profile, and the two-argument functions `min(a,b)` and `max(a,b)`. Coordinates and results are in metres. The 256-character limit applies, and planning rejects undefined or nonfinite sampled values. For example, `min(5e-7-sqrt(x*x+y*y), sqrt(x*x+y*y)-2e-7)` measures the inward distance from either circular edge of an annulus. Points in the hole have negative distance. A general implicit function gives the requested physical width only where its scalar coordinate equals distance. A subsequent `expression="u**3"` on the layer chooses the ramp independently.
+A custom `geometry.expression` is a distance formula of the same language: the rules of the profile apply with the variables `x`, `y`, `z` in place of `u` (`t` and `u` are rejected). Coordinates and results are in metres. The 256-character limit applies, and planning rejects nonfinite sampled values. For example, `min(5e-7-sqrt(x*x+y*y), sqrt(x*x+y*y)-2e-7)` measures the inward distance from either circular edge of an annulus. Points in the hole have negative distance. A general implicit function gives the requested physical width only where its scalar coordinate equals distance. A subsequent `expression="u**3"` on the layer chooses the ramp independently.
 
 FDM samples the same analytical field at magnetic cell centers and FEM at magnetic nodes. The oracle compares against each discretization's sampling locations. Validate the legacy mapping, independent ends, translated and tilted rings, region clipping and overlap, curved contours and invalid or dangling references. Qualify FDM CPU, FDM GPU, FEM CPU and FEM GPU individually; material-map agreement and reflection measurements are separate outcomes.
 
@@ -418,6 +451,8 @@ still rejected by the execution planner.
 | Canonical IR | `crates/fullmag-ir/src/model.rs:MagnetIR` | typed optional module |
 | IR validation | `crates/fullmag-ir/src/absorbing_boundary.rs:validate_absorbing_boundary` | fail-closed schema validation |
 | Shared ramp evaluator | `crates/fullmag-ir/src/absorbing_boundary.rs:ResolvedAbsorbingBoundaryProfile` | normalized presets and checked scalar expression sampling |
+| Formula language | `crates/fullmag-expr/src/function.rs:compile_function` | parse and evaluate profile (`FunctionKind::Profile`) and distance (`FunctionKind::Distance`) formulas |
+| Python formula front end | `packages/fullmag-py/src/fullmag/model/mask_function.py:compile_formula` | check a formula with the antenna syntax-tree rules and evaluate the checked tree |
 | FDM/FEM lowering | `crates/fullmag-plan/src/spatial_absorber.rs:apply_absorbing_boundary_layer` | cell/node alpha-field materialization |
 | UI authoring | `apps/control-room/src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.tsx:ObjectAbsorbingBoundaryPanel` | v2 scene-resource editing |
 
@@ -452,7 +487,13 @@ and record the actual device/runtime provenance.
 
 Python tests cover proxy compatibility, validation, IR lowering, and script
 round-trip. The new profile tests check analytic midpoint values, exact plateau,
-invalid custom expressions, and Python export. Rust tests cover IR validation,
+invalid custom expressions, and Python export. One case table,
+`crates/fullmag-ir/tests/fixtures/absorbing_boundary_formula_cases.json`, lists
+accepted and rejected profile and distance formulas with their values and error
+category; the Rust and the Python tests both read it. A second table,
+`absorbing_boundary_formula_baseline.json`, holds the values of the evaluator
+that preceded the shared language at all 257 probe points; both tests require
+the same values for every formula that evaluator accepted. Rust tests cover IR validation,
 planner profiles, region ordering,
 and single-grid FDM CUDA planner materialization. Authoring tests cover scene and script
 builder round-trip. The `examples/fem_absorbing_boundary.py` loader test verifies the
@@ -509,7 +550,9 @@ parameter, backend lane, and implementation symbol cited here:
 | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | Python-to-IR lowering |
 | `crates/fullmag-ir/src/absorbing_boundary.rs` | `validate_absorbing_boundary` | IR validation |
 | `crates/fullmag-ir/src/absorbing_boundary.rs` | `ResolvedAbsorbingBoundaryProfile` | Shared preset and expression evaluator |
-| `packages/fullmag-py/src/fullmag/model/_absorbing_boundary_expression.py` | `compile_expression` | Python expression validation and analytic sampling |
+| `packages/fullmag-py/src/fullmag/model/absorbing_boundary.py` | `compile_profile_expression` | Python profile-formula validation and analytic sampling |
+| `packages/fullmag-py/src/fullmag/model/mask_function.py` | `compile_formula` | Shared Python front end of the formula language |
+| `crates/fullmag-expr/src/function.rs` | `compile_function` | Shared Rust parser and evaluator of the formula language |
 | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_absorbing_boundary` | Canonical editable profile export |
 | `crates/fullmag-plan/src/spatial_absorber.rs` | `apply_absorbing_boundary_layer` | FDM/FEM alpha-field materialization |
 | `tests/standard_problems/absorbing_boundary/prepare.py` | `prepare_case` | Matched wave-packet inputs for both meshes and all execution lanes |
@@ -523,8 +566,8 @@ parameter, backend lane, and implementation symbol cited here:
 | `packages/fullmag-py/src/fullmag/model/absorbing_boundary.py` | `class AbsorbingGeometry` | Validate named distance geometries and their SI parameters. |
 | `crates/fullmag-ir/src/model.rs` | `SpatialAbsorbingLayerIR` | Represent a named layer and its optional region scope. |
 | `crates/fullmag-ir/src/absorbing_boundary.rs` | `validate_absorbing_boundary_config` | Validate unique layer IDs, numeric domains and geometry expressions. |
-| `crates/fullmag-ir/src/absorbing_boundary.rs` | `AbsorbingBoundaryCoordinate` | Parse the restricted distance expression and evaluate finite samples. |
-| `packages/fullmag-py/src/fullmag/model/_absorbing_boundary_expression.py` | `compile_distance_expression` | Validate distance expressions independently from normalized profiles. |
+| `crates/fullmag-ir/src/absorbing_boundary.rs` | `AbsorbingBoundaryCoordinate` | Compile the distance formula with `fullmag-expr` and evaluate finite samples. |
+| `packages/fullmag-py/src/fullmag/model/absorbing_boundary.py` | `compile_distance_expression` | Validate distance formulas independently from normalized profiles. |
 | `crates/fullmag-plan/src/spatial_absorber.rs` | `MetricShape` | Compile the exact sided distance for supported region boundaries. |
 | `crates/fullmag-plan/src/spatial_absorber.rs` | `RegionMask` | Restrict contributions to the referenced region in its own frame. |
 | `packages/fullmag-py/tests/test_absorbing_boundary.py` | `test_spatial_layers_round_trip_scene_script_and_ir` | Round-trip six geometries and independent profiles through scene export and canonical IR. |

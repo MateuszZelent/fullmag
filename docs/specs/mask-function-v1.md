@@ -4,7 +4,9 @@
 - Schema versions: `mask_field_drive.v1`, `field_expr.v1`, `fullmag_time_expr.v1`
 - Owner of the semantics: `ProblemIR` and the crate `fullmag-expr`
 - Related: [ADR 0081](../adr/0081-explicit-field-masks.md),
+  [ADR 0085](../adr/0085-one-formula-engine-for-antennas-and-absorbing-boundary.md),
   [physics note 0922](../physics/0922-masks-for-field-excitation.md),
+  [absorbing boundary layer](../physics/absorbing-boundary-layer.md),
   [design](../superpowers/specs/2026-11-13-field-masks-design.md)
 
 (mask-function-v1-scope)=
@@ -23,6 +25,11 @@ the three data languages behind it:
 3. the time bytecode `fullmag_time_expr.v1` consumed by the solvers.
 
 The solver never calls Python. A mask equation is evaluated by the planner only.
+
+The same equation language also carries the two formulas of an absorbing
+boundary layer, a ramp profile `u -> number` and a distance `(x, y, z) -> number`
+(section 8). They are not mask field drives; they share the parser, the
+evaluator and the error codes.
 
 (mask-function-v1-python)=
 ## 2. Restricted Python
@@ -51,7 +58,8 @@ The solver never calls Python. A mask equation is evaluated by the planner only.
 - Rejected with `MaskFunctionError("line N: …")`: `if`, `for`, `while`, `with`,
   `try`, comprehensions, lambdas, conditional expressions, comparisons, boolean
   operators, attribute access other than `math.<function>`, subscripts, calls to
-  any other function, augmented operators other than `+= -= *= /= **=`, tuple
+  any other function, a parenthesized function name (`(sin)(x)`, which
+  `field_expr.v1` cannot read), augmented operators other than `+= -= *= /= **=`, tuple
   assignment, starred arguments,
   keyword-only and positional-only parameters, `*args`, `**kwargs`.
 - A function without retrievable source (built-in, lambda, interactive input) is
@@ -74,6 +82,10 @@ exponent := ("e" | "E") ["+" | "-"] digits
 name   := [A-Za-z_][A-Za-z0-9_]*
 ```
 
+- A number written as `digits` alone (no `.`, no exponent) must not start with
+  `0` unless all its digits are `0`: `01` is an `expr_syntax` error, as in
+  Python; `0`, `00`, `0.5`, `01.5` and `01e3` are numbers.
+
 - Whitespace between tokens is ignored. `**` is one token: its two stars must
   touch (`* *` is a syntax error, as in Python).
 - `**` is the power operator, with Python's precedence: it is
@@ -88,16 +100,33 @@ name   := [A-Za-z_][A-Za-z0-9_]*
   because the change adds a spelling and changes no meaning: every text
   accepted before is accepted with the same value and the same time bytecode.
   An equation with `**` is not readable by builds older than this change.
-- Variables: `x`, `y`, `z` in a mask function; `t` in a time function.
-- Reserved names: `x y z t pi` and the function names. A parameter or a local
-  may not use a reserved name or a Python keyword (`lambda`, `class`, …), since
-  an exported script writes these names as Python names. Parameter and local
-  names are unique within one function.
+  A profile or distance formula (section 8) rejects `^` with `expr_syntax`: no
+  stored formula of those kinds used it.
+- Variables: `x`, `y`, `z` in a mask function; `t` in a time function; `u`
+  in a profile; `x`, `y`, `z` in a distance (section 8). `u` is a variable
+  of a profile only: in the other kinds it is an ordinary name.
+- Reserved names: `x y z t pi` and the function names (`log1p` included).
+  A parameter or a local may not use a reserved name or a Python keyword
+  (`lambda`, `class`, …), since an exported script writes these names as
+  Python names; in a profile it may not be named `u` either. Parameter and
+  local names are unique within one function.
 - An equation is one line: a line break is an `expr_syntax` error.
 - Functions and arity: one argument — `sin cos tan asin acos atan sinh cosh tanh
-  exp log sqrt abs`; two arguments — `atan2 min max`.
+  exp log sqrt abs`; two arguments — `atan2 min max`. These are available in
+  every kind. Two more one-argument functions depend on the kind:
+
+  | Function | Mask | Time | Profile | Distance |
+  |---|---|---|---|---|
+  | `log1p(a)` = $\ln(1+a)$ | no | no | yes | yes |
+  | `heaviside(a)` (0, ½ at 0, 1) | yes | yes | no | no |
+
+  `log1p` has no opcode in `fullmag_time_expr.v1` (section 4), so a time
+  function cannot use it; `heaviside` serves the spin-transfer-torque time
+  expressions. A function that the kind does not provide is an
+  `expr_unknown_name` error.
 - A local may refer to parameters and to locals defined before it.
-- Limits: 4096 characters and 512 syntax nodes per equation; 64 parameters and
+- Limits: 4096 characters, 512 syntax nodes and 128 levels of nesting
+  (parentheses, argument lists, unary signs and exponents) per equation; 64 parameters and
   64 locals per function. With its locals substituted, an equation has at most
   65 536 nodes and 512 levels of nesting (a chain of locals that doubles at each
   step is rejected before it is expanded).
@@ -113,6 +142,21 @@ name   := [A-Za-z_][A-Za-z0-9_]*
   expression with `**`; a negative folded parameter is parenthesized
   (`((-2.0)**2.0)`).
 
+Version. The text stays `field_expr.v1` after the additions of 2026-11-20
+(profile and distance kinds, `log1p`, the leading-zero rule). The kinds and
+`log1p` add texts and change the value of none: the formulas of an absorbing
+boundary layer are stored in their own `ProblemIR` fields, which carry no
+expression version and keep their shape. The leading-zero rule makes one
+previously accepted text invalid: an integer literal such as `01`, read as 1
+before, is now an `expr_syntax` error, as it is in Python. No writer emits one:
+the transpiler copies Python source, in which `01` is a syntax error, and
+writes other numbers with `repr`; the old formula parsers of the absorbing
+boundary layer rejected `01` already. A hand-written mask or time equation
+with `01` now fails validation instead of loading. Reserving `log1p` likewise
+rejects a parameter or local of that name. Since no accepted text changes its
+value ([compatibility policy](problem-ir-compatibility-v1.md), section 4),
+the version is kept.
+
 Error codes (`FunctionError.code`):
 
 | Code | Meaning |
@@ -121,7 +165,7 @@ Error codes (`FunctionError.code`):
 | `expr_unknown_name` | a name is not a variable, parameter, earlier local, `pi` or function |
 | `expr_arity` | wrong number of function arguments, or wrong number of outputs |
 | `expr_too_large` | a limit of this section is exceeded |
-| `mask_function_wrong_variable` | `t` in a mask function, or `x`, `y`, `z` in a time function |
+| `mask_function_wrong_variable` | `t` in a mask function, or `x`, `y`, `z` in a time function; `x`, `y`, `z`, `t` in a profile; `t` in a distance |
 | `expr_name_invalid` | a parameter or local uses a reserved name, a Python keyword or a duplicate name |
 
 Every error carries the path (`parameters[i]`, `locals[i]`, `outputs[c]`) and the
@@ -248,3 +292,38 @@ both position and time is rejected with `mask_not_separable` and the
 expression (for a call, the whole call, for example
 `exp(-(x - v * t) ** 2 / s ** 2)`); more than 8 terms are rejected with
 `mask_too_many_terms`.
+
+(mask-function-v1-formulas)=
+## 8. Profile and distance formulas
+
+An absorbing boundary layer
+([physics note](../physics/absorbing-boundary-layer.md#abl-formula-language))
+stores up to two formulas as plain strings in `ProblemIR`:
+
+| Field | Kind (`FunctionKind`) | Variables | Output |
+|---|---|---|---|
+| `absorbing_boundary[.layers[]].expression` | `Profile` | `u` (ramp coordinate, dimensionless) | one number, dimensionless |
+| `absorbing_boundary.layers[].geometry.expression` | `Distance` | `x`, `y`, `z` (metres, layer frame) | one number, metres |
+
+- A formula is one equation of section 3 for its kind: no parameters, no
+  locals, one output. `pi`, the shared functions and `log1p` are available;
+  `heaviside` and `^` are not.
+- `fullmag-expr` compiles it (`compile_function`) and evaluates it
+  (`CompiledFunction::eval_profile`, `CompiledFunction::eval_distance`) with
+  the arithmetic of section 3. Only the value of the formula is checked;
+  intermediate infinities follow IEEE-754.
+- The owner adds its own rules in `crates/fullmag-ir/src/absorbing_boundary.rs`:
+  at most 256 characters, printable ASCII or tab only, not blank; a profile
+  must give finite values in $[0, 1]$ at the 257 points $u = k/256$ and
+  $p(0) = 0$, $p(1) = 1$ within $10^{-12}$. An engine error is reported with its
+  code and zero-based character position, for example
+  `expression error expr_syntax at character 0: integer literal '01' has a leading zero`.
+- The Python front end (`fullmag.model.mask_function.compile_formula`) parses
+  the string with `ast`, applies the syntax-tree checker of the antenna
+  functions for the kind (no capture of free names, no `math.` attributes),
+  checks the tokens that `ast` does not keep (literal spellings, a trailing
+  comma, a parenthesized function name, the nesting depth of section 3) and
+  evaluates the checked tree with `math` and IEEE-754 results where `math`
+  raises. It never calls `eval`.
+- The accept/reject table shared by the Rust and Python tests is
+  `crates/fullmag-ir/tests/fixtures/absorbing_boundary_formula_cases.json`.
