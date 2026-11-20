@@ -3,23 +3,40 @@ import { Button } from "@/shared/ui/Button";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
-import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
+import { useEditableRowKeys } from "@/shared/utils/useEditableRowKeys";
 import { chargeBoundaryKinds, chargeMaterialFields, changeTransportBoundaryKind, parseTransportScopeOption, spinBoundaryKinds, spinMaterialFields, transportRows, transportScopeOptions, updateTransportRow, type CollectionRow } from "./TransportCollectionFieldsModel";
 
 interface Props { family: "current_transport" | "spin_transport"; collection: "domain" | "materials" | "boundaries"; value: string; scene: SceneResource | null; onChange: (value: string) => void }
 const record = (value: unknown): CollectionRow => value && typeof value === "object" && !Array.isArray(value) ? value as CollectionRow : {};
 const text = (value: unknown): string => value === null || value === undefined ? "" : Array.isArray(value) ? value.join(", ") : String(value);
-export function TransportCollectionFields({ family, collection, value, scene, onChange }: Props) {
+export function TransportCollectionFields(props: Props) {
   let rows: CollectionRow[];
-  try { rows = transportRows(value); } catch (error) { return <FeedbackBanner kind="error" message={error instanceof Error ? error.message : String(error)} />; }
+  try { rows = transportRows(props.value); } catch (error) { return <FeedbackBanner kind="error" message={error instanceof Error ? error.message : String(error)} />; }
+  return <TransportRows {...props} rows={rows} />;
+}
+function TransportRows({ family, collection, value, scene, onChange, rows }: Props & { rows: CollectionRow[] }) {
+  function identity(row: CollectionRow) {
+    if (collection === "boundaries") return JSON.stringify([collection, row.id]);
+    const scope = collection === "materials" ? record(row.region) : row;
+    return JSON.stringify([collection, scope.object_id, scope.region_id]);
+  }
+  const rowKeys = useEditableRowKeys(rows.map(identity));
   const scopes = transportScopeOptions(scene);
-  const update = (index: number, path: string[], input: string, kind?: "text" | "number" | "vector" | "reaction") => onChange(updateTransportRow(value, index, path, input, kind));
+  const update = (index: number, path: string[], input: string, kind?: "text" | "number" | "vector" | "reaction") => {
+    const next = updateTransportRow(value, index, path, input, kind);
+    if (collection === "boundaries" && path.length === 1 && path[0] === "id") {
+      rowKeys.rename(index, identity(transportRows(next)[index]));
+    }
+    onChange(next);
+  };
   const scopeField = (index: number, ref: CollectionRow, path: string[], label: string) => <FormField label={label} type="select" value={JSON.stringify([ref.object_id ?? "", ref.region_id ?? ""])} onChange={(event) => {
     const parsedScope = parseTransportScopeOption(event.currentTarget.value);
     if (!parsedScope) return;
     const [objectId, regionId] = parsedScope;
     const first = updateTransportRow(value, index, [...path, "object_id"], objectId);
-    onChange(updateTransportRow(first, index, [...path, "region_id"], regionId));
+    const next = updateTransportRow(first, index, [...path, "region_id"], regionId);
+    rowKeys.rename(index, identity(transportRows(next)[index]));
+    onChange(next);
   }}><option value={'["",""]'}>Select authored object or region</option>
     {ref.object_id && !scopes.some((scope) => scope.objectId === ref.object_id && scope.regionId === (ref.region_id ?? "")) ? <option value={JSON.stringify([ref.object_id, ref.region_id ?? ""])}>Unavailable: {text(ref.object_id)} / {text(ref.region_id)}</option> : null}
     {scopes.map((scope) => <option key={`${scope.objectId}:${scope.regionId}`} value={JSON.stringify([scope.objectId, scope.regionId])}>{scope.label}</option>)}
@@ -30,11 +47,7 @@ export function TransportCollectionFields({ family, collection, value, scene, on
     <FormField label={`${label} outward orientation`} value={text(ref.orientation)} onChange={(event) => update(index, [...path, "orientation"], event.currentTarget.value, "vector")} />
   </InspectorGroup>;
   return <InspectorGroup title={`${family === "spin_transport" ? "Spin" : "Charge"} ${collection}`} collapsible defaultOpen>
-    {keyedOccurrences(rows, (row) => collection === "domain"
-      ? JSON.stringify([collection, row.object_id, row.region_id])
-      : collection === "materials"
-        ? JSON.stringify([collection, record(row.region).object_id, record(row.region).region_id])
-        : JSON.stringify([collection, row.id])).map(({ item: row, key }, index) => <InspectorGroup key={key} title={`${collection} ${index + 1}`}>
+    {rows.map((row, index) => <InspectorGroup key={rowKeys.keys[index]} title={`${collection} ${index + 1}`}>
       {collection === "domain" ? scopeField(index, row, [], "Domain scope") : null}
       {collection === "materials" ? <>
         {scopeField(index, record(row.region), ["region"], "Material scope")}
@@ -60,9 +73,16 @@ export function TransportCollectionFields({ family, collection, value, scene, on
           <Button type="button" onClick={() => onChange(JSON.stringify(rows.map((item, i) => i === index ? { ...row, surfaces: [...(Array.isArray(row.surfaces) ? row.surfaces : []), {}] } : item)))}>Add explicit surface</Button>
         </>}
       </> : null}
-      <Button type="button" onClick={() => onChange(JSON.stringify(rows.filter((_, i) => i !== index)))}>Remove row from draft</Button>
+      <Button type="button" onClick={() => {
+        rowKeys.remove(index);
+        onChange(JSON.stringify(rows.filter((_, i) => i !== index)));
+      }}>Remove row from draft</Button>
     </InspectorGroup>)}
-    <Button type="button" onClick={() => onChange(JSON.stringify([...rows, collection === "domain" ? {} : collection === "materials" ? { region: {}, material: {} } : { id: "", surfaces: [] }]))}>Add explicit {collection === "domain" ? "domain scope" : collection === "materials" ? "material assignment" : "boundary"}</Button>
+    <Button type="button" onClick={() => {
+      const row = collection === "domain" ? {} : collection === "materials" ? { region: {}, material: {} } : { id: "", surfaces: [] };
+      rowKeys.append(identity(row));
+      onChange(JSON.stringify([...rows, row]));
+    }}>Add explicit {collection === "domain" ? "domain scope" : collection === "materials" ? "material assignment" : "boundary"}</Button>
     <p className="fm-inspector-hint">Values are explicit SI parameters. Unedited parameters are preserved; clone-only validation owns geometry and execution qualification.</p>
   </InspectorGroup>;
 }

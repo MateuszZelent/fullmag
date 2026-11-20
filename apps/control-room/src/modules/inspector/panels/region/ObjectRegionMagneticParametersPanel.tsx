@@ -11,7 +11,7 @@ import {
 import { useKernel } from "@/kernel/KernelContext";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
-import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
+import { useEditableRowKeys } from "@/shared/utils/useEditableRowKeys";
 import { Button } from "@/shared/ui/Button";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
@@ -32,6 +32,7 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
+  defaultMaterialOverrideDraft,
   defaultMaterialOverrideUnit,
   defaultMaterialOverrideValue,
 } from "../ObjectRegionsPanelModel";
@@ -222,6 +223,14 @@ function useObjectRegionMagneticParametersPanelView({
   auxiliaryDraftOwnerKey,
   auxiliaryDraftRegistry,
 }: RegionSubPanelProps) {
+  function overrideIdentity(override: RegionSubPanelProps["draft"]["materialOverrides"][number]) {
+    return JSON.stringify([model.objectId, model.regionId, override.parameter, override.preservedOverride?.parameter]);
+  }
+  const overrideRowKeys = useEditableRowKeys(draft.materialOverrides.map(overrideIdentity));
+  function removeOverride(index: number) {
+    overrideRowKeys.remove(index);
+    removeMaterialOverride(index);
+  }
   const { api, authoringHistory, commands, resources } = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const { data: sceneData } = useSceneResource();
@@ -540,10 +549,7 @@ function useObjectRegionMagneticParametersPanelView({
           <FieldRow label="Local overrides" value="inherits object material" />
         ) : null}
 
-        {keyedOccurrences(draft.materialOverrides, (override) => JSON.stringify([
-          override.parameter,
-          override.preservedOverride?.parameter,
-        ])).map(({ item: override, key }, index) => {
+        {draft.materialOverrides.map((override, index) => {
           const parentInfo = getParentParamInfo(
             override.parameter,
             model.objectId,
@@ -552,12 +558,12 @@ function useObjectRegionMagneticParametersPanelView({
             sceneData,
           );
           return (
-            <div className="fm-region-override fm-section-separator" key={key}>
+            <div className="fm-region-override fm-section-separator" key={overrideRowKeys.keys[index]}>
               {override.preservedOverride ? (
                 <>
                   <FieldRow label={`Override ${index + 1}`} value={`${override.preservedOverride.parameter} · ${override.preservedOverride.value.kind}`} />
                   <p>This profile is preserved unchanged. Edit it in the Python script.</p>
-                  <Button size="sm" type="button" variant="ghost" onClick={() => removeMaterialOverride(index)}>
+                  <Button size="sm" type="button" variant="ghost" onClick={() => removeOverride(index)}>
                     Remove Override
                   </Button>
                 </>
@@ -569,6 +575,7 @@ function useObjectRegionMagneticParametersPanelView({
                     value={override.parameter}
                     onChange={(event: ChangeEvent<HTMLSelectElement>) => {
                       const nextParam = event.target.value as RegionMaterialParameter;
+                      overrideRowKeys.rename(index, overrideIdentity({ ...override, parameter: nextParam }));
                       if (nextParam === "anisotropy_axis") {
                         updateMaterialOverride(index, {
                           parameter: nextParam,
@@ -729,7 +736,7 @@ function useObjectRegionMagneticParametersPanelView({
                       size="sm"
                       type="button"
                       variant="ghost"
-                      onClick={() => removeMaterialOverride(index)}
+                      onClick={() => removeOverride(index)}
                     >
                       Remove Override
                     </Button>
@@ -744,7 +751,10 @@ function useObjectRegionMagneticParametersPanelView({
             size="sm"
             type="button"
             variant="ghost"
-            onClick={addMaterialOverride}
+            onClick={() => {
+              overrideRowKeys.append(overrideIdentity(defaultMaterialOverrideDraft()));
+              addMaterialOverride();
+            }}
           >
             Add Override
           </Button>
