@@ -7,6 +7,16 @@ describe("absorbing boundary expressions", () => {
       expect(absorbingExpressionError(source, "profile")).toBeUndefined();
     }
   });
+  it("accepts finite ramp samples after non-finite intermediate operations", () => {
+    for (const source of ["u + 1/exp(999)", "min(u, sqrt(-1))", "max(sqrt(-1), u)", "u * 1**(0/0)"]) {
+      expect(absorbingExpressionError(source, "profile")).toBeUndefined();
+    }
+    expect(absorbingExpressionError("sqrt(-1)", "profile")).toBeTruthy();
+  });
+  it("checks the engine nesting limit even for a distance without sample points", () => {
+    expect(absorbingExpressionError("+".repeat(128) + "x", "distance")).toBeUndefined();
+    expect(absorbingExpressionError("+".repeat(129) + "x", "distance")).toBeTruthy();
+  });
   it("rejects out-of-range ramps, wrong endpoints and singular interiors", () => {
     for (const source of ["u+0.01", "u**0", "1/(u-0.5)", "sqrt(u-1)", "2*u"]) {
       expect(absorbingExpressionError(source, "profile")).toBeTruthy();

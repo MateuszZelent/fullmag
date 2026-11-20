@@ -8,13 +8,18 @@ const unary = new Map<string, (x: number) => number>([
   ["tanh", Math.tanh], ["exp", Math.exp], ["log", Math.log], ["log1p", Math.log1p],
   ["sqrt", Math.sqrt], ["abs", Math.abs],
 ]);
+// Rust f64 min/max select the numeric operand when only one operand is NaN.
+function numericExtremum(operation: Operation): Operation {
+  return (left, right) => Number.isNaN(left) ? right : Number.isNaN(right) ? left : operation(left, right);
+}
+
 const binary = new Map<string, (a: number, b: number) => number>([
-  ["atan2", Math.atan2], ["min", Math.min], ["max", Math.max],
+  ["atan2", Math.atan2], ["min", numericExtremum(Math.min)], ["max", numericExtremum(Math.max)],
 ]);
 const operators = new Map<string, [number, number, Operation]>([
   ["+", [1, 2, (a, b) => a + b]], ["-", [1, 2, (a, b) => a - b]],
   ["*", [2, 3, (a, b) => a * b]], ["/", [2, 3, (a, b) => a / b]],
-  ["**", [4, 4, Math.pow]],
+  ["**", [4, 4, (base, exponent) => base === 1 || (base === -1 && Math.abs(exponent) === Infinity) ? 1 : Math.pow(base, exponent)]],
 ]);
 
 function finite(value: number): number {
@@ -37,14 +42,15 @@ function parse(source: string, variables: readonly string[]): Scalar {
   function requireToken(token: string) {
     if (!consume(token)) throw new Error("Expected '" + token + "'.");
   }
-  function operand(): Scalar {
-    if (consume("+")) return expression(3);
+  function operand(depth: number): Scalar {
+    if (depth > 128) throw new Error("The expression exceeds 128 nesting levels.");
+    if (consume("+")) return expression(3, depth + 1);
     if (consume("-")) {
-      const value = expression(3);
+      const value = expression(3, depth + 1);
       return vars => -value(vars);
     }
     if (consume("(")) {
-      const inside = expression(0);
+      const inside = expression(0, depth + 1);
       requireToken(")");
       return inside;
     }
@@ -61,32 +67,32 @@ function parse(source: string, variables: readonly string[]): Scalar {
     const fn = unary.get(token);
     if (fn) {
       requireToken("(");
-      const argument = expression(0);
+      const argument = expression(0, depth + 1);
       requireToken(")");
-      return vars => finite(fn(argument(vars)));
+      return vars => fn(argument(vars));
     }
     const pair = binary.get(token);
     if (!pair) throw new Error("Unknown variable or function '" + token + "'.");
     requireToken("(");
-    const first = expression(0);
+    const first = expression(0, depth + 1);
     requireToken(",");
-    const second = expression(0);
+    const second = expression(0, depth + 1);
     requireToken(")");
-    return vars => finite(pair(first(vars), second(vars)));
+    return vars => pair(first(vars), second(vars));
   }
-  function expression(minimum: number): Scalar {
-    let value = operand();
+  function expression(minimum: number, depth: number): Scalar {
+    let value = operand(depth);
     while (position < tokens.length) {
       const operator = operators.get(tokens[position]);
       if (!operator || operator[0] < minimum) break;
       position++;
       const left = value;
-      const right = expression(operator[1]);
-      value = vars => finite(operator[2](left(vars), right(vars)));
+      const right = expression(operator[1], operator[0] === 4 ? depth + 1 : depth);
+      value = vars => operator[2](left(vars), right(vars));
     }
     return value;
   }
-  const result = expression(0);
+  const result = expression(0, 0);
   if (position !== tokens.length) throw new Error("Unexpected token '" + tokens[position] + "'.");
   return result;
 }
@@ -98,7 +104,7 @@ export function absorbingExpressionError(source: string, kind: "distance" | "pro
       const tolerance = 1e-12;
       for (let step = 0; step <= 256; step++) {
         const u = step / 256;
-        const value = evaluate([u]);
+        const value = finite(evaluate([u]));
         if (value < -tolerance || value > 1 + tolerance) throw new Error("The ramp must stay within [0, 1].");
         if ((step === 0 || step === 256) && Math.abs(value - u) > tolerance) {
           throw new Error("The ramp must equal 0 at u = 0 and 1 at u = 1.");
