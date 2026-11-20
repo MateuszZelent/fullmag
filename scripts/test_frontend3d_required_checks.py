@@ -359,8 +359,36 @@ def test_managed_fem_dispatch_requires_private_runner_label_without_changing_gat
     assert "github.event_name != 'workflow_dispatch'" not in dispatch_label
     assert "format('fullmag-fem-private-{0}', github.run_id)" in dispatch_label
     assert "vars.FULLMAG_FEM_RUNNER_LABEL" not in dispatch_label
-    assert managed_job["steps"][-1]["run"] == (
-        "./scripts/ci/run_frontend3d_required_gate.sh managed-fem-qualification"
+    steps = managed_job["steps"]
+    qualification = next(step for step in steps if step.get("id") == "qualification")
+    receipt_check = next(
+        step
+        for step in steps
+        if step.get("name") == "Verify managed FEM receipt after successful gate"
+    )
+    upload = next(
+        step
+        for step in steps
+        if step.get("name") == "Upload managed FEM qualification receipt"
+    )
+    assert steps.index(qualification) < steps.index(receipt_check) < steps.index(upload)
+    assert receipt_check["if"] == "${{ success() }}"
+    assert receipt_check["env"]["REPORT_ROOT"] == "${{ steps.qualification.outputs.report_root }}"
+    for required_receipt in (
+        "runtime-manifest.v3.json",
+        "cpu/summary.v4.json",
+        "gpu/summary.v4.json",
+        "summary.v3.json",
+    ):
+        assert f'test -s "$REPORT_ROOT/{required_receipt}"' in receipt_check["run"]
+    assert "always()" in upload["if"]
+    assert "${{ steps.qualification.outputs.report_root }}/summary.v3.json" in upload["with"]["path"]
+    assert "${{ steps.qualification.outputs.report_root }}/runtime-manifest.v3.json" in upload["with"]["path"]
+    assert "mixed prism-airbox report root:" in qualification["run"]
+    assert "$GITHUB_OUTPUT" in qualification["run"]
+    assert (
+        'report_log="$RUNNER_TEMP/managed-fem-qualification-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.log"'
+        in qualification["run"]
     )
 
 

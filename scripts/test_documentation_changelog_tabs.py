@@ -65,6 +65,7 @@ class DocumentationChangelogTabsContractTests(unittest.TestCase):
             ":(exclude)**/*.md",
             ":(exclude)**/*.rst",
             ":(exclude).github/workflows/documentation.yml",
+            ":(exclude).github/workflows/documentation-build.yml",
             ":(exclude).agents/skills/scientific-documentation-contract",
             ":(exclude)packages/fullmag-py/tests/test_public_python_api_documentation.py",
             ":(exclude)packages/fullmag-py/tests/test_public_exchange_documentation.py",
