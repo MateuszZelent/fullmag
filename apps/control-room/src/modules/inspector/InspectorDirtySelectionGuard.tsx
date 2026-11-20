@@ -205,7 +205,7 @@ export function InspectorDirtySelectionGuard({
 
   async function decide(apply: boolean): Promise<void> {
     const transition = pendingRef.current;
-    if (!transition || transition.running) return;
+    if (!transition || transition.running || transition.acknowledged) return;
     if (!isCurrent(transition)) { dismiss(); return; }
     const owner = transition.session;
     if (owner.applying || owner.lockReason || (apply && (!owner.valid || owner.applyBlockReason))) return;
@@ -241,7 +241,9 @@ export function InspectorDirtySelectionGuard({
     } finally {
       transition.running = false;
       // react-doctor-disable-next-line react-doctor/no-loading-flag-reset-outside-finally -- This reset is in finally; keep the ownership guard so a late request cannot clear a newer transition's busy state.
-      if (pendingRef.current === transition || pendingRef.current === null) setBusy(false);
+      if (pendingRef.current === null || (pendingRef.current === transition && !transition.acknowledged)) {
+        setBusy(false);
+      }
     }
   }
 
