@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { findExplorerNodePath, publishExplorerNodePath, readExplorerNodePath } from "./explorerNodePath";
+import { readSelectionPath } from "@/kernel/selection/selectionPath";
+
+import { findExplorerNodePath, publishExplorerNodePath } from "./explorerNodePath";
 import type { ExplorerNode } from "./explorerTypes";
 
 const node = (id: string, label: string, children: ExplorerNode[] = []): ExplorerNode =>
@@ -18,10 +20,13 @@ describe("Explorer node path for the Inspector", () => {
 
   it("keeps the published path identity when the chain is unchanged", () => {
     publishExplorerNodePath(tree, "viz");
-    const first = readExplorerNodePath();
+    const first = readSelectionPath();
     publishExplorerNodePath(tree, "viz");
-    expect(readExplorerNodePath()).toBe(first);
+    expect(readSelectionPath()).toBe(first);
+    expect(first?.crumbs.map((crumb) => crumb.label)).toEqual(["Universe", "Airbox", "Visualization"]);
+    expect(first?.crumbs.at(-1)?.selection).toBeUndefined();
+    expect(first?.crumbs[0]?.selection?.nodeId).toBe("universe");
     publishExplorerNodePath(tree, null);
-    expect(readExplorerNodePath()).toBeNull();
+    expect(readSelectionPath()).toBeNull();
   });
 });

@@ -15,14 +15,13 @@ import {
 } from "lucide-react";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 
+import { useSelectionPath } from "@/kernel/selection/selectionPath";
 import { PanelChrome, usePanelChromeControls } from "@/shared/ui/PanelFrame";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import { DropdownMenuItem } from "@/shared/ui/DropdownMenu";
 import { ScrollArea } from "@/shared/ui/ScrollArea";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
-import { useExplorerNodePath } from "@/modules/explorer/explorerNodePath";
-import { selectionFromExplorerNode } from "@/modules/explorer/explorerSelection";
 import { InspectorFooter } from "./InspectorFooter";
 import type { InspectorDescriptor } from "./inspectorDescriptor";
 import { resetInspectorScroll } from "./inspectorScroll";
@@ -96,17 +95,11 @@ export function InspectorShell({
   const contentRef = useRef<HTMLDivElement>(null);
   const nodeId = descriptor.metadata.find((item) => item.label === "Node")?.value;
   const displayId = inspectorDisplayId(descriptor.metadata);
-  const treePath = useExplorerNodePath(nodeId);
+  const treePath = useSelectionPath(nodeId);
   // Prefer the full Explorer path (Universe › Airbox › Visualization); the
   // descriptor's short path remains for selections outside the tree.
   const breadcrumbs: InspectorDescriptor["breadcrumbs"] = treePath
-    ? treePath.nodes.map((node, index) => ({
-        id: node.id,
-        label: node.label,
-        selection: index < treePath.nodes.length - 1 && node.selectable !== false
-          ? selectionFromExplorerNode(node)
-          : undefined,
-      }))
+    ? [...treePath.crumbs]
     : descriptor.breadcrumbs;
   const descriptorKey = `${nodeId ?? descriptor.title}:${descriptor.tabs.map((tab) => tab.id).join(",")}`;
   useLayoutEffect(() => {
