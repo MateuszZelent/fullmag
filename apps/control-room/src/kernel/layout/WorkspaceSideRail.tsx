@@ -118,11 +118,14 @@ export function WorkspaceSideRail({ side }: { side: "left" | "right" }) {
       data-open={open}
       data-side={side}
     >
-      {items.map(({ active, icon: Icon, id, label, onSelect }) => (
+      {items.map(({ active, icon: Icon, id, label, onSelect }, index) => (
         <button
+          // The first item is where focus lands when its panel is hidden.
+          data-restore-panel={index === 0 ? (side === "left" ? "panel-left" : "panel-right") : undefined}
           aria-label={label}
           aria-pressed={open && active}
           className="fm-side-rail__item"
+          data-active={active}
           data-rail-item={id}
           key={id}
           title={label}
@@ -130,6 +133,7 @@ export function WorkspaceSideRail({ side }: { side: "left" | "right" }) {
           onClick={onSelect}
         >
           <Icon aria-hidden="true" size={18} strokeWidth={1.75} />
+          <span className="sr-only">{label}</span>
         </button>
       ))}
     </nav>

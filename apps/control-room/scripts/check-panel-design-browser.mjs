@@ -73,7 +73,7 @@ import { designCheckUrl } from "./lib/design-browser-env.mjs";
     await nameInput.focus();
     await p.getByRole("button", { name: "Inspector panel menu", exact: true }).click();
     await p.getByRole("menuitem", { name: "Hide panel", exact: true }).click();
-    await p.getByRole("button", { name: "Restore Inspector", exact: true }).click();
+    await p.locator('[data-restore-panel="panel-right"]').click();
     assert.equal(
       await p.evaluate(
         () => window.__panelMarker === document.querySelector('[data-panel-frame="panel-right"] .fm-inspector'),

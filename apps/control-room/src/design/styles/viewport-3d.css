@@ -4,7 +4,8 @@
 
   position: relative;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  /* The HUD floats over the scene, so the canvas takes the whole panel. */
+  grid-template-rows: minmax(0, 1fr);
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -76,19 +77,26 @@
   gap: var(--fm-space-2);
 }
 
+/* Floating glass HUD (mockup viewport): the toolbar is a pill centred over
+   the scene and the readouts are small chips beneath it. Only the controls
+   take pointer events, so the scene stays orbit-able around them. */
 .fm-viewport-3d__hud {
-  position: relative;
+  position: absolute;
+  top: var(--fm-space-2);
+  inset-inline: var(--fm-space-2);
   z-index: var(--fm-z-base);
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   min-width: 0;
   max-height: 15rem;
-  overflow-y: auto;
-  gap: var(--fm-space-1);
+  overflow: visible;
+  gap: var(--fm-space-1) var(--fm-space-2);
   align-items: center;
-  border-bottom: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-chrome);
-  padding: var(--fm-space-1) var(--fm-space-2);
+  border-bottom: 0;
+  background: transparent;
+  padding: 0;
+  pointer-events: none;
   color: var(--fm-text-secondary);
   font-size: var(--fm-font-size-control);
 }
@@ -97,11 +105,23 @@
    part that gives way, so the HUD stays one row until controls alone overflow. */
 .fm-viewport-3d__hud > * {
   flex: none;
+  pointer-events: auto;
+}
+
+.fm-viewport-3d__hud > .fm-viewport-3d-toolbar,
+.fm-viewport-3d__hud > fieldset {
+  border: 1px solid var(--fm-glass-line);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-glass-strong);
+  box-shadow: var(--fm-elevation-md), inset 0 1px 0 var(--fm-glass-highlight);
+  -webkit-backdrop-filter: var(--fm-glass-backdrop);
+  backdrop-filter: var(--fm-glass-backdrop);
 }
 
 .fm-viewport-3d__hud-info {
   display: flex;
-  flex: 1 1 0;
+  flex: 1 1 100%;
+  justify-content: center;
   flex-wrap: nowrap;
   gap: var(--fm-space-1);
   align-items: center;
@@ -114,13 +134,16 @@
   min-width: 0;
   max-width: 12rem;
   overflow: hidden;
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
-  background: color-mix(in srgb, var(--fm-bg-chrome) 88%, transparent);
-  padding: var(--fm-space-1) var(--fm-space-2);
+  border: 1px solid var(--fm-glass-line);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-glass-bg);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  padding: 2px var(--fm-space-2);
   text-overflow: ellipsis;
   white-space: nowrap;
-  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: var(--fm-glass-backdrop);
+  backdrop-filter: var(--fm-glass-backdrop);
 }
 
 .fm-viewport-3d__render-details-trigger {

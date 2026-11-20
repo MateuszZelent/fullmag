@@ -405,3 +405,13 @@
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
 }
+
+/* A rail whose panel is collapsed keeps a gutter to the viewport. */
+.fm-side-rail[data-side="left"][data-open="false"] { margin-right: var(--fm-space-1); }
+.fm-side-rail[data-side="right"][data-open="false"] { margin-left: var(--fm-space-1); }
+
+/* Panel tab strips scroll sideways only, without a visible scrollbar. */
+.fm-panel-chrome > .fm-tabs-list {
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
