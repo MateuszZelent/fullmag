@@ -576,3 +576,88 @@
 @media (prefers-reduced-motion: reduce) {
   .fm-footer-telemetry__diverge-fill { transition: none; }
 }
+
+/* Mockup proportions: Run, Magnetization, Energy (widest), Convergence. */
+@container footer-metrics (width >= 900px) {
+  .fm-footer-telemetry__metrics-grid {
+    grid-template-columns: 1.15fr 1fr 1.35fr 1fr;
+  }
+}
+
+.fm-footer-telemetry__group-aside {
+  flex: none;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+}
+
+.fm-footer-telemetry__group-aside--value {
+  color: var(--fm-success-text);
+  font-size: var(--fm-font-size-xs);
+  font-weight: var(--fm-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-footer-telemetry__symbol {
+  font-family: var(--fm-font-symbol);
+  font-size: 1.1em;
+  font-style: italic;
+}
+
+.fm-footer-telemetry__symbol sub,
+.fm-footer-telemetry__caption sub {
+  font-size: 0.7em;
+  line-height: 0;
+}
+
+.fm-footer-telemetry__group[data-card="magnetization"] .fm-footer-telemetry__rows {
+  flex: 1;
+  align-content: center;
+  gap: var(--fm-space-1);
+}
+
+.fm-footer-telemetry__energy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--fm-space-2);
+}
+
+@container footer-metrics (width >= 900px) {
+  .fm-footer-telemetry__energy {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  }
+
+  .fm-footer-telemetry__energy-total {
+    border-left: 1px solid var(--fm-border-subtle);
+    padding-left: var(--fm-space-3);
+  }
+}
+
+.fm-footer-telemetry__energy-total {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.fm-footer-telemetry__energy-value {
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-lg);
+  font-weight: var(--fm-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fm-footer-telemetry__caption {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+}
+
+.fm-footer-telemetry__caption--split {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+}
+
+.fm-footer-telemetry__group[data-card="convergence"] .fm-footer-telemetry__spark {
+  flex: 1;
+  min-height: 48px;
+}
