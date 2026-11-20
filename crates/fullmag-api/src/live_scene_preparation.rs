@@ -1199,15 +1199,30 @@ fn hold_current_accepted_attempt_fence(
     expected: &AcceptedTaskAttemptIdentity,
     expected_claim: Option<&fullmag_application::TaskClaim>,
     wait: std::time::Duration,
+    busy_code: &'static str,
 ) -> Result<fullmag_session::ReadTransaction, ApiError> {
     // Wait on this blocking thread without holding any store lock. Validate
     // the attempt under the acquired fence before allowing publication.
     let transaction = fullmag_runtime_control::acquire_store_read_transaction(store, wait)
-        .map_err(|error| accepted_step_output_store_read_error(
-            "accepted attempt final read fence failed",
-            &expected.step_id,
-            error,
-        ))?;
+        .map_err(|error| {
+            if error.chain().any(|cause| {
+                matches!(
+                    cause.downcast_ref::<std::fs::TryLockError>(),
+                    Some(std::fs::TryLockError::WouldBlock)
+                )
+            }) {
+                return ApiError::with_status_and_code(
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    busy_code,
+                    format!("accepted attempt final read fence busy for `{}`: {error:#}", expected.step_id),
+                );
+            }
+            accepted_step_output_store_read_error(
+                "accepted attempt final read fence failed",
+                &expected.step_id,
+                error,
+            )
+        })?;
     let catalog = store
         .read_run_catalog(&expected.run_id)
         .map_err(|error| accepted_step_output_store_read_error(
@@ -1465,6 +1480,7 @@ async fn hold_current_accepted_attempt_fence_async(
     expected: AcceptedTaskAttemptIdentity,
     expected_claim: Option<fullmag_application::TaskClaim>,
     wait: std::time::Duration,
+    busy_code: &'static str,
 ) -> Result<fullmag_session::ReadTransaction, ApiError> {
     tokio::task::spawn_blocking(move || {
         let store = fullmag_session::SessionStore::open_existing(&store_root).map_err(|error| {
@@ -1474,7 +1490,7 @@ async fn hold_current_accepted_attempt_fence_async(
                 error,
             )
         })?;
-        hold_current_accepted_attempt_fence(&store, &expected, expected_claim.as_ref(), wait)
+        hold_current_accepted_attempt_fence(&store, &expected, expected_claim.as_ref(), wait, busy_code)
     })
     .await
     .map_err(|error| ApiError::internal(format!("accepted attempt final fence task failed: {error}")))?
@@ -1489,7 +1505,13 @@ pub(crate) async fn hold_live_observation_publication_fence(
     wait: std::time::Duration,
 ) -> Result<fullmag_session::ReadTransaction, ApiError> {
     let expected = AcceptedTaskAttemptIdentity::from_live_header(header)?;
-    hold_current_accepted_attempt_fence_async(store_root.to_path_buf(), expected, None, wait).await
+    hold_current_accepted_attempt_fence_async(
+        store_root.to_path_buf(),
+        expected,
+        None,
+        wait,
+        "accepted_projection_store_pending",
+    ).await
 }
 
 async fn hold_verified_stage_output_fence_async(
@@ -3112,6 +3134,7 @@ async fn publish_accepted_task_preparation_with_mode(
                 identity.clone(),
                 expected_initial_state_claim.clone(),
                 PREPARATION_ATTEMPT_FENCE_WAIT,
+                "accepted_preparation_pending",
             ).await?)
         }
         (AcceptedPreparationPublicationMode::Active, _) => {
@@ -3127,6 +3150,7 @@ async fn publish_accepted_task_preparation_with_mode(
                     },
                     Some(claim),
                     PREPARATION_ATTEMPT_FENCE_WAIT,
+                    "accepted_preparation_pending",
                 ).await?)
             } else {
                 None
@@ -5948,7 +5972,7 @@ mod tests {
         // The store only contains writer metadata. A correct read must get past
         // contention and reject the nonexistent attempt; it must not publish it.
         let error = hold_current_accepted_attempt_fence(
-            &reader, &expected, None, PREPARATION_ATTEMPT_FENCE_WAIT,
+            &reader, &expected, None, PREPARATION_ATTEMPT_FENCE_WAIT, "accepted_preparation_pending",
         ).err().unwrap();
         writer.join().unwrap();
         assert_eq!(error.code.as_deref(), Some("accepted_preparation_current_state_changed"));

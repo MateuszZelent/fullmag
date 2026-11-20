@@ -27,15 +27,7 @@ fn projection_deferral_backoff(error: &ApiError, repeated: u32) -> Duration {
     // Recording a heartbeat or committing a worker checkpoint can briefly
     // own the store writer. Retry at the normal poll cadence so identical
     // contention does not stall live samples or performance invalidations.
-    if matches!(
-        error.code.as_deref(),
-        Some(
-            "accepted_preparation_pending"
-                | "accepted_projection_store_pending"
-                | "accepted_projection_current_state_changed"
-                | "accepted_projection_current_session_changed"
-        )
-    ) {
+    if error.code.as_deref() == Some("accepted_projection_store_pending") {
         return Duration::ZERO;
     }
     POLL_INTERVAL
@@ -4219,8 +4211,8 @@ async fn apply_projection(
         )
         .await?;
     }
-    let journal_changed = journal_before !=
-        state.current_command_journal_revision.load(std::sync::atomic::Ordering::Acquire);
+    let journal_after = state.current_command_journal_revision.load(std::sync::atomic::Ordering::Acquire);
+    let journal_changed = journal_before != journal_after;
     if journal_changed {
         realtime_state =
             crate::current_live_realtime_state_from_snapshot(state, &next, display_revision).await;
@@ -4229,16 +4221,18 @@ async fn apply_projection(
         drop(transition);
         return Ok(());
     }
-    let (transition, observation_fence, retried_fence) =
+    let (transition, observation_fence) =
         if let Some((_, observation)) = projection.live_observation.as_ref().filter(|_| live_stage_is_newer) {
             let store_root = state.submit_store_root.as_deref()
                 .ok_or_else(|| ApiError::conflict("accepted live observation requires its session store"))?;
             use crate::live_scene_preparation::hold_live_observation_publication_fence;
 
             match hold_live_observation_publication_fence(store_root, &observation.header, Duration::ZERO).await {
-                Ok(fence) => (transition, Some(fence), false),
-                Err(error) if error.code.as_deref() == Some("accepted_preparation_pending") => {
-                    // Keep the prepared candidate, but let commands proceed
+                Ok(fence) => (transition, Some(fence)),
+                Err(error) if !journal_changed && error.code.as_deref() == Some("accepted_projection_store_pending") => {
+                    // A changed command journal and its candidate must stay
+                    // under one transition. Only an observation that made no
+                    // journal change may release it here. Let commands proceed
                     // while the durable writer is busy. Never wait for the
                     // transition while holding a store fence: command paths
                     // may already hold it and need the store's writer.
@@ -4257,24 +4251,24 @@ async fn apply_projection(
                     validate_observation_publication_candidate(
                         state, context, display_revision, &publication_fence,
                     ).await?;
-                    (transition, Some(fence), true)
+                    if state.current_command_journal_revision.load(std::sync::atomic::Ordering::Acquire) != journal_after {
+                        return Err(ApiError::conflict_with_code(
+                            "accepted_projection_current_state_changed",
+                            "command journal changed while waiting to publish the live observation",
+                        ));
+                    }
+                    (transition, Some(fence))
                 }
                 Err(error) => return Err(error),
             }
         } else {
-            (transition, None, false)
+            (transition, None)
         };
     let previous = {
         let mut current = state.current_live_state.write().await;
         std::mem::replace(&mut *current, Some(next))
     };
     drop(observation_fence);
-    if retried_fence {
-        let current = state.current_live_state.read().await;
-        if let Some(snapshot) = current.as_ref() {
-            realtime_state = crate::current_live_realtime_state_from_snapshot(state, snapshot, display_revision).await;
-        }
-    }
     if let Some(sample) = scalar_sample {
         crate::queue_current_live_realtime_scalar_sample(state.as_ref(), sample).await?;
     }
@@ -4504,14 +4498,19 @@ mod tests {
 
     #[test]
     fn retryable_store_contention_keeps_the_normal_live_poll_period() {
-        for code in ["accepted_preparation_pending", "accepted_projection_store_pending"] {
-            let transient = ApiError::with_status_and_code(
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                code,
-                "writer holds the session store",
-            );
-            assert_eq!(projection_deferral_backoff(&transient, 20), Duration::ZERO);
-        }
+        let busy = ApiError::with_status_and_code(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "accepted_projection_store_pending",
+            "writer holds the session store",
+        );
+        assert_eq!(projection_deferral_backoff(&busy, 20), Duration::ZERO);
+
+        let awaiting_preparation = ApiError::with_status_and_code(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "accepted_preparation_pending",
+            "preparation has not published its receipt",
+        );
+        assert_eq!(projection_deferral_backoff(&awaiting_preparation, 20), MAX_DEFERRAL_BACKOFF);
         let invalid = ApiError::conflict("invalid field carrier");
         assert_eq!(projection_deferral_backoff(&invalid, 20), MAX_DEFERRAL_BACKOFF);
     }
@@ -5492,6 +5491,16 @@ mod tests {
         let dir = store.root().join("runs").join(&context.run_id).join("worker-attempts")
             .join(&successor.task_id).join("attempt-live/epoch-1");
         std::fs::create_dir_all(&dir).unwrap();
+        let plan = fullmag_plan::plan(&fullmag_ir::ProblemIR::bootstrap_example()).unwrap();
+        let layout = fullmag_runner::study_magnetization_layout_for_plan(&plan).unwrap();
+        let fullmag_ir::BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
+            panic!("the projection fixture must use a regular FDM domain");
+        };
+        let count = fdm.grid.cells.iter().map(|axis| *axis as usize).product::<usize>();
+        let field = [0.0_f64, 1.0, 0.0].into_iter().flat_map(f64::to_le_bytes)
+            .collect::<Vec<_>>().repeat(count);
+        let field_name = "live_observation_m.1.f64le";
+        std::fs::write(dir.join(field_name), &field).unwrap();
         let header = crate::accepted_study_worker::AcceptedLiveObservationHeader {
             schema_version: crate::accepted_study_worker::ACCEPTED_LIVE_OBSERVATION_SCHEMA.into(),
             run_id: context.run_id.clone(), task_id: successor.task_id.clone(),
@@ -5499,7 +5508,21 @@ mod tests {
             ownership_epoch: successor.ownership_epoch, realization: "fdm_cpu".into(),
             sequence: 1, written_at_unix_ms: 1000,
             stats: Some(fullmag_runner::StepStats { step: 1, time: 9e-12, dt: 1e-12, ..Default::default() }),
-            operation_progress: None, magnetization: None,
+            operation_progress: None,
+            magnetization: Some(crate::accepted_study_worker::AcceptedLiveMagnetizationRef {
+                sequence: 1,
+                source_step: 1,
+                source_time_s: 9e-12,
+                solver_dt_s: 1e-12,
+                sample_count: count as u64,
+                file_name: field_name.into(),
+                content_sha256: fullmag_application::study_artifact_content_sha256(&field),
+                space_fingerprint: fullmag_application::study_state_layout_sha256(&layout).unwrap(),
+                layout,
+                active_support_mask: None,
+                fem_local_node_map: None,
+                fields: Vec::new(),
+            }),
         };
         std::fs::write(dir.join(crate::accepted_study_worker::ACCEPTED_LIVE_OBSERVATION_FILE),
             serde_json::to_vec(&header).unwrap()).unwrap();
@@ -5547,6 +5570,13 @@ mod tests {
         assert!(snapshot.scalar_revision > previous_revision);
         assert_eq!(snapshot.scalar_rows.len(), 1);
         assert_eq!(snapshot.scalar_rows[0].step, 1);
+        let visible_m = snapshot.latest_fields.get("m").unwrap().clone();
+        assert_eq!(visible_m["source_step"], 1);
+        assert_eq!(visible_m["provenance"]["sequence"], 1);
+        assert_eq!(
+            visible_m["observation_frame"],
+            serde_json::to_value(snapshot.scalar_rows[0].observation_frame.as_ref().unwrap()).unwrap(),
+        );
         assert_eq!(snapshot.latest_scalar_source.as_ref().unwrap().series.as_ref().unwrap().identity, successor);
         let visible_revision = snapshot.scalar_revision;
         drop(current);
@@ -5569,6 +5599,7 @@ mod tests {
         assert!(apply_projection(&state, &context, stale).await.is_err());
         let current = state.current_live_state.read().await;
         assert_eq!(current.as_ref().unwrap().scalar_revision, visible_revision);
+        assert_eq!(current.as_ref().unwrap().latest_fields.get("m"), Some(&visible_m));
     }
 
     #[tokio::test]
