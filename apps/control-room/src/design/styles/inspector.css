@@ -673,15 +673,39 @@
 }
 
 .fm-inspector__breadcrumb-separator {
+  flex: none;
   color: var(--fm-text-muted);
-  margin-inline: var(--fm-space-1);
 }
 
 .fm-inspector__breadcrumb {
+  border: 0;
+  border-radius: var(--fm-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
   font-weight: 500;
   overflow: hidden;
+  padding: 2px var(--fm-space-1);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+button.fm-inspector__breadcrumb { cursor: pointer; }
+
+button.fm-inspector__breadcrumb:hover {
+  background: color-mix(in srgb, var(--fm-text-primary) 6%, transparent);
+  color: var(--fm-text-primary);
+}
+
+/* The selection path is the panel title row (mockup Inspector header). */
+.fm-panel-chrome > .fm-inspector__breadcrumbs {
+  flex: 1;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.fm-inspector__breadcrumb-item:last-child .fm-inspector__breadcrumb {
+  color: var(--fm-text-primary);
 }
 
 /* Identity: domain-hue glyph, name, kind, copyable ID and one state pill

@@ -347,11 +347,17 @@
   color: var(--fm-danger);
 }
 
+/* One joined pill: the primary Compute segment and icon segments for the
+   other run commands (mockup header). */
 .fm-header__run-controls {
   display: flex;
   align-items: center;
   flex: none;
-  gap: var(--fm-space-1);
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-field-bg);
   -webkit-app-region: no-drag;
 }
 
@@ -359,7 +365,23 @@
   width: var(--fm-control-height-compact);
   min-width: var(--fm-control-height-compact);
   height: var(--fm-control-height-compact);
+  border-radius: 0;
   transition: transform var(--fm-duration-fast) ease-out, background-color var(--fm-transition-fast);
+}
+
+.fm-header__run-btn + .fm-header__run-btn {
+  border-left: 1px solid var(--fm-border-subtle);
+}
+
+.fm-header__run-btn[data-run-control="run"] {
+  width: auto;
+  gap: var(--fm-space-1);
+  border-radius: var(--fm-radius-pill) 0 0 var(--fm-radius-pill);
+  padding-inline: var(--fm-space-3) var(--fm-space-3);
+}
+
+.fm-header__run-label {
+  font-weight: var(--fm-font-weight-semibold);
 }
 
 .fm-header__run-btn:active {
@@ -367,7 +389,7 @@
 }
 
 .fm-header__run-btn[data-run-control="run"]:not(:disabled) {
-  color: var(--fm-success);
+  color: var(--fm-text-on-accent);
 }
 
 .fm-header__run-btn[data-run-control="pause"]:not(:disabled) {

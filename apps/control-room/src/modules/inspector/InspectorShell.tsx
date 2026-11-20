@@ -6,6 +6,7 @@ import {
   Copy,
   Focus,
   BarChart2,
+  ChevronRight,
   Database,
   Gauge,
   Layers3,
@@ -122,29 +123,12 @@ export function InspectorShell({
           </DropdownMenuItem>
         }
       >
-        <span className="fm-panel-chrome__title">Inspector</span>
-        <Button
-          aria-label="Hide Inspector"
-          className="fm-inspector__panel-toggle"
-          data-panel-toggle="inspector"
-          size="icon"
-          title="Hide Inspector"
-          type="button"
-          variant="ghost"
-          onClick={() => (chrome ? chrome.hideWith(onToggleVisibility) : onToggleVisibility())}
-        >
-          <PanelRightClose size={16} aria-hidden="true" />
-        </Button>
-      </PanelChrome>
-      <header className="fm-inspector__header">
         {descriptor.breadcrumbs.length > 0 ? (
           <nav className="fm-inspector__breadcrumbs" aria-label="Selection path">
             {descriptor.breadcrumbs.map((crumb, index) => (
               <span className="fm-inspector__breadcrumb-item" key={crumb.id}>
                 {index > 0 ? (
-                  <span className="fm-inspector__breadcrumb-separator" aria-hidden="true">
-                    /
-                  </span>
+                  <ChevronRight aria-hidden="true" className="fm-inspector__breadcrumb-separator" size={12} />
                 ) : null}
                 {crumb.selection ? (
                   <button
@@ -160,7 +144,23 @@ export function InspectorShell({
               </span>
             ))}
           </nav>
-        ) : null}
+        ) : (
+          <span className="fm-panel-chrome__title">Inspector</span>
+        )}
+        <Button
+          aria-label="Hide Inspector"
+          className="fm-inspector__panel-toggle"
+          data-panel-toggle="inspector"
+          size="icon"
+          title="Hide Inspector"
+          type="button"
+          variant="ghost"
+          onClick={() => (chrome ? chrome.hideWith(onToggleVisibility) : onToggleVisibility())}
+        >
+          <PanelRightClose size={16} aria-hidden="true" />
+        </Button>
+      </PanelChrome>
+      <header className="fm-inspector__header">
         <div className="fm-inspector__identity">
           <span className="fm-inspector__identity-icon" aria-hidden="true">
             <InspectorIdentityIcon icon={descriptor.icon} />
