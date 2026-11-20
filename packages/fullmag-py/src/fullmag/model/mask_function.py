@@ -6,6 +6,10 @@ dimensionless number. Both are written as ordinary Python in a restricted subset
 and transpiled to ``field_expr.v1`` equations. Fullmag never calls them during a
 run; the Rust planner and solvers evaluate the equations.
 
+The same syntax-tree checker validates the formula strings of an absorbing
+boundary layer (``compile_formula``, section 8 of the contract): a profile of
+``u`` and a distance of ``x, y, z``, evaluated here for validation and sampling.
+
 Values of the further parameters are given where the function is used::
 
     field = fm.mask(antenna_mask, B01=0.2 * mT, wavelength=279 * nm)
@@ -15,14 +19,17 @@ Values of the further parameters are given where the function is used::
 from __future__ import annotations
 
 import ast
+import bisect
 import inspect
 import io
 import linecache
 import math
+import re
 import textwrap
 import tokenize
 from dataclasses import dataclass, replace
 from dataclasses import field as _dataclass_field
+from functools import lru_cache
 from typing import Callable, Mapping
 
 FIELD_EXPR_VERSION = "field_expr.v1"
@@ -45,11 +52,20 @@ _FUNCTIONS_1 = frozenset(
     }
 )
 _FUNCTIONS_2 = frozenset({"atan2", "min", "max"})
+# Profile and distance formulas also have log1p; it has no time opcode.
+_FORMULA_FUNCTIONS_1 = _FUNCTIONS_1 | {"log1p"}
 _MATH_ALIASES = {"fabs": "abs"}
 # "space_time": one function of position and time, split into mask and time
-# functions by fullmag.model.space_time before it reaches the IR.
-_VARIABLES = {"mask": ("x", "y", "z"), "time": ("t",), "space_time": ("x", "y", "z", "t")}
-_RESERVED = frozenset({"x", "y", "z", "t", "pi"}) | _FUNCTIONS_1 | _FUNCTIONS_2
+# functions by fullmag.model.space_time before it reaches the IR. "profile" and
+# "distance": formula strings of an absorbing boundary layer (compile_formula).
+_VARIABLES = {
+    "mask": ("x", "y", "z"),
+    "time": ("t",),
+    "space_time": ("x", "y", "z", "t"),
+    "profile": ("u",),
+    "distance": ("x", "y", "z"),
+}
+_RESERVED = frozenset({"x", "y", "z", "t", "pi"}) | _FORMULA_FUNCTIONS_1 | _FUNCTIONS_2
 _AUGMENTED_OPERATORS = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.Pow: "**"}
 
 
@@ -265,7 +281,116 @@ def _transpile(function: Callable[..., object], kind: str) -> _TranspiledFunctio
     return _Transpiler(function, kind, source, first_line, definition).run()
 
 
-class _Transpiler:
+class _ExpressionChecker:
+    """Syntax-tree checker of the expressions of one function kind.
+
+    Shared by the function transpiler and the formula strings; a subclass gives
+    ``fail`` (how a position is reported) and ``check_name`` (which free names
+    are allowed).
+    """
+
+    kind: str
+    # math.pi and math.<function>(...) are allowed in transpiled functions only:
+    # a formula string is stored as written, and field_expr.v1 has no ``.``.
+    allow_math = True
+    functions_1: frozenset[str] = _FUNCTIONS_1
+    functions_2: frozenset[str] = _FUNCTIONS_2
+
+    def fail(self, node: ast.AST, message: str) -> ValueError:
+        raise NotImplementedError
+
+    def check_name(self, node: ast.Name) -> None:
+        raise NotImplementedError
+
+    def check(self, node: ast.AST) -> None:
+        if isinstance(node, ast.Constant):
+            value = node.value
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise self.fail(node, f"only real numbers are allowed, not {value!r}")
+            try:
+                finite = math.isfinite(float(value))
+            except OverflowError:
+                finite = False
+            if not finite:
+                raise self.fail(node, "numbers must be finite")
+            return
+        if isinstance(node, ast.Name):
+            self.check_name(node)
+            return
+        if isinstance(node, ast.Attribute):
+            if (
+                self.allow_math
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "math"
+                and node.attr == "pi"
+            ):
+                return
+            raise self.fail(
+                node,
+                "attribute access is allowed only as math.pi or math.<function>(...)"
+                if self.allow_math
+                else "attribute access is not allowed; write pi and functions without 'math.'",
+            )
+        if isinstance(node, ast.UnaryOp):
+            if not isinstance(node.op, (ast.UAdd, ast.USub)):
+                raise self.fail(node, f"operator {type(node.op).__name__} is not allowed")
+            self.check(node.operand)
+            return
+        if isinstance(node, ast.BinOp):
+            if not isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow)):
+                raise self.fail(
+                    node, f"operator {type(node.op).__name__} is not allowed; use + - * / **"
+                )
+            self.check(node.left)
+            self.check(node.right)
+            return
+        if isinstance(node, ast.Call):
+            self.check_call(node)
+            return
+        raise self.fail(
+            node,
+            f"{type(node).__name__} is not allowed in a {self.kind} function; "
+            "use an array mask for general Python code"
+            if self.allow_math
+            else f"{type(node).__name__} is not allowed in a {self.kind} formula",
+        )
+
+    def check_call(self, node: ast.Call) -> None:
+        if node.keywords:
+            raise self.fail(node, "functions take positional arguments only")
+        func = node.func
+        if isinstance(func, ast.Name):
+            name = func.id
+        elif (
+            self.allow_math
+            and isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "math"
+        ):
+            name = _MATH_ALIASES.get(func.attr, func.attr)
+        else:
+            raise self.fail(node, "only math functions may be called")
+        # ``ast`` drops parentheses: ``(sin)(x)`` starts at the parenthesis and
+        # its callee one character later. field_expr.v1 cannot read it.
+        if (func.lineno, func.col_offset) != (node.lineno, node.col_offset):
+            raise self.fail(node, f"write the function name {name!r} without parentheses around it")
+        if name in self.functions_1:
+            arity = 1
+        elif name in self.functions_2:
+            arity = 2
+        else:
+            raise self.fail(
+                node,
+                f"function {name!r} is not allowed; available: "
+                f"{', '.join(sorted(self.functions_1 | self.functions_2))}",
+            )
+        if len(node.args) != arity or any(isinstance(arg, ast.Starred) for arg in node.args):
+            raise self.fail(node, f"{name} takes {arity} argument(s)")
+        for argument in node.args:
+            self.check(argument)
+
+
+class _Transpiler(_ExpressionChecker):
     def __init__(
         self,
         function: Callable[..., object],
@@ -444,72 +569,6 @@ class _Transpiler:
         renames = {name: version for name, version in self.current.items() if name != version}
         return _to_field_expr(text, renames)
 
-    def check(self, node: ast.AST) -> None:
-        if isinstance(node, ast.Constant):
-            value = node.value
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise self.fail(node, f"only real numbers are allowed, not {value!r}")
-            if not math.isfinite(float(value)):
-                raise self.fail(node, "numbers must be finite")
-            return
-        if isinstance(node, ast.Name):
-            self.check_name(node)
-            return
-        if isinstance(node, ast.Attribute):
-            if isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr == "pi":
-                return
-            raise self.fail(node, "attribute access is allowed only as math.pi or math.<function>(...)")
-        if isinstance(node, ast.UnaryOp):
-            if not isinstance(node.op, (ast.UAdd, ast.USub)):
-                raise self.fail(node, f"operator {type(node.op).__name__} is not allowed")
-            self.check(node.operand)
-            return
-        if isinstance(node, ast.BinOp):
-            if not isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow)):
-                raise self.fail(
-                    node, f"operator {type(node.op).__name__} is not allowed; use + - * / **"
-                )
-            self.check(node.left)
-            self.check(node.right)
-            return
-        if isinstance(node, ast.Call):
-            self.check_call(node)
-            return
-        raise self.fail(
-            node,
-            f"{type(node).__name__} is not allowed in a {self.kind} function; "
-            "use an array mask for general Python code",
-        )
-
-    def check_call(self, node: ast.Call) -> None:
-        if node.keywords:
-            raise self.fail(node, "functions take positional arguments only")
-        func = node.func
-        if isinstance(func, ast.Name):
-            name = func.id
-        elif (
-            isinstance(func, ast.Attribute)
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "math"
-        ):
-            name = _MATH_ALIASES.get(func.attr, func.attr)
-        else:
-            raise self.fail(node, "only math functions may be called")
-        if name in _FUNCTIONS_1:
-            arity = 1
-        elif name in _FUNCTIONS_2:
-            arity = 2
-        else:
-            raise self.fail(
-                node,
-                f"function {name!r} is not allowed; available: "
-                f"{', '.join(sorted(_FUNCTIONS_1 | _FUNCTIONS_2))}",
-            )
-        if len(node.args) != arity or any(isinstance(arg, ast.Starred) for arg in node.args):
-            raise self.fail(node, f"{name} takes {arity} argument(s)")
-        for argument in node.args:
-            self.check(argument)
-
     def check_name(self, node: ast.Name) -> None:
         name = node.id
         if name in self.current:
@@ -539,6 +598,303 @@ class _Transpiler:
 
 
 _MISSING = object()
+
+
+# -- formula strings (absorbing boundary layer) ----------------------------
+
+# Rust ``fullmag-expr``: nesting of parentheses, argument lists, unary signs and
+# exponents per equation.
+_MAX_FORMULA_NESTING = 128
+_FORMULA_OPERATORS = frozenset({"+", "-", "*", "/", "**", "(", ")", ","})
+_FORMULA_NUMBER = re.compile(r"(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+_SKIPPED_TOKENS = frozenset(
+    {tokenize.NEWLINE, tokenize.NL, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER}
+)
+
+
+class FormulaError(ValueError):
+    """A formula string is not a ``field_expr.v1`` formula of its kind.
+
+    Messages start with ``character N:``, the zero-based position in the text.
+    """
+
+
+class _FormulaChecker(_ExpressionChecker):
+    allow_math = False
+    functions_1 = _FORMULA_FUNCTIONS_1
+
+    def __init__(self, kind: str, offset: int) -> None:
+        self.kind = kind
+        self.variables = _VARIABLES[kind]
+        self.offset = offset
+
+    def fail(self, node: ast.AST, message: str) -> FormulaError:
+        return FormulaError(f"character {self.offset + getattr(node, 'col_offset', 0)}: {message}")
+
+    def check_name(self, node: ast.Name) -> None:
+        name = node.id
+        if name in self.variables or name == "pi":
+            return
+        if name in {"x", "y", "z", "t", "u"}:
+            raise self.fail(
+                node,
+                f"a {self.kind} formula may use only {', '.join(self.variables)}, not {name!r}",
+            )
+        if name in self.functions_1 or name in self.functions_2:
+            raise self.fail(node, f"function {name!r} must be called")
+        raise self.fail(
+            node, f"name {name!r} is not {', '.join(self.variables)}, pi or a function"
+        )
+
+
+def compile_formula(text: str, kind: str) -> Callable[..., float]:
+    """Check a profile (``u``) or distance (``x, y, z``) formula and return its evaluator.
+
+    The text is checked with the syntax-tree rules of the transpiled functions
+    and with the token rules that ``ast`` does not keep (literal spellings, a
+    trailing comma, nesting depth), so that exactly the texts that
+    ``fullmag-expr`` reads are accepted. The evaluator follows IEEE-754 like the
+    Rust one: it returns ``inf`` or ``nan`` where ``math`` raises. The value is
+    not checked; ``FormulaError`` is raised for a text outside the language.
+    """
+    if kind not in ("profile", "distance"):
+        raise ValueError(f"unknown formula kind {kind!r}")
+    if not isinstance(text, str):
+        raise FormulaError(f"character 0: a formula is a string, not {type(text).__name__}")
+    return _compile_formula(text, kind)
+
+
+@lru_cache(maxsize=256)
+def _compile_formula(text: str, kind: str) -> Callable[..., float]:
+    if not text.isascii():
+        position = next(index for index, character in enumerate(text) if not character.isascii())
+        raise FormulaError(f"character {position}: only ASCII characters are allowed")
+    for index, character in enumerate(text):
+        if character in "\r\n":
+            raise FormulaError(f"character {index}: a formula is one line")
+    offset = len(text) - len(text.lstrip(" \t"))
+    stripped = text.strip(" \t")
+    if not stripped:
+        raise FormulaError("character 0: the formula is empty")
+    tokens = _formula_tokens(stripped, offset)
+    try:
+        tree = ast.parse(stripped, mode="eval").body
+    except SyntaxError as error:
+        column = (error.offset or 1) - 1
+        raise FormulaError(f"character {offset + column}: {error.msg}") from None
+    except (ValueError, RecursionError, MemoryError) as error:
+        raise FormulaError(f"character {offset}: {error}") from None
+    checker = _FormulaChecker(kind, offset)
+    try:
+        checker.check(tree)
+    except RecursionError:
+        raise FormulaError(f"character {offset}: the formula is nested too deeply") from None
+    _check_formula_nesting(tree, tokens, offset)
+    return _evaluator(tree, _VARIABLES[kind])
+
+
+def _formula_tokens(text: str, offset: int) -> list[tokenize.TokenInfo]:
+    """Tokens of one formula line; rejects tokens ``field_expr.v1`` cannot read."""
+    try:
+        tokens = [
+            token
+            for token in tokenize.generate_tokens(io.StringIO(text).readline)
+            if token.type not in _SKIPPED_TOKENS
+        ]
+    except (tokenize.TokenError, SyntaxError) as error:
+        raise FormulaError(f"character {offset}: {error}") from None
+    for index, token in enumerate(tokens):
+        position = offset + token.start[1]
+        if token.type == tokenize.NUMBER:
+            if _FORMULA_NUMBER.fullmatch(token.string) is None:
+                raise FormulaError(
+                    f"character {position}: write the number {token.string!r} in decimal "
+                    "or scientific notation without '_'"
+                )
+        elif token.type == tokenize.OP:
+            if token.string not in _FORMULA_OPERATORS:
+                raise FormulaError(f"character {position}: {token.string!r} is not allowed")
+            following = tokens[index + 1] if index + 1 < len(tokens) else None
+            if token.string == "," and following is not None and following.string == ")":
+                raise FormulaError(f"character {position}: an argument list cannot end with ','")
+        elif token.type != tokenize.NAME:
+            raise FormulaError(f"character {position}: {token.string!r} is not allowed")
+    return tokens
+
+
+def _check_formula_nesting(
+    tree: ast.expr, tokens: list[tokenize.TokenInfo], offset: int
+) -> None:
+    """The nesting limit of ``fullmag-expr``: each open parenthesis, unary sign and
+    exponent around a number or a name is one level."""
+    opened: list[int] = []
+    depth = 0
+    for token in tokens:
+        if token.string == "(":
+            depth += 1
+        elif token.string == ")":
+            depth -= 1
+        opened.append(depth)
+    starts = [token.start[1] for token in tokens]
+
+    def parentheses_before(column: int) -> int:
+        index = bisect.bisect_left(starts, column)
+        return opened[index - 1] if index > 0 else 0
+
+    stack: list[tuple[ast.AST, int]] = [(tree, 0)]
+    while stack:
+        node, levels = stack.pop()
+        if isinstance(node, (ast.Constant, ast.Name)):
+            if levels + parentheses_before(node.col_offset) > _MAX_FORMULA_NESTING:
+                raise FormulaError(
+                    f"character {offset + node.col_offset}: the formula is nested deeper "
+                    f"than {_MAX_FORMULA_NESTING} levels"
+                )
+        elif isinstance(node, ast.UnaryOp):
+            stack.append((node.operand, levels + 1))
+        elif isinstance(node, ast.BinOp):
+            stack.append((node.left, levels))
+            stack.append((node.right, levels + 1 if isinstance(node.op, ast.Pow) else levels))
+        elif isinstance(node, ast.Call):
+            stack.extend((argument, levels) for argument in node.args)
+
+
+def _is_odd_integer(value: float) -> bool:
+    return math.isfinite(value) and value == math.floor(value) and math.fmod(value, 2.0) != 0.0
+
+
+def _ieee_div(left: float, right: float) -> float:
+    try:
+        return left / right
+    except ZeroDivisionError:
+        if math.isnan(left) or left == 0.0:
+            return math.nan
+        return math.copysign(math.inf, left) * math.copysign(1.0, right)
+
+
+def _ieee_pow(base: float, exponent: float) -> float:
+    try:
+        return math.pow(base, exponent)
+    except OverflowError:
+        negative = base < 0.0 and _is_odd_integer(exponent)
+        return -math.inf if negative else math.inf
+    except ValueError:
+        if base == 0.0 and exponent < 0.0:
+            return math.copysign(math.inf, base) if _is_odd_integer(exponent) else math.inf
+        return math.nan
+
+
+def _ieee_log(value: float) -> float:
+    if value == 0.0:
+        return -math.inf
+    return math.log(value) if value > 0.0 or math.isnan(value) else math.nan
+
+
+def _ieee_log1p(value: float) -> float:
+    if value == -1.0:
+        return -math.inf
+    return math.log1p(value) if value > -1.0 or math.isnan(value) else math.nan
+
+
+def _ieee(function: Callable[[float], float], overflow: Callable[[float], float]):
+    """``function`` with ``math``'s exceptions replaced by IEEE-754 results."""
+
+    def evaluate(value: float) -> float:
+        try:
+            return function(value)
+        except OverflowError:
+            return overflow(value)
+        except ValueError:
+            return math.nan
+
+    return evaluate
+
+
+def _ieee_min(left: float, right: float) -> float:
+    """Rust ``f64::min``: a NaN operand gives the other one."""
+    if math.isnan(left):
+        return right
+    if math.isnan(right):
+        return left
+    return left if left <= right else right
+
+
+def _ieee_max(left: float, right: float) -> float:
+    if math.isnan(left):
+        return right
+    if math.isnan(right):
+        return left
+    return left if left >= right else right
+
+
+def _signed_infinity(value: float) -> float:
+    return math.copysign(math.inf, value)
+
+
+def _infinity(_: float) -> float:
+    return math.inf
+
+
+_FORMULA_EVALUATORS_1: dict[str, Callable[[float], float]] = {
+    "sin": _ieee(math.sin, _infinity),
+    "cos": _ieee(math.cos, _infinity),
+    "tan": _ieee(math.tan, _infinity),
+    "asin": _ieee(math.asin, _infinity),
+    "acos": _ieee(math.acos, _infinity),
+    "atan": math.atan,
+    "sinh": _ieee(math.sinh, _signed_infinity),
+    "cosh": _ieee(math.cosh, _infinity),
+    "tanh": math.tanh,
+    "exp": _ieee(math.exp, _infinity),
+    "log": _ieee_log,
+    "log1p": _ieee_log1p,
+    "sqrt": _ieee(math.sqrt, _infinity),
+    "abs": math.fabs,
+}
+_FORMULA_EVALUATORS_2: dict[str, Callable[[float, float], float]] = {
+    "atan2": math.atan2,
+    "min": _ieee_min,
+    "max": _ieee_max,
+}
+_FORMULA_BINARY: dict[type, Callable[[float, float], float]] = {
+    ast.Add: lambda left, right: left + right,
+    ast.Sub: lambda left, right: left - right,
+    ast.Mult: lambda left, right: left * right,
+    ast.Div: _ieee_div,
+    ast.Pow: _ieee_pow,
+}
+
+
+def _evaluator(node: ast.expr, variables: tuple[str, ...]) -> Callable[..., float]:
+    """Evaluator of a checked formula tree; called with the variable values."""
+    if isinstance(node, ast.Constant):
+        number = float(node.value)
+        return lambda *values: number
+    if isinstance(node, ast.Name):
+        if node.id == "pi":
+            return lambda *values: math.pi
+        index = variables.index(node.id)
+        return lambda *values: float(values[index])
+    if isinstance(node, ast.UnaryOp):
+        operand = _evaluator(node.operand, variables)
+        if isinstance(node.op, ast.USub):
+            return lambda *values: -operand(*values)
+        return operand
+    if isinstance(node, ast.BinOp):
+        left = _evaluator(node.left, variables)
+        right = _evaluator(node.right, variables)
+        operation = _FORMULA_BINARY[type(node.op)]
+        return lambda *values: operation(left(*values), right(*values))
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        arguments = [_evaluator(argument, variables) for argument in node.args]
+        if len(arguments) == 1:
+            function_1 = _FORMULA_EVALUATORS_1[node.func.id]
+            argument = arguments[0]
+            return lambda *values: function_1(argument(*values))
+        function_2 = _FORMULA_EVALUATORS_2[node.func.id]
+        first, second = arguments
+        return lambda *values: function_2(first(*values), second(*values))
+    raise AssertionError(f"unchecked formula node {type(node).__name__}")
 
 
 def _closure_values(function: Callable[..., object]) -> dict[str, object]:
@@ -631,6 +987,7 @@ def register_script_source(filename: str, source: str) -> None:
 
 __all__ = [
     "FIELD_EXPR_VERSION",
+    "FormulaError",
     "FunctionParameter",
     "LibraryCall",
     "MaskFunction",

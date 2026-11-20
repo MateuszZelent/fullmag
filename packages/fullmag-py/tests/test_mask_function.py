@@ -180,6 +180,12 @@ class MaskFunctionTests(unittest.TestCase):
             "wrong_leading": ("def f(a, y, z):\n    return (a, 0, 0)\n", 1),
             "string": ("def f(x, y, z):\n    return ('x', 0, 0)\n", 2),
             "modulo": ("def f(x, y, z):\n    return (x % 2, 0, 0)\n", 2),
+            # field_expr.v1 cannot read a parenthesized function name.
+            "parenthesized_callee": ("def f(x, y, z):\n    return ((sin)(x), 0, 0)\n", 2),
+            "parenthesized_math": ("def f(x, y, z):\n    return ((math.sin)(x), 0, 0)\n", 2),
+            # log1p belongs to the absorbing-boundary formulas only.
+            "log1p": ("def f(x, y, z):\n    return (log1p(x), 0, 0)\n", 2),
+            "reserved_log1p": ("def f(x, y, z):\n    log1p = x\n    return (log1p, 0, 0)\n", 2),
         }
         for name, (source, line) in cases.items():
             with self.subTest(name):

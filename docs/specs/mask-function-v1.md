@@ -317,13 +317,15 @@ stores up to two formulas as plain strings in `ProblemIR`:
   must give finite values in $[0, 1]$ at the 257 points $u = k/256$ and
   $p(0) = 0$, $p(1) = 1$ within $10^{-12}$. An engine error is reported with its
   code and zero-based character position, for example
-  `expression error expr_syntax at character 0: integer literal '01' has a leading zero`.
+  `expression error expr_syntax at character 0: integer literal '01' has a
+  leading zero; write it without the zero, as in Python`.
 - The Python front end (`fullmag.model.mask_function.compile_formula`) parses
   the string with `ast`, applies the syntax-tree checker of the antenna
-  functions for the kind (no capture of free names, no `math.` attributes),
-  checks the tokens that `ast` does not keep (literal spellings, a trailing
-  comma, a parenthesized function name, the nesting depth of section 3) and
-  evaluates the checked tree with `math` and IEEE-754 results where `math`
-  raises. It never calls `eval`.
+  functions for the kind (no capture of free names, no `math.` attributes, no
+  parenthesized function name), checks what `ast` does not keep (literal
+  spellings, a trailing comma, the nesting depth of section 3) on the tokens,
+  and evaluates the checked tree with `math`, returning the IEEE-754 result
+  where `math` raises. It never calls `eval`. Its errors carry the character
+  position (`FormulaError`, `character N: …`) but not the Rust error code.
 - The accept/reject table shared by the Rust and Python tests is
   `crates/fullmag-ir/tests/fixtures/absorbing_boundary_formula_cases.json`.
