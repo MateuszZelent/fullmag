@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
-import type { CurrentRunResource, StageExecutionResource } from "@/kernel/api/apiTypes";
+import type { CurrentRunResource, ScalarWindowResource, StageExecutionResource } from "@/kernel/api/apiTypes";
 import type { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
