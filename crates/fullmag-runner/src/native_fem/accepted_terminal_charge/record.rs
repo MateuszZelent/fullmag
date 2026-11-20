@@ -1,7 +1,6 @@
 //! Runner compatibility facade for the backend-neutral charge artifact codec.
 
 pub(crate) use fullmag_antenna_artifacts::charge::AcceptedTerminalChargeRecord;
-pub(in crate::native_fem) use fullmag_antenna_artifacts::charge::Reader;
 
 pub(crate) fn decode_accepted_terminal_charge_record(
     payload: Vec<u8>,

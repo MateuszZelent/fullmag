@@ -1,6 +1,7 @@
 name: eigensolve-ui-method-contracts
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     branches: [master, main]
@@ -56,65 +57,11 @@ on:
       - '.github/workflows/eigensolve-ui-method-contracts.yml'
       - 'scripts/ci/prepare_eigensolve_ui_workspace.py'
       - 'scripts/ci/test_prepare_eigensolve_ui_workspace.py'
-  pull_request:
-    paths:
-      - 'apps/control-room/src/shared/analysis-charts/frequencyRenderModels*'
-      - 'apps/control-room/src/shared/analysis-charts/chartRenderer*'
-      - 'apps/control-room/src/shared/analysis-charts/InteractiveChartSurface*'
-      - 'apps/control-room/src/shared/analysis-charts/interactiveChartModel.ts'
-      - 'apps/control-room/src/modules/analysis-plots/components/EChartsSurface*'
-      - 'apps/control-room/src/modules/analysis-plots/components/AnalysisResultProjectionSurface*'
-      - 'apps/control-room/src/modules/analysis-plots/useAnalysisResultProjectionController*'
-      - 'apps/control-room/src/shared/domain/analysis/results/projectionModels*'
-      - 'apps/control-room/src/modules/live-charts/liveChartsPresentation*'
-      - 'apps/control-room/src/modules/inspector/panels/FrequencyDomainCharts*'
-      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors*'
-      - 'apps/control-room/src/modules/inspector/panels/analysis-results/AnalysisResultInspectorPanel*'
-      - 'apps/control-room/src/modules/ribbon/RibbonModule*'
-      - 'apps/control-room/src/modules/ribbon/ribbonCommands*'
-      - 'apps/control-room/src/kernel/analysis-modules/postprocessingCommandContributions*'
-      - 'apps/control-room/src/kernel/analysis-modules/postprocessingDefinitions*'
-      - 'apps/control-room/src/kernel/resources/postprocessingDefinitionResources*'
-      - 'apps/control-room/src/kernel/resources/studyRuntimeResources*'
-      - 'apps/control-room/src/kernel/api/generated/openapi-v2*'
-      - 'apps/control-room/src/kernel/api/apiTypes.ts'
-      - 'apps/control-room/src/kernel/api/ControlRoomApi*'
-      - 'apps/control-room/src/kernel/api/fieldQueryIdentity*'
-      - 'apps/control-room/src/kernel/resources/frequencyDomainResourceKeys*'
-      - 'apps/control-room/src/kernel/resources/modeCompositionFieldLayerResources*'
-      - 'apps/control-room/src/kernel/visualization/ModeCompositionFieldLayerController*'
-      - 'apps/control-room/src/kernel/visualization/ModeFieldOverlayIntent*'
-      - 'apps/control-room/src/kernel/resources/modeFieldOverlayResources*'
-      - 'apps/control-room/src/modules/viewport-3d/viewport3dResources*'
-      - 'apps/control-room/src/modules/viewport-3d/model/modeCompositionViewportProjection*'
-      - 'apps/control-room/src/modules/viewport-3d/layers/MeshPartLayer*'
-      - 'apps/control-room/src/modules/analysis-plots/referenceOverlaySeries.test.ts'
-      - 'apps/control-room/src/modules/analysis-plots/useAnalysisPlotsController.ts'
-      - 'apps/control-room/src/modules/analysis-plots/referenceChartQuantity.test.ts'
-      - 'apps/control-room/src/shared/domain/analysis/modalDampingObservables*'
-      - 'apps/control-room/src/shared/domain/analysis/phasorConventionAdapter*'
-      - 'apps/control-room/src/shared/domain/analysis/referenceImport*'
-      - 'apps/control-room/src/kernel/visualization/AnalysisResultFieldOverlayIntent*'
-      - 'apps/control-room/src/modules/inspector/panels/StudyInspectorPanel*'
-      - 'apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels*'
-      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel*'
-      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel*'
-      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel*'
-      - 'apps/control-room/src/modules/explorer/**'
-      - 'apps/control-room/src/kernel/selection/selectionTypes*'
-      - 'apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases*'
-      - 'apps/control-room/src/kernel/analysis-modules/analysisSurfaceRouting*'
-      - 'apps/control-room/src/modules/inspector/inspectorRouteCatalog*'
-      - 'apps/control-room/src/modules/inspector/inspectorRegistry*'
-      - '.github/workflows/eigensolve-ui-method-contracts.yml'
-      - 'scripts/ci/prepare_eigensolve_ui_workspace.py'
-      - 'scripts/ci/test_prepare_eigensolve_ui_workspace.py'
-
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: eigensolve-ui-method-contracts-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

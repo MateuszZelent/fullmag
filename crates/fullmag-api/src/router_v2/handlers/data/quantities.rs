@@ -216,10 +216,10 @@ fn annotate_runtime_quantity_state(
             resolved.request,
             fullmag_runner::QuantityRequestCapability::FieldVector
         ) && resolved.reason_code.as_deref() != Some("prepared_initial_state");
-        // The Docker runtime only adopts fields a finished accepted run
-        // published; it has no evaluator for a prepared state. Report such a
-        // field as supported but not yet computable instead of letting a
-        // Compute request fail.
+        // The Docker runtime has no evaluator for a prepared state (ADR 0071):
+        // before a run starts such a field is supported but not computable.
+        // A running or finished run captures demanded fields live and
+        // publishes the full catalog at the end, so it stays requestable.
         if entry.materializable
             && materialization_state == "unmaterialized"
             && accepted_fields_require_terminal_run(snapshot)
@@ -235,11 +235,24 @@ fn annotate_runtime_quantity_state(
     }
 }
 
-/// Whether field materialization must wait for a finished accepted run.
+/// Whether field materialization must wait for an accepted run to start.
+///
+/// Only a prepared state (no run, or a run awaiting its first Compute) lacks
+/// an evaluator in the Docker runtime. While the run computes, the UI demand
+/// reaches the worker and the next heavy payload captures the field; after
+/// it ends, the terminal bundle carries the full active catalog.
 fn accepted_fields_require_terminal_run(snapshot: &SessionStateResponse) -> bool {
-    crate::live_accepted_execution::docker_api_only_runtime()
-        && !snapshot.run.as_ref().is_some_and(|run| {
-            matches!(run.status.as_str(), "completed" | "failed" | "cancelled")
+    accepted_fields_await_run(
+        crate::live_accepted_execution::docker_api_only_runtime(),
+        snapshot.run.as_ref().map(|run| run.status.as_str()),
+    )
+}
+
+/// Pure decision behind `accepted_fields_require_terminal_run`.
+fn accepted_fields_await_run(docker_runtime: bool, run_status: Option<&str>) -> bool {
+    docker_runtime
+        && !run_status.is_some_and(|status| {
+            matches!(status, "running" | "stopping" | "completed" | "failed" | "cancelled")
         })
 }
 
@@ -803,6 +816,19 @@ mod tests {
         );
         assert_eq!(resolved.lane, "unresolved");
         assert_eq!(resolved.reason_code.as_deref(), Some("prepared_initial_state"));
+    }
+
+    #[test]
+    fn running_and_finished_accepted_runs_keep_fields_requestable() {
+        // Regression: H_demag/H_eff stayed "(after Run)" during a running
+        // Docker run, so the UI never demanded them and only m was captured.
+        for status in ["running", "stopping", "completed", "failed", "cancelled"] {
+            assert!(!super::accepted_fields_await_run(true, Some(status)), "{status}");
+        }
+        for status in [None, Some("awaiting_command"), Some("waiting_for_compute")] {
+            assert!(super::accepted_fields_await_run(true, status), "{status:?}");
+        }
+        assert!(!super::accepted_fields_await_run(false, None));
     }
 
     #[test]

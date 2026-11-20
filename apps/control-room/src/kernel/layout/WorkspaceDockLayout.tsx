@@ -17,6 +17,7 @@ import {
 } from "./layoutModel";
 import { SlotHost } from "./SlotHost";
 import { ViewportTabHost } from "./ViewportTabHost";
+import { WorkspaceSideRail } from "./WorkspaceSideRail";
 import { useWorkspaceContentScope } from "./WorkspaceContentScope";
 import { useKernel } from "../KernelContext";
 import type { SavedResultsPlaybackSelection } from "../saved-results/SavedResultsPlaybackController";
@@ -126,8 +127,32 @@ export function WorkspaceDockLayout() {
   const hasAuxViewportModule = !projectOnly && !playbackOnly && kernel.modules.forSlot("viewport-aux").length > 0;
   const [dockState, setDockState] = useState<WorkspaceDockState>({ layout: DEFAULT_WORKSPACE_LAYOUT, restored: false });
   const [dockedPanels, setDockedPanels] = useState<Record<string, boolean>>({});
-  const [windowWidth, setWindowWidth] = useState(1440);
   const panels = useRef<Record<string, PanelImperativeHandle | null>>({});
+  // Narrow windows give the content the width: side panels collapse to their
+  // rails below 760 px and come back as they were when the window widens.
+  // A rail icon still opens a panel docked in a narrow window.
+  const narrowRestore = useRef<{ left: boolean; right: boolean } | null>(null);
+  useEffect(() => {
+    // Environments without media queries (jsdom, embedded hosts) keep the layout as is.
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia("(max-width: 759px)");
+    const apply = () => {
+      const visibleNow = kernel.layout.get().panelVisible;
+      if (query.matches && narrowRestore.current === null) {
+        narrowRestore.current = { left: visibleNow.left, right: visibleNow.right };
+        kernel.layout.setPanelVisible("left", false);
+        kernel.layout.setPanelVisible("right", false);
+      } else if (!query.matches && narrowRestore.current !== null) {
+        const previous = narrowRestore.current;
+        narrowRestore.current = null;
+        kernel.layout.setPanelVisible("left", previous.left);
+        kernel.layout.setPanelVisible("right", previous.right);
+      }
+    };
+    apply();
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
+  }, [kernel]);
 
   useEffect(() => {
     const restore = () => {
@@ -137,9 +162,7 @@ export function WorkspaceDockLayout() {
     };
     restore();
     window.addEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, restore);
-    const resize = () => setWindowWidth(window.innerWidth);
-    resize(); window.addEventListener("resize", resize);
-    return () => { window.removeEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, restore); window.removeEventListener("resize", resize); };
+    return () => { window.removeEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, restore); };
   }, []);
   useEffect(() => { if (dockState.restored) persistWorkspaceLayout(dockState.layout); }, [dockState]);
   const onDockChange = useCallback((id: string, docked: boolean) => {
@@ -163,7 +186,9 @@ export function WorkspaceDockLayout() {
   const visible = (id: string) => playbackOnly && id === "panel-right"
     ? true
     : id === "panel-left" ? panelVisible.left : id === "panel-right" ? panelVisible.right : true;
-  const isDrawer = (id: string) => id === "panel-right" && windowWidth < 1180 || id === "panel-left" && windowWidth < 760;
+  // Side panels never become drawers: they stay docked beside their rails and
+  // the columns scale with the window; a rail icon collapses a panel for room.
+  const isDrawer = (_id: string) => false;
   // Explorer and Inspector drawers open together only below 760px; they then split the width.
   const drawersShared = isDrawer("panel-left") && isDrawer("panel-right") && visible("panel-left") && visible("panel-right");
   const move = (id: string, direction: -1 | 1) => {
@@ -179,6 +204,8 @@ export function WorkspaceDockLayout() {
   return <div className="fm-workspace-body" id="fm-main-content" tabIndex={-1}>
     <ResizablePanelGroup autoSaveId="fullmag-workspace-main:retained-v1" direction="vertical" panelCount={projectOnly || playbackOnly ? 1 : 2}>
       <ResizablePanel defaultSize="78%" id="workspace-main" minSize="160px">
+        <div className="fm-workspace-main-row">
+        {!projectOnly && !playbackOnly ? <WorkspaceSideRail side="left" /> : null}
         <SortableList id="workspace-dock-columns" items={columns.map(column => column.slotId)} onMove={(activeId, overId) => setDockState(current => ({ ...current, layout: moveWorkspaceColumn(current.layout, activeId, overId) }))}>
           <ResizablePanelGroup autoSaveId={`fullmag-workspace-columns:retained-v1:${columns.map(column => column.slotId).join("|")}`} direction="horizontal" panelCount={columns.length}>
             {columns.map((column, index) => <Fragment key={column.slotId}>
@@ -189,6 +216,8 @@ export function WorkspaceDockLayout() {
             </Fragment>)}
           </ResizablePanelGroup>
         </SortableList>
+        {!projectOnly && !playbackOnly ? <WorkspaceSideRail side="right" /> : null}
+        </div>
       </ResizablePanel>
       {!projectOnly && !playbackOnly ? <>
         <ResizableHandle className="fm-resize-handle--horizontal" aria-label="Resize bottom diagnostics" style={dockedPanels["panel-bottom"] === false ? { display: "none" } : undefined} />
@@ -201,8 +230,9 @@ export function WorkspaceDockLayout() {
     </ResizablePanelGroup>
     {!playbackOnly ? (
       <div role="group" className="fm-panel-restore-bar" aria-label="Restore hidden panels">
-        {!panelVisible.left ? <Button data-restore-panel="panel-left" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("left", true)}>Restore Explorer</Button> : null}
-        {!panelVisible.right ? <Button data-restore-panel="panel-right" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("right", true)}>Restore Inspector</Button> : null}
+        {/* Explorer and Inspector reopen from their side rails. */}
+        {projectOnly && !panelVisible.left ? <Button data-restore-panel="panel-left" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("left", true)}>Restore Explorer</Button> : null}
+        {projectOnly && !panelVisible.right ? <Button data-restore-panel="panel-right" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("right", true)}>Restore Inspector</Button> : null}
         {!projectOnly && !panelVisible.bottom ? <Button data-restore-panel="panel-bottom" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("bottom", true)}>Restore Diagnostics</Button> : null}
       </div>
     ) : null}

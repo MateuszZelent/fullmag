@@ -33,6 +33,8 @@ export function InspectorFooter({
   // by routing focus to the first invalid control and announcing a summary.
   const showInvalid = staged && !!session?.dirty && !session.valid && !session.lockReason && !busy;
   const modeLabel = staged ? "Draft" : live ? "Live" : session?.mode === "immediate" ? "Immediate" : null;
+  // Tone of the floating change bar: a pending draft is tinted, an invalid one warns.
+  const tone = error || showInvalid ? "error" : staged && session?.dirty ? "draft" : live ? "live" : "idle";
 
   async function run(action: "apply" | "reset") {
     if (!session || inFlight.current || busy || (action === "apply" ? !actions.canApply : !actions.canReset)) return;
@@ -55,7 +57,13 @@ export function InspectorFooter({
   }
 
   return (
-    <footer className="fm-inspector__action-bar" data-edit-mode={session?.mode ?? "none"}>
+    <footer className="fm-inspector__action-bar" data-edit-mode={session?.mode ?? "none"} data-tone={tone}>
+      <p className="fm-inspector__action-reason" id={reasonId}>
+        <span aria-hidden="true" className="fm-inspector__action-dot" />
+        <span className="fm-inspector__action-message">
+          {modeLabel ? <><strong>{modeLabel}</strong> · </> : null}{message}
+        </span>
+      </p>
       <div className="fm-inspector__action-controls">
         {!focusDisabled ? (
           <Button className="fm-inspector__action-btn" size="sm" type="button" variant="secondary" onClick={onFocus}>
@@ -102,9 +110,6 @@ export function InspectorFooter({
           </Button>
         ) : null}
       </div>
-      <p className="fm-inspector__action-reason" id={reasonId}>
-        {modeLabel ? <><strong>{modeLabel}</strong> · </> : null}{message}
-      </p>
       {error ? <p className="fm-inspector__action-error" role="alert">{error}</p> : null}
     </footer>
   );

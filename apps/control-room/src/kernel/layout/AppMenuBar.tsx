@@ -385,24 +385,30 @@ function HeaderRunControls({
 }: Pick<HeaderNavigationProps, "commandDisabledReason" | "isCommandDisabled" | "onCommand">) {
   return (
     <div role="group" className="fm-header__run-controls" aria-label="Runtime controls">
-      {RUN_CONTROLS.map((action) => (
-        <Button
-          key={action.id}
-          className="fm-header__run-btn"
-          data-command-id={action.id}
-          data-run-control={action.id.replace(/^study\./, "")}
-          disabled={Boolean(action.disabled || isCommandDisabled(action.id))}
-          disabledReason={commandDisabledReason(action.id)}
-          aria-label={action.label}
-          size="icon"
-          title={commandDisabledReason(action.id) ? undefined : action.label}
-          type="button"
-          variant="ghost"
-          onClick={() => onCommand(action.id)}
-        >
-          {action.icon}
-        </Button>
-      ))}
+      {RUN_CONTROLS.map((action) => {
+        // Compute is the primary pill with its label, as in the mockup header;
+        // pause, stop and skip stay icon segments joined to it.
+        const primary = action.id === "study.run";
+        return (
+          <Button
+            key={action.id}
+            className="fm-header__run-btn"
+            data-command-id={action.id}
+            data-run-control={action.id.replace(/^study\./, "")}
+            disabled={Boolean(action.disabled || isCommandDisabled(action.id))}
+            disabledReason={commandDisabledReason(action.id)}
+            aria-label={action.label}
+            size={primary ? "sm" : "icon"}
+            title={commandDisabledReason(action.id) ? undefined : action.label}
+            type="button"
+            variant={primary ? "primary" : "ghost"}
+            onClick={() => onCommand(action.id)}
+          >
+            {action.icon}
+            {primary ? <span className="fm-header__run-label">Compute</span> : null}
+          </Button>
+        );
+      })}
     </div>
   );
 }

@@ -536,6 +536,7 @@ def setup(app: Sphinx) -> dict[str, object]:
         (
             "public_docs/site",
             ".github/workflows/documentation.yml",
+            ".github/workflows/documentation-build.yml",
             "scripts/public_docs_information_architecture.py",
             "scripts/check_public_docs_information_architecture.py",
             "scripts/check_public_doc_examples.py",
@@ -555,6 +556,7 @@ def setup(app: Sphinx) -> dict[str, object]:
             ":(exclude)**/*.md",
             ":(exclude)**/*.rst",
             ":(exclude).github/workflows/documentation.yml",
+            ":(exclude).github/workflows/documentation-build.yml",
             ":(exclude).agents/skills/scientific-documentation-contract",
             ":(exclude)packages/fullmag-py/tests/test_public_python_api_documentation.py",
             ":(exclude)packages/fullmag-py/tests/test_public_exchange_documentation.py",

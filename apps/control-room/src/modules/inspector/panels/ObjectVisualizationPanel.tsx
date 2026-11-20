@@ -88,10 +88,7 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { ViewportCameraControls } from "../visualization/ViewportCameraControls";
 import { ViewportClippingControls } from "../visualization/ViewportClippingControls";
-import {
-  ScientificInspectorContext,
-  ScientificInspectorIdentity,
-} from "../components/ScientificInspectorTemplate";
+import { ScientificInspectorContext } from "../components/ScientificInspectorTemplate";
 import { FieldRow } from "../primitives/FieldRow";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
@@ -1362,13 +1359,6 @@ export function VisualizationTargetInspectorPanel({
     }, planar.resolution, planar.vector_style);
     if (presentationPatch) visualizationSync.queuePatch({ planar: presentationPatch });
   }, [activeSettings?.vectorBudget, activeSettings?.vectorColorMode, activeSettings?.vectorLengthScale, planarVisualizationState, visualizationSync]);
-  const scientificInspectorIdentity = (
-    <ScientificInspectorIdentity
-      methodLabel="Display controls"
-      physicalLabel={owner.targetLabel}
-      title={owner.title}
-    />
-  );
   const scientificInspectorContext = (
     <ScientificInspectorContext
       collapsible
@@ -1401,7 +1391,6 @@ export function VisualizationTargetInspectorPanel({
   if (!target || !stablePanel) {
     return (
       <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner={owner.id}>
-        {scientificInspectorIdentity}
         <EmptyState
           description={`Select an Explorer node that supports ${owner.targetLabel} visualization.`}
           heading="No visualization target selected"
@@ -1417,7 +1406,6 @@ export function VisualizationTargetInspectorPanel({
   if (visualizationViewContext === "planar") {
     return (
       <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner={owner.id}>
-        {scientificInspectorIdentity}
         <InspectorGroup title="View">
           <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
         </InspectorGroup>
@@ -1430,7 +1418,6 @@ export function VisualizationTargetInspectorPanel({
 
   return (
     <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner={owner.id}>
-      {scientificInspectorIdentity}
       <InspectorGroup title="View">
         <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
       </InspectorGroup>

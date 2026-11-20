@@ -724,7 +724,7 @@ pub fn validate_mixed_layer_topology_certificate_v2_against_mesh(
         }
         let volume = match cell_volume(cell_type, &points) {
             Ok(volume) if legal && volume.is_finite() && volume > 0.0 => volume,
-            Ok(volume) if !legal => 0.0,
+            Ok(_) if !legal => 0.0,
             Ok(_) => {
                 errors.push(format!("mixed v2 cell {ordinal} has invalid volume"));
                 0.0

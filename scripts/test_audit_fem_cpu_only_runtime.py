@@ -250,7 +250,7 @@ class RepositoryContractTests(unittest.TestCase):
 
     def test_ci_runs_cpu_only_repository_guard_without_building_container(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
-        workflow = (repository_root / ".github/workflows/bootstrap.yml").read_text(
+        workflow = (repository_root / ".github/workflows/bootstrap-python.yml").read_text(
             encoding="utf-8"
         )
 

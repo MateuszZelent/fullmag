@@ -162,9 +162,12 @@ export function resolveViewport3DCanvasDpr({
   const safeRatio = Number.isFinite(devicePixelRatio)
     ? Math.max(1, devicePixelRatio)
     : 1;
-  // Figure supersamples ordinary displays as well as high-density displays.
-  // Other profiles retain their native-density caps for interactive navigation.
-  return profile.id === "figure" ? profile.dprCap : Math.min(safeRatio, profile.dprCap);
+  // Figure and Detailed supersample ordinary displays as well as high-density
+  // ones, so they differ from Standard at 100% zoom. Fast and Standard keep
+  // their native-density caps for interactive navigation.
+  return profile.id === "figure" || profile.id === "balanced"
+    ? profile.dprCap
+    : Math.min(safeRatio, profile.dprCap);
 }
 
 /**

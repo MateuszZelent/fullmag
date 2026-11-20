@@ -476,79 +476,13 @@
   box-shadow: 0 2px 8px -1px color-mix(in srgb, var(--fm-accent) 40%, transparent);
 }
 
-/* ── Inspector Group nav variant ── */
-.fm-inspector-group-nav-trigger {
-  display: flex;
-  align-items: center;
-  min-height: var(--fm-inspector-group-nav-height);
-}
-
-/* Nav row icon: circular container */
-.fm-inspector-group-nav-icon {
-  flex-shrink: 0;
-  width: var(--fm-inspector-nav-icon-size);
-  height: var(--fm-inspector-nav-icon-size);
-  border-radius: 50%;
-  border: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-panel-raised);
-  color: var(--fm-text-muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* ── Display group card wrapper ── */
-.fm-viz-display-card {
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-lg);
-  background: var(--fm-bg-surface);
-  padding: var(--fm-space-1) 0 var(--fm-space-3);
-  overflow: hidden;
-  box-shadow: var(--fm-shadow-sm), inset 0 1px 0 color-mix(in srgb, var(--fm-text-primary) 4%, transparent);
-}
-
-/* Override InspectorGroup header inside card */
-.fm-viz-display-card [data-slot="inspector-group-trigger"] {
-  padding: var(--fm-space-3) var(--fm-inspector-padding-inline);
-  height: auto;
-  min-height: var(--fm-inspector-tab-height);
-  border-radius: var(--fm-radius-lg) var(--fm-radius-lg) 0 0;
-}
-
-.fm-viz-display-card [data-slot="inspector-group-trigger"] h3 {
-  font-size: var(--fm-font-size-lg);
-  font-weight: 650;
-}
-
-/* Icon box inside the Display group header */
-.fm-viz-display-card [data-slot="inspector-group-trigger"] .fm-inspector-group-icon-box {
-  width: var(--fm-panel-header-height);
-  height: var(--fm-panel-header-height);
-  border-radius: var(--fm-radius-md);
-  border: 1px solid var(--fm-border-subtle);
-  background: color-mix(in srgb, var(--fm-accent) 12%, var(--fm-bg-panel-raised));
-  color: var(--fm-accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.fm-viz-display-card [data-slot="inspector-group-content"] {
-  padding: 0 14px;
-  gap: var(--fm-space-3);
-}
-
-/* ── Nav sections container ── */
+/* Display and navigation section containers are plain stacks; each
+   InspectorGroup inside draws its own section card. */
+.fm-viz-display-card,
 .fm-viz-nav-sections {
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-lg);
-  background: var(--fm-bg-surface);
-  overflow: hidden;
-  box-shadow: var(--fm-shadow-sm);
-}
-
-.fm-viz-nav-sections > [data-variant="nav"] {
-  border-radius: 0;
+  display: grid;
+  gap: var(--fm-inspector-group-gap);
+  min-width: 0;
 }
 
 /* ── InspectorShell action bar buttons with icons ── */
@@ -567,149 +501,58 @@
   font-weight: 650;
 }
 
-/* ── Inspector identity: larger icon box ── */
-.fm-inspector__identity-icon {
-  background: color-mix(in srgb, var(--fm-accent) 8%, var(--fm-bg-panel-raised)) !important;
-  border-color: color-mix(in srgb, var(--fm-accent) 24%, var(--fm-border-subtle)) !important;
-  transition:
-    background var(--fm-transition-fast),
-    box-shadow var(--fm-transition-fast);
-}
-
-.fm-inspector__identity-icon:hover {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-accent) 12%, transparent);
-}
-
-/* ── InspectorGroup icon slot (used in default variant header) ── */
-.fm-inspector-group-icon-box {
-  width: var(--fm-field-row-min-height);
-  height: var(--fm-field-row-min-height);
-  border-radius: var(--fm-radius-md);
-  border: 1px solid var(--fm-border-subtle);
-  background: color-mix(in srgb, var(--fm-accent) 10%, var(--fm-bg-panel-raised));
-  color: var(--fm-accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: background var(--fm-transition-fast), box-shadow var(--fm-transition-fast);
-}
-
 /* ─────────────────────────────────────────────
    MICRO-ANIMATIONS & INTERACTION POLISH
 ────────────────────────────────────────────── */
 
 /* Inspector controls stay opaque through disclosure and resource updates. */
-/* Nav row: subtle lift on hover */
-.fm-inspector-group-nav-trigger {
-  transition:
-    background var(--fm-transition-fast),
-    transform var(--fm-duration-normal) ease;
-}
-
-.fm-inspector-group-nav-trigger:hover {
-  transform: none; /* no lift on nav rows — they're full-width */
-}
-
-/* Nav row icon: color accent on parent hover */
-.fm-inspector-group-nav-trigger:hover .fm-inspector-group-nav-icon {
-  border-color: color-mix(in srgb, var(--fm-accent) 30%, var(--fm-border-subtle));
-  background: color-mix(in srgb, var(--fm-accent) 8%, var(--fm-bg-panel-raised));
-  color: var(--fm-accent);
-  transition: all var(--fm-transition-fast);
-}
-
-/* Nav row chevron: nudge on hover */
-.fm-inspector-group-nav-trigger:hover > svg:last-child {
-  transform: translateX(2px);
-  transition: transform var(--fm-duration-moderate) ease;
-}
-
 /* Toggle chip: scale press feedback */
 .fm-visualization-toggle:active:not(:disabled) {
   transform: scale(0.96) !important;
 }
 
-/* Metric strip cards: fixed height, consistent label/value alignment */
+/* Facts (specs/frontend-v2/13 §1a, slot 3): one recessed group with hairline
+   dividers. Each fact draws its own leading and top hairline; the strip clips
+   the ones at its outer edge, so dividers stay correct when the grid wraps. */
+.fm-inspector-metric-strip {
+  overflow: hidden;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-section);
+  background: var(--fm-field-bg);
+  box-shadow: var(--fm-elevation-sm);
+}
+
 .fm-inspector-metric-card {
-  position: relative;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
+  gap: var(--fm-space-1);
   min-width: 0;
-  height: 58px;
-  padding: var(--fm-space-1) var(--fm-space-2);
-  border-radius: var(--fm-radius-md);
-  border: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-panel-raised);
-  overflow: hidden;
-  transition:
-    background var(--fm-transition-fast),
-    border-color var(--fm-transition-fast),
-    box-shadow var(--fm-transition-fast),
-    transform 120ms ease;
-}
-
-/* Tone accent bar along the top edge, keyed to the value's data-state */
-.fm-inspector-metric-card::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 2px;
-  background: var(--fm-border-subtle);
-  transition: background var(--fm-transition-fast);
-}
-
-.fm-inspector-metric-card:has([data-state="success"])::before {
-  background: var(--fm-success);
-}
-
-.fm-inspector-metric-card:has([data-state="warning"])::before {
-  background: var(--fm-warning);
-}
-
-.fm-inspector-metric-card:has([data-state="danger"])::before {
-  background: var(--fm-danger);
-}
-
-.fm-inspector-metric-card:has([data-state="degraded"])::before {
-  background: var(--fm-degraded);
-}
-
-.fm-inspector-metric-card:has([data-state="stale"])::before {
-  background: var(--fm-stale);
+  padding: var(--fm-space-2) var(--fm-space-3);
+  box-shadow:
+    -1px 0 0 0 var(--fm-border-subtle),
+    0 -1px 0 0 var(--fm-border-subtle);
 }
 
 .fm-inspector-metric-card__label {
   display: block;
-  font-size: var(--fm-font-size-2xs);
-  font-weight: 600;
-  line-height: 1.2;
-  color: var(--fm-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
   overflow: hidden;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  font-weight: var(--fm-font-weight-normal);
+  line-height: 1.2;
   text-overflow: ellipsis;
-  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .fm-inspector-metric-card__value {
   display: block;
-  margin-top: var(--fm-space-1);
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--fm-font-size-sm);
-  font-weight: 600;
+  font-size: var(--fm-font-size-md);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fm-font-weight-medium);
   line-height: 1.3;
-  flex-shrink: 0;
-}
-
-.fm-inspector-metric-card:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--fm-shadow-sm);
+  overflow-wrap: anywhere;
 }
 
 /* The overview frame is shared by Visualization and Physics.  Container
@@ -731,12 +574,6 @@
 .fm-inspector__action-btn:active:not(:disabled) {
   transform: scale(0.96) translateY(1px);
   transition: transform var(--fm-duration-fast) ease;
-}
-
-/* InspectorGroup icon box: scale when parent trigger is hovered */
-button:hover > .fm-inspector-group-icon-box {
-  background: color-mix(in srgb, var(--fm-accent) 16%, var(--fm-bg-panel-raised));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 14%, transparent);
 }
 
 /* Quantity source dropdown: smooth focus ring */
@@ -789,17 +626,14 @@ button:hover > .fm-inspector-group-icon-box {
 @media (prefers-reduced-motion: reduce) {
   .fm-viz-render-mode-tile,
   .fm-viz-render-mode-tile__icon,
-  .fm-inspector-metric-card,
   .fm-viz-color-swatch,
   .fm-visualization-toggle,
   .fm-viz-layer-chip,
-  .fm-inspector-group-nav-trigger > svg:last-child,
   .fm-inspector__action-btn {
     transform: none !important;
   }
 
   .fm-viz-render-mode-tile__icon,
-  .fm-inspector-group-nav-trigger:hover > svg:last-child,
   .fm-inspector__action-btn:active:not(:disabled) {
     transition: none !important;
   }
@@ -809,13 +643,8 @@ button:hover > .fm-inspector-group-icon-box {
     transition-property: background, border-color, color, box-shadow !important;
   }
 
-  .fm-viz-color-swatch,
-  .fm-inspector-metric-card {
+  .fm-viz-color-swatch {
     transition-property: background, border-color, box-shadow !important;
-  }
-
-  .fm-inspector-group-nav-trigger {
-    transition-property: background !important;
   }
   .fm-inspector-range-slider::-webkit-slider-thumb {
     transition: none;

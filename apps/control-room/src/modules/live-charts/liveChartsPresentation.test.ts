@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
-import { liveChartReadings, liveChartXAxisOptions, visibleLiveChartPanes } from "./liveChartsPresentation";
+import { serializeChartData } from "@/shared/analysis-charts/chartExport";
+import { liveChartExportModel, liveChartReadings, liveChartXAxisOptions, visibleLiveChartPanes } from "./liveChartsPresentation";
 
 const series: ChartSeries[] = [
   { id: "mx", label: "mx", quantity: "mx", unit: "1", xUnit: "s", points: [{ rowIndex: 0, x: 1e-9, y: 0.98 }], source: { kind: "data.table.rows", resourceKey: "table", tableId: "default" }, status: "ready" },
@@ -29,6 +30,28 @@ describe("Live Charts presentation", () => {
     expect(readings[0]).toMatchObject({ id: "mx", latestValue: "0.98", unit: "1" });
     expect(readings[1]).toMatchObject({ id: "energy", latestValue: "1.0000e-6", unit: "pJ" });
     expect(series[1].points[0].y).toBe(1e-18);
+  });
+
+  it("exports the selected relaxation step coordinate and its dimensionless unit", () => {
+    const relaxation: ChartSeries = {
+      id: "simulation.solver.energies:total",
+      label: "E total",
+      quantity: "total",
+      unit: "J",
+      xUnit: "1",
+      points: [
+        { rowIndex: 0, x: 4, y: -3 },
+        { rowIndex: 1, x: 9, y: -5 },
+      ],
+      source: { kind: "simulation.solver.energies.history", resourceKey: "energy-history", tableId: "solver-energies" },
+      status: "ready",
+    };
+    const model = liveChartExportModel([relaxation], "Energy", "Step", { kind: "ready", revision: 7 });
+    const csv = serializeChartData(model, "csv");
+
+    expect(model.xAxis).toEqual({ label: "Step", unit: "1" });
+    expect(csv).toContain(",0,4,-3,1,J,");
+    expect(csv).toContain(",1,9,-5,1,J,");
   });
 
   it("preserves a missing latest sample instead of presenting an old value as current", () => {

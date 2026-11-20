@@ -2,6 +2,7 @@ import type {
   FdmDomainSelectionScope,
   FdmDomainSelectionKind,
   RegionVisualizationTargetId,
+  Selection,
   SelectionRef,
 } from "@/kernel/selection/selectionTypes";
 import {
@@ -891,6 +892,33 @@ function isFrequencyDomainSelectionNode(node: ExplorerNode): boolean {
   return FREQUENCY_DOMAIN_RESULT_KINDS.has(node.kind);
 }
 
+/** The selection an Explorer node stands for (also used by the Inspector path). */
+export function selectionFromExplorerNode(node: ExplorerNode): Omit<Selection, "moduleSource"> {
+  const ref = selectionRefFromNode(node);
+  return {
+    kind:
+      ref?.type === "cross-section-draft" ||
+      ref?.type === "cross-section-plot" ||
+      ref?.type === "planar-monitor-draft" ||
+      (ref?.type === "mesh-part" &&
+        node.kind !== "mesh.unassigned" &&
+        node.kind !== "mesh.unassigned.part") ||
+      ref?.type === "current-transport" ||
+      ref?.type === "spin-transport" ||
+      ref?.type === "spin-interface" ||
+      ref?.type === "spin-torque" ||
+      ref?.type === "oersted-field" ||
+      ref?.type === "physics-field-drive" ||
+      ref?.type === "physics-module"
+        ? ref.kind
+        : node.kind,
+    label: node.label,
+    nodeId: node.id,
+    objectId: node.objectId ?? null,
+    ref,
+  };
+}
+
 export function selectExplorerNode(
   kernel: KernelApi,
   node: ExplorerNode,
@@ -900,32 +928,7 @@ export function selectExplorerNode(
   if (node.crossSectionPlotId) {
     selectCrossSectionPlot(node.crossSectionPlotId);
   }
-  const ref = selectionRefFromNode(node);
-  kernel.selection.set(
-    {
-      kind:
-        ref?.type === "cross-section-draft" ||
-        ref?.type === "cross-section-plot" ||
-        ref?.type === "planar-monitor-draft" ||
-        (ref?.type === "mesh-part" &&
-          node.kind !== "mesh.unassigned" &&
-          node.kind !== "mesh.unassigned.part") ||
-        ref?.type === "current-transport" ||
-        ref?.type === "spin-transport" ||
-        ref?.type === "spin-interface" ||
-        ref?.type === "spin-torque" ||
-        ref?.type === "oersted-field" ||
-        ref?.type === "physics-field-drive" ||
-        ref?.type === "physics-module"
-          ? ref.kind
-          : node.kind,
-      label: node.label,
-      nodeId: node.id,
-      objectId: node.objectId ?? null,
-      ref,
-    },
-    source,
-  );
+  kernel.selection.set(selectionFromExplorerNode(node), source);
 }
 
 // Airbox nodes publish one mesh-derived status; the inspector reads the three

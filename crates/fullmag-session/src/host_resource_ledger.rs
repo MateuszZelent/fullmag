@@ -50,7 +50,7 @@ use crate::compute_node_snapshot::{
 };
 use crate::compute_node_policy::{NodePolicy, NodePolicyStatus};
 use crate::durability::{atomic_write, confirm_publication, sync_directory};
-use crate::repository_path::{checked_path, read_bounded_regular_file, reject_link, validate_store_id};
+use crate::repository_path::{checked_path, read_bounded_regular_file, reject_link};
 use crate::store::SessionStore;
 use crate::types::{
     FmsPreparationProcessExitReceipt, FmsPreparationResourceLease, FmsResourceBudget,
