@@ -287,7 +287,7 @@ spin = study.spin_transport(fm.SpinDriftDiffusion(
     materials=[fm.SpinTransportMaterialAssignment(
         region, fm.SpinTransportMaterial(3.0e6, 0.2, 0.1, 4e-9, 1e-9, 1e-9)
     )],
-    solver=fm.SpinSolverPolicy(engine="block_gmres", operator_version=operator),
+    solver=fm.SpinSolverPolicy(engine="gmres", operator_version=operator),
     requested_execution=fm.TransportExecution("fem", "cpu", "double", "strict"),
 ))
 study.spin_torque(fm.DriftDiffusionSpinTorque("m2_torque", spin.id, region))

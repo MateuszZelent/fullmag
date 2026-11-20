@@ -103,7 +103,7 @@ spin = study.spin_transport(
             )
         ],
         solver=fm.SpinSolverPolicy(
-            engine="block_gmres",
+            engine="gmres",
             relative_tolerance=1.0e-8,
             absolute_tolerance=0.0,
             max_iterations=200,

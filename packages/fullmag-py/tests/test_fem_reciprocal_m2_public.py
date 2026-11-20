@@ -56,6 +56,11 @@ class PublicFemReciprocalM2FixtureTests(unittest.TestCase):
             stage_ir["current_modules"][0]["solver"]["operator_version"],
             "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1",
         )
+        # The FEM M2 planner (crates/fullmag-plan/src/spin_transport.rs,
+        # resolve_m1_fem_spin_transport) accepts only these spin engines; the
+        # charge block keeps block_gmres as ProblemIR requires.
+        self.assertIn(stage_ir["spin_transport_modules"][0]["solver"]["engine"], {"auto", "gmres"})
+        self.assertEqual(stage_ir["current_modules"][0]["solver"]["engine"], "block_gmres")
         self.assertEqual(
             stage_ir["spin_transport_modules"][0]["solver"]["operator_version"],
             "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1",
@@ -96,6 +101,14 @@ class PublicFemReciprocalM2FixtureTests(unittest.TestCase):
                 "cpu_threads": None,
                 "execution_mode": "strict",
                 "execution_precision": "double",
+                "parallel_execution": {
+                    "mode": "serial",
+                    "max_cpu_percent": 90.0,
+                    "max_memory_percent": 80.0,
+                    "memory_reserve_bytes": 1073741824,
+                    "max_workers": None,
+                    "threads_per_worker": 1,
+                },
             },
         )
 
