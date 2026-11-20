@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { tauriInvoke } from "@/kernel/persistence/ProjectDocumentController";
 import { Button } from "@/shared/ui/Button";
 
 import {
@@ -44,6 +43,7 @@ import { readBuildInfo, type BuildInfo } from "../model/buildInfo";
 import { buildDiagnostics } from "../model/diagnostics";
 import { startScreenStore } from "../model/startScreenState";
 import type { ComputeProbeState, RecentIndexState } from "../model/types";
+import { useDesktopInvoke } from "../model/useDesktopInvoke";
 
 export interface AboutSectionProps {
   readonly compute: ComputeProbeState;
@@ -63,6 +63,7 @@ const TAB_ITEMS: readonly { readonly id: AboutTabId; readonly label: string }[] 
 ];
 
 export function AboutSection({ compute, index }: AboutSectionProps) {
+  const desktopInvoke = useDesktopInvoke();
   const [build, setBuild] = useState<BuildInfo | null>(null);
   const [activeTab, setActiveTab] = useState<AboutTabId>("all");
   const [copiedBibtex, setCopiedBibtex] = useState(false);
@@ -95,7 +96,7 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
 
   const handleCopyDiagnostics = () => {
     const text = buildDiagnostics({
-      host: tauriInvoke() ? "desktop" : "browser",
+      host: desktopInvoke ? "desktop" : "browser",
       userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "SSR",
       locale: typeof navigator !== "undefined" ? navigator.language : "en",
       now: new Date(),
@@ -496,7 +497,7 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
                 </dl>
               ) : (
                 <p className="fm-start-inspector__note fm-about-flush">
-                  Host build details are reported by the desktop runtime. Running in {tauriInvoke() ? "desktop mode" : "browser environment"}.
+                  Host build details are reported by the desktop runtime. Running in {desktopInvoke ? "desktop mode" : "browser environment"}.
                 </p>
               )}
             </div>

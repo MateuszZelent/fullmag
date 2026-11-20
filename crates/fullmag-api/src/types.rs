@@ -1711,6 +1711,8 @@ pub(crate) struct CurrentLiveFieldGeneration {
 pub(crate) struct StageExecutionRecord {
     #[serde(default)]
     pub stage_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authored_stage_id: Option<String>,
     #[serde(default)]
     pub antenna_solve_stage_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

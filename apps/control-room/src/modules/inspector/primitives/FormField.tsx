@@ -387,32 +387,39 @@ export function FormField(props: FormFieldProps) {
   const inputType = type === "number" && (unit || unitControl) ? "text" : type ?? "text";
   const resolvedInputMode =
     inputMode ?? (type === "number" || unit || unitControl ? "decimal" : undefined);
+  const input = (
+    <input
+      {...(rest as object)}
+      id={fieldId}
+      aria-label={label}
+      aria-describedby={describedBy}
+      aria-errormessage={error ? feedbackId : undefined}
+      aria-invalid={invalidValue}
+      className={inputClass}
+      disabled={disabled}
+      inputMode={resolvedInputMode}
+      type={inputType}
+      value={value}
+      onInput={onChange as ComponentPropsWithoutRef<"input">["onInput"]}
+    />
+  );
+  // A fixed unit sits inside the recessed field (specs/frontend-v2/13 §1a,
+  // slot 7); a unit picker stays a separate control beside it.
+  const field = unit && !unitControl ? (
+    <span className="fm-inspector-field-box" data-slot="inspector-field-box">
+      {input}
+      <span className="fm-inspector-form-field__unit" id={unitId}>{unit}</span>
+    </span>
+  ) : input;
   return (
     <InspectorPropertyRow
       className={wrapClass}
       label={labelNode}
       layout={layout}
-      unit={
-        unitControl ?? (unit ? (
-          <span className="fm-inspector-form-field__unit" id={unitId}>{unit}</span>
-        ) : undefined)
-      }
+      unit={unitControl}
     >
       <div {...textHandlers} className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
-        <input
-          {...(rest as object)}
-          id={fieldId}
-          aria-label={label}
-          aria-describedby={describedBy}
-          aria-errormessage={error ? feedbackId : undefined}
-          aria-invalid={invalidValue}
-          className={inputClass}
-          disabled={disabled}
-          inputMode={resolvedInputMode}
-          type={inputType}
-          value={value}
-          onInput={onChange as ComponentPropsWithoutRef<"input">["onInput"]}
-        />
+        {field}
         {feedback}
       </div>
     </InspectorPropertyRow>

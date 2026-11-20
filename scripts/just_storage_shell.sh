@@ -566,7 +566,7 @@ case "${recipe}" in
     docker_dev_prelaunch_fresh_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --fresh-state --prelaunch-failure-stop '([0-9a-f]{32})' --prelaunch-failure-stop-sha256 '([0-9a-f]{64})'[[:space:]]*$"
     docker_dev_native_terminal_fresh_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --fresh-state --native-terminal-stop '([0-9a-f]{32})' --native-terminal-stop-sha256 '([0-9a-f]{64})'[[:space:]]*$"
     docker_dev_cache_maintenance_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" maintain-cache --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)'[[:space:]]*$"
-    docker_dev_interrupted_fresh_archive_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" resume-interrupted-fresh-archive --prior-attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '(/[^']+)' --recreation-attempt '([0-9a-f]{32})' --unknown-receipt-sha256 '([0-9a-f]{64})' --helper-container-id '([0-9a-f]{64})' --helper-image '([^[:space:]']+@sha256:[0-9a-f]{64}|sha256:[0-9a-f]{64})' --engine-id '([^']{1,256})'( --prepared-quarantine-sha256 '([0-9a-f]{64})' --prepared-archive-terminal-sha256 '([0-9a-f]{64})')?( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
+    docker_dev_interrupted_fresh_archive_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" resume-interrupted-fresh-archive --prior-attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '(/[^']+)' --recreation-attempt '([0-9a-f]{32})' --unknown-receipt-sha256 '([0-9a-f]{64})' --helper-container-id '([0-9a-f]{64})' --helper-image '([^[:space:]']+@sha256:[0-9a-f]{64}|sha256:[0-9a-f]{64})' --engine-id '([^']+)'( --prepared-quarantine-sha256 '([0-9a-f]{64})' --prepared-archive-terminal-sha256 '([0-9a-f]{64})')?( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     docker_dev_cold_quarantine_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" quarantine-failed-bootstrap --source-root '([^']+)' --operation-attempt '([0-9a-f]{32})' --recovery-id '([0-9a-f]{32})'( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     docker_dev_retire_stopped_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --fresh-state --retire-only[[:space:]]*$"
     docker_dev_completed_cache_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" reconcile-completed-cache --registry '([^']+)' --volume '(fullmag-backend-v2-[0-9a-f]{24}-package)' --recovery-id '([0-9a-f]{32})'( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
@@ -593,7 +593,10 @@ case "${recipe}" in
     elif [[ "${recipe}" =~ ${docker_dev_retire_stopped_pattern} ]]; then
       docker_dev_args+=(recreate-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
         --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}" --fresh-state --retire-only)
-    elif [[ "${recipe}" =~ ${docker_dev_interrupted_fresh_archive_pattern} ]]; then
+    # The engine ID bound is checked outside the regex: MSYS bash (Git for
+    # Windows) rejects repetition counts above 255 and fails every recipe.
+    elif [[ "${recipe}" =~ ${docker_dev_interrupted_fresh_archive_pattern} ]] &&
+      (( ${#BASH_REMATCH[8]} <= 256 )); then
       docker_dev_args+=(resume-interrupted-fresh-archive --prior-attempt "${BASH_REMATCH[1]}"
         --config-sha256 "${BASH_REMATCH[2]}" --source-root "${BASH_REMATCH[3]}"
         --recreation-attempt "${BASH_REMATCH[4]}" --unknown-receipt-sha256 "${BASH_REMATCH[5]}"

@@ -16,7 +16,9 @@ use crate::repository_path::{
     checked_path, create_parent, read_bounded_regular_file, reject_link, validate_store_id,
 };
 use crate::store::SessionStore;
-use crate::types::{canonical_json_sha256, FmsRunCatalog, FmsTaskCatalogEntry, FmsTaskLifecycle};
+use crate::types::{canonical_json_sha256, FmsTaskCatalogEntry, FmsTaskLifecycle};
+#[cfg(test)]
+use crate::types::FmsRunCatalog;
 
 pub const FMS_TASK_CANCELLATION_INTENT_SCHEMA: &str = "task_cancellation_intent.v1";
 const MAX_TASK_CANCELLATION_INTENT_BYTES: usize = 256 * 1024;

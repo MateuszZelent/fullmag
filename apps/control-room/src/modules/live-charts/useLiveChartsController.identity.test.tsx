@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 
@@ -86,7 +86,10 @@ vi.mock("./hooks/useLiveEnergyData", () => ({
 type Controller = ReturnType<typeof useLiveChartsController>;
 
 function Probe({ onRender }: { onRender: (controller: Controller) => void; tick: number }) {
-  onRender(useLiveChartsController({} as never));
+  const controller = useLiveChartsController({} as never);
+  useEffect(() => {
+    onRender(controller);
+  });
   return null;
 }
 

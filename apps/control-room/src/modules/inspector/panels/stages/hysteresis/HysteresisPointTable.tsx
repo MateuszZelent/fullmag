@@ -101,7 +101,7 @@ function HysteresisPointTableRow({
   const mAvg = point.m_avg ?? [];
 
   return (
-    <tr data-status={point.status}>
+    <tr className="tabular-nums" data-status={point.status}>
       <td>{point.point_id}</td>
       <td>{point.protocol_role ?? "n/a"}</td>
       <td>{point.branch_id ?? point.branch_ids?.join(", ") ?? "n/a"}</td>

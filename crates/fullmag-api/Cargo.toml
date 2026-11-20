@@ -63,7 +63,7 @@ bench = false
 
 [[bin]]
 name = "fullmag-api-openapi"
-path = "src/main.rs"
+path = "src/openapi_main.rs"
 required-features = ["openapi-codegen"]
 test = false
 bench = false

@@ -194,7 +194,8 @@ jobs:
                 self.assertEqual(len(installations), 1)
                 self.assertEqual(len(consumers), 1)
                 self.assertLess(installations[0], consumers[0])
-        self.assertIn("sudo apt-get install -y libglu1-mesa", workflow)
+        python_workflow = ROOT / ".github/workflows/bootstrap-python.yml"
+        self.assertIn("sudo apt-get install -y libglu1-mesa", python_workflow.read_text())
         self.assertIn('test "$(/usr/bin/rg --version | head -n 1)" = "ripgrep 13.0.0"', workflow)
 
     def test_ci_uses_node24_actions(self) -> None:
@@ -228,7 +229,7 @@ jobs:
         self.assertLess(generated_job.index(test_command), generated_job.index(gate_command))
 
     def test_rust_contracts_install_python_runtime_dependencies(self) -> None:
-        workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
+        workflow = (ROOT / ".github/workflows/bootstrap-rust.yml").read_text()
         rust_steps = yaml.safe_load(workflow)["jobs"]["rust-contracts"]["steps"]
 
         self.assertIn(
@@ -266,7 +267,7 @@ jobs:
         )
 
     def test_rust_contracts_resolve_artifact_storage_before_running_tests(self) -> None:
-        workflow = yaml.safe_load((ROOT / ".github/workflows/bootstrap.yml").read_text())
+        workflow = yaml.safe_load((ROOT / ".github/workflows/bootstrap-rust.yml").read_text())
         steps = workflow["jobs"]["rust-contracts"]["steps"]
         index = next(i for i, step in enumerate(steps)
                      if step.get("name") == "Resolve storage for API artifact fixtures")
@@ -306,7 +307,7 @@ jobs:
             output.assert_not_called()
 
     def test_texture_compatibility_regressions_run_in_required_contract_jobs(self) -> None:
-        workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
+        workflow = (ROOT / ".github/workflows/bootstrap-python.yml").read_text()
         gate = (ROOT / "scripts/ci/run_frontend3d_required_gate.sh").read_text()
 
         self.assertIn(
@@ -329,15 +330,8 @@ jobs:
             python_job,
         )
         self.assertNotIn("actions/checkout@v4", workflow)
-        references = _workflow_uses(workflow)
-        for action in ("actions/checkout", "actions/setup-node"):
-            action_references = [reference for reference in references
-                                 if reference.startswith(action + "@")]
-            self.assertTrue(action_references, f"Required action is missing: {action}")
-            self.assertEqual(set(action_references), {action + "@v7"})
         self.assertIn("actions/setup-python@v7", workflow)
         self.assertIn("actions/upload-artifact@v7", workflow)
-        self.assertIn("pnpm/action-setup@v6", workflow)
 
     def test_meshing_extra_provides_trimesh_boolean_backend(self) -> None:
         pyproject = (ROOT / "packages/fullmag-py/pyproject.toml").read_text()

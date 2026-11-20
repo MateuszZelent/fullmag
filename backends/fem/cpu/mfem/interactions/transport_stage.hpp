@@ -17,9 +17,11 @@ struct Context;
  */
 
 /* Runtime owner for the public reciprocal transport torque callback.  The
- * callback returns a direct LLG RHS contribution in 1/s for every magnetic
- * node at the exact RK stage; attempt hooks are kept here so reject/commit
- * semantics are independent of the charge--spin solver implementation. */
+ * callback returns the raw Gilbert-form transport source in 1/s for every
+ * magnetic node at the exact RK stage; add_transport_stage_rhs converts it
+ * once to the explicit LLG RHS with the local damping (0970 §2.6.2a).
+ * Attempt hooks are kept here so reject/commit semantics are independent of
+ * the charge--spin solver implementation. */
 struct TransportStageRuntimeState {
     bool has_stage_callback = false;
     fullmag_fem_stage_transport_callback_v1 stage_callback{};
@@ -42,6 +44,7 @@ bool materialize_transport_stage_rhs(
 
 void add_transport_stage_rhs(
     const Context &ctx,
+    const std::vector<double> &m_xyz,
     std::vector<double> &rhs_xyz,
     double &max_rhs);
 

@@ -164,7 +164,7 @@ function TaskExecutionDetails({ task }: { readonly task: unknown }) {
   }
 
   return (
-    <div className="grid min-w-0 gap-1 rounded border border-fm-subtle px-2 py-1">
+    <div className="grid min-w-0 gap-1 rounded border border-fm-subtle p-2">
       <div className="font-medium text-fm-primary">Pinned requested execution</div>
       <div>Study step: {execution.stepId}</div>
       {execution.materialization ? (

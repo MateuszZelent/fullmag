@@ -20,7 +20,7 @@ import { antennaStageValidationMessages } from "@/shared/domain/physics/antennaS
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
-import { ScientificInspectorContext, ScientificInspectorIdentity } from "../../components/ScientificInspectorTemplate";
+import { ScientificInspectorContext } from "../../components/ScientificInspectorTemplate";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FormField } from "../../primitives/FormField";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -63,7 +63,6 @@ function AntennaLegacyVisualizationView({ selection, scene }: InspectorPanelProp
   const [preferredStage, setPreferredStage] = useState("");
   const stage = stages.find((candidate) => candidate.id === preferredStage) ?? stages[0];
   return <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner="object.antenna.visualization">
-    <ScientificInspectorIdentity title="Antenna visualization" physicalLabel="Conductor / Oersted field" methodLabel="Display controls" />
     <AntennaPublishedVisualization objectId={objectId} stageId={stage?.id ?? null} scene={scene.data} sceneStatus={scene.status} />
     <InspectorGroup title="Source" collapsible defaultOpen={false}>
       <FieldRow label="Source object" value={objectId ?? "none"} mono />

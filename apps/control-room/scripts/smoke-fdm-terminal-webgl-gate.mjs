@@ -434,9 +434,9 @@ function explorerTreeItem(page, nodeId) {
 }
 
 async function selectExplorerVisualizationTarget(page, target) {
-  const modelTab = page.getByRole("tab", { name: "Model", exact: true });
+  const modelTab = page.locator('.fm-side-rail[data-side="left"] [data-rail-item="model"]');
   await modelTab.waitFor({ state: "visible", timeout: timeoutMs });
-  if (await modelTab.getAttribute("aria-selected") !== "true") {
+  if (await modelTab.getAttribute("aria-pressed") !== "true") {
     await modelTab.click({ timeout: timeoutMs });
   }
   for (const parentNodeId of target.parentNodeIds) {

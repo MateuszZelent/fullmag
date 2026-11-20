@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 
 import { Badge } from "@/shared/ui/Badge";
@@ -13,13 +13,21 @@ export interface InspectorGroupProps {
   description?: string;
   /** Optional icon rendered before the title. Should be a Lucide icon element. */
   icon?: ReactNode;
-  /** Summary text shown on the right side of the header (used in nav-row style collapsibles) */
+  /** Value summary shown on the right side of the header row. */
   summary?: string;
-  /** Use "nav" style: full-width clickable row with icon, title, summary, and chevron-right */
+  /**
+   * "nav" keeps a toggle row even when the group is not collapsible. Both
+   * variants share the one section look (specs/frontend-v2/13 §1a, slot 6).
+   */
   variant?: "default" | "nav";
   title: string;
 }
 
+/**
+ * The one Inspector section: a glass card with a disclosure chevron next to
+ * the title, a domain-hue icon when open, an optional value summary and the
+ * content grid. Nested sections render flat inside their parent card.
+ */
 export function InspectorGroup({
   badge,
   children,
@@ -34,10 +42,11 @@ export function InspectorGroup({
 }: InspectorGroupProps) {
   const [open, setOpen] = useState(defaultOpen);
   const contentId = useId();
+  const toggleRow = collapsible || variant === "nav";
 
   const heading = (
     <div className="min-w-0 flex-1" data-slot="inspector-group-heading">
-      <h3 className="m-0 text-fm-xs font-semibold leading-tight text-fm-primary">
+      <h3 className="m-0 text-fm-sm font-semibold leading-tight text-fm-primary">
         {title}
       </h3>
       {description ? (
@@ -47,113 +56,60 @@ export function InspectorGroup({
       ) : null}
     </div>
   );
-
-  if (variant === "nav") {
-    return (
-      <section
-        className={cn(
-          "min-w-0 border-b border-fm-subtle last:border-b-0",
-          className,
-        )}
-        data-collapsible={collapsible || undefined}
-        data-open={collapsible ? open : undefined}
-        data-slot="inspector-group"
-        data-variant="nav"
-      >
-        <button
-          aria-controls={contentId}
-          aria-expanded={open}
-          className="fm-inspector-group-nav-trigger flex w-full min-w-0 items-center gap-3 px-fm-inline py-2.5 text-left outline-none transition-[background-color,box-shadow,transform] hover:bg-fm-hover active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-fm-accent"
-          data-slot="inspector-group-trigger"
-          type="button"
-          onClick={() => setOpen((current) => !current)}
-        >
-          {icon ? (
-            <span className="fm-inspector-group-nav-icon">
-              {icon}
-            </span>
-          ) : null}
-          <span className="min-w-0 flex-1 text-fm-md font-semibold leading-tight text-fm-primary">
-            {title}
-          </span>
-          {summary ? (
-            <span className="shrink-0 text-fm-xs text-fm-muted">{summary}</span>
-          ) : null}
-          {badge ? <Badge variant="secondary">{badge}</Badge> : null}
-          <ChevronRight
-            aria-hidden="true"
-            className="shrink-0 text-fm-muted transition-transform duration-150"
-            size={14}
-          />
-        </button>
-        <div
-          className="grid min-w-0 gap-fm-inspector-control px-fm-inline pb-3"
-          data-slot="inspector-group-content"
-          hidden={collapsible && !open}
-          id={contentId}
-        >
-          {children}
-        </div>
-      </section>
-    );
-  }
+  const trailing = (
+    <>
+      {summary ? (
+        <span className="fm-inspector-group__summary max-w-[50%] shrink truncate text-fm-xs text-fm-muted">
+          {summary}
+        </span>
+      ) : null}
+      {badge ? <Badge variant="secondary">{badge}</Badge> : null}
+    </>
+  );
+  const iconSlot = icon ? (
+    <span className="fm-inspector-group__icon" aria-hidden="true">
+      {icon}
+    </span>
+  ) : null;
 
   return (
     <section
-      className={cn(
-        "min-w-0 border-b border-fm-subtle pb-fm-inspector-group last:border-b-0 last:pb-0",
-        className,
-      )}
+      className={cn("fm-inspector-group min-w-0", className)}
       data-collapsible={collapsible || undefined}
       data-open={collapsible ? open : undefined}
       data-slot="inspector-group"
+      data-variant={variant === "nav" ? "nav" : undefined}
     >
-      {collapsible ? (
+      {toggleRow ? (
         <button
           aria-controls={contentId}
           aria-expanded={open}
-          className="flex h-fm-control-sm w-full min-w-0 items-center gap-1.5 rounded-fm-disclosure px-1.5 text-left outline-none transition-[background-color,box-shadow,transform] hover:bg-fm-disabled active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-fm-accent"
+          className="fm-inspector-group__row fm-inspector-group__row--toggle"
           data-slot="inspector-group-trigger"
           type="button"
           onClick={() => setOpen((current) => !current)}
         >
-          {icon ? (
-            <span className="fm-inspector-group-icon-box">
-              {icon}
-            </span>
-          ) : null}
+          <ChevronRight
+            aria-hidden="true"
+            className="fm-inspector-group__chevron"
+            size={14}
+          />
+          {iconSlot}
           {heading}
-          {badge ? <Badge variant="secondary">{badge}</Badge> : null}
-          {open ? (
-            <ChevronDown
-              aria-hidden="true"
-              className="shrink-0 text-fm-muted transition-transform duration-150"
-              size={14}
-            />
-          ) : (
-            <ChevronRight
-              aria-hidden="true"
-              className="shrink-0 text-fm-muted transition-transform duration-150"
-              size={14}
-            />
-          )}
+          {trailing}
         </button>
       ) : (
         <header
-          className="flex h-fm-control-sm min-w-0 items-center gap-1.5 px-1.5"
+          className="fm-inspector-group__row"
           data-slot="inspector-group-header"
         >
-          {icon ? (
-            <span className="fm-inspector-group-icon-box">
-              {icon}
-            </span>
-          ) : null}
+          {iconSlot}
           {heading}
-          {badge ? <Badge variant="secondary">{badge}</Badge> : null}
+          {trailing}
         </header>
       )}
       <div
-        className="mt-1 grid min-w-0 gap-fm-inspector-control px-1.5"
+        className="fm-inspector-group__content grid min-w-0 gap-fm-inspector-control"
         data-slot="inspector-group-content"
         hidden={collapsible && !open}
         id={contentId}

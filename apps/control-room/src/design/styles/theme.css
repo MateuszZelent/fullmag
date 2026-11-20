@@ -3,28 +3,28 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --fm-bg-app: #1e1e2e;
-  --fm-bg-chrome: #181825;
-  --fm-bg-panel: #1e1e2e;
-  --fm-bg-panel-raised: #313244;
-  --fm-bg-viewport: #11111b;
-  --fm-bg-viewport-top: #181825;
-  --fm-bg-viewport-bottom: #45475a;
-  --fm-bg-overlay: #313244;
-  --fm-bg-selected: #264069;
+  --fm-bg-app: #0d0d16;
+  --fm-bg-chrome: #12121c;
+  --fm-bg-panel: #161622;
+  --fm-bg-panel-raised: #24243a;
+  --fm-bg-viewport: #0b0b13;
+  --fm-bg-viewport-top: #12121c;
+  --fm-bg-viewport-bottom: #2b2c3d;
+  --fm-bg-overlay: #20202f;
+  --fm-bg-selected: #223358;
   --fm-bg-canvas: #11111b;
-  --fm-bg-surface: #242438;
-  --fm-bg-elevated: #313244;
-  --fm-bg-muted: #262739;
-  --fm-bg-hover: #3b3c4f;
+  --fm-bg-surface: #1b1b2a;
+  --fm-bg-elevated: #262638;
+  --fm-bg-muted: #1c1c2b;
+  --fm-bg-hover: #2a2b3e;
   --fm-surface-hover: var(--fm-bg-hover); /* semantic alias: hover state surface */
   --fm-bg-disabled: var(--fm-bg-muted);
 
-  --fm-border-subtle: #313244;
-  --fm-border-default: #45475a;
+  --fm-border-subtle: rgb(205 214 244 / 0.09);
+  --fm-border-default: rgb(205 214 244 / 0.15);
   --fm-border-moderate: color-mix(in srgb, var(--fm-border-default) 50%, var(--fm-border-strong));
-  --fm-border-strong: #585b70;
-  --fm-border-muted: #292a3a;
+  --fm-border-strong: rgb(205 214 244 / 0.24);
+  --fm-border-muted: rgb(205 214 244 / 0.06);
   --fm-border-disabled: var(--fm-border-muted);
 
   --fm-text-primary: #cdd6f4;
@@ -133,34 +133,57 @@
   --fm-hud-cube-face: #585b70;
   --fm-hud-cube-edge: #9399b2;
   --fm-hud-cube-shade: #11111b;
+
+  /* Visual language 2026-11: glass layers, recessed fields, raised selection, domain hues */
+  --fm-glass-bg: rgb(24 24 37 / 0.56);
+  --fm-glass-strong: rgb(30 30 46 / 0.78);
+  --fm-glass-line: rgb(205 214 244 / 0.1);
+  --fm-glass-highlight: rgb(255 255 255 / 0.07);
+  --fm-field-bg: rgb(17 17 27 / 0.45);
+  --fm-raised-bg: rgb(255 255 255 / 0.11);
+  --fm-section-bg: rgb(205 214 244 / 0.025);
+  --fm-viewport-glow-a: rgb(203 166 247 / 0.14);
+  --fm-viewport-glow-b: rgb(137 180 250 / 0.12);
+  /* Page backdrop behind the floating panels: the base with a soft glow. */
+  --fm-page-bg:
+    radial-gradient(1100px 700px at 18% 12%, rgb(137 180 250 / 0.13), transparent 62%),
+    radial-gradient(900px 600px at 92% 30%, rgb(203 166 247 / 0.11), transparent 62%),
+    var(--fm-bg-app);
+  --fm-hue-geometry: var(--fm-accent);
+  --fm-hue-material: var(--fm-chart-mauve);
+  --fm-hue-physics: var(--fm-chart-peach);
+  --fm-hue-study: var(--fm-success);
+  --fm-hue-visualization: var(--fm-chart-teal);
+  --fm-hue-mesh: var(--fm-chart-sky);
+  --fm-hue-definition: var(--fm-chart-pink);
 }
 
 /* ===== Catppuccin Latte (light) ===== */
 [data-theme="light"] {
   color-scheme: light;
 
-  --fm-bg-app: #eff1f5;
-  --fm-bg-chrome: #e6e9ef;
-  --fm-bg-panel: #eff1f5;
-  --fm-bg-panel-raised: #e6e9ef;
-  --fm-bg-viewport: #dce0e8;
+  --fm-bg-app: #e9ecf3;
+  --fm-bg-chrome: #eef0f6;
+  --fm-bg-panel: #f5f6fa;
+  --fm-bg-panel-raised: #fafbfd;
+  --fm-bg-viewport: #dde2ec;
   --fm-bg-viewport-top: #ccd0da;
   --fm-bg-viewport-bottom: #eff1f5;
-  --fm-bg-overlay: #e6e9ef;
-  --fm-bg-selected: #c4d7f5;
+  --fm-bg-overlay: #f7f8fb;
+  --fm-bg-selected: #d5e1fa;
   --fm-bg-canvas: #dce0e8;
-  --fm-bg-surface: #f7f8fb;
-  --fm-bg-elevated: #e6e9ef;
-  --fm-bg-muted: #e9ecf2;
-  --fm-bg-hover: #dce0e8;
+  --fm-bg-surface: #f9fafc;
+  --fm-bg-elevated: #fbfbfd;
+  --fm-bg-muted: #eceef4;
+  --fm-bg-hover: #e3e6ee;
   --fm-surface-hover: var(--fm-bg-hover); /* semantic alias: hover state surface */
   --fm-bg-disabled: var(--fm-bg-muted);
 
-  --fm-border-subtle: #ccd0da;
-  --fm-border-default: #bcc0cc;
+  --fm-border-subtle: rgb(76 79 105 / 0.12);
+  --fm-border-default: rgb(76 79 105 / 0.19);
   --fm-border-moderate: color-mix(in srgb, var(--fm-border-default) 50%, var(--fm-border-strong));
-  --fm-border-strong: #acb0be;
-  --fm-border-muted: #d7dae2;
+  --fm-border-strong: rgb(76 79 105 / 0.29);
+  --fm-border-muted: rgb(76 79 105 / 0.08);
   --fm-border-disabled: var(--fm-border-muted);
 
   --fm-text-primary: #4c4f69;
@@ -268,6 +291,40 @@
   --fm-hud-cube-face: #eff1f5;
   --fm-hud-cube-edge: #8c8fa1;
   --fm-hud-cube-shade: #4c4f69;
+
+  /* Visual language 2026-11: fields are recessed, never bright white */
+  --fm-glass-bg: rgb(255 255 255 / 0.58);
+  --fm-glass-strong: rgb(255 255 255 / 0.78);
+  --fm-glass-line: rgb(255 255 255 / 0.85);
+  --fm-glass-highlight: rgb(255 255 255 / 0.95);
+  --fm-field-bg: rgb(76 79 105 / 0.055);
+  --fm-raised-bg: #ffffff;
+  --fm-section-bg: rgb(76 79 105 / 0.03);
+  --fm-viewport-glow-a: rgb(136 57 239 / 0.16);
+  --fm-viewport-glow-b: rgb(4 165 229 / 0.18);
+  --fm-page-bg:
+    radial-gradient(1100px 700px at 18% 12%, rgb(30 102 245 / 0.12), transparent 62%),
+    radial-gradient(900px 600px at 92% 30%, rgb(136 57 239 / 0.11), transparent 62%),
+    var(--fm-bg-app);
+  --fm-hue-geometry: var(--fm-accent);
+  --fm-hue-material: var(--fm-chart-mauve);
+  --fm-hue-physics: var(--fm-chart-peach);
+  --fm-hue-study: var(--fm-success);
+  --fm-hue-visualization: var(--fm-chart-teal);
+  --fm-hue-mesh: var(--fm-chart-sky);
+  --fm-hue-definition: var(--fm-chart-pink);
+}
+
+/* Reduced transparency: glass layers become opaque panel surfaces. */
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  [data-theme="dark"],
+  [data-theme="light"] {
+    --fm-glass-bg: var(--fm-bg-panel);
+    --fm-glass-strong: var(--fm-bg-panel);
+    --fm-glass-backdrop: none;
+    --fm-page-bg: var(--fm-bg-app);
+  }
 }
 
 .fm-inspector-alert {

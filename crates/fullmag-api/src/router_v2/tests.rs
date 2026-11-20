@@ -1091,6 +1091,7 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
             stages: vec![
                 StageExecutionRecord {
                     stage_id: None,
+                    authored_stage_id: None,
                     antenna_solve_stage_id: None,
                     antenna_progress: None,
                     kind: None,
@@ -1133,6 +1134,7 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                 },
                 StageExecutionRecord {
                     stage_id: None,
+                    authored_stage_id: None,
                     antenna_solve_stage_id: None,
                     antenna_progress: None,
                     kind: None,
@@ -2841,6 +2843,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
             stages: vec![
                 StageExecutionRecord {
                     stage_id: None,
+                    authored_stage_id: None,
                     antenna_solve_stage_id: None,
                     antenna_progress: None,
                     kind: None,
@@ -2883,6 +2886,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 },
                 StageExecutionRecord {
                     stage_id: None,
+                    authored_stage_id: None,
                     antenna_solve_stage_id: None,
                     antenna_progress: None,
                     kind: None,
@@ -25622,6 +25626,7 @@ async fn commands_endpoint_invalidates_hysteresis_stage_resources() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -25831,6 +25836,7 @@ async fn commands_endpoint_validates_runtime_precondition_against_effective_stat
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("relax".into()),
@@ -26424,6 +26430,7 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: None,
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: None,
@@ -27328,6 +27335,7 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-003".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_frequency_response".into()),
@@ -27788,6 +27796,7 @@ async fn hysteresis_progress_endpoint_returns_current_stage_progress() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-hyst".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -27893,6 +27902,7 @@ async fn hysteresis_progress_endpoint_reports_active_first_point_before_completi
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -27988,6 +27998,7 @@ async fn hysteresis_progress_endpoint_projects_live_magnetization_for_sample_ang
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-angle".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -28076,6 +28087,7 @@ async fn hysteresis_progress_endpoint_uses_measurement_axis_for_live_projection(
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-measurement-axis".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -28171,6 +28183,7 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-fem-magnetic-average".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -28267,6 +28280,7 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-fem-volume-average".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -28363,6 +28377,7 @@ async fn hysteresis_progress_endpoint_uses_snapshot_fem_mesh_for_live_average() 
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-snapshot-fem-average".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -28499,6 +28514,7 @@ async fn hysteresis_execution_tree_returns_windowed_active_points() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("hysteresis".into()),
@@ -28661,6 +28677,7 @@ async fn hysteresis_bookmarks_round_trip_through_resource_and_execution_tree() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("hysteresis".into()),
@@ -28815,6 +28832,7 @@ async fn hysteresis_execution_tree_marks_missing_snapshot_payloads() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("hysteresis".into()),
@@ -29004,6 +29022,7 @@ async fn hysteresis_execution_tree_uses_settle_trace_status_for_completed_points
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("hysteresis".into()),
@@ -29190,6 +29209,7 @@ async fn hysteresis_execution_tree_exposes_runtime_branch_nodes() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-branches".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("hysteresis".into()),
@@ -29316,6 +29336,7 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-relax".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("relax".into()),
@@ -29554,6 +29575,7 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-relax".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("relax".into()),
@@ -39238,6 +39260,7 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
             stage_statuses: vec![StageLifecycleState::Completed],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -39402,6 +39425,7 @@ async fn hysteresis_analysis_uses_active_hysteresis_kind_only_when_record_kind_i
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: None,
@@ -39568,6 +39592,7 @@ async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_executio
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -39672,6 +39697,7 @@ async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_po
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -39755,6 +39781,7 @@ async fn hysteresis_analysis_points_returns_empty_for_running_stage_before_first
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -40314,6 +40341,7 @@ async fn field_vector_snapshot_id_validates_optional_hysteresis_stage_scope() {
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),

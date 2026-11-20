@@ -313,6 +313,7 @@ pub(crate) fn accepted_stage_record(
 ) -> StageExecutionRecord {
     StageExecutionRecord {
         stage_id: Some(stage_id.to_string()),
+        authored_stage_id: None,
         antenna_solve_stage_id: None,
         antenna_progress: None,
         kind,
@@ -6360,6 +6361,7 @@ mod tests {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: None,
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: None,
@@ -7279,6 +7281,7 @@ mod tests {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: None,
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: None,
@@ -7338,6 +7341,7 @@ mod tests {
                     completed_stage_indexes: vec![0],
                     stages: vec![StageExecutionRecord {
                         stage_id: None,
+                        authored_stage_id: None,
                         antenna_solve_stage_id: None,
                         antenna_progress: None,
                         kind: None,
@@ -8948,6 +8952,7 @@ mod tests {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: None,
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: None,

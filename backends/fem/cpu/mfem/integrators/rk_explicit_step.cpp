@@ -630,7 +630,7 @@ bool context_step_explicit_rk_mfem(
             max_rhs_final,
             ctx.state.current_time,
             ctx.zeeman.stage_start_time_s);
-        add_transport_stage_rhs(ctx, ws.k[0], max_rhs_final);
+        add_transport_stage_rhs(ctx, ctx.state.m_xyz, ws.k[0], max_rhs_final);
         zero_non_magnetic_nodes_aos(ws.k[0], ctx.mesh.magnetic_node_mask);
         if (ctx.frozen_spins.enabled()) {
             ctx.frozen_spins.zero_frozen_rhs(ws.k[0]);

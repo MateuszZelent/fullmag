@@ -2,14 +2,16 @@
 
 ## Status
 
-Niniejszy dokument definiuje repozytoryjny release gate dla zmian dotyczących
-Control Room, API v2 i wizualizacji 3D. Ustawienia ochrony gałęzi w GitHub muszą
-wymagać odpowiadających im kontekstów. Sam dokument nie jest dowodem wykonania
-bramki dla konkretnego SHA.
+Dla PR do `master` zbiorczy status `CI / required` sprawdza wynik każdego
+zestawu wybranego na podstawie zmienionych plików. Zmiany Control Room, API v2
+i wizualizacji uruchamiają bootstrap. Poniższe nazwy wskazują workflow i job
+do odszukania w logach. Nazwy zagnieżdżonych jobów w interfejsie GitHuba
+zawierają także nazwę wywołującego workflow. Kwalifikację wydania FEM operator
+uruchamia osobno dla publikowanego SHA.
 
-## Wymagane konteksty CI
+## Bramki i źródła dowodów
 
-| Workflow / job (dokładny context) | Klasa dowodu | Zakres | Wymagany wynik |
+| Workflow / job | Klasa dowodu | Zakres | Wymagany wynik |
 |---|---|---|---|
 | `bootstrap / rust-contracts` | source contract / compiled API | `fullmag-quantities`, runner quantity, API v2 router i CLI interactive-runtime | `success` |
 | `bootstrap / generated-api-determinism` | generated API | ponowne wygenerowanie OpenAPI v2 bez diffu transportu | `success` |

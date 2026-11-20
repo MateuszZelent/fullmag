@@ -72,7 +72,7 @@ function FullmagLogo({
           }}
         >
           <div
-            className="relative flex items-center justify-center w-full h-full max-w-[90vw] max-h-[90vh] sm:max-w-[70vw] sm:max-h-[70vh] p-8 sm:p-16 rounded-3xl border border-white/10 bg-black/20 shadow-2xl animate-in zoom-in-95 duration-300 cursor-default"
+            className="relative flex items-center justify-center w-full h-full max-w-[90vw] max-h-[90vh] sm:max-w-[70vw] sm:max-h-[70vh] p-8 sm:p-16 rounded-3xl bg-black/20 shadow-2xl animate-in zoom-in-95 duration-300 cursor-default"
           >
             <div className="absolute inset-0 bg-primary/10 rounded-3xl blur-3xl pointer-events-none" />
             <FullmagLogoVector

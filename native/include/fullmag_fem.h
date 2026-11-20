@@ -387,9 +387,10 @@ typedef struct {
 } fullmag_fem_stage_oersted_callback_v1;
 
 /* Append-only native CPU RK hook for a reciprocal charge--spin solve.  The
- * callback receives the exact stage magnetization and returns a direct LLG
- * torque in 1/s.  The torque is added to the native RHS after the standard
- * LLG, STT and SOT terms; GPU execution rejects this hook until a
+ * callback receives the exact stage magnetization and returns the raw
+ * Gilbert-form transport source T_G in 1/s.  The native RHS adds
+ * (T_G + alpha m x T_G) / (1 + alpha^2) with the local damping after the
+ * standard LLG, STT and SOT terms; GPU execution rejects this hook until a
  * device-resident implementation is qualified. */
 #define FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ABI_VERSION 1u
 #define FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ERROR_CAPACITY 256u

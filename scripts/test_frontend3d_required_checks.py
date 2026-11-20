@@ -7,7 +7,6 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-import pytest
 import yaml
 
 
@@ -210,75 +209,14 @@ CONTRACT_SCOPES = frozenset(
         "retention",
     }
 )
-SCOPED_REQUIRED_JOB_EXCLUSIONS = {
-    "api-hygiene-rg13": CONTRACT_SCOPES - {"bootstrap"},
-    "control-room-contracts": CONTRACT_SCOPES - {"bootstrap", "browser"},
-    "browser-fixture-smoke": CONTRACT_SCOPES - {"bootstrap", "browser"},
+# Every automatic lane also runs for an explicit default dispatch.
+ADDITIONAL_MANUAL_SCOPES = {
+    "rust-contracts": "rust",
+    "native-modal-cabi-contract": "native-modal",
+    "control-room-contracts": "browser",
+    "browser-fixture-smoke": "browser",
+    "inspector-actions-browser-smoke": "browser",
 }
-
-
-def dispatch_scope_guard(exclusions: set[str] | frozenset[str]) -> str:
-    terms = sorted(exclusions)
-    return (
-        "${{ github.event_name != 'workflow_dispatch' || ("
-        + " && ".join(f"inputs.contract_scope != '{scope}'" for scope in terms)
-        + ") }}"
-    )
-
-
-def assert_dispatch_scope_guard(
-    condition: str,
-    *,
-    expected_exclusions: set[str] | frozenset[str] | None = None,
-) -> None:
-    prefix = "${{ github.event_name != 'workflow_dispatch' || "
-    assert condition.startswith(prefix)
-    assert condition.endswith("}}")
-    exclusions = condition[len(prefix) : -2].strip()
-    assert exclusions.startswith("(") and exclusions.endswith(")")
-    terms = exclusions[1:-1].split(" && ")
-    assert terms
-    scopes = []
-    for term in terms:
-        term_prefix = "inputs.contract_scope != '"
-        assert term.startswith(term_prefix) and term.endswith("'")
-        scope = term[len(term_prefix) : -1]
-        assert scope in CONTRACT_SCOPES
-        assert scope != "bootstrap"
-        scopes.append(scope)
-    assert len(scopes) == len(set(scopes))
-    if expected_exclusions is not None:
-        assert set(scopes) == set(expected_exclusions)
-
-
-def test_dispatch_scope_guards_reject_wrong_required_job_exclusions() -> None:
-    browser_exclusions = SCOPED_REQUIRED_JOB_EXCLUSIONS["browser-fixture-smoke"]
-    api_exclusions = SCOPED_REQUIRED_JOB_EXCLUSIONS["api-hygiene-rg13"]
-    for job_exclusions in SCOPED_REQUIRED_JOB_EXCLUSIONS.values():
-        assert_dispatch_scope_guard(
-            dispatch_scope_guard(job_exclusions),
-            expected_exclusions=job_exclusions,
-        )
-
-    invalid_cases = (
-        (browser_exclusions | {"browser"}, browser_exclusions),
-        (api_exclusions | {"all"}, api_exclusions),
-        (api_exclusions | {"brower"}, api_exclusions),
-        (api_exclusions | {"bootstrap"}, api_exclusions),
-        (api_exclusions - {"browser"}, api_exclusions),
-    )
-    for exclusions, expected_exclusions in invalid_cases:
-        with pytest.raises(AssertionError):
-            assert_dispatch_scope_guard(
-                dispatch_scope_guard(exclusions),
-                expected_exclusions=expected_exclusions,
-            )
-
-    with pytest.raises(AssertionError):
-        assert_dispatch_scope_guard(
-            dispatch_scope_guard(api_exclusions).replace(") }}", ") && !cancelled() }}"),
-            expected_exclusions=api_exclusions,
-        )
 
 
 def test_required_contexts_and_proof_output_are_fail_closed() -> None:
@@ -296,19 +234,21 @@ def test_required_contexts_and_proof_output_are_fail_closed() -> None:
         "browser-fixture-smoke",
     }
     assert required_jobs <= jobs.keys()
-    for job_id in required_jobs:
-        serialized = json.dumps(jobs[job_id])
-        assert "continue-on-error" not in serialized
-        condition = jobs[job_id].get("if")
-        expected_exclusions = SCOPED_REQUIRED_JOB_EXCLUSIONS.get(job_id)
-        if expected_exclusions is not None:
-            assert condition is not None
-            assert_dispatch_scope_guard(
-                condition,
-                expected_exclusions=expected_exclusions,
-            )
-        elif condition is not None:
-            assert_dispatch_scope_guard(condition)
+    automatic_jobs = jobs["automatic-results"]["needs"]
+    assert required_jobs | set(ADDITIONAL_MANUAL_SCOPES) <= set(automatic_jobs)
+    for job_id in automatic_jobs:
+        job = jobs[job_id]
+        assert "continue-on-error" not in json.dumps(job)
+        scopes = ["bootstrap"]
+        if job_id in ADDITIONAL_MANUAL_SCOPES:
+            scopes.append(ADDITIONAL_MANUAL_SCOPES[job_id])
+        terms = " || ".join(f"inputs.contract_scope == '{scope}'" for scope in scopes)
+        assert job["if"] == "${{ github.event_name != 'workflow_dispatch' || " + terms + " }}"
+        if "uses" in job:
+            called = load_workflow(REPO_ROOT / job["uses"])
+            assert "continue-on-error" not in json.dumps(called["jobs"])
+    assert jobs["automatic-results"]["if"] == "${{ always() && github.event_name != 'workflow_dispatch' }}"
+    assert 'all(.[]; .result == "success")' in jobs["automatic-results"]["steps"][0]["run"]
 
     browser_steps = jobs["browser-fixture-smoke"]["steps"]
     preproof_steps = [
@@ -419,8 +359,36 @@ def test_managed_fem_dispatch_requires_private_runner_label_without_changing_gat
     assert "github.event_name != 'workflow_dispatch'" not in dispatch_label
     assert "format('fullmag-fem-private-{0}', github.run_id)" in dispatch_label
     assert "vars.FULLMAG_FEM_RUNNER_LABEL" not in dispatch_label
-    assert managed_job["steps"][-1]["run"] == (
-        "./scripts/ci/run_frontend3d_required_gate.sh managed-fem-qualification"
+    steps = managed_job["steps"]
+    qualification = next(step for step in steps if step.get("id") == "qualification")
+    receipt_check = next(
+        step
+        for step in steps
+        if step.get("name") == "Verify managed FEM receipt after successful gate"
+    )
+    upload = next(
+        step
+        for step in steps
+        if step.get("name") == "Upload managed FEM qualification receipt"
+    )
+    assert steps.index(qualification) < steps.index(receipt_check) < steps.index(upload)
+    assert receipt_check["if"] == "${{ success() }}"
+    assert receipt_check["env"]["REPORT_ROOT"] == "${{ steps.qualification.outputs.report_root }}"
+    for required_receipt in (
+        "runtime-manifest.v3.json",
+        "cpu/summary.v4.json",
+        "gpu/summary.v4.json",
+        "summary.v3.json",
+    ):
+        assert f'test -s "$REPORT_ROOT/{required_receipt}"' in receipt_check["run"]
+    assert "always()" in upload["if"]
+    assert "${{ steps.qualification.outputs.report_root }}/summary.v3.json" in upload["with"]["path"]
+    assert "${{ steps.qualification.outputs.report_root }}/runtime-manifest.v3.json" in upload["with"]["path"]
+    assert "mixed prism-airbox report root:" in qualification["run"]
+    assert "$GITHUB_OUTPUT" in qualification["run"]
+    assert (
+        'report_log="$RUNNER_TEMP/managed-fem-qualification-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.log"'
+        in qualification["run"]
     )
 
 

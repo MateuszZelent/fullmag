@@ -131,7 +131,6 @@ export function StudySolverPolicyFields({
 }
 
 export function StudyPipelineSection({
-  activeStageIndex,
   activeLane,
   algorithmsAvailable = EMPTY_ALGORITHMS,
   authoringBusy = false,
@@ -156,7 +155,6 @@ export function StudyPipelineSection({
   runCommand,
   commandDisabledReason,
 }: {
-  activeStageIndex: number | null;
   activeLane?: ActiveLaneCapabilitySnapshot | null;
   algorithmsAvailable?: readonly string[];
   authoringBusy?: boolean;
@@ -211,7 +209,7 @@ export function StudyPipelineSection({
         {model.stages.map((stage) => (
           <StageCard
             key={stage.index}
-            active={activeStageIndex === stage.index}
+            active={stage.active === true}
             selected={draftIndex === stage.index}
             stage={stage}
             onSelect={() => onSelectDraft(stage.index)}

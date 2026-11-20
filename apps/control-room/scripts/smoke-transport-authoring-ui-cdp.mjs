@@ -396,7 +396,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const resultsSnapshot = await evaluate(`() => ({
       explorer: document.querySelector(".fm-explorer")?.innerText || "",
       nodes: Array.from(document.querySelectorAll(".fm-explorer [data-node-id]")).map((node) => node.getAttribute("data-node-id")),
-      tabs: Array.from(document.querySelectorAll(".fm-explorer-tabs [role=tab]")).map((node) => ({ selected: node.getAttribute("aria-selected"), text: (node.textContent || "").trim() })),
+      tabs: Array.from(document.querySelectorAll(".fm-side-rail[data-side=left] .fm-side-rail__item")).map((node) => ({ selected: node.getAttribute("data-active"), text: (node.textContent || "").trim() })),
     })`);
     if (!resultsSnapshot.nodes.includes("results:root")) {
       throw new Error(`Explorer did not navigate to Results: ${JSON.stringify(resultsSnapshot)}`);
@@ -1228,18 +1228,19 @@ async function clickTabByText(text) {
 }
 
 async function clickExplorerTabByText(text) {
-  const selector = ".fm-explorer-tabs [role=\"tab\"]";
+  const selector = ".fm-side-rail[data-side=\"left\"] .fm-side-rail__item";
   await waitForEvaluate(
     `() => Array.from(document.querySelectorAll(${JSON.stringify(selector)})).some((node) => (node.textContent || "").trim() === ${JSON.stringify(text)})`,
   );
   await evaluate(`() => {
     const node = Array.from(document.querySelectorAll(${JSON.stringify(selector)}))
       .find((entry) => (entry.textContent || "").trim() === ${JSON.stringify(text)});
-    node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, ctrlKey: false }));
+    // Choosing the open family again collapses the panel, so click only to switch.
+    if (node.getAttribute("data-active") !== "true") node.click();
     return true;
   }`);
   await waitForEvaluate(
-    `() => Array.from(document.querySelectorAll(${JSON.stringify(selector)})).some((node) => (node.textContent || "").trim() === ${JSON.stringify(text)} && node.getAttribute("aria-selected") === "true")`,
+    `() => Array.from(document.querySelectorAll(${JSON.stringify(selector)})).some((node) => (node.textContent || "").trim() === ${JSON.stringify(text)} && node.getAttribute("data-active") === "true")`,
   );
 }
 

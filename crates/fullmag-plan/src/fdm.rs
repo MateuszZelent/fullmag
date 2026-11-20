@@ -1851,7 +1851,7 @@ impl TransportGridRefs {
 
 fn active_transport_grid_refs(
     problem: &ProblemIR,
-    active_graph: &crate::spin_transport::ActiveFdmTransportGraph,
+    active_graph: &crate::spin_transport::ActiveTransportGraph,
 ) -> Result<TransportGridRefs, PlanError> {
     let mut refs = TransportGridRefs::default();
 
@@ -2066,7 +2066,7 @@ fn transport_common_grid(
     magnetic_geometry: &GeometryEntryIR,
     magnetic_shape: &GeometryShape,
     cell_size: [f64; 3],
-    active_graph: &crate::spin_transport::ActiveFdmTransportGraph,
+    active_graph: &crate::spin_transport::ActiveTransportGraph,
 ) -> Result<
     (
         [f64; 3],
@@ -2465,7 +2465,7 @@ pub(crate) fn plan_fdm(
 ) -> Result<ExecutionPlanIR, PlanError> {
     let mut errors = Vec::new();
     let active_transport_graph =
-        crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;
+        crate::spin_transport::resolve_active_transport_graph(problem)?;
 
     let first_material = problem.magnets.first().and_then(|magnet| {
         problem
@@ -4434,7 +4434,7 @@ pub(crate) fn plan_fdm_multilayer(
 ) -> Result<ExecutionPlanIR, PlanError> {
     let mut errors = Vec::new();
     let active_transport_graph =
-        crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;
+        crate::spin_transport::resolve_active_transport_graph(problem)?;
 
     let fdm_hints = match &problem.backend_policy.discretization_hints {
         Some(DiscretizationHintsIR { fdm: Some(fdm), .. }) => fdm,

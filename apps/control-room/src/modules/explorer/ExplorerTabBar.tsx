@@ -4,9 +4,9 @@ import { Activity, BarChart3, Box, Database, ListChecks, type LucideIcon } from 
 
 import type { ExplorerTabId } from "./explorerTypes";
 import { PanelChrome } from "@/shared/ui/PanelFrame";
-import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
-const EXPLORER_TABS: Array<{ id: ExplorerTabId; label: string; icon: LucideIcon }> = [
+/** Explorer resource families; the tab bar and the left side rail share this list. */
+export const EXPLORER_TABS: ReadonlyArray<{ id: ExplorerTabId; label: string; icon: LucideIcon }> = [
   { id: "model", label: "Model", icon: Box },
   { id: "resources", label: "Resources", icon: Database },
   { id: "results", label: "Results", icon: BarChart3 },
@@ -16,25 +16,21 @@ const EXPLORER_TABS: Array<{ id: ExplorerTabId; label: string; icon: LucideIcon 
 
 interface ExplorerTabBarProps {
   activeTab: ExplorerTabId;
-  onTabChange: (tabId: ExplorerTabId) => void;
 }
 
-/** In a narrow panel inactive tabs collapse to their icon so all five stay visible. */
-export function ExplorerTabBar({ activeTab, onTabChange }: ExplorerTabBarProps) {
+/**
+ * The left side rail switches resource families (specs/frontend-v2/10 §1a);
+ * the panel chrome names the open family.
+ */
+export function ExplorerTabBar({ activeTab }: ExplorerTabBarProps) {
+  const tab = EXPLORER_TABS.find(({ id }) => id === activeTab) ?? EXPLORER_TABS[0];
+  const Icon = tab.icon;
   return (
-    <Tabs
-      className="fm-explorer-tabs"
-      value={activeTab}
-      onValueChange={(value) => onTabChange(value as ExplorerTabId)}
-    >
-      <PanelChrome><TabsList aria-label="Explorer resource families">
-        {EXPLORER_TABS.map(({ id, label, icon: Icon }) => (
-          <TabsTrigger aria-label={label} key={id} title={label} value={id}>
-            <Icon aria-hidden="true" size={13} />
-            <span className="fm-explorer-tabs__label">{label}</span>
-          </TabsTrigger>
-        ))}
-      </TabsList></PanelChrome>
-    </Tabs>
+    <PanelChrome>
+      <span className="fm-panel-chrome__title fm-explorer-tabs__title">
+        <Icon aria-hidden="true" size={14} />
+        {tab.label}
+      </span>
+    </PanelChrome>
   );
 }
