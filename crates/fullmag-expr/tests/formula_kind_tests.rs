@@ -112,8 +112,12 @@ fn log1p_and_heaviside_depend_on_the_kind() {
         let error = formula(text, kind).unwrap_err();
         assert_eq!((error.code, error.position), ("expr_unknown_name", 0), "{text}");
     }
-    // `log1p` is reserved like every function name.
-    let error = compile(&[("log1p", 1.0)], &[], &["t"], FunctionKind::Time).unwrap_err();
+    // Older antennas can use log1p as a parameter or a local.
+    let time = compile(&[("log1p", 2.0)], &[], &["log1p * t"], FunctionKind::Time).unwrap();
+    assert_eq!(time.eval_time(3.0), 6.0);
+    let mask = compile(&[], &[("log1p", "x")], &["log1p", "0", "0"], FunctionKind::Mask).unwrap();
+    assert_eq!(mask.eval_mask([2.0, 0.0, 0.0]), [2.0, 0.0, 0.0]);
+    let error = compile(&[("log1p", 1.0)], &[], &["u"], FunctionKind::Profile).unwrap_err();
     assert_eq!(error.code, "expr_name_invalid");
 }
 
@@ -127,11 +131,14 @@ fn caret_is_a_legacy_power_of_mask_and_time_only() {
 }
 
 #[test]
-fn integer_literals_with_a_leading_zero_are_rejected_as_in_python() {
-    for (text, position) in [("01", 0), ("t * 007", 4), ("2 + 0010", 4)] {
-        let error = formula(text, FunctionKind::Time).unwrap_err();
+fn new_formulas_require_python_integer_literals_and_old_antennas_remain_readable() {
+    for (text, position) in [("01", 0), ("u * 007", 4), ("2 + 0010", 4)] {
+        let error = formula(text, FunctionKind::Profile).unwrap_err();
         assert_eq!((error.code, error.position), ("expr_syntax", position), "{text}");
     }
+    assert_eq!(formula("t * 007", FunctionKind::Time).unwrap().eval_time(2.0), 14.0);
+    let mask = compile(&[], &[], &["01 * x", "0", "0"], FunctionKind::Mask).unwrap();
+    assert_eq!(mask.eval_mask([2.0, 0.0, 0.0]), [2.0, 0.0, 0.0]);
     for (text, value) in [
         ("0", 0.0),
         ("00", 0.0),

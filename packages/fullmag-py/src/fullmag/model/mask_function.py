@@ -71,9 +71,7 @@ _VARIABLES = {
     "distance": ("x", "y", "z"),
     "field": ("x", "y", "z"),
 }
-_RESERVED = (
-    frozenset({"x", "y", "z", "t", "pi"}) | _FORMULA_FUNCTIONS_1 | _FIELD_FUNCTIONS_1 | _FUNCTIONS_2
-)
+_RESERVED = frozenset({"x", "y", "z", "t", "pi"}) | _FIELD_FUNCTIONS_1 | _FUNCTIONS_2
 # How a function of each kind is called in a script, for error messages.
 _CALLS = {"mask": "fm.mask", "time": "fm.time", "field": "fm.fields.function"}
 _AUGMENTED_OPERATORS = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.Pow: "**"}
