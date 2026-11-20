@@ -1,18 +1,23 @@
-name: frontend-3d-managed-fem
+name: Managed FEM CPU/GPU qualification
+run-name: "Managed FEM qualification (${{ inputs.runner_label }})"
 
 on:
   workflow_dispatch:
     inputs:
       runner_label:
-        description: "Unique private label assigned to this ephemeral FEM runner"
+        description: "Unique label for the isolated self-hosted Linux runner with managed FEM and CUDA."
         required: true
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   managed-fem-qualification:
-    # This is a dedicated Linux managed runner, not an interactive WSL step.
-    # The current receipt contract requires loop-backed ext4 storage and CUDA
-    # visibility; Windows local builds use scripts/windows/run_fullmag_fem.ps1.
+    name: Qualify managed FEM CPU and GPU runtime
+    timeout-minutes: 240
+    # Dedicated Linux managed runner, not an interactive WSL step. Its receipt
+    # requires loop-backed ext4 storage and CUDA visibility.
     runs-on: [self-hosted, linux, x64, "${{ github.event_name == 'workflow_dispatch' && inputs.runner_label || format('fullmag-fem-private-{0}', github.run_id) }}"]
     env:
       FULLMAG_MANAGED_FEM_RUNNER: "1"
@@ -24,4 +29,56 @@ jobs:
         run: just ensure-python
 
       - name: Run managed FEM magnetic-only and shared-air qualification
-        run: ./scripts/ci/run_frontend3d_required_gate.sh managed-fem-qualification
+        id: qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The recipe allocates runs/run.XXXXXXXX for each invocation; key the
+          # runner log by Actions run and attempt so reruns stay distinguishable.
+          report_log="$RUNNER_TEMP/managed-fem-qualification-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.log"
+          set +e
+          ./scripts/ci/run_frontend3d_required_gate.sh managed-fem-qualification 2>&1 | tee "$report_log"
+          gate_status=$?
+          set -e
+          report_root="$(sed -n 's/^mixed prism-airbox report root: //p' "$report_log" | tail -n 1)"
+          if [[ -n "$report_root" && -d "$report_root" && "$report_root" != *$'\n'* && "$report_root" != *$'\r'* ]]; then
+            printf 'report_root=%s\n' "$report_root" >> "$GITHUB_OUTPUT"
+          elif [[ -n "$report_root" ]]; then
+            echo "::warning::Managed FEM report root could not be passed safely to artifact upload."
+          fi
+          exit "$gate_status"
+
+      - name: Verify managed FEM receipt after successful gate
+        if: ${{ success() }}
+        shell: bash
+        env:
+          REPORT_ROOT: ${{ steps.qualification.outputs.report_root }}
+        run: |
+          set -euo pipefail
+          test -n "$REPORT_ROOT"
+          test -s "$REPORT_ROOT/runtime-manifest.v3.json"
+          test -s "$REPORT_ROOT/cpu/summary.v4.json"
+          test -s "$REPORT_ROOT/gpu/summary.v4.json"
+          test -s "$REPORT_ROOT/summary.v3.json"
+
+      - name: Upload managed FEM qualification receipt
+        if: ${{ always() && steps.qualification.outputs.report_root != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: managed-fem-qualification-receipt
+          path: |
+            ${{ steps.qualification.outputs.report_root }}/source.v1.json
+            ${{ steps.qualification.outputs.report_root }}/source-snapshot.v2.json
+            ${{ steps.qualification.outputs.report_root }}/runtime-manifest.v3.json
+            ${{ steps.qualification.outputs.report_root }}/summary.v3.json
+            ${{ steps.qualification.outputs.report_root }}/comparison.v3.csv
+            ${{ steps.qualification.outputs.report_root }}/cpu/runtime.log
+            ${{ steps.qualification.outputs.report_root }}/cpu/summary.v4.json
+            ${{ steps.qualification.outputs.report_root }}/cpu/artifacts/metadata.json
+            ${{ steps.qualification.outputs.report_root }}/cpu/artifacts/scalars.csv
+            ${{ steps.qualification.outputs.report_root }}/gpu/runtime.log
+            ${{ steps.qualification.outputs.report_root }}/gpu/summary.v4.json
+            ${{ steps.qualification.outputs.report_root }}/gpu/artifacts/metadata.json
+            ${{ steps.qualification.outputs.report_root }}/gpu/artifacts/scalars.csv
+          if-no-files-found: warn
+          retention-days: 30

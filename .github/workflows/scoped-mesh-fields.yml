@@ -1,14 +1,9 @@
 name: scoped-mesh-fields
 
 on:
+  workflow_call:
   push:
     branches: [master, main]
-    paths:
-      - 'packages/fullmag-py/src/fullmag/meshing/**'
-      - 'packages/fullmag-py/tests/test_meshing.py'
-      - 'scripts/test_box_layered_airbox_mesh.py'
-      - '.github/workflows/scoped-mesh-fields.yml'
-  pull_request:
     paths:
       - 'packages/fullmag-py/src/fullmag/meshing/**'
       - 'packages/fullmag-py/tests/test_meshing.py'
@@ -20,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: scoped-mesh-fields-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
