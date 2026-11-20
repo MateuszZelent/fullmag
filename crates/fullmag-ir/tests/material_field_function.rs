@@ -142,6 +142,14 @@ fn function_field_rejects_bad_versions_values_and_names() {
     field["function"]["expression_version"] = json!("field_expr.v0");
     assert!(errors(Parameter::Alpha, field).contains("expression_version must be 'field_expr.v1'"));
 
+    for option in ["frame", "unit"] {
+        let mut field = alpha_ramp_json();
+        field["function"]["parameters"] = json!([{"name": option, "value": 1.0}]);
+        field["function"]["outputs"] = json!([option]);
+        let message = errors(Parameter::Alpha, field);
+        assert!(message.contains("function.parameters[0]") && message.contains(option), "{message}");
+    }
+
     // JSON has no infinity: the value reaches the check through the typed IR.
     let mut problem = problem_with(Parameter::Alpha, alpha_ramp_json());
     let MaterialParameterFieldIR::Function { function, .. } =

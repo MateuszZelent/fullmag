@@ -423,6 +423,12 @@ fn compile_field_function(
         })?;
     }
     for (index, value) in function.parameters.iter().enumerate() {
+        if matches!(value.name.as_str(), "frame" | "unit") {
+            return Err(format!(
+                "material_field_function_invalid: function.parameters[{index}] '{}' is an option of fm.fields.function",
+                value.name
+            ));
+        }
         if !value.value.is_finite() {
             return Err(format!(
                 "material_field_function_invalid: function.parameters[{index}] '{}' must be finite",
