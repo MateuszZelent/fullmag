@@ -55,10 +55,8 @@ def evaluate(ir: dict, **variables: float) -> tuple[float, ...]:
     scope.update({item["name"]: item["value"] for item in ir.get("parameters", [])})
     scope.update(variables)
     for local in ir.get("locals", []):
-        scope[local["name"]] = eval(local["expression"].replace("^", "**"), {"__builtins__": {}}, scope)
-    return tuple(
-        eval(output.replace("^", "**"), {"__builtins__": {}}, scope) for output in ir["outputs"]
-    )
+        scope[local["name"]] = eval(local["expression"], {"__builtins__": {}}, scope)
+    return tuple(eval(output, {"__builtins__": {}}, scope) for output in ir["outputs"])
 
 
 def compile_source(source: str, name: str = "f", **namespace: object):
@@ -90,7 +88,7 @@ class MaskFunctionTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in ir["locals"]], ["k", "sigma_y", "g"])
         self.assertEqual(
             ir["locals"][2]["expression"],
-            "exp(-(x + xs)^2 / (2 * wavelength^2)) * exp(-y^2 / (2 * sigma_y^2))",
+            "exp(-(x + xs)**2 / (2 * wavelength**2)) * exp(-y**2 / (2 * sigma_y**2))",
         )
         self.assertEqual(
             ir["outputs"],
@@ -160,8 +158,8 @@ class MaskFunctionTests(unittest.TestCase):
             """
         )
         ir = fm.mask(f, a=2.0).to_ir()
-        self.assertEqual(ir["locals"][0]["expression"], "a * x + a ^ 2")
-        self.assertEqual(ir["outputs"], ["g", "-y ^ 2", "+z"])
+        self.assertEqual(ir["locals"][0]["expression"], "a * x + a ** 2")
+        self.assertEqual(ir["outputs"], ["g", "-y ** 2", "+z"])
 
     def test_rejections_name_the_line(self) -> None:
         cases = {

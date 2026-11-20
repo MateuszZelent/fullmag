@@ -6700,7 +6700,10 @@ def _mask_field_drive_payloads(
 
 
 def _canonical_function_ir(value: object) -> tuple[object, ...] | None:
-    """Equations and values of a ``FunctionIR``, independent of how its JSON was written."""
+    """Equations and values of a ``FunctionIR``, independent of how its JSON was written.
+
+    Legacy ``^`` is read as ``**``, so a stored ready-antenna term still matches its rebuild.
+    """
     function = _normalize_mapping(value)
     if not function:
         return None
@@ -6708,8 +6711,11 @@ def _canonical_function_ir(value: object) -> tuple[object, ...] | None:
         str(function.get("expression_version") or ""),
         str(function.get("name") or ""),
         tuple((str(item["name"]), float(item["value"])) for item in function.get("parameters") or []),
-        tuple((str(item["name"]), str(item["expression"])) for item in function.get("locals") or []),
-        tuple(str(output) for output in function.get("outputs") or []),
+        tuple(
+            (str(item["name"]), _field_expr_as_python(str(item["expression"])))
+            for item in function.get("locals") or []
+        ),
+        tuple(_field_expr_as_python(str(output)) for output in function.get("outputs") or []),
     )
 
 
@@ -6802,7 +6808,11 @@ def _mask_functions(payload: Mapping[str, object]) -> list[tuple[str, Mapping[st
 
 
 def _field_expr_as_python(text: str) -> str:
-    """``field_expr.v1`` is Python syntax except for ``^`` (power)."""
+    """``field_expr.v1`` text is a Python expression; ``^`` is the legacy spelling of ``**``.
+
+    Equations stored before ``**`` became canonical use ``^``; both are the same
+    operator with the same precedence, so the replacement is exact.
+    """
     return text.replace("^", "**")
 
 
