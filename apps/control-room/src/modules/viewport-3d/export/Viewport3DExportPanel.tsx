@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { Download, RefreshCw } from "lucide-react";
 
 import type { Export3DFormat } from "@/shared/export-3d/export3dTypes";
 import { Button } from "@/shared/ui/Button";
@@ -177,6 +177,17 @@ export function Viewport3DExportPanel({
       aria-label="3D Export"
       className="fm-viewport-3d-settings fm-viewport-3d-export"
     >
+      <header className="fm-viewport-3d-settings__header">
+        <span aria-hidden="true" className="fm-viewport-3d-settings__header-icon">
+          <Download size={18} strokeWidth={1.75} />
+        </span>
+        <span className="fm-viewport-3d-settings__header-copy">
+          <h2 className="fm-viewport-3d-settings__title">Export</h2>
+          <span className="fm-viewport-3d-settings__subtitle">
+            PNG image and 3D model (GLB, glTF, VTK)
+          </span>
+        </span>
+      </header>
       <Tabs
         className="fm-viewport-3d-settings__tabs"
         onValueChange={(value) => {

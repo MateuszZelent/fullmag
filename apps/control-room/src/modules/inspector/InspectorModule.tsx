@@ -79,7 +79,7 @@ export default function InspectorModule() {
       exportPanel={exportVisited ? <ExportInspectorPanel /> : null}
       onContextChange={setViewport3DInspectorContext}
       view={viewVisited ? <ViewInspectorPanel /> : null}
-      viewActions={<ViewInspectorActions title={context === "export" ? "Export" : "3D View"} />}
+      viewActions={<ViewInspectorActions />}
     >
       {selectionPanel}
     </InspectorContexts>
@@ -94,12 +94,11 @@ function ExportInspectorPanel() {
   return <section className="fm-inspector-view" aria-label="3D Export Inspector"><Viewport3DExportPanelOutlet /></section>;
 }
 
-function ViewInspectorActions({ title }: { title: string }) {
+function ViewInspectorActions() {
   const kernel = useKernel();
   const chrome = usePanelChromeControls();
   const hide = () => kernel.layout.setPanelVisible("right", false);
   return <PanelChrome className="fm-inspector-contexts__actions">
-    <span className="fm-panel-chrome__title">{title}</span>
     <Button aria-label="Hide Inspector" size="icon" variant="ghost" onClick={() => chrome ? chrome.hideWith(hide) : hide()}><PanelRightClose size={16} aria-hidden="true" /></Button>
   </PanelChrome>;
 }

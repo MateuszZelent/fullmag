@@ -1,5 +1,6 @@
 "use client";
 
+import { SlidersHorizontal } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import {
@@ -79,6 +80,16 @@ export function Viewport3DSettingsContent({
       aria-label="3D View Settings"
       className="fm-viewport-3d-settings"
     >
+      {/* Identity header shared with the Inspector template (specs/frontend-v2/13 §1a). */}
+      <header className="fm-viewport-3d-settings__header">
+        <span aria-hidden="true" className="fm-viewport-3d-settings__header-icon">
+          <SlidersHorizontal size={18} strokeWidth={1.75} />
+        </span>
+        <span className="fm-viewport-3d-settings__header-copy">
+          <h2 className="fm-viewport-3d-settings__title">3D View</h2>
+          <span className="fm-viewport-3d-settings__subtitle">Camera, appearance and render quality</span>
+        </span>
+      </header>
       <Tabs
         className="fm-viewport-3d-settings__tabs"
         onValueChange={(value) => {
