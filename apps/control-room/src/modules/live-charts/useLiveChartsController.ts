@@ -121,15 +121,6 @@ export function useLiveChartsController(selection: SelectionController) {
   // selection and effect dependencies stay referentially stable across renders.
   const defaults = useMemo(() => liveChartDescriptorDefaults(descriptorId), [descriptorId]);
   const descriptor = preferences.descriptor ?? defaults;
-  const rangeMode = descriptor.range.mode;
-  const rangeFromSI = rangeMode === "fixed" ? descriptor.range.fromSI : null;
-  const rangeToSI = rangeMode === "fixed" ? descriptor.range.toSI : null;
-  const initialRange = useMemo(
-    () => rangeMode === "fixed" && rangeFromSI !== null && rangeToSI !== null
-      ? liveChartInitialRange({ mode: "fixed", fromSI: rangeFromSI, toSI: rangeToSI })
-      : null,
-    [rangeFromSI, rangeMode, rangeToSI],
-  );
   const commandAction = useSyncExternalStore(liveChartsCommandRequests.subscribe, liveChartsCommandRequests.getSnapshot, liveChartsCommandRequests.getSnapshot);
   const commandFitRequest = useSyncExternalStore(liveChartsCommandRequests.subscribe, liveChartsCommandRequests.getFitRequestSnapshot, liveChartsCommandRequests.getFitRequestSnapshot);
   const paused = descriptor.liveMode === "paused";
@@ -170,6 +161,19 @@ export function useLiveChartsController(selection: SelectionController) {
   const chartTable = tableView?.table ?? null;
   const effectiveTableXAxisId = tableView?.xAxisId ?? descriptor.xAxisId;
   const energyData = useLiveEnergyData({ active: true, descriptorId, paused });
+  const energyAxisAndRange = resolveLiveChartAxisAndRange(
+    [energyData.xAxisId],
+    descriptor.xAxisId,
+    descriptor.range,
+  );
+  const hasEnergyHistory = energyData.resource.data !== null;
+  const effectiveXAxisId = resolveLiveChartsXAxisId(
+    descriptorId,
+    effectiveTableXAxisId,
+    energyData.xAxisId,
+  );
+  const initialRangePreference = descriptorId === "energy" ? energyAxisAndRange.range : descriptor.range;
+  const initialRange = useMemo(() => liveChartInitialRange(initialRangePreference), [initialRangePreference]);
   const [localFitRequest, setLocalFitRequest] = useState(0);
   const [localExportState, setLocalExportState] = useState<LiveChartsLocalExportState>({ errorFormat: null, request: null });
   const localExportRequest = localExportState.request;
@@ -206,9 +210,30 @@ export function useLiveChartsController(selection: SelectionController) {
     }));
   }, [descriptor.range, descriptor.xAxisId, descriptorId, paused, preferences.isHydrated, tableData.columns.data, tableData.range, tableData.xAxisId]);
   useEffect(() => {
+    if (!preferences.isHydrated || descriptorId !== "energy" || paused || !hasEnergyHistory) return;
+    const axisChanged = energyAxisAndRange.axisChanged;
+    const rangeChanged = !liveChartRangesEqual(energyAxisAndRange.range, descriptor.range);
+    if (!axisChanged && !rangeChanged) return;
+    liveChartsWorkspaceStore.clearRange();
+    liveChartPreferencesStore.updateDescriptor(descriptorId, () => ({
+      range: energyAxisAndRange.range,
+      xAxisId: energyAxisAndRange.xAxisId,
+    }));
+  }, [
+    descriptor.range,
+    descriptor.xAxisId,
+    descriptorId,
+    energyAxisAndRange.axisChanged,
+    energyAxisAndRange.range,
+    energyAxisAndRange.xAxisId,
+    hasEnergyHistory,
+    paused,
+    preferences.isHydrated,
+  ]);
+  useEffect(() => {
     if (!commandAction) return;
-    applyLiveChartsCommand({ action: commandAction, descriptorId, preferences, setLocalExportState, tableXAxisId: effectiveTableXAxisId });
-  }, [commandAction, descriptorId, effectiveTableXAxisId, preferences]);
+    applyLiveChartsCommand({ action: commandAction, descriptorId, preferences, setLocalExportState, xAxisId: effectiveXAxisId });
+  }, [commandAction, descriptorId, effectiveXAxisId, preferences]);
   // Series depend only on whether the rows resource failed, not on every
   // loading/ready transition of a background refresh that keeps the same table.
   const tableRowsFailed = !tableView?.archived && tableView?.status === "error";
@@ -265,9 +290,9 @@ export function useLiveChartsController(selection: SelectionController) {
       presentationVisibleRevision,
     ],
   );
-  const effectiveXAxisId = resolveLiveChartsXAxisId(descriptorId, effectiveTableXAxisId);
   const viewMetadata = deriveLiveChartsViewMetadata({
-    descriptor, descriptorId, effectiveXAxisId,
+    descriptorId, effectiveXAxisId,
+    energyRange: energyAxisAndRange.range,
     tableRange: tableView?.range ?? descriptor.range,
     tableColumns: tableView?.columns ?? null,
   });
@@ -410,30 +435,37 @@ function deriveLiveChartsPresentation({
   }, { latestKnownRevision: snapshot.requestedRevision, paused });
 }
 
-function resolveLiveChartsXAxisId(descriptorId: LiveChartPresetId, tableXAxisId: string): string {
-  return descriptorId === "energy" ? "t" : tableXAxisId;
+function resolveLiveChartsXAxisId(
+  descriptorId: LiveChartPresetId,
+  tableXAxisId: string,
+  energyXAxisId: string,
+): string {
+  return descriptorId === "energy" ? energyXAxisId : tableXAxisId;
 }
 
 function deriveLiveChartsViewMetadata({
-  descriptor,
   descriptorId,
   effectiveXAxisId,
+  energyRange,
   tableRange,
   tableColumns,
 }: {
-  descriptor: ReturnType<typeof liveChartDescriptorDefaults>;
   descriptorId: LiveChartPresetId;
   effectiveXAxisId: string;
+  energyRange: LiveChartTableView["range"];
   tableRange: LiveChartTableView["range"];
   tableColumns: LiveChartTableView["columns"];
 }) {
   return {
-    range: descriptorId === "energy" ? descriptor.range : tableRange,
+    range: descriptorId === "energy" ? energyRange : tableRange,
     title: liveChartPreset(descriptorId).title,
     xAxisId: effectiveXAxisId,
     xAxisLabel: liveChartsXAxisLabel(effectiveXAxisId),
     xAxisOptions: descriptorId === "energy"
-      ? [{ id: "t", label: "Time (s)" }]
+      ? [{
+          id: effectiveXAxisId,
+          label: effectiveXAxisId === "step" ? "Step" : "Time (s)",
+        }]
       : liveChartXAxisOptions(tableColumns ?? []),
   };
 }
@@ -474,7 +506,15 @@ function createLiveChartsViewActions({
     onRangeSelected: (fromSI: number, toSI: number) => {
       if (descriptorId !== "energy" && !isLiveChartServerXAxisId(effectiveXAxisId)) return;
       liveChartsWorkspaceStore.setRange({ fromSI, toSI });
-      preferences.setDescriptorRange(descriptorId, { mode: "fixed", fromSI, toSI });
+      const range = { mode: "fixed" as const, fromSI, toSI };
+      if (descriptorId === "energy") {
+        liveChartPreferencesStore.updateDescriptor(descriptorId, () => ({
+          range,
+          xAxisId: effectiveXAxisId,
+        }));
+      } else {
+        preferences.setDescriptorRange(descriptorId, range);
+      }
     },
     onSeriesChange: (ids: string[]) => preferences.setDescriptorSelectedSeriesIds(descriptorId, ids),
     onRequestedExportHandled: () => {
@@ -527,13 +567,13 @@ function applyLiveChartsCommand({
   descriptorId,
   preferences,
   setLocalExportState,
-  tableXAxisId,
+  xAxisId,
 }: {
   action: Exclude<NonNullable<ReturnType<typeof liveChartsCommandRequests.getSnapshot>>, null>;
   descriptorId: string;
   preferences: LiveChartPreferencesActions;
   setLocalExportState: LiveChartsStateSetter<LiveChartsLocalExportState>;
-  tableXAxisId: string;
+  xAxisId: string;
 }): void {
   if (action.kind === "export") {
     clearLiveChartsExportError(setLocalExportState);
@@ -559,15 +599,17 @@ function applyLiveChartsCommand({
   }
   if (action.kind === "set-range") {
     if (action.descriptorId === descriptorId) {
-      const nextRange = descriptorId === "energy"
-        ? action.range
-        : normalizeLiveChartRangeForXAxis(action.range, tableXAxisId);
+      const nextRange = normalizeLiveChartRangeForXAxis(action.range, xAxisId);
       if (nextRange.mode === "fixed") {
         liveChartsWorkspaceStore.setRange({ fromSI: nextRange.fromSI, toSI: nextRange.toSI });
       } else {
         liveChartsWorkspaceStore.clearRange();
       }
-      preferences.setDescriptorRange(descriptorId, nextRange);
+      if (descriptorId === "energy") {
+        liveChartPreferencesStore.updateDescriptor(descriptorId, () => ({ range: nextRange, xAxisId }));
+      } else {
+        preferences.setDescriptorRange(descriptorId, nextRange);
+      }
     }
     liveChartsCommandRequests.complete();
     return;
