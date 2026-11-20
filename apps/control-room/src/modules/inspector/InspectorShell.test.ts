@@ -43,6 +43,14 @@ describe("InspectorShell identity header", () => {
     expect(source).not.toContain("fm-inspector__metadata-grid");
   });
 
+  it("keeps the full descriptor metadata in a hidden list for browser audits", () => {
+    expect(source).toContain(
+      '<dl className="fm-inspector__metadata" data-slot="inspector-metadata" hidden>',
+    );
+    expect(source).toContain('className="fm-inspector__metadata-item"');
+    expect(source).toContain("<dd title={item.value}>{item.value}</dd>");
+  });
+
   it("maps every descriptor icon to a domain hue", () => {
     expect(inspectorDomain("object")).toBe("geometry");
     expect(inspectorDomain("airbox")).toBe("mesh");
