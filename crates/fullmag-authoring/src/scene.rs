@@ -1676,6 +1676,16 @@ pub enum SceneMaterialParameterField {
         location: SceneMaterialFieldLocation,
         unit: String,
     },
+    /// A scalar equation of `x, y, z` (`fm.fields.function`); the same
+    /// `FunctionIR` as `MaterialParameterFieldIR::Function`.
+    Function {
+        #[schema(value_type = Object)]
+        function: fullmag_ir::FunctionIR,
+        #[serde(default)]
+        frame: SceneRegionFrame,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]

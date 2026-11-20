@@ -298,6 +298,7 @@ fn material_field_metadata(
         fullmag_authoring::SceneMaterialParameterField::Linear { unit, .. } => unit.clone(),
         fullmag_authoring::SceneMaterialParameterField::Radial { unit, .. } => unit.clone(),
         fullmag_authoring::SceneMaterialParameterField::Sampled { unit, .. } => Some(unit.clone()),
+        fullmag_authoring::SceneMaterialParameterField::Function { unit, .. } => unit.clone(),
     };
     let frame = match field {
         fullmag_authoring::SceneMaterialParameterField::Linear { frame, .. } => Some(
@@ -307,7 +308,8 @@ fn material_field_metadata(
                 .unwrap()
                 .to_string(),
         ),
-        fullmag_authoring::SceneMaterialParameterField::Radial { frame, .. } => Some(
+        fullmag_authoring::SceneMaterialParameterField::Radial { frame, .. }
+        | fullmag_authoring::SceneMaterialParameterField::Function { frame, .. } => Some(
             serde_json::to_value(frame)
                 .unwrap()
                 .as_str()

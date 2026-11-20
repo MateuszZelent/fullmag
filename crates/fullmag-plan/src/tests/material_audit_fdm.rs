@@ -439,3 +439,50 @@ fn translated_object_region_constant_override_uses_local_coordinates() {
         "the region selector must remain represented in the grid certificate"
     );
 }
+
+/// The alpha ramp of `docs/specs/material-assignment-and-spatial-fields-v0.md`
+/// (`fm.fields.function`), sampled at every FDM cell centre of a translated strip.
+#[test]
+fn function_alpha_is_sampled_at_every_cell_in_the_declared_frame() {
+    const A0: f64 = 0.01;
+    const A_MAX: f64 = 0.5;
+    const X_EDGE: f64 = 10e-9;
+    const L: f64 = 40e-9;
+    let by_hand = |x: f64| A0 + A_MAX * ((x - X_EDGE) / L).max(0.0).powf(3.0);
+    for (frame, frame_origin_x) in [("object", OBJECT_TRANSLATION[0]), ("world", 0.0)] {
+        let mut ir = translated_strip_ir();
+        ir.material_parameter_fields.push(
+            serde_json::from_value(serde_json::json!({
+                "assignment_id": "strip:object:alpha", "owner_object": "strip",
+                "parameter": "alpha",
+                "value": {"kind": "function", "frame": frame, "function": {
+                    "expression_version": "field_expr.v1",
+                    "parameters": [
+                        {"name": "a0", "value": A0}, {"name": "a_max", "value": A_MAX},
+                        {"name": "x_edge", "value": X_EDGE}, {"name": "L", "value": L}
+                    ],
+                    "outputs": ["a0 + a_max * max(0.0, (x - x_edge) / L) ** 3"]}}
+            }))
+            .unwrap(),
+        );
+        let fdm = fdm_plan(&ir);
+        let alpha = fdm
+            .material
+            .alpha_field
+            .as_ref()
+            .expect("a function alpha must be sampled per cell");
+        let cell_count: u32 = fdm.grid.cells.iter().product();
+        assert_eq!(alpha.len(), cell_count as usize);
+        let mut ramp_cells = 0;
+        for (index, value) in alpha.iter().enumerate() {
+            let x = cell_center(&fdm, index)[0] - frame_origin_x;
+            let expected = by_hand(x);
+            assert!(
+                (value - expected).abs() <= 1e-12,
+                "frame {frame}: cell {index} x={x} alpha={value} expected={expected}"
+            );
+            ramp_cells += usize::from(*value > A0);
+        }
+        assert!(ramp_cells > 0 && ramp_cells < alpha.len(), "frame {frame}");
+    }
+}

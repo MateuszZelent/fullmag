@@ -1,3 +1,4 @@
+use fullmag_expr::CompiledFunction;
 use fullmag_ir::{
     GeometryEntryIR, MaterialFieldLocationIR, MaterialFieldPlan, MaterialFieldSourceKind,
     MaterialParameterFieldIR, MaterialParameterNameIR, ProblemIR, RegionFrameIR, RegionShapeIR,
@@ -203,8 +204,27 @@ fn transition_weight(
     })
 }
 
+fn frame_coordinates(
+    frame: RegionFrameIR,
+    world_point: [f64; 3],
+    object_translation: [f64; 3],
+) -> [f64; 3] {
+    match frame {
+        RegionFrameIR::World => world_point,
+        RegionFrameIR::Object => [
+            world_point[0] - object_translation[0],
+            world_point[1] - object_translation[1],
+            world_point[2] - object_translation[2],
+        ],
+    }
+}
+
+/// Value of an authored field at one sample point. `compiled` is the equation
+/// of a `function` field, compiled once per resolution by
+/// `MaterialParameterFieldIR::compile_function`; other kinds ignore it.
 pub(crate) fn evaluate_parameter_field(
     field: &MaterialParameterFieldIR,
+    compiled: Option<&CompiledFunction>,
     world_point: [f64; 3],
     object_translation: [f64; 3],
 ) -> Result<f64, String> {
@@ -227,14 +247,7 @@ pub(crate) fn evaluate_parameter_field(
             frame,
             ..
         } => {
-            let coords = match frame {
-                RegionFrameIR::World => world_point,
-                RegionFrameIR::Object => [
-                    world_point[0] - object_translation[0],
-                    world_point[1] - object_translation[1],
-                    world_point[2] - object_translation[2],
-                ],
-            };
+            let coords = frame_coordinates(*frame, world_point, object_translation);
             Ok(*base + gradient[0] * coords[0] + gradient[1] * coords[1] + gradient[2] * coords[2])
         }
         MaterialParameterFieldIR::Radial {
@@ -245,14 +258,7 @@ pub(crate) fn evaluate_parameter_field(
             frame,
             ..
         } => {
-            let coords = match frame {
-                RegionFrameIR::World => world_point,
-                RegionFrameIR::Object => [
-                    world_point[0] - object_translation[0],
-                    world_point[1] - object_translation[1],
-                    world_point[2] - object_translation[2],
-                ],
-            };
+            let coords = frame_coordinates(*frame, world_point, object_translation);
             let dx = coords[0] - center[0];
             let dy = coords[1] - center[1];
             let dz = coords[2] - center[2];
@@ -267,6 +273,12 @@ pub(crate) fn evaluate_parameter_field(
             "sampled parameter field kind is not yet supported for pointwise resolution"
                 .to_string(),
         ),
+        MaterialParameterFieldIR::Function { frame, .. } => {
+            let compiled = compiled.ok_or_else(|| {
+                "function parameter field was not compiled before sampling".to_string()
+            })?;
+            Ok(compiled.eval_field(frame_coordinates(*frame, world_point, object_translation)))
+        }
     }
 }
 
@@ -372,6 +384,17 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
     // Sort overrides/assignments by priority desc, then by region_id to keep sort stable
     overrides.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
+    // Equations of `function` fields, compiled once and evaluated at every point.
+    let compiled_functions = overrides
+        .iter()
+        .map(|(_, _, value, _, _, _, source_id)| {
+            value
+                .compile_function(parameter)
+                .transpose()
+                .map_err(|error| format!("{source_id}: {error}"))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
     // A sharp transition, or none, needs only membership, which CSG regions
     // provide without a signed distance. Compile those predicates once.
     let membership_predicates = overrides
@@ -443,6 +466,7 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                         weight,
                         policy,
                         source_id.to_string(),
+                        compiled_functions[override_index].as_ref(),
                     ));
                 }
             }
@@ -474,8 +498,19 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                     .iter()
                     .find(|entry| entry.5.as_str() == resolution.winner_region_id.as_str())
                     .expect("resolver winner must be one of the active candidates");
-                let value = evaluate_parameter_field(selected.2, point, object_translation)?;
-                validate_resolved_parameter_value(parameter, value)?;
+                let value =
+                    evaluate_parameter_field(selected.2, selected.6, point, object_translation)?;
+                validate_resolved_parameter_value(parameter, value).map_err(|error| {
+                    if matches!(selected.2, MaterialParameterFieldIR::Function { .. }) {
+                        // The equation decides where a value leaves the range.
+                        format!(
+                            "{error} (function field {} at world point {point:?} m)",
+                            selected.5
+                        )
+                    } else {
+                        error
+                    }
+                })?;
                 resolved_values.push(base_value + selected.3 * (value - base_value));
             }
         }
@@ -753,6 +788,124 @@ mod tests {
         let error = apply_absorbing_boundary_layer(&problem, "strip", &mut values, &points, None, [0.0; 3])
             .unwrap_err();
         assert!(error.contains("expression is undefined"));
+    }
+
+    fn alpha_function_assignment(
+        frame: &str,
+        outputs: &str,
+    ) -> fullmag_ir::MaterialParameterAssignmentIR {
+        serde_json::from_value(serde_json::json!({
+            "assignment_id": "strip:object:alpha", "owner_object": "strip", "parameter": "alpha",
+            "value": {"kind": "function", "frame": frame, "function": {
+                "expression_version": "field_expr.v1",
+                "parameters": [{"name": "a0", "value": 0.02}, {"name": "g", "value": 0.01}],
+                "outputs": [outputs]}}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn function_field_is_sampled_in_its_frame_at_cells_and_nodes() {
+        let points = [[0.0, 0.0, 0.0], [1.0, 2.0, 0.0], [3.0, 0.0, 1.0]];
+        let translation = [1.0, -1.0, 0.0];
+        for (frame, origin) in [("object", translation), ("world", [0.0; 3])] {
+            let mut problem = ProblemIR::bootstrap_example();
+            problem
+                .material_parameter_fields
+                .push(alpha_function_assignment(frame, "a0 + g*x + g*y**2"));
+            let expected: Vec<f64> = points
+                .iter()
+                .map(|p| {
+                    let (x, y) = (p[0] - origin[0], p[1] - origin[1]);
+                    0.02 + 0.01 * x + 0.01 * y.powf(2.0)
+                })
+                .collect();
+            for sampling in [
+                MaterialSampling::Cells { spacing: 1.0, active_mask: None },
+                MaterialSampling::Nodes { spacings: &[1.0; 3] },
+            ] {
+                let values = resolve_spatial_parameter(
+                    &problem,
+                    "strip",
+                    MaterialParameterNameIR::Alpha,
+                    0.5,
+                    &points,
+                    sampling,
+                    translation,
+                )
+                .expect("function alpha should resolve");
+                // The field replaces the base value through `base + w (value - base)`.
+                for (value, expected) in values.iter().zip(&expected) {
+                    assert!((value - expected).abs() < 1e-15, "frame {frame}: {value} {expected}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn absorbing_boundary_adds_on_top_of_a_function_field() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem
+            .material_parameter_fields
+            .push(alpha_function_assignment("object", "a0 + g*x"));
+        problem.magnets[0].absorbing_boundary =
+            Some(layer(AbsorbingBoundaryProfileIR::Smootherstep).into());
+        let points = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [3.0, 0.0, 0.0], [4.0, 0.0, 0.0]];
+        let values = resolve_spatial_parameter(
+            &problem,
+            "strip",
+            MaterialParameterNameIR::Alpha,
+            0.1,
+            &points,
+            MaterialSampling::Cells { spacing: 1.0, active_mask: None },
+            [0.0; 3],
+        )
+        .unwrap();
+        // Increments of the smootherstep layer from the test above: 0, 0.25, 0.5, 0.5.
+        for (index, added) in [0.0, 0.25, 0.5, 0.5].into_iter().enumerate() {
+            let field = 0.02 + 0.01 * points[index][0];
+            assert!((values[index] - (field + added)).abs() < 1e-12, "{index}: {}", values[index]);
+        }
+    }
+
+    #[test]
+    fn function_field_values_are_checked_against_the_parameter_range() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem
+            .material_parameter_fields
+            .push(alpha_function_assignment("object", "a0 - g*x"));
+        let error = resolve_spatial_parameter(
+            &problem,
+            "strip",
+            MaterialParameterNameIR::Alpha,
+            0.1,
+            &[[1.0, 0.0, 0.0], [3.0, 0.0, 0.0]],
+            MaterialSampling::Cells { spacing: 1.0, active_mask: None },
+            [0.0; 3],
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Alpha has invalid value")
+                && error.contains("function field assignment:strip:object:alpha")
+                && error.contains("[3.0, 0.0, 0.0]"),
+            "{error}"
+        );
+
+        let mut problem = ProblemIR::bootstrap_example();
+        problem
+            .material_parameter_fields
+            .push(alpha_function_assignment("object", "a0 + 1/(x - 1)"));
+        let error = resolve_spatial_parameter(
+            &problem,
+            "strip",
+            MaterialParameterNameIR::Alpha,
+            0.1,
+            &[[1.0, 0.0, 0.0]],
+            MaterialSampling::Cells { spacing: 1.0, active_mask: None },
+            [0.0; 3],
+        )
+        .unwrap_err();
+        assert!(error.contains("must be finite"), "{error}");
     }
 
     #[test]

@@ -2141,6 +2141,13 @@ fn validate_material_parameter_field(
                 errors.push(format!("{path} sampled unit must not be empty"));
             }
         }
+        MaterialParameterFieldIR::Function { .. } => {
+            // The values depend on the sample points: the planner checks them
+            // against the parameter's range (`validate_resolved_parameter_value`).
+            if let Some(Err(error)) = field.compile_function(parameter) {
+                errors.push(format!("{path}: {error}"));
+            }
+        }
     }
 }
 
