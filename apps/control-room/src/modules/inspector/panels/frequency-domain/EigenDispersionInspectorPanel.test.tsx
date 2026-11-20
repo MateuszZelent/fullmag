@@ -7,7 +7,7 @@ import {
   buildEigenDispersionPointViewModel,
   dispersionReferenceComparison,
 } from "./EigenDispersionInspectorModel";
-import { buildEigenDispersionPointHandoffContext } from "./EigenDispersionInspectorPanel";
+import { buildEigenDispersionPointHandoffContext } from "./EigenDispersionInspectorPanel.model";
 
 const point: EigenDispersionPoint = {
   analyticFrequencyHz: 12.45e9,

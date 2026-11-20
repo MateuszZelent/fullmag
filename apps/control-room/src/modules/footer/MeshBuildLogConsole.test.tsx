@@ -1,13 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import {
-  filterMeshBuildLogRows,
-  isLogScrolledToBottom,
-  MeshBuildLogConsoleView,
-  serializeMeshBuildLogRows,
-  type MeshBuildLogConsoleFilters,
-} from "./MeshBuildLogConsole";
+import { MeshBuildLogConsoleView } from "./MeshBuildLogConsole";
+import { filterMeshBuildLogRows, isLogScrolledToBottom, serializeMeshBuildLogRows, type MeshBuildLogConsoleFilters } from "./MeshBuildLogConsole.model";
 import type { MeshJobsLogRow } from "./meshJobsModel";
 
 const rows: MeshJobsLogRow[] = [

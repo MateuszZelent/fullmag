@@ -11,7 +11,7 @@ import { ProjectThumb } from "../ui/ProjectThumb";
 import { SolverBadge } from "../ui/SolverBadge";
 import { StatusPill } from "../ui/StatusPill";
 
-import { rowDomId } from "./ProjectRow";
+import { rowDomId } from "./ProjectRow.model";
 
 export interface ProjectCardProps {
   readonly entry: RecentEntry;

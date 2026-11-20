@@ -8,6 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+// react-doctor-disable-next-line react-doctor/no-flush-sync -- Apply and Run continues imperatively; commit the accepted stage baseline and clear authoring-busy before Solve proceeds.
 import { flushSync } from "react-dom";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import type { CommandResult } from "@/kernel/commands/commandTypes";
@@ -30,16 +31,7 @@ import {
   SIMULATION_STAGES_RESULTS_PATH,
 } from "@/kernel/api/apiPaths";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
-import type {
-  AuthoringTransactionResponse,
-  CheckpointEntry,
-  FrequencyDomainManifestResource,
-  MeshPeriodicPairsResource,
-  MeshSharedDomainManifestResource,
-  SceneResource,
-  SolverStatusResource,
-  StageExecutionResource,
-} from "@/kernel/api/apiTypes";
+import type { AuthoringTransactionResponse, SceneResource } from "@/kernel/api/apiTypes";
 import {
   shouldLoadRuntimeCurrentRun,
   shouldLoadRuntimeCommandQueue,
@@ -113,17 +105,14 @@ import {
   hasStudyExecutionProfile,
   type StudyExecutionProfileAssignment,
 } from "./StudyExecutionProfileModel";
-import type { K0ModalExecutionReadiness } from "./StudyStageAuthoringModel";
+
 import { validateStudyWorkflow } from "./stages/studyWorkflowState";
 import type { StageInitialStateChoice } from "@/kernel/runtime/studyStageInitialState";
 import { captureStudyComputeInput } from "@/kernel/runtime/studyComputeInput";
 import { executeStageAfterApply, type StageApplyRunPin } from "./studyStageApplyAndRun";
 export { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
-import {
-  RestoreCheckpointDialog,
-  ImportStateDialog,
-  readFileAsBase64,
-} from "./StudyInspectorDialogs";
+import { RestoreCheckpointDialog, ImportStateDialog } from "./StudyInspectorDialogs";
+import { readFileAsBase64 } from "./StudyInspectorDialogs.model";
 import {
   StudyRuntimeSection,
   StudySelectedStageSection,
@@ -146,6 +135,8 @@ import {
   numericSceneRevision,
   asRecord,
 } from "./studyInspectorShared";
+import { deriveK0ModalExecutionReadiness, applyStudyDraftsWithPartialFailure } from "./StudyInspectorPanel.model";
+
 export {
   studyInspectorPanelReducer,
 } from "./studyInspectorPanelState";
@@ -186,132 +177,6 @@ function sceneHasAuthoringPayload(scene: unknown): boolean {
         "version" in record ||
         "current_modules" in record),
   );
-}
-
-const PRODUCTION_CAPABILITY_STATUSES = new Set([
-  "production",
-  "production_qualified",
-  "qualified",
-]);
-
-/**
- * Keeps K0 authoring gates tied to revisioned HTTP resources instead of an
- * optimistic local form flag. Unknown resources stay unavailable.
- */
-export function deriveK0ModalExecutionReadiness({
-  checkpoints,
-  equilibriumArtifact,
-  equilibriumSource,
-  frequencyManifest,
-  meshManifest,
-  periodicPairs,
-  solverStatus,
-  stageExecution,
-}: {
-  checkpoints: readonly CheckpointEntry[];
-  equilibriumArtifact: string;
-  equilibriumSource: string;
-  frequencyManifest: FrequencyDomainManifestResource | null;
-  meshManifest: MeshSharedDomainManifestResource | null;
-  periodicPairs: MeshPeriodicPairsResource | null;
-  solverStatus: SolverStatusResource | null;
-  stageExecution: StageExecutionResource | null;
-}): K0ModalExecutionReadiness {
-  const sharedDomainMeshReady = Boolean(
-    meshManifest?.mesh_id && meshManifest.revision >= 0,
-  );
-  const periodicCertificateReady = Boolean(
-    periodicPairs &&
-      periodicPairs.pairs.length > 0 &&
-      periodicPairs.pairs.every(
-        (pair) =>
-          pair.paired_node_count > 0 &&
-          pair.unpaired_destination_node_count === 0 &&
-          pair.unpaired_source_node_count === 0 &&
-          ["certified", "matched", "valid"].includes(pair.status),
-      ),
-  );
-  const acceptedRelaxationReady = Boolean(
-    stageExecution?.stages.some((stage) =>
-      stage.kind === "relax" &&
-      stage.converged &&
-      ["accepted", "completed"].includes(stage.status),
-    ),
-  );
-  const acceptedArtifactReady = Boolean(
-    equilibriumArtifact.trim() &&
-      checkpoints.some(
-        (checkpoint) =>
-          checkpoint.artifact_ref === equilibriumArtifact.trim() &&
-          checkpoint.mesh_revision === meshManifest?.revision,
-      ),
-  );
-  const acceptedProvidedStateReady = Boolean(
-    solverStatus &&
-      solverStatus.converged &&
-      !solverStatus.is_busy &&
-      solverStatus.revision >= 0,
-  );
-  const acceptedEquilibriumReady =
-    equilibriumSource === "relax"
-      ? acceptedRelaxationReady
-      : equilibriumSource === "provided"
-        ? acceptedProvidedStateReady
-        : equilibriumSource === "artifact"
-          ? acceptedArtifactReady
-          : false;
-  const strictGpuReady = PRODUCTION_CAPABILITY_STATUSES.has(
-    frequencyManifest?.capabilities.modal.production_gpu.status ?? "",
-  );
-
-  return {
-    acceptedEquilibriumReady,
-    periodicCertificateReady,
-    sharedDomainMeshReady,
-    strictGpuReady,
-  };
-}
-
-const PARTIAL_STUDY_APPLY_MESSAGE =
-  "Global Study settings were committed. The Pipeline stage save could not be confirmed. Review the current scene and Pipeline feedback before retrying Apply.";
-
-function partialStudyApplyError(cause?: unknown): Error {
-  const detail = cause instanceof Error ? " Stage save error: " + cause.message : "";
-  return new Error(PARTIAL_STUDY_APPLY_MESSAGE + detail);
-}
-
-export async function applyStudyDraftsWithPartialFailure({
-  globalDirty,
-  stagesDirty,
-  commitGlobal,
-  commitStages,
-}: {
-  globalDirty: boolean;
-  stagesDirty: boolean;
-  commitGlobal: () => Promise<boolean>;
-  commitStages: () => Promise<boolean>;
-}): Promise<boolean> {
-  let globalCommitted = false;
-  if (globalDirty) {
-    globalCommitted = await commitGlobal();
-    if (!globalCommitted) return false;
-  }
-
-  if (stagesDirty) {
-    let stagesCommitted: boolean;
-    try {
-      stagesCommitted = await commitStages();
-    } catch (error) {
-      if (globalCommitted) throw partialStudyApplyError(error);
-      throw error;
-    }
-    if (!stagesCommitted) {
-      if (globalCommitted) throw partialStudyApplyError();
-      return false;
-    }
-  }
-
-  return true;
 }
 
 export function useStudyInspectorPanelController(
@@ -727,12 +592,14 @@ export function useStudyInspectorPanelController(
         message: `Stage ${index + 1}: ${issue.message}`,
       }));
     });
-    const workflowIssues = validateStudyWorkflow(submittedDrafts)
-      .filter((issue) => !pipelineDraft || submittedDrafts[issue.index] === pipelineDraft)
-      .map((issue) => ({
-        ...issue,
-        message: `Stage ${issue.index + 1}: ${issue.message}`,
-      }));
+    const workflowIssues = validateStudyWorkflow(submittedDrafts).flatMap((issue) =>
+      !pipelineDraft || submittedDrafts[issue.index] === pipelineDraft
+        ? [{
+            ...issue,
+            message: `Stage ${issue.index + 1}: ${issue.message}`,
+          }]
+        : [],
+    );
     const textureTargetsValid = textureEdits.every((draft) =>
       (readStageTextureAssignments(draft.stageMagnetizationAssignments) ?? []).every((assignment) => {
         const object = currentScene.scene.objects?.find((candidate) =>

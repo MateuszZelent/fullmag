@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { ChartControlBar, chartRangeOptions } from "./ChartControlBar";
+import { ChartControlBar } from "./ChartControlBar";
+import { chartRangeOptions } from "./ChartControlBar.model";
 
 describe("ChartControlBar", () => {
   it("renders Live button, visible points, range mode badge, and Fit button", () => {

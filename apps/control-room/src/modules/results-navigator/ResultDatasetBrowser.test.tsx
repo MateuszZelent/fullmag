@@ -20,10 +20,8 @@ vi.mock("@tanstack/react-virtual", () => ({
   }),
 }));
 
-import {
-  ResultDatasetBrowser,
-  resultDatasetItemSelection,
-} from "./ResultDatasetBrowser";
+import { ResultDatasetBrowser } from "./ResultDatasetBrowser";
+import { resultDatasetItemSelection } from "./ResultDatasetBrowser.model";
 import { buildResultDatasetBrowserModel } from "./resultDatasetBrowserModel";
 
 vi.mock("@/kernel/resources/analysisResultResources", () => ({

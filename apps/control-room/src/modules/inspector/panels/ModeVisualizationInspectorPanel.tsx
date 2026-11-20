@@ -30,11 +30,8 @@ import {
   canPlotSelectedFieldIn3D,
   selectedField3DPlotStatus,
 } from "./frequency-domain/FrequencyDomainHelpers";
-import {
-  DEFAULT_ANALYSIS_FIELD_VIEW,
-  normalizeAnalysisFieldView,
-  useFrequencyDomainModeDisplaySettings,
-} from "./FrequencyDomainModeDisplayControls";
+import { useFrequencyDomainModeDisplaySettings } from "./FrequencyDomainModeDisplayControls";
+import { DEFAULT_ANALYSIS_FIELD_VIEW, normalizeAnalysisFieldView } from "./FrequencyDomainModeDisplayControls.model";
 
 type ModeVisualizationSelectionRef = Extract<
   SelectionRef,

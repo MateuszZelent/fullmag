@@ -328,9 +328,14 @@ function shaderColorModeId(mode: string | null | undefined): number {
 // catalog. GPU surfaces, CPU glyphs and CSS legends interpolate the same stops.
 const SHADER_PALETTES: readonly (ScalarColorPalette | "twilight")[] = [
   "viridis", "coolwarm", "inferno", "jet", "magma", "twilight",
-  ...SCALAR_COLOR_PALETTE_ITEMS.map(({ value }) => value).filter(
-    (value) => !["viridis", "coolwarm", "inferno", "jet", "magma"].includes(value),
-  ),
+  ...(() => {
+    const existing = new Set(["viridis", "coolwarm", "inferno", "jet", "magma"]);
+    const palettes: ScalarColorPalette[] = [];
+    for (const { value } of SCALAR_COLOR_PALETTE_ITEMS) {
+      if (!existing.has(value)) palettes.push(value);
+    }
+    return palettes;
+  })(),
 ];
 
 export function scalarPaletteId(palette: string | null | undefined): number {

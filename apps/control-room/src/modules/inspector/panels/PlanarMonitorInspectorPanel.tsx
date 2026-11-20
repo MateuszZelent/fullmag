@@ -36,10 +36,8 @@ import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { VisualizationContextSwitch } from "../visualization/VisualizationContextSwitch";
 import { PlanarVisualizationSection } from "../visualization/PlanarVisualizationSection";
-import {
-  PlanarMonitorDefinitionEditor,
-  planarMonitorDefinitionAvailabilityErrors,
-} from "./PlanarMonitorDefinitionEditor";
+import { PlanarMonitorDefinitionEditor } from "./PlanarMonitorDefinitionEditor";
+import { planarMonitorDefinitionAvailabilityErrors } from "./PlanarMonitorDefinitionEditor.model";
 import { usePlanarMonitorDefinitionAvailability } from "./usePlanarMonitorDefinitionAvailability";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 

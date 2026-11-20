@@ -7,22 +7,7 @@ import { snapCameraToDirection, type Direction3 } from "../orientation/cameraOri
 import { describe, expect, it, vi } from "vitest";
 import { scheduleViewport3DCameraRestCommit } from "./viewport3DCameraRestCommit";
 
-import {
-  commitOrbitCameraEnd,
-  installScaleAwareOrbitChange,
-  normalizeViewport3DOrbitDebugAngles,
-  resolveViewport3DOrbitDebugControlDeltas,
-  resolveViewport3DOrbitDebugStep,
-  resolveViewport3DCameraFit,
-  resolveViewport3DAutoFitOrbitTarget,
-  resolveViewport3DCameraInteractionOptions,
-  shouldApplyViewport3DOrbitDebugAngles,
-  shouldApplyViewport3DCameraState,
-  shouldAutoFitViewport3DBoundsChange,
-  shouldPreserveViewport3DAutoFitAgainstDefaultCamera,
-  shouldSyncCameraControlsPose,
-  VIEWPORT_3D_ORBIT_DEBUG_LIMITS,
-} from "./CameraControls";
+import { commitOrbitCameraEnd, installScaleAwareOrbitChange, normalizeViewport3DOrbitDebugAngles, resolveViewport3DOrbitDebugControlDeltas, resolveViewport3DOrbitDebugStep, resolveViewport3DCameraFit, resolveViewport3DAutoFitOrbitTarget, resolveViewport3DCameraInteractionOptions, shouldApplyViewport3DOrbitDebugAngles, shouldApplyViewport3DCameraState, shouldAutoFitViewport3DBoundsChange, shouldPreserveViewport3DAutoFitAgainstDefaultCamera, shouldSyncCameraControlsPose, VIEWPORT_3D_ORBIT_DEBUG_LIMITS } from "./CameraControls.model";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   viewport3dStore,

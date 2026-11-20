@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { visitSequentially } from "./visitSequentially.mjs";
 import {
   ensureViewportSettingsSection,
   getViewportSettingsRegion,
@@ -70,7 +71,7 @@ export async function runViewportAppearanceBrowserQa(page, {
     await viewport.waitFor({ state: "visible", timeout });
     originalInspectorState = await readViewportInspectorState(page);
     await ensureSettingsOpen(page, "Appearance", timeout, { forceCommand: true });
-    originalControls = await readControls(page, settings, timeout);
+    originalControls = await readControls(page, timeout);
     inspectorInteraction = await checkInspectorInteraction(page, { assertCanvas, timeout });
 
     try {
@@ -189,7 +190,7 @@ export async function runViewportAppearanceBrowserQa(page, {
     assertSameSession(expectedSession, sessionBeforeReload, "before appearance preference reload");
     const persistence = storageBefore.available
       ? await verifyPreferenceReload(page, {
-          assertCanvas, settings, expectedSession, getSessionIdentity, timeout,
+          assertCanvas, expectedSession, getSessionIdentity, timeout,
         })
       : { state: "skipped", reason: "Browser local storage is unavailable." };
 
@@ -318,18 +319,33 @@ async function ensureSettingsOpen(page, section, timeout, options) {
   return ensureViewportSettingsSection(page, section, timeout, options);
 }
 
-async function readControls(page, settings, timeout) {
-  await ensureSettingsOpen(page, "Appearance", timeout);
-  const background = await readChoice(page, "Background", timeout);
-  const strength = await readRangeValue(settings, "fm-view-background-strength");
-  const lightingMode = await readChoice(page, "Geometry appearance", timeout);
-  const lightingIntensity = await readRangeValue(settings, "fm-view-light-strength");
-  await ensureSettingsOpen(page, "View", timeout);
-  const origin = await readChoice(page, "Scale coordinates", timeout);
-  const frame = await readChoice(page, "Grid and axes", timeout);
-  await ensureSettingsOpen(page, "Quality", timeout);
-  const ambientOcclusion = await settings.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked();
-  const bloom = await settings.getByRole("switch", { name: "Bloom (Glow)", exact: true }).isChecked();
+async function readControls(page, timeout) {
+  const values = {};
+  await visitSequentially(["Appearance", "View", "Quality"], async (section) => {
+    const sectionSettings = await ensureSettingsOpen(page, section, timeout);
+    if (section === "Appearance") {
+      const [background, strength, lightingMode, lightingIntensity] = await Promise.all([
+        readChoiceFromSettings(sectionSettings, "Background", timeout),
+        readRangeValue(sectionSettings, "fm-view-background-strength"),
+        readChoiceFromSettings(sectionSettings, "Geometry appearance", timeout),
+        readRangeValue(sectionSettings, "fm-view-light-strength"),
+      ]);
+      Object.assign(values, { background, strength, lightingMode, lightingIntensity });
+    } else if (section === "View") {
+      const [origin, frame] = await Promise.all([
+        readChoiceFromSettings(sectionSettings, "Scale coordinates", timeout),
+        readChoiceFromSettings(sectionSettings, "Grid and axes", timeout),
+      ]);
+      Object.assign(values, { origin, frame });
+    } else {
+      const [ambientOcclusion, bloom] = await Promise.all([
+        sectionSettings.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked(),
+        sectionSettings.getByRole("switch", { name: "Bloom (Glow)", exact: true }).isChecked(),
+      ]);
+      Object.assign(values, { ambientOcclusion, bloom });
+    }
+  });
+  const { background, strength, lightingMode, lightingIntensity, origin, frame, ambientOcclusion, bloom } = values;
   const backgroundMode = background === BACKGROUND_OPTIONS.gradient
     ? "gradient"
     : background === BACKGROUND_OPTIONS.solid
@@ -353,11 +369,15 @@ export async function readChoice(page, label, timeout = 15_000) {
   const section = SETTING_SECTIONS_BY_LABEL[label];
   if (!section) throw new Error(`No 3D View Settings section is registered for ${label}`);
   const settings = await ensureSettingsOpen(page, section, timeout);
+  return readChoiceFromSettings(settings, label, timeout);
+}
+
+function readChoiceFromSettings(settings, label, timeout = 15_000) {
   if (label === "Visualization mode") {
-    return normalizeText(await settings.getByRole("radiogroup", { name: label, exact: true })
-      .getByRole("radio", { checked: true }).innerText({ timeout }));
+    return settings.getByRole("radiogroup", { name: label, exact: true })
+      .getByRole("radio", { checked: true }).innerText({ timeout }).then(normalizeText);
   }
-  return normalizeText(await settings.getByRole("combobox", { name: label, exact: true }).innerText({ timeout }));
+  return settings.getByRole("combobox", { name: label, exact: true }).innerText({ timeout }).then(normalizeText);
 }
 
 export async function choose(page, label, option, id, timeout) {
@@ -558,11 +578,13 @@ async function checkNarrowViewport(page, settings, timeout) {
     settings.getByRole("slider", { name: "Gradient strength", exact: true }),
   ];
   const visibleCounts = [];
-  for (const target of targets) {
+  await visitSequentially(targets, async (target) => {
     await target.scrollIntoViewIfNeeded();
     await target.waitFor({ state: "visible", timeout });
-    const box = await target.boundingBox();
-    const settingsBox = await settings.boundingBox();
+    const [box, settingsBox] = await Promise.all([
+      target.boundingBox(),
+      settings.boundingBox(),
+    ]);
     if (!box || !settingsBox || box.x < 0 || box.y < 0 || box.x + box.width > 480 || box.y + box.height > 320 ||
         box.x < settingsBox.x - 1 || box.y < settingsBox.y - 1 ||
         box.x + box.width > settingsBox.x + settingsBox.width + 1 ||
@@ -581,13 +603,16 @@ async function checkNarrowViewport(page, settings, timeout) {
       throw new Error(`Viewport settings controls overlap at 480x320: ${layout.collisions.join(", ")}`);
     }
     visibleCounts.push(layout.visibleControls);
-  }
+  });
   await ensureSettingsOpen(page, "View", timeout);
   const coordinateControl = settings.getByRole("combobox", { name: "Scale coordinates", exact: true });
   await coordinateControl.scrollIntoViewIfNeeded();
   await coordinateControl.waitFor({ state: "visible", timeout });
-  const coordinateBox = await coordinateControl.boundingBox();
-  const settingsBox = await settings.boundingBox();
+  const [coordinateBox, settingsBox, viewLayout] = await Promise.all([
+    coordinateControl.boundingBox(),
+    settings.boundingBox(),
+    readVisibleControlLayout(settings),
+  ]);
   if (!coordinateBox || !settingsBox || coordinateBox.x < 0 || coordinateBox.y < 0 ||
       coordinateBox.x + coordinateBox.width > 480 || coordinateBox.y + coordinateBox.height > 320 ||
       coordinateBox.x < settingsBox.x - 1 || coordinateBox.y < settingsBox.y - 1 ||
@@ -595,7 +620,6 @@ async function checkNarrowViewport(page, settings, timeout) {
       coordinateBox.y + coordinateBox.height > settingsBox.y + settingsBox.height + 1) {
     throw new Error("A required viewport setting is clipped at 480x320");
   }
-  const viewLayout = await readVisibleControlLayout(settings);
   if (viewLayout.visibleControls === 0) throw new Error("Visible View controls were omitted by the collision probe");
   if (viewLayout.collisions.length) {
     throw new Error(`Viewport settings controls overlap at 480x320: ${viewLayout.collisions.join(", ")}`);
@@ -658,7 +682,6 @@ async function readVisibleControlLayout(settings) {
 
 async function verifyPreferenceReload(page, {
   assertCanvas,
-  settings,
   expectedSession,
   getSessionIdentity,
   timeout,
@@ -673,15 +696,30 @@ async function verifyPreferenceReload(page, {
   await assertCanvas("after appearance preference reload");
   const session = await getSessionIdentity();
   assertSameSession(expectedSession, session, "after appearance preference reload");
-  await ensureSettingsOpen(page, "Appearance", timeout);
-  const background = await readChoice(page, "Background", timeout);
-  const strength = await readRangeValue(settings, "fm-view-background-strength");
-  await ensureSettingsOpen(page, "View", timeout);
-  const frame = await readChoice(page, "Grid and axes", timeout);
-  const origin = await readChoice(page, "Scale coordinates", timeout);
-  await ensureSettingsOpen(page, "Quality", timeout);
-  const ambientOcclusion = await settings.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked();
-  const bloom = await settings.getByRole("switch", { name: "Bloom (Glow)", exact: true }).isChecked();
+  const values = {};
+  await visitSequentially(["Appearance", "View", "Quality"], async (section) => {
+    const sectionSettings = await ensureSettingsOpen(page, section, timeout);
+    if (section === "Appearance") {
+      const [background, strength] = await Promise.all([
+        readChoiceFromSettings(sectionSettings, "Background", timeout),
+        readRangeValue(sectionSettings, "fm-view-background-strength"),
+      ]);
+      Object.assign(values, { background, strength });
+    } else if (section === "View") {
+      const [frame, origin] = await Promise.all([
+        readChoiceFromSettings(sectionSettings, "Grid and axes", timeout),
+        readChoiceFromSettings(sectionSettings, "Scale coordinates", timeout),
+      ]);
+      Object.assign(values, { frame, origin });
+    } else {
+      const [ambientOcclusion, bloom] = await Promise.all([
+        sectionSettings.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked(),
+        sectionSettings.getByRole("switch", { name: "Bloom (Glow)", exact: true }).isChecked(),
+      ]);
+      Object.assign(values, { ambientOcclusion, bloom });
+    }
+  });
+  const { background, strength, frame, origin, ambientOcclusion, bloom } = values;
   if (background !== BACKGROUND_OPTIONS.gradient || Math.abs(strength - 1) > 0.001 ||
       frame !== FRAME_OPTIONS.floor || origin !== ORIGIN_OPTIONS.world || !ambientOcclusion || !bloom) {
     throw new Error("The selected appearance preferences did not survive a workspace reload");
@@ -711,7 +749,7 @@ async function restoreControls(page, settings, original, timeout) {
   await setSwitch(page, "Ambient occlusion", original.ambientOcclusion, timeout);
   await setSwitch(page, "Bloom (Glow)", original.bloom, timeout);
   await choose(page, "Background", BACKGROUND_OPTIONS[original.backgroundMode], "fm-view-background", timeout);
-  const restored = await readControls(page, settings, timeout);
+  const restored = await readControls(page, timeout);
   if (JSON.stringify(restored) !== JSON.stringify(original)) {
     throw new Error("Viewport appearance controls did not return to their original values");
   }
@@ -752,13 +790,25 @@ function normalizeText(value) {
 
 
 async function checkPresentationRendering(page, settings, { assertCanvas, pngDecoder, timeout, pixelSnapshots, lightingAudit }) {
-  await ensureSettingsOpen(page, "Appearance", timeout);
-  const originalMode = await readChoice(page, "Visualization mode", timeout);
-  const originalLighting = await readChoice(page, "Geometry appearance", timeout);
-  await ensureSettingsOpen(page, "Quality", timeout);
-  const originalQuality = await readChoice(page, "Quality profile", timeout);
-  const originalAo = await settings.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked();
-  const originalShadows = await settings.getByRole("switch", { name: "Soft shadows", exact: true }).isChecked();
+  const originalValues = {};
+  await visitSequentially(["Appearance", "Quality"], async (section) => {
+    const sectionSettings = await ensureSettingsOpen(page, section, timeout);
+    if (section === "Appearance") {
+      const [originalMode, originalLighting] = await Promise.all([
+        readChoiceFromSettings(sectionSettings, "Visualization mode", timeout),
+        readChoiceFromSettings(sectionSettings, "Geometry appearance", timeout),
+      ]);
+      Object.assign(originalValues, { originalMode, originalLighting });
+    } else {
+      const [originalQuality, originalAo, originalShadows] = await Promise.all([
+        readChoiceFromSettings(sectionSettings, "Quality profile", timeout),
+        sectionSettings.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked(),
+        sectionSettings.getByRole("switch", { name: "Soft shadows", exact: true }).isChecked(),
+      ]);
+      Object.assign(originalValues, { originalQuality, originalAo, originalShadows });
+    }
+  });
+  const { originalMode, originalLighting, originalQuality, originalAo, originalShadows } = originalValues;
   let originalRoughness;
   let originalMetalness;
   let difference = null;
@@ -884,9 +934,11 @@ async function checkInspectorInteraction(page, { assertCanvas, timeout }) {
   await object.click({ timeout });
   const name = inspector.getByRole("textbox", { name: "Name", exact: true });
   await name.waitFor({ state: "visible", timeout });
-  const originalName = await name.inputValue();
-  const nameNode = await name.elementHandle();
-  const inspectorNode = await inspector.elementHandle();
+  const [originalName, nameNode, inspectorNode] = await Promise.all([
+    name.inputValue(),
+    name.elementHandle(),
+    inspector.elementHandle(),
+  ]);
   const scroller = inspector.locator("[data-radix-scroll-area-viewport]").first();
   let cameraOriginal = null;
   let cameraField = null;

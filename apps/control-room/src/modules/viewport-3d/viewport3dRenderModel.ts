@@ -910,8 +910,9 @@ export function buildViewport3DFieldRenderModel(
   for (const partModel of [...topology.magneticParts, ...topology.airboxParts]) {
     const partId = partModel.part.id;
     const targetRenderPlan = options.targetRenderPlans?.get(partId) ?? null;
+    const targetProjectionMode = targetRenderPlan?.shader.projectionMode ?? "raw_nodal";
     const thicknessProjectionNodeMembership =
-      targetRenderPlan?.shader.projectionMode === "thickness_average_z"
+      targetProjectionMode === "thickness_average_z"
         ? buildViewport3DProjectionNodeMembership(
             partModel.fullNodeSelection,
             topology.nodeCount,
@@ -1073,10 +1074,10 @@ export function buildViewport3DFieldRenderModel(
                 explicitPartFieldBuffer,
                 colorMode,
                 partQuantityId,
-                targetRenderPlan?.shader.projectionMode ?? "raw_nodal",
+              targetProjectionMode ?? "raw_nodal",
               )
             ? null
-            : targetRenderPlan?.shader.projectionMode === "surface_faces"
+            : targetProjectionMode === "surface_faces"
             ? buildCachedSurfaceFaceScalarColors(
                 partModel,
                 topology,
@@ -1086,7 +1087,7 @@ export function buildViewport3DFieldRenderModel(
                 partScalarRangesByMode?.get(colorMode),
                 partProjectionFieldNodeIndices,
               )
-            : targetRenderPlan?.shader.projectionMode === "thickness_average_z"
+            : targetProjectionMode === "thickness_average_z"
             ? buildCachedThicknessAverageZScalarColors(
                 partModel,
                 topology,
@@ -1310,12 +1311,11 @@ export function buildViewport3DFieldRenderModel(
           colorMode: partSurfaceScalarColorMode ?? null,
           explicitPartFieldBuffer,
           quantityId: partQuantityId,
-          projectionMode: targetRenderPlan?.shader.projectionMode ?? "raw_nodal",
+          projectionMode: targetProjectionMode,
           scalarColors: activePartScalarColors,
         }),
         passId: `${partId}:surface`,
-        projectionMode:
-          targetRenderPlan?.shader.projectionMode ?? "raw_nodal",
+        projectionMode: targetProjectionMode,
         scalarColorMode: partSurfaceScalarColorMode ?? null,
         scalarColors: activePartScalarColors,
       },

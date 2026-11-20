@@ -5,12 +5,8 @@ import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import { fieldMapCommands } from "@/modules/field-map/fieldMapCommands";
 
 import { commandPaletteStore } from "./commandPaletteStore";
-import {
-  CommandPaletteView,
-  executePaletteCommand,
-  filterPaletteCommands,
-  resolvePaletteCommandItems,
-} from "./CommandPaletteModule";
+import { CommandPaletteView } from "./CommandPaletteModule";
+import { executePaletteCommand, filterPaletteCommands, resolvePaletteCommandItems } from "./CommandPaletteModule.model";
 import { overlayManifest } from "./manifest";
 
 describe("CommandPaletteModule", () => {

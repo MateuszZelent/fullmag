@@ -5,12 +5,8 @@ import { describe, expect, it } from "vitest";
 import type { FdmRegionMembershipResource } from "@/kernel/api/apiTypes";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 
-import {
-  Viewport3DFdmSelectionAnnouncement,
-  Viewport3DInspectTooltip,
-  resolveViewport3DInspectSelectionProvenance,
-  resolveViewport3DFdmSelectionAnnouncement,
-} from "./Viewport3DModule";
+import { Viewport3DFdmSelectionAnnouncement, Viewport3DInspectTooltip } from "./Viewport3DModule";
+import { resolveViewport3DInspectSelectionProvenance, resolveViewport3DFdmSelectionAnnouncement } from "./Viewport3DModule.model";
 
 type FdmCellSelectionRef = Extract<SelectionRef, { type: "fdm-cell" }>;
 

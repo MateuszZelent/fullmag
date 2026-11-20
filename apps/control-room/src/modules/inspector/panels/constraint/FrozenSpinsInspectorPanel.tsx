@@ -1,18 +1,8 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 
-import type {
-  FieldMetaResource,
-  FrozenSpinsActivation,
-  FrozenSpinsDefinition,
-  FrozenSpinsMembershipPolicy,
-  FrozenSpinsPreviewActivationResponse,
-  FrozenSpinsPreviewResponse,
-  FrozenSpinsReferencePolicy,
-  FrozenSpinsRuntimeApplication,
-  FrozenSpinsSolverRuntimeStatus,
-} from "@/kernel/api/apiTypes";
+import type { FrozenSpinsActivation, FrozenSpinsDefinition, FrozenSpinsMembershipPolicy, FrozenSpinsPreviewActivationResponse, FrozenSpinsPreviewResponse, FrozenSpinsReferencePolicy, FrozenSpinsRuntimeApplication, FrozenSpinsSolverRuntimeStatus } from "@/kernel/api/apiTypes";
 import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -35,12 +25,104 @@ import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { SelectionExpressionBuilder } from "../selection/SelectionExpressionBuilder";
+import { frozenSpinsPreviewTopologyFingerprint, resolveFrozenSpinsSolverBinding, type FrozenSpinsSolverBindingModel } from "./FrozenSpinsInspectorPanel.model";
 
 type PendingField = "activate" | "apply" | "delete" | "preview" | "quantity" | null;
 
 interface Feedback {
   kind: "error" | "success" | "warning";
   message: string;
+}
+
+interface FrozenSpinsWorkflowState {
+  activationReceipt: FrozenSpinsPreviewActivationResponse | null;
+  feedback: Feedback | null;
+  pendingField: PendingField;
+  preview: FrozenSpinsPreviewResponse | null;
+  previewSelectorJson: string | null;
+  runtimeApplication: FrozenSpinsRuntimeApplication | null;
+}
+
+type FrozenSpinsWorkflowAction =
+  | { type: "pending"; field: PendingField }
+  | { type: "feedback"; feedback: Feedback | null }
+  | { type: "preview-invalidated" }
+  | { type: "preview-reset" }
+  | {
+      type: "definition-applied";
+      feedback: Feedback;
+      runtimeApplication: FrozenSpinsRuntimeApplication | null;
+    }
+  | {
+      type: "preview-created";
+      feedback: Feedback;
+      preview: FrozenSpinsPreviewResponse;
+      selectorJson: string;
+    }
+  | {
+      type: "preview-activated";
+      feedback: Feedback;
+      receipt: FrozenSpinsPreviewActivationResponse;
+      runtimeApplication: FrozenSpinsRuntimeApplication;
+    };
+
+function frozenSpinsWorkflowReducer(
+  state: FrozenSpinsWorkflowState,
+  action: FrozenSpinsWorkflowAction,
+): FrozenSpinsWorkflowState {
+  switch (action.type) {
+    case "pending":
+      return { ...state, pendingField: action.field };
+    case "feedback":
+      return { ...state, feedback: action.feedback };
+    case "preview-invalidated":
+      return { ...state, preview: null, previewSelectorJson: null };
+    case "preview-reset":
+      return {
+        ...state,
+        feedback: null,
+        preview: null,
+        previewSelectorJson: null,
+      };
+    case "definition-applied":
+      return {
+        ...state,
+        activationReceipt: null,
+        feedback: action.feedback,
+        preview: null,
+        runtimeApplication: action.runtimeApplication,
+      };
+    case "preview-created":
+      return {
+        ...state,
+        activationReceipt: null,
+        feedback: action.feedback,
+        preview: action.preview,
+        previewSelectorJson: action.selectorJson,
+        runtimeApplication: null,
+      };
+    case "preview-activated":
+      return {
+        ...state,
+        activationReceipt: action.receipt,
+        feedback: action.feedback,
+        preview: null,
+        runtimeApplication: action.runtimeApplication,
+      };
+  }
+  const unhandledAction: never = action;
+  return unhandledAction;
+}
+
+function createFrozenSpinsWorkflowState(): FrozenSpinsWorkflowState {
+  return {
+    activationReceipt: null,
+    feedback: null,
+    pendingField: null,
+    preview: null,
+    previewSelectorJson: null,
+    runtimeApplication: null,
+  };
 }
 
 export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
@@ -130,14 +212,19 @@ export function FrozenSpinsEditor({
   const acknowledgeAppliedDraftRef = useRef<(() => boolean) | null>(null);
   const mountedRef = useRef(true);
   const [revision, setRevision] = useState(initialRevision);
-  const [pendingField, setPendingField] = useState<PendingField>(null);
-  const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const [preview, setPreview] = useState<FrozenSpinsPreviewResponse | null>(null);
-  const [activationReceipt, setActivationReceipt] =
-    useState<FrozenSpinsPreviewActivationResponse | null>(null);
-  const [runtimeApplication, setRuntimeApplication] =
-    useState<FrozenSpinsRuntimeApplication | null>(null);
-  const [previewSelectorJson, setPreviewSelectorJson] = useState<string | null>(null);
+  const [workflow, dispatchWorkflow] = useReducer(
+    frozenSpinsWorkflowReducer,
+    undefined,
+    createFrozenSpinsWorkflowState,
+  );
+  const {
+    activationReceipt,
+    feedback,
+    pendingField,
+    preview,
+    previewSelectorJson,
+    runtimeApplication,
+  } = workflow;
   const solverStatus = useSolverStatusResource();
   const fieldMeta = useFieldMetaResource({
     enabled: objectId !== null,
@@ -166,8 +253,7 @@ export function FrozenSpinsEditor({
     if (wasClean) {
       draftRef.current = incomingDefinition;
       setDraft(incomingDefinition);
-      setPreview(null);
-      setPreviewSelectorJson(null);
+      dispatchWorkflow({ type: "preview-invalidated" });
     }
   }, [initialDefinition, initialRevision]);
   useEffect(() => {
@@ -183,7 +269,7 @@ export function FrozenSpinsEditor({
     const submittedDraft = draft;
     const operationSessionScopeKey = sessionScopeKey ?? null;
     if (!operationSessionScopeKey) {
-      setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
+      dispatchWorkflow({ type: "feedback", feedback: { kind: "error", message: "Session identity is not ready. Try again after it loads." } });
       return false;
     }
     const historyGeneration = kernel.authoringHistory?.getGeneration?.();
@@ -193,8 +279,8 @@ export function FrozenSpinsEditor({
         kernel.authoringHistory?.getGeneration?.() === historyGeneration);
     const requestOptions = scopedFrozenSpinsRequestOptions(sessionScopeKey);
     applyInFlight.current = true;
-    setPendingField("apply");
-    setFeedback(null);
+    dispatchWorkflow({ type: "pending", field: "apply" });
+    dispatchWorkflow({ type: "feedback", feedback: null });
     try {
       const response = await runAuthoringMutationWithHistory(
         {
@@ -231,49 +317,56 @@ export function FrozenSpinsEditor({
         setDraft(acknowledged);
       }
       setRevision(response.revision);
-      setPreview(null);
-      setActivationReceipt(null);
-      setRuntimeApplication(response.runtime_application ?? null);
       invalidateDefinitionResources(kernel, draft.id, response.revision);
       kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
-      setFeedback({
-        kind: response.runtime_application ? "warning" : "success",
-        message: response.runtime_application
-          ? frozenSpinsRuntimeApplicationMessage(response.runtime_application)
-          : "Frozen Spins definition updated.",
+      dispatchWorkflow({
+        type: "definition-applied",
+        runtimeApplication: response.runtime_application ?? null,
+        feedback: {
+          kind: response.runtime_application ? "warning" : "success",
+          message: response.runtime_application
+            ? frozenSpinsRuntimeApplicationMessage(response.runtime_application)
+            : "Frozen Spins definition updated.",
+        },
       });
       return true;
     } catch (error) {
       if (!mountedRef.current) return false;
       if (!isCurrentSession()) return false;
-      setFeedback({ kind: "error", message: errorMessage(error) });
+      dispatchWorkflow({ type: "feedback", feedback: { kind: "error", message: errorMessage(error) } });
       return false;
     } finally {
       applyInFlight.current = false;
-      if (mountedRef.current) setPendingField(null);
+      if (mountedRef.current) dispatchWorkflow({ type: "pending", field: null });
     }
   }
 
   async function createPreview(): Promise<void> {
     if (applyInFlight.current) return;
     if (!objectId) {
-      setFeedback({
-        kind: "warning",
-        message: "Select a target object to preview Frozen Spins.",
+      dispatchWorkflow({
+        type: "feedback",
+        feedback: {
+          kind: "warning",
+          message: "Select a target object to preview Frozen Spins.",
+        },
       });
       return;
     }
     const sourceStateRevision = fieldMeta.data?.field_revision;
     const topologyFingerprint = frozenSpinsPreviewTopologyFingerprint(fieldMeta.data);
     if (sourceStateRevision === undefined || !topologyFingerprint) {
-      setFeedback({
-        kind: "warning",
-        message: "Current magnetization and topology identity are required for preview.",
+      dispatchWorkflow({
+        type: "feedback",
+        feedback: {
+          kind: "warning",
+          message: "Current magnetization and topology identity are required for preview.",
+        },
       });
       return;
     }
-    setPendingField("preview");
-    setFeedback(null);
+    dispatchWorkflow({ type: "pending", field: "preview" });
+    dispatchWorkflow({ type: "feedback", feedback: null });
     try {
       const request = {
         expected_revision: revision,
@@ -291,34 +384,38 @@ export function FrozenSpinsEditor({
         ? await kernel.api.model.frozenSpins.createPreview(request, requestOptions)
         : await kernel.api.model.frozenSpins.createPreview(request);
       if (!mountedRef.current) return;
-      setPreviewSelectorJson(JSON.stringify(draft.selector));
-      setPreview(response);
-      setActivationReceipt(null);
-      setRuntimeApplication(null);
       kernel.resources.invalidate(
         FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY,
         response.preview_id,
       );
-      setFeedback({
-        kind: response.current ? "success" : "warning",
-        message: response.current
-          ? "Speculative Frozen Spins preview is current and visible in the 3D viewport. Solver identity is not bound until runtime activation."
-          : "Preview was created but is stale against the current model state.",
+      dispatchWorkflow({
+        type: "preview-created",
+        preview: response,
+        selectorJson: JSON.stringify(draft.selector),
+        feedback: {
+          kind: response.current ? "success" : "warning",
+          message: response.current
+            ? "Speculative Frozen Spins preview is current and visible in the 3D viewport. Solver identity is not bound until runtime activation."
+            : "Preview was created but is stale against the current model state.",
+        },
       });
     } catch (error) {
       if (!mountedRef.current) return;
       const message = errorMessage(error);
       if (message.includes("selection_stale_revision")) {
         await fieldMeta.refetch();
-        setFeedback({
-          kind: "warning",
-          message: `${message} Current field identity was refreshed; retry Preview mask.`,
+        dispatchWorkflow({
+          type: "feedback",
+          feedback: {
+            kind: "warning",
+            message: `${message} Current field identity was refreshed; retry Preview mask.`,
+          },
         });
       } else {
-        setFeedback({ kind: "error", message });
+        dispatchWorkflow({ type: "feedback", feedback: { kind: "error", message } });
       }
     } finally {
-      if (mountedRef.current) setPendingField(null);
+      if (mountedRef.current) dispatchWorkflow({ type: "pending", field: null });
     }
   }
 
@@ -326,16 +423,19 @@ export function FrozenSpinsEditor({
     const acknowledgeDraft = acknowledgeAppliedDraftRef.current;
     if (applyInFlight.current) return;
     if (!preview?.current) {
-      setFeedback({
-        kind: "warning",
-        message: "Create a current Frozen Spins preview before activation.",
+      dispatchWorkflow({
+        type: "feedback",
+        feedback: {
+          kind: "warning",
+          message: "Create a current Frozen Spins preview before activation.",
+        },
       });
       return;
     }
     const submittedDraft = draft;
     const operationSessionScopeKey = sessionScopeKey ?? null;
     if (!operationSessionScopeKey) {
-      setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
+      dispatchWorkflow({ type: "feedback", feedback: { kind: "error", message: "Session identity is not ready. Try again after it loads." } });
       return;
     }
     const historyGeneration = kernel.authoringHistory?.getGeneration?.();
@@ -345,8 +445,8 @@ export function FrozenSpinsEditor({
         kernel.authoringHistory?.getGeneration?.() === historyGeneration);
     const requestOptions = scopedFrozenSpinsRequestOptions(sessionScopeKey);
     applyInFlight.current = true;
-    setPendingField("activate");
-    setFeedback(null);
+    dispatchWorkflow({ type: "pending", field: "activate" });
+    dispatchWorkflow({ type: "feedback", feedback: null });
     try {
       const response = await runAuthoringMutationWithHistory(
         {
@@ -388,23 +488,25 @@ export function FrozenSpinsEditor({
         setDraft(acknowledged);
       }
       setRevision(response.revision);
-      setPreview(null);
-      setActivationReceipt(response);
-      setRuntimeApplication(response.runtime_application);
       invalidateDefinitionResources(kernel, draft.id, response.revision);
       kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
       solverStatus.refetch();
-      setFeedback({
-        kind: "warning",
-        message: `${frozenSpinsRuntimeApplicationMessage(response.runtime_application)} The preview candidate was consumed; solver activation is still pending runtime confirmation and a matching solver-owned certificate.`,
+      dispatchWorkflow({
+        type: "preview-activated",
+        receipt: response,
+        runtimeApplication: response.runtime_application,
+        feedback: {
+          kind: "warning",
+          message: `${frozenSpinsRuntimeApplicationMessage(response.runtime_application)} The preview candidate was consumed; solver activation is still pending runtime confirmation and a matching solver-owned certificate.`,
+        },
       });
     } catch (error) {
       if (!mountedRef.current) return;
       if (!isCurrentSession()) return;
-      setFeedback({ kind: "error", message: errorMessage(error) });
+      dispatchWorkflow({ type: "feedback", feedback: { kind: "error", message: errorMessage(error) } });
     } finally {
       applyInFlight.current = false;
-      if (mountedRef.current) setPendingField(null);
+      if (mountedRef.current) dispatchWorkflow({ type: "pending", field: null });
     }
   }
 
@@ -412,8 +514,8 @@ export function FrozenSpinsEditor({
     if (applyInFlight.current) return;
     applyInFlight.current = true;
     const requestOptions = scopedFrozenSpinsRequestOptions(sessionScopeKey);
-    setPendingField("delete");
-    setFeedback(null);
+    dispatchWorkflow({ type: "pending", field: "delete" });
+    dispatchWorkflow({ type: "feedback", feedback: null });
     try {
       const response = await runAuthoringMutationWithHistory(
         {
@@ -446,16 +548,16 @@ export function FrozenSpinsEditor({
       kernel.selection.clear("inspector");
     } catch (error) {
       if (!mountedRef.current) return;
-      setFeedback({ kind: "error", message: errorMessage(error) });
-      setPendingField(null);
+      dispatchWorkflow({ type: "feedback", feedback: { kind: "error", message: errorMessage(error) } });
+      dispatchWorkflow({ type: "pending", field: null });
     } finally {
       applyInFlight.current = false;
     }
   }
 
   async function showSolverQuantity(): Promise<void> {
-    setPendingField("quantity");
-    setFeedback(null);
+    dispatchWorkflow({ type: "pending", field: "quantity" });
+    dispatchWorkflow({ type: "feedback", feedback: null });
     try {
       kernel.visualizationSync.queuePatch({
         active_quantity_id: "frozen_spins",
@@ -468,14 +570,17 @@ export function FrozenSpinsEditor({
       await kernel.visualizationSync.flushNow();
       kernel.layout.setActiveViewportMainModule("viewport-3d");
       kernel.layout.setFocusedSlot("viewport-main");
-      setFeedback({
-        kind: "success",
-        message: "3D viewport now reads the solver-owned frozen_spins quantity.",
+      dispatchWorkflow({
+        type: "feedback",
+        feedback: {
+          kind: "success",
+          message: "3D viewport now reads the solver-owned frozen_spins quantity.",
+        },
       });
     } catch (error) {
-      setFeedback({ kind: "error", message: errorMessage(error) });
+      dispatchWorkflow({ type: "feedback", feedback: { kind: "error", message: errorMessage(error) } });
     } finally {
-      setPendingField(null);
+      dispatchWorkflow({ type: "pending", field: null });
     }
   }
 
@@ -484,9 +589,7 @@ export function FrozenSpinsEditor({
     if (applyInFlight.current) return;
     draftRef.current = baseline;
     setDraft(baseline);
-    setPreview(null);
-    setPreviewSelectorJson(null);
-    setFeedback(null);
+    dispatchWorkflow({ type: "preview-reset" });
   };
   const activation = draft.activation ?? { kind: "all_stages" };
   const reference = draft.reference ?? { kind: "capture_current_at_activation" };
@@ -748,27 +851,6 @@ export function FrozenSpinsEditor({
   );
 }
 
-export function frozenSpinsPreviewTopologyFingerprint(
-  fieldMeta: FieldMetaResource | null | undefined,
-): string | null {
-  const publicationFingerprint = fieldMeta?.publication_bundle?.topology_hash?.trim();
-  if (publicationFingerprint) return publicationFingerprint;
-
-  const currentCarriers = (fieldMeta?.resolved_capability?.carriers ?? []).filter(
-    (carrier) =>
-      carrier.payload_state === "current" && carrier.carrier_fingerprint.trim().length > 0,
-  );
-  const fullCarrier = currentCarriers.find(
-    (carrier) => carrier.scope_kind === "full" && carrier.scope_id == null,
-  );
-  if (fullCarrier) return fullCarrier.carrier_fingerprint;
-
-  const fingerprints = [...new Set(
-    currentCarriers.map((carrier) => carrier.carrier_fingerprint),
-  )];
-  return fingerprints.length === 1 ? fingerprints[0] : null;
-}
-
 export function FrozenSpinsPreviewDetails({
   activationCandidateReady,
   preview,
@@ -807,59 +889,6 @@ export function FrozenSpinsPreviewDetails({
       ))}
     </div>
   );
-}
-
-export interface FrozenSpinsSolverBindingModel {
-  state: "confirmed" | "mismatch" | "not_committed" | "pending";
-  message: string;
-}
-
-export function resolveFrozenSpinsSolverBinding(
-  receipt: FrozenSpinsPreviewActivationResponse | null,
-  runtime: FrozenSpinsSolverRuntimeStatus | null,
-  constraintId: string,
-): FrozenSpinsSolverBindingModel {
-  if (!receipt) {
-    return {
-      state: "not_committed",
-      message: "No authoring preview has been committed.",
-    };
-  }
-  if (!runtime || !runtime.active_constraint_ids.includes(constraintId)) {
-    return {
-      state: "pending",
-      message:
-        "Waiting for a solver stage that activates this constraint and publishes its certificate.",
-    };
-  }
-  const matches =
-    runtime.constraint_activation_epochs[constraintId] !== undefined &&
-    runtime.topology_fingerprint === receipt.topology_fingerprint &&
-    (runtime.source_state_revision === null ||
-      runtime.source_state_revision === receipt.source_state_revision) &&
-    sameSha256Identity(runtime.mask_sha256, receipt.mask_sha256) &&
-    sameSha256Identity(runtime.reference_sha256, receipt.reference_sha256) &&
-    runtime.active_site_count === receipt.active_site_count &&
-    runtime.frozen_site_count === receipt.frozen_site_count &&
-    runtime.free_site_count === receipt.free_site_count;
-  return matches
-    ? {
-        state: "confirmed",
-        message: "Solver certificate matches the committed preview identity.",
-      }
-    : {
-        state: "mismatch",
-        message:
-          "Solver recomputed a different activation identity. The speculative preview is invalid and the solver-owned quantity must be used.",
-      };
-}
-
-function sameSha256Identity(left: string, right: string): boolean {
-  return normalizeSha256Identity(left) === normalizeSha256Identity(right);
-}
-
-function normalizeSha256Identity(value: string): string {
-  return value.trim().toLowerCase().replace(/^sha256:/, "");
 }
 
 function FrozenSpinsSolverBindingDetails({

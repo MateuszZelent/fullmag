@@ -9,10 +9,7 @@ import {
   useAnalysisResultItemsResource,
   useAnalysisResultSamplesResource,
 } from "@/kernel/resources/analysisResultResources";
-import type {
-  AnalysisResultDatasetManifestResource,
-  AnalysisResultPageQuery,
-} from "@/kernel/api/apiTypes";
+import type { AnalysisResultPageQuery } from "@/kernel/api/apiTypes";
 import {
   useCurrentRunResource,
   useFrequencyDomainEigenBranchesResource,
@@ -49,11 +46,7 @@ import {
   resultPageForDataset,
   type ResultDatasetItemStatusFilter,
 } from "./resultDatasetBrowserModel";
-import {
-  analysisResultAxisPresentation,
-  analysisResultSelectionRef,
-  type AnalysisResultSelectionRef,
-} from "@/shared/domain/analysis/results";
+import { analysisResultAxisPresentation, analysisResultSelectionRef, type AnalysisResultSelectionRef } from "@/shared/domain/analysis/results";
 import {
   buildFrequencyDomainResultsTree,
   mapNavigatorArtifactState,
@@ -78,6 +71,7 @@ import {
 import {
   kernelSelectionForResultsNavigatorNode,
 } from "./resultsNavigatorSelection";
+import { resultSelectionForAnalysis } from "./ResultsNavigatorModule.model";
 
 function activeStageId(
   activeStageIndex: number | null | undefined,
@@ -128,29 +122,6 @@ function axisFiltersKey(filters: Readonly<Record<string, string>>): string {
       Object.entries(filters).sort(([left], [right]) => left.localeCompare(right)),
     ),
   );
-}
-
-export function resultSelectionForAnalysis(
-  manifest: AnalysisResultDatasetManifestResource | null,
-  selection: AnalysisResultSelectionRef | null,
-): AnalysisResultSelectionRef | null {
-  if (!manifest) return null;
-  if (
-    selection &&
-    selection.runId === manifest.run_id &&
-    selection.stageId === manifest.stage_id &&
-    selection.datasetId === manifest.dataset_id &&
-    selection.datasetRevision === manifest.dataset_revision
-  ) {
-    return selection;
-  }
-  return analysisResultSelectionRef({
-    datasetId: manifest.dataset_id,
-    datasetRevision: manifest.dataset_revision,
-    focus: "dataset",
-    runId: manifest.run_id,
-    stageId: manifest.stage_id,
-  });
 }
 
 function CurrentResultsNavigator({

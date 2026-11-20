@@ -1,6 +1,7 @@
 "use client";
 
 import { FileWarning, ImageOff } from "lucide-react";
+import Image from "next/image";
 import { useState } from "react";
 
 import { pinThumbnail } from "../model/thumbnailCache";
@@ -29,12 +30,13 @@ function ThumbImage({ eager, src }: { readonly eager: boolean; readonly src: str
   return (
     // Empty alt: the project name is always adjacent, so announcing the image
     // would only repeat it. The inspector adds its own label.
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
+    <Image
       alt=""
       className="fm-start-thumb__img"
-      decoding="async"
+      fill
+      unoptimized
       loading={eager ? "eager" : "lazy"}
+      sizes="(max-width: 768px) 100vw, 360px"
       onError={() => setFailed(true)}
       onLoad={(event) => pinThumbnail(src, event.currentTarget)}
       src={src}

@@ -19,11 +19,7 @@ import {
   DialogTitle,
 } from "@/shared/ui/Dialog";
 
-import {
-  analysisFieldViewLabel,
-  DEFAULT_ANALYSIS_FIELD_VIEW,
-  normalizeAnalysisFieldView,
-} from "./FrequencyDomainModeDisplayControls";
+import { analysisFieldViewLabel, DEFAULT_ANALYSIS_FIELD_VIEW, normalizeAnalysisFieldView } from "./FrequencyDomainModeDisplayControls.model";
 
 const MODE_DATA_PREVIEW_SAMPLE_COUNT = 12;
 

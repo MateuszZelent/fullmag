@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { AirboxFieldRow, airboxEffectiveLengthUnit } from "./airboxDisplay";
+import { AirboxFieldRow } from "./airboxDisplay";
+import { airboxEffectiveLengthUnit } from "./airboxDisplay.model";
 
 describe("Airbox display boundary", () => {
   it("shows SI units for effective physical lengths only", () => {

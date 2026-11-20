@@ -150,7 +150,8 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
 
     expect(materialPanel).toContain("materialFieldRealizationRows(");
     expect(materialPanel).toContain('key={`realization:${field.assignmentId}:${rowIndex}`}');
-    expect(materialPanel).toContain('key={`override:${index}`}');
+    expect(materialPanel).toContain("keyedOccurrences(draft.materialOverrides,");
+    expect(materialPanel).toContain("key={key}");
     expect(materialPanel).not.toContain("overrideKeys");
     expect(materialPanel).toContain('label={row.label}');
     expect(materialPanel).toContain('value={row.value}');
@@ -304,6 +305,10 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
       new URL("./region/ObjectRegionOverviewPanel.tsx", import.meta.url),
       "utf8",
     );
+    const overviewModel = readFileSync(
+      new URL("./region/ObjectRegionOverviewPanel.model.ts", import.meta.url),
+      "utf8",
+    );
 
     expect(parent).toContain('meshLane === "fem"');
     expect(parent).toContain("resolveRegionMeshLifecycle");
@@ -313,7 +318,7 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
     expect(meshPanel).toContain("useFdmRegionMembershipBinaryResource(");
     expect(meshPanel).toContain("model.regionId");
     expect(meshPanel).toContain("regionId: model.regionId");
-    expect(overview).toContain('meshLane === "fdm"');
+    expect(overviewModel).toContain('meshLane === "fdm"');
     expect(overview).toContain("Runtime-derived structured-grid membership");
   });
 

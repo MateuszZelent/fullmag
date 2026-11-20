@@ -217,20 +217,16 @@ export function resolveFdmObjectMeshInspectorModel({
         (!objectId || entry.object_id === objectId),
       ) ?? null
     : null;
-  const metadata = (membership?.region_legend ?? [])
-    .filter((entry) =>
-      normalizedRegionId
-        ? Boolean(selectedRegionEntry) &&
-          entry.region_id === selectedRegionEntry?.region_id &&
-          (!objectId || entry.object_id === objectId)
-        : !objectId || entry.object_id === objectId,
-    )
-    .map((entry) => ({
+  const metadata = (membership?.region_legend ?? []).flatMap((entry) => {
+    if (objectId && entry.object_id !== objectId) return [];
+    if (normalizedRegionId && (!selectedRegionEntry || entry.region_id !== selectedRegionEntry.region_id)) return [];
+    return [{
       numericId: entry.numeric_id,
       objectId: entry.object_id,
       priority: entry.priority,
       regionId: entry.region_id,
-    }));
+    }];
+  });
   const membershipCompatible =
     membership !== null &&
     membership !== undefined &&
@@ -256,11 +252,10 @@ export function resolveFdmObjectMeshInspectorModel({
       resources.membership.status === "ready" &&
       resources.domain.status === "ready",
   );
-  const regionIds = new Set(
-    metadata
-      .map((entry) => entry.numericId)
-      .filter((numericId) => numericId !== FMRM_INACTIVE_REGION_ID),
-  );
+  const regionIds = new Set<number>();
+  for (const entry of metadata) {
+    if (entry.numericId !== FMRM_INACTIVE_REGION_ID) regionIds.add(entry.numericId);
+  }
   if (hasSoleActiveUnassignedOwner(membership, objectId, normalizedRegionId)) {
     regionIds.add(0);
   }

@@ -42,10 +42,28 @@ export function useAntennaSpectrumGridCompatibility(spectrum: AntennaSourceSpect
   useEffect(() => {
     if (plan.kind !== "verify") return;
     let active = true;
-    void Promise.all([axisDigest(plan.grid.k_u_rad_per_m), axisDigest(plan.grid.k_v_rad_per_m)]).then(
-      ([u, v]) => { if (active) setVerified({ token: plan.token, result: u === plan.uHash && v === plan.vHash ? { kind: "ready" } : { kind: "error", error: MISMATCH } }); },
-      error => { if (active) setVerified({ token: plan.token, result: { kind: "error", error: error instanceof Error ? error.message : "Wave-vector grid verification failed." } }); },
-    );
+    void Promise.all([axisDigest(plan.grid.k_u_rad_per_m), axisDigest(plan.grid.k_v_rad_per_m)])
+      .then(([u, v]) => {
+        if (active) {
+          setVerified({
+            token: plan.token,
+            result: u === plan.uHash && v === plan.vHash
+              ? { kind: "ready" }
+              : { kind: "error", error: MISMATCH },
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setVerified({
+            token: plan.token,
+            result: {
+              kind: "error",
+              error: error instanceof Error ? error.message : "Wave-vector grid verification failed.",
+            },
+          });
+        }
+      });
     return () => { active = false; };
   }, [plan]);
   if (plan.kind !== "verify") return plan;

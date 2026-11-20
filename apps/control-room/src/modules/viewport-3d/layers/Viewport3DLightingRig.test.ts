@@ -4,7 +4,7 @@ import {
   DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES,
 } from "../viewport3dAppearancePreferences";
 import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
-import { resolveViewport3DLightingRig } from "./Viewport3DLightingRig";
+import { resolveViewport3DLightingRig } from "./Viewport3DLightingRig.model";
 
 describe("Viewport3DLightingRig", () => {
   it("keeps flat lighting free of directional lights", () => {

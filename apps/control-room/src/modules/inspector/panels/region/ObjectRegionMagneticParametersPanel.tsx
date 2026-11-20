@@ -10,6 +10,7 @@ import {
 import { useKernel } from "@/kernel/KernelContext";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 import { Button } from "@/shared/ui/Button";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
@@ -553,7 +554,10 @@ function useObjectRegionMagneticParametersPanelView({
           <FieldRow label="Local overrides" value="inherits object material" />
         ) : null}
 
-        {draft.materialOverrides.map((override, index) => {
+        {keyedOccurrences(draft.materialOverrides, (override) => JSON.stringify([
+          override.parameter,
+          override.preservedOverride?.parameter,
+        ])).map(({ item: override, key }, index) => {
           const parentInfo = getParentParamInfo(
             override.parameter,
             model.objectId,
@@ -562,7 +566,7 @@ function useObjectRegionMagneticParametersPanelView({
             sceneData,
           );
           return (
-            <div className="fm-region-override fm-section-separator" key={`override:${index}`}>
+            <div className="fm-region-override fm-section-separator" key={key}>
               {override.preservedOverride ? (
                 <>
                   <FieldRow label={`Override ${index + 1}`} value={`${override.preservedOverride.parameter} · ${override.preservedOverride.value.kind}`} />

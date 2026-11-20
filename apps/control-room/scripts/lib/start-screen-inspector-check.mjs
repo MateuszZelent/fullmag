@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 
 import { FIXTURE_DETAILS } from "../fixtures/start-screen-workspace-api.mjs";
+import { visitSequentially } from "./visitSequentially.mjs";
 
 // Layout and contrast guard for the start screen's right-hand inspector, on
 // the real stylesheets and the REAL components: the three inspectors (project,
@@ -28,13 +29,23 @@ export async function loadInspectorMarkup() {
   });
   const load = (path) => server.ssrLoadModule(path);
   // React stays a plain Node import, so the modules Vite loads share this instance.
-  const react = await import("react");
-  const { renderToStaticMarkup } = await import("react-dom/server");
-  const types = await load("/src/modules/start/model/workspaceApiTypes.ts");
-  const { ProjectDetails } = await load("/src/modules/start/inspector/ProjectDetails.tsx");
-  const { ScriptInspector } = await load("/src/modules/start/inspector/ScriptInspector.tsx");
-  const { ResultInspector } = await load("/src/modules/start/inspector/ResultInspector.tsx");
-  const adapters = await load("/src/modules/start/model/workspaceApiAdapters.ts");
+  const [
+    react,
+    { renderToStaticMarkup },
+    types,
+    { ProjectDetails },
+    { ScriptInspector },
+    { ResultInspector },
+    adapters,
+  ] = await Promise.all([
+    import("react"),
+    import("react-dom/server"),
+    load("/src/modules/start/model/workspaceApiTypes.ts"),
+    load("/src/modules/start/inspector/ProjectDetails.tsx"),
+    load("/src/modules/start/inspector/ScriptInspector.tsx"),
+    load("/src/modules/start/inspector/ResultInspector.tsx"),
+    load("/src/modules/start/model/workspaceApiAdapters.ts"),
+  ]);
 
   const h = react.createElement;
   const render = (component, props) => renderToStaticMarkup(h(component, props));
@@ -253,7 +264,7 @@ export async function checkInspectors({ browser, styles, markup, failures }) {
       await tab.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
     };
 
-    for (const [kind, expected] of Object.entries(EXPECTED)) {
+    await visitSequentially(Object.entries(EXPECTED), async ([kind, expected]) => {
       await show(markup[kind]);
       const m = await tab.evaluate(measureInspector);
       const label = `${kind} inspector`;
@@ -287,12 +298,14 @@ export async function checkInspectors({ browser, styles, markup, failures }) {
       assert.match(m.panelLabelled, /-tab-/, `${label}: the panel is labelled by its tab`);
 
       // Sections of the overview are visible and in the sketch's order.
+      const expectedSectionSet = new Set(expected.sections);
+      const measuredSectionSet = new Set(m.sections);
       for (const section of expected.sections) {
-        assert.ok(m.sections.includes(section), `${label} shows the ${section} section, got ${m.sections.join(", ")}`);
+        assert.ok(measuredSectionSet.has(section), `${label} shows the ${section} section, got ${m.sections.join(", ")}`);
       }
       assert.deepEqual(
-        expected.sections.filter((s) => m.sections.includes(s)),
-        m.sections.filter((s) => expected.sections.includes(s)),
+        expected.sections.filter((section) => measuredSectionSet.has(section)),
+        m.sections.filter((section) => expectedSectionSet.has(section)),
         `${label}: sections are in order`,
       );
 
@@ -306,7 +319,7 @@ export async function checkInspectors({ browser, styles, markup, failures }) {
       assert.ok(!m.footOverlap, `${label}: the action bar buttons do not overlap`);
       assert.ok(m.partsInside, `${label}: the action bar stays inside the column`);
       console.log(`${kind}: inspector layout ok (${m.sections.join(", ")})`);
-    }
+    });
 
     // Runs tab of the sketch: Run | Started | Duration | Output, then the viewer buttons.
     await show(markup.projectRuns);
@@ -336,8 +349,8 @@ export async function checkInspectors({ browser, styles, markup, failures }) {
 
     // WCAG AA of everything the inspectors draw, in both themes and on every tab fixture.
     let measured = 0;
-    for (const theme of ["dark", "light"]) {
-      for (const [name, html] of Object.entries(markup)) {
+    await visitSequentially(["dark", "light"], async (theme) => {
+      await visitSequentially(Object.entries(markup), async ([name, html]) => {
         await show(html);
         await tab.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
         const results = await tab.evaluate(measureTextContrast);
@@ -345,8 +358,8 @@ export async function checkInspectors({ browser, styles, markup, failures }) {
         for (const r of results) {
           if (r.ratio < 4.5) failures.push(`${theme}: inspector "${name}" ${r.selector} "${r.text}" = ${r.ratio.toFixed(2)}:1`);
         }
-      }
-    }
+      });
+    });
     console.log(`inspectors: ${measured} text elements checked for contrast in both themes`);
   } finally {
     await tab.close();

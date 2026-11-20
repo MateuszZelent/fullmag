@@ -10,6 +10,31 @@ import type { ComputeProbeState } from "../model/types";
 import { ProjectThumb } from "../ui/ProjectThumb";
 import { SolverBadge } from "../ui/SolverBadge";
 
+function handleTemplateKeyDown(event: KeyboardEvent<HTMLDivElement>, index: number) {
+  const columns = Math.max(
+    1,
+    getComputedStyle(event.currentTarget.parentElement as Element).gridTemplateColumns
+      .split(" ")
+      .filter(Boolean).length,
+  );
+  const next =
+    event.key === "ArrowRight"
+      ? index + 1
+      : event.key === "ArrowLeft"
+        ? index - 1
+        : event.key === "ArrowDown"
+          ? index + columns
+          : event.key === "ArrowUp"
+            ? index - columns
+            : null;
+  if (next === null) return;
+  const target = STUDY_TEMPLATES[next];
+  if (!target) return;
+  event.preventDefault();
+  startScreenStore.setSelectedTemplate(target.id);
+  document.getElementById(`fm-start-template-${target.id}`)?.focus();
+}
+
 export function TemplatesSection({ compute }: { readonly compute: ComputeProbeState }) {
   const { selectedTemplateId } = useSyncExternalStore(
     startScreenStore.subscribe,
@@ -17,30 +42,6 @@ export function TemplatesSection({ compute }: { readonly compute: ComputeProbeSt
     startScreenStore.getServerSnapshot,
   );
 
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>, index: number) => {
-    const columns = Math.max(
-      1,
-      getComputedStyle(event.currentTarget.parentElement as Element).gridTemplateColumns
-        .split(" ")
-        .filter(Boolean).length,
-    );
-    const next =
-      event.key === "ArrowRight"
-        ? index + 1
-        : event.key === "ArrowLeft"
-          ? index - 1
-          : event.key === "ArrowDown"
-            ? index + columns
-            : event.key === "ArrowUp"
-              ? index - columns
-              : null;
-    if (next === null) return;
-    const target = STUDY_TEMPLATES[next];
-    if (!target) return;
-    event.preventDefault();
-    startScreenStore.setSelectedTemplate(target.id);
-    document.getElementById(`fm-start-template-${target.id}`)?.focus();
-  };
 
   return (
     <>
@@ -64,7 +65,7 @@ export function TemplatesSection({ compute }: { readonly compute: ComputeProbeSt
               id={`fm-start-template-${template.id}`}
               key={template.id}
               onClick={() => startScreenStore.setSelectedTemplate(template.id)}
-              onKeyDown={(event) => onKeyDown(event, index)}
+              onKeyDown={(event) => handleTemplateKeyDown(event, index)}
               role="option"
               // A roving tab stop: one card is reachable, the arrows move between them.
               tabIndex={selected || (selectedTemplateId === null && index === 0) ? 0 : -1}

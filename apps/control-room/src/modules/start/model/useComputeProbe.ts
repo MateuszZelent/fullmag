@@ -103,12 +103,13 @@ export function useComputeProbe(): ComputeProbeController {
     [nodeInventoryData, nodeInventoryElapsedMs, nodeInventoryRefreshError, nodeInventoryStatus],
   );
   const [desktop, setDesktop] = useState<ComputeProbeState>(undefined);
-  const [desktopRefreshing, setDesktopRefreshing] = useState(false);
+  const [pendingDesktopRefresh, setPendingDesktopRefresh] = useState<number | null>(null);
   const [desktopFailed, setDesktopFailed] = useState(false);
   const [desktopRefreshId, setDesktopRefreshId] = useState(0);
   const operatorCapability = useRef<string | null>(null);
   const [hasLocalComputeOperator, setHasLocalComputeOperator] = useState(false);
   const needsDesktop = cpu.status === "error" && gpu.status === "error" && !cpu.data && !gpu.data;
+  const desktopRefreshing = needsDesktop && pendingDesktopRefresh === desktopRefreshId;
 
   useEffect(() => {
     const invoke = tauriInvoke();
@@ -141,7 +142,7 @@ export function useComputeProbe(): ComputeProbeController {
         timer = window.setTimeout(() => void tick(), COMPUTE_POLL_MS);
         return;
       }
-      setDesktopRefreshing(true);
+      setPendingDesktopRefresh(desktopRefreshId);
       try {
         const next = await probeCompute();
         if (cancelled) return;
@@ -149,7 +150,7 @@ export function useComputeProbe(): ComputeProbeController {
         setDesktopFailed(!next);
         if (next) timer = window.setTimeout(() => void tick(), COMPUTE_POLL_MS);
       } finally {
-        if (!cancelled) setDesktopRefreshing(false);
+        if (!cancelled) setPendingDesktopRefresh(null);
       }
     };
     if (needsDesktop) void tick();

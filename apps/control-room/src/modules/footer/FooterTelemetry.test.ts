@@ -11,13 +11,8 @@ import type {
 } from "@/kernel/api/apiTypes";
 import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
 
-import {
-  buildFooterTelemetryModel,
-  footerTelemetryStatusEquals,
-  resolveFooterMagneticModelPresent,
-  resolvePrimaryTelemetryObjectId,
-  selectFooterTelemetryStatus,
-} from "./FooterTelemetry";
+import { buildFooterTelemetryModel } from "./FooterTelemetry.presentation";
+import { footerTelemetryStatusEquals, resolveFooterMagneticModelPresent, resolvePrimaryTelemetryObjectId, selectFooterTelemetryStatus } from "./FooterTelemetry.model";
 
 const status: LiveStatusResource = {
   api_contract_version: "1.0.0",
@@ -167,7 +162,6 @@ describe("FooterTelemetry", () => {
   const currentStatus = selectFooterTelemetryStatus({
     data: status, error: null, refetch: () => {}, revision: 1, status: "ready",
   });
-
 
   const antennaProgress = {
     phase: "evaluating_field" as const,

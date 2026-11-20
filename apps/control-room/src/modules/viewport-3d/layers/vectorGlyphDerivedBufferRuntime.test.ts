@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
-import {
-  VECTOR_GLYPH_DERIVED_CACHE_MAX_BYTES,
-  VECTOR_GLYPH_DERIVED_CACHE_MAX_ENTRIES,
-  createVectorGlyphDerivedBufferRuntime,
-} from "./vectorGlyphDerivedBufferRuntime";
+import { VECTOR_GLYPH_DERIVED_CACHE_MAX_BYTES, VECTOR_GLYPH_DERIVED_CACHE_MAX_ENTRIES, createVectorGlyphDerivedBufferRuntime } from "./vectorGlyphDerivedBufferRuntime.model";
 import { buildViewport3DDerivedBufferCacheKey } from "../build-engine/cache/viewport3dCacheKey";
 
 const key = buildViewport3DDerivedBufferCacheKey({

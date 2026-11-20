@@ -33,11 +33,8 @@ import {
 } from "../../InspectorEditSession";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
-import {
-  AirboxFieldRow as FieldRow,
-  airboxEffectiveLengthUnit,
-  boundedDisplayText,
-} from "./airboxDisplay";
+import { AirboxFieldRow as FieldRow } from "./airboxDisplay";
+import { airboxEffectiveLengthUnit, boundedDisplayText } from "./airboxDisplay.model";
 import { FormField } from "../../primitives/FormField";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { QuantityUnitSelect } from "../../primitives/QuantityUnitSelect";

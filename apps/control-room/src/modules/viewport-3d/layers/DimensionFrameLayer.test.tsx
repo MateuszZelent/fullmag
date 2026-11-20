@@ -4,12 +4,14 @@ import { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import {
   createDimensionFrameLineGeometry,
+  createDimensionFrameOrientationStore,
+  createDimensionFrameScreenTickAttributes,
   dimensionFrameLabelRuns,
   releaseDimensionFrameGeometry,
   resolveDimensionFrameLayerColors,
   tickThinningForSpacing,
   trackDimensionFrameGeometry,
-} from "./DimensionFrameLayer";
+} from "./DimensionFrameLayer.model";
 
 const colors: Viewport3DColors = {
   accent: "#89b4fa",
@@ -22,6 +24,43 @@ const colors: Viewport3DColors = {
 };
 
 describe("DimensionFrameLayer resources", () => {
+  it("keeps screen tick geometry static and prepares endpoint data for the GPU", () => {
+    const attributes = createDimensionFrameScreenTickAttributes(
+      new Float32Array([1, 2, 3, 4, 6, 3, -1, 0, 2, -1, 0, 7]),
+    );
+
+    expect(Array.from(attributes.starts)).toEqual([
+      1, 2, 3, 1, 2, 3,
+      -1, 0, 2, -1, 0, 2,
+    ]);
+    const directions = Array.from(attributes.directions);
+    expect(directions).toHaveLength(12);
+    [0.6, 0.8, 0, 0.6, 0.8, 0, 0, 0, 1, 0, 0, 1].forEach(
+      (direction, index) => {
+        expect(directions[index]).toBeCloseTo(direction, 6);
+      },
+    );
+    expect(Array.from(attributes.endpoints)).toEqual([0, 1, 0, 1]);
+  });
+
+  it("publishes dimension orientation only when the snapshot changes", () => {
+    const initial = { xFacing: 1, yFacing: -1, zCornerX: 1, zCornerY: -1 } as const;
+    const next = { xFacing: -1, yFacing: -1, zCornerX: -1, zCornerY: -1 } as const;
+    const store = createDimensionFrameOrientationStore(initial);
+    const listener = vi.fn();
+    const unsubscribe = store.subscribe(listener);
+
+    store.setSnapshot(initial);
+    expect(listener).not.toHaveBeenCalled();
+    store.setSnapshot(next);
+    expect(store.getSnapshot()).toBe(next);
+    expect(listener).toHaveBeenCalledOnce();
+
+    unsubscribe();
+    store.setSnapshot(initial);
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
   it("does not allocate geometry for empty line buffers", () => {
     expect(createDimensionFrameLineGeometry(new Float32Array())).toBeNull();
   });

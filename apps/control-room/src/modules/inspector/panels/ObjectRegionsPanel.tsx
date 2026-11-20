@@ -79,6 +79,12 @@ import type {
 } from "./region/shared";
 import { resolveMeshInspectorLane } from "./fdmMeshInspectorModel";
 
+function isCurrentRegionMutation(
+  context: ReturnType<typeof captureAuthoringMutationFence>,
+): boolean {
+  return context.isCurrentSessionScope?.() === true;
+}
+
 type Feedback =
   | {
       kind: "error" | "success" | "warning";
@@ -143,11 +149,7 @@ function revisionFromScene(scene: unknown): number | null {
   return null;
 }
 
-export function ObjectRegionsPanel(props: InspectorPanelProps) {
-  return useObjectRegionsPanelView(props);
-}
-
-function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
+export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
   const {
     api,
@@ -318,10 +320,6 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
         input: { object_id: model.objectId, region_id: model.regionId },
       }),
     );
-  }
-
-  function isCurrentRegionMutation(context: ReturnType<typeof captureRegionMutationContext>): boolean {
-    return context.isCurrentSessionScope?.() === true;
   }
 
   function beginRegionOperation(): number | null {

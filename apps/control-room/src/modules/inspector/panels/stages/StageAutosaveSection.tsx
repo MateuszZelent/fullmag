@@ -4,6 +4,7 @@ import { Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/shared/ui/Button";
 import { FormField } from "../../primitives/FormField";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 import type {
   StageAutosaveDraft,
   StageAutosaveOwnerKind,
@@ -103,8 +104,8 @@ export function StageAutosaveSection({
             {draft.format === "txt" ? (
               <p className="fm-stage-autosave__notice">TXT stores scalar tables only. Choose Zarr or HDF5 for fields.</p>
             ) : null}
-            {draft.fields.map((field, index) => (
-              <div className="fm-stage-autosave__field" key={`${index}:${field.quantity}`}>
+            {keyedOccurrences(draft.fields, (field) => field.quantity).map(({ item: field, key }, index) => (
+              <div className="fm-stage-autosave__field" key={key}>
                 <FormField
                   label="Quantity"
                   value={field.quantity}

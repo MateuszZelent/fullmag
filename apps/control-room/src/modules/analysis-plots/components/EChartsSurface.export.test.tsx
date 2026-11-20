@@ -30,7 +30,8 @@ vi.mock("@/shared/analysis-charts/InteractiveChartSurface", () => ({
   },
 }));
 
-import { EChartsSurface, tableSeriesRenderModel } from "./EChartsSurface";
+import { EChartsSurface } from "./EChartsSurface";
+import { tableSeriesRenderModel } from "./EChartsSurface.model";
 
 const series = [{
   id: "data.table:table-a:step:mx",

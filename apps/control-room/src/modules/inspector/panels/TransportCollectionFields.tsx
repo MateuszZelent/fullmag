@@ -3,7 +3,8 @@ import { Button } from "@/shared/ui/Button";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
-import { chargeBoundaryKinds, chargeMaterialFields, changeTransportBoundaryKind, spinBoundaryKinds, spinMaterialFields, transportRows, transportScopeOptions, updateTransportRow, type CollectionRow } from "./TransportCollectionFieldsModel";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
+import { chargeBoundaryKinds, chargeMaterialFields, changeTransportBoundaryKind, parseTransportScopeOption, spinBoundaryKinds, spinMaterialFields, transportRows, transportScopeOptions, updateTransportRow, type CollectionRow } from "./TransportCollectionFieldsModel";
 
 interface Props { family: "current_transport" | "spin_transport"; collection: "domain" | "materials" | "boundaries"; value: string; scene: SceneResource | null; onChange: (value: string) => void }
 const record = (value: unknown): CollectionRow => value && typeof value === "object" && !Array.isArray(value) ? value as CollectionRow : {};
@@ -14,7 +15,9 @@ export function TransportCollectionFields({ family, collection, value, scene, on
   const scopes = transportScopeOptions(scene);
   const update = (index: number, path: string[], input: string, kind?: "text" | "number" | "vector" | "reaction") => onChange(updateTransportRow(value, index, path, input, kind));
   const scopeField = (index: number, ref: CollectionRow, path: string[], label: string) => <FormField label={label} type="select" value={JSON.stringify([ref.object_id ?? "", ref.region_id ?? ""])} onChange={(event) => {
-    const [objectId, regionId] = JSON.parse(event.currentTarget.value) as [string, string];
+    const parsedScope = parseTransportScopeOption(event.currentTarget.value);
+    if (!parsedScope) return;
+    const [objectId, regionId] = parsedScope;
     const first = updateTransportRow(value, index, [...path, "object_id"], objectId);
     onChange(updateTransportRow(first, index, [...path, "region_id"], regionId));
   }}><option value={'["",""]'}>Select authored object or region</option>
@@ -27,7 +30,11 @@ export function TransportCollectionFields({ family, collection, value, scene, on
     <FormField label={`${label} outward orientation`} value={text(ref.orientation)} onChange={(event) => update(index, [...path, "orientation"], event.currentTarget.value, "vector")} />
   </InspectorGroup>;
   return <InspectorGroup title={`${family === "spin_transport" ? "Spin" : "Charge"} ${collection}`} collapsible defaultOpen>
-    {rows.map((row, index) => <InspectorGroup key={index} title={`${collection} ${index + 1}`}>
+    {keyedOccurrences(rows, (row) => collection === "domain"
+      ? JSON.stringify([collection, row.object_id, row.region_id])
+      : collection === "materials"
+        ? JSON.stringify([collection, record(row.region).object_id, record(row.region).region_id])
+        : JSON.stringify([collection, row.id])).map(({ item: row, key }, index) => <InspectorGroup key={key} title={`${collection} ${index + 1}`}>
       {collection === "domain" ? scopeField(index, row, [], "Domain scope") : null}
       {collection === "materials" ? <>
         {scopeField(index, record(row.region), ["region"], "Material scope")}
