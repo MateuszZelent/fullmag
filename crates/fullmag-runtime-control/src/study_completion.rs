@@ -23,6 +23,15 @@ pub(crate) fn dependencies_ready_locked(
     accepted: &AcceptedStudySnapshot,
     step: &StudyStep,
 ) -> Result<bool> {
+    dependencies_ready_fenced(store, accepted, step, None)
+}
+
+pub(crate) fn dependencies_ready_fenced(
+    store: &SessionStore,
+    accepted: &AcceptedStudySnapshot,
+    step: &StudyStep,
+    read_transaction: Option<&fullmag_session::ReadTransaction>,
+) -> Result<bool> {
     let lowered = accepted
         .lowered
         .steps
@@ -85,9 +94,11 @@ pub(crate) fn dependencies_ready_locked(
         let checkpoint: CoordinatorCheckpoint = if let Some(genesis) = &task.coordinator_genesis {
             serde_json::from_value(genesis.checkpoint.clone())?
         } else {
-            let entry = store
-                .read_coordinator_journal(run_id.as_str())?
-                .into_iter()
+            let journal = match read_transaction {
+                Some(tx) => store.read_coordinator_journal_readonly(run_id.as_str(), tx)?,
+                None => store.read_coordinator_journal(run_id.as_str())?,
+            };
+            let entry = journal.into_iter()
                 .find(|entry| {
                     entry.task_id == task_id
                         && entry.attempt_id == attempt
@@ -105,7 +116,10 @@ pub(crate) fn dependencies_ready_locked(
         {
             bail!("completion producer checkpoint has a stale identity");
         }
-        let recovered = crate::recover_coordinator_locked(store, &claim)?;
+        let recovered = match read_transaction {
+            Some(tx) => crate::recover_coordinator_readonly(store, &claim, tx)?,
+            None => crate::recover_coordinator_locked(store, &claim)?,
+        };
         if recovered.coordinator.task().lifecycle != TaskLifecycle::Succeeded
             || !recovered
                 .events

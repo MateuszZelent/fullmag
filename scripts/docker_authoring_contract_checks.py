@@ -109,6 +109,11 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
         # Source-only tests keep native solver/runtime packages untouched.
         # Disable debug output and incremental duplication in this private target.
         "live-observation-contracts": (
+            ('/usr/bin/env', '-u', 'FULLMAG_SESSION_STORAGE_PROFILE', 'CARGO_INCREMENTAL=0',
+             'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-runtime-control', '--lib',
+             'prepare_and_start_rehydration_refuse_completion_changed_after_publication'),
             ('/usr/bin/env', 'CARGO_INCREMENTAL=0',
              'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
              '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
