@@ -2601,6 +2601,72 @@ modalny K0 używa `pure_neumann` z $\beta=0$. Jawne `dirichlet` lub
 | $w$ | wagi cechowania średniej zerowej | $1$ |
 | $N_{zz}^{\mathrm{Robin}}$ | współczynnik odmagnesowania z brzegiem Robina | $1$ |
 
+## Brzeg Neumanna w statycznym demag filmu periodycznego (korekta 2026-11-20)
+
+Status: kod źródłowy natywnego CPU i współdzielonej ścieżki GPU. Runtime w
+Docker DEV i qualification: **NOT VERIFIED**.
+
+Producent stanu równowagi dla K0 (relaksacja z demag Poissona w
+`docs/physics/0800-fem-static-pbc-demag.md`) stosował dotąd Robina także dla
+siatki periodycznej w dwóch osiach. Wtedy statyczne $\mathbf H_{\mathrm d,0}$
+filmu ma błąd {eq}`eq-k0-film-robin-defect`, a operator modalny już używa
+Neumanna. Ta sama reguła obowiązuje teraz w solwerze statycznym
+(`initialize_demag_poisson_boundary_operator`). Gdy plan wybiera
+`poisson_robin`, a pary periodyczne siatki dają translacje w dokładnie dwóch
+osiach, przyjmujemy $\beta=0$. Dirichlet z planu pozostaje bez zmian, a jedna
+oś periodyczna lub brak periodyczności zachowuje Robina.
+
+```{math}
+:label: eq-static-film-neumann-gauge
+N_{zz}^{\mathrm{Robin}}=\frac{1+\beta d}{1+\beta L},
+\qquad
+\sum_i b_i=\int_{\Omega_m}M_s\,\mathbf m\cdot\nabla\Bigl(\sum_i N_i\Bigr)\,\mathrm dV=0,
+\qquad
+\phi_{i_\star}=0 .
+```
+
+Pierwsza równość to {eq}`eq-k0-film-robin-defect` zapisane przez połowę
+wysokości komórki $L=t/2+d$. Ponieważ $R_\ast=L$, mamy $\beta L=c_\beta$ i
+$N_{zz}=1-c_\beta t/\bigl(2(1+c_\beta)L\bigr)$: błąd maleje algebraicznie, a
+nie wykładniczo z grubością powietrza. Dla $\beta=0$ dostajemy $N_{zz}=1$ i
+zerowe pole w powietrzu.
+
+Bez Robina zredukowany operator $P^{\mathsf T}KP$ ma stałe jądro. Prawa strona
+jest zgodna, bo funkcje P1 tworzą rozkład jedności (druga równość). Cechowanie
+ustala eliminacja jednego stopnia swobody potencjału $i_\star$ na otwartym
+brzegu, którego klasa periodyczna jest jednoelementowa
+(`film_neumann_gauge_pin_tdof`). Taki węzeł leży poza szwami, więc eliminacja
+usuwa dokładnie stałą. Zredukowany solve CPU zeruje prawą stronę klas
+wyeliminowanych, tak jak robi to już ścieżka urządzenia. Dla zgodnego
+$\mathbf b$ rozwiązanie z przypięciem równa się rozwiązaniu Neumanna minus
+jego wartość w $i_\star$.
+
+Pole $-\nabla\phi$ i energia $\tfrac{\mu_0}{2}\phi^{\mathsf T}\mathbf b$ nie
+zależą od cechowania. Człon brzegowy Robina znika przy $\beta=0$. Decyzję
+zapisuje linia logu
+`[fullmag-fem] static demag 2D-periodic film: pure Neumann outer boundary (Robin beta=0), gauge pin potential DOF <n>`.
+Brak jednoelementowego stopnia swobody na otwartym brzegu kończy przebieg
+błędem; solwer nie dostaje wtedy układu osobliwego.
+
+Ograniczenia:
+
+- Referencyjny silnik CPU w Rust (`crates/fullmag-engine/src/fem.rs`) nadal
+  stosuje Robina dla dwóch osi periodycznych.
+- Provenance zapisuje żądane `poisson_robin`; rozstrzygnięte $\beta=0$ widać
+  tylko w logu natywnym.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $L$ | połowa wysokości komórki filmu, $t/2+d$ | $\mathrm m$ |
+| $b_i$ | składowa statycznej prawej strony Poissona $\int M_s\mathbf m\cdot\nabla N_i\,\mathrm dV$ | $\mathrm{A\,m}$ |
+| $i_\star$ | indeks stopnia swobody potencjału przypiętego do cechowania | $1$ |
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-static-film-neumann-boundary | backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp + initialize_demag_poisson_boundary_operator | $\beta=0$ i eliminacja $i_\star$ dla filmu periodycznego w dwóch osiach |
+| source-static-film-gauge-pin | backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp + film_neumann_gauge_pin_tdof | Wybór jednoelementowej klasy na otwartym brzegu |
+| source-static-film-periodic-rhs | backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp + solve_demag_periodic_poisson_reduced | Zerowanie prawej strony klas wyeliminowanych w zredukowanym solve CPU |
+
 ## Spójne pole statyczne w linearyzacji K0 (korekta 2026-11-19)
 
 Status: runtime headless CPU w Docker DEV (2026-11-19,

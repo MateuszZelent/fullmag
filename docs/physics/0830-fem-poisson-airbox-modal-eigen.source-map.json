@@ -528,6 +528,29 @@
       "sources": [
         "source-k0-consistent-static-demag"
       ]
+    },
+    {
+      "id": "eq-static-film-neumann-gauge",
+      "symbols": [
+        "robin_film_demag",
+        "robin_beta",
+        "air_layer",
+        "film_half_height",
+        "static_source_entry",
+        "Ms",
+        "magnetization",
+        "p1_basis_and_tet_volume",
+        "domains",
+        "gradient",
+        "measures",
+        "potential",
+        "gauge_pin_dof"
+      ],
+      "sources": [
+        "source-static-film-neumann-boundary",
+        "source-static-film-gauge-pin",
+        "source-static-film-periodic-rhs"
+      ]
     }
   ],
   "symbols": [
@@ -1184,6 +1207,24 @@
       "latex": "$\\mathbf H^{\\mathrm{prod}}_{d,0,i}$",
       "meaning": "pole demag producenta równowagi",
       "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "film_half_height",
+      "latex": "$L$",
+      "meaning": "połowa wysokości komórki filmu, $t/2+d$",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "static_source_entry",
+      "latex": "$b_i$",
+      "meaning": "składowa statycznej prawej strony Poissona $\\int M_s\\mathbf m\\cdot\\nabla N_i\\,\\mathrm dV$",
+      "si_unit": "$\\mathrm{A\\,m}$"
+    },
+    {
+      "id": "gauge_pin_dof",
+      "latex": "$i_\\star$",
+      "meaning": "indeks stopnia swobody potencjału przypiętego do cechowania",
+      "si_unit": "$1$"
     }
   ],
   "sources": [
@@ -1881,6 +1922,27 @@
       "symbol": "recompute_shared_domain_static_demag_p1",
       "responsibility": "Solve the static P1 demag of m0 with the dynamic block's operator and replace the restoring parallel field before A_qq assembly.",
       "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-static-film-neumann-boundary",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp",
+      "symbol": "initialize_demag_poisson_boundary_operator",
+      "responsibility": "Resolve a planned Robin airbox on a mesh periodic along exactly two axes to beta = 0 and eliminate the gauge pin.",
+      "evidence_status": "source_visible; runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-static-film-gauge-pin",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp",
+      "symbol": "film_neumann_gauge_pin_tdof",
+      "responsibility": "Pick one open-boundary P1 potential DOF whose periodic class is a singleton.",
+      "evidence_status": "source_visible; runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-static-film-periodic-rhs",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp",
+      "symbol": "solve_demag_periodic_poisson_reduced",
+      "responsibility": "Zero the reduced right-hand side of eliminated classes before the CPU reduced CG solve.",
+      "evidence_status": "source_visible; runtime_NOT_VERIFIED"
     }
   ],
   "public_api": {
