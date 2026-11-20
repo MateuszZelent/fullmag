@@ -16,6 +16,7 @@ import { scheduleViewport3DCameraRestCommit, VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_
 import { resolveViewport3DCameraDepthRange } from "./viewport3DCameraClip";
 import {
   resolveViewport3DFlyStep,
+  resolveViewport3DOrbitReturn,
   VIEWPORT_3D_FREE_PIVOT_FRACTION,
   type Viewport3DRotationModeForFly,
 } from "./viewport3DCameraFly";
@@ -1428,21 +1429,29 @@ function useOrbitCameraControlsModel({
   }, [camera, cameraProjection, gl, handleEnd, handleTransitionStart, interactionBlocked, invalidate, rotationMode, sceneRadius]);
 
   // A free camera looks around from where it stands: its orbit pivot sits just
-  // in front of it. Object orbit moves the pivot back out along the view
-  // direction to the scene's depth, so the view does not jump either way.
+  // in front of it. Returning to object orbit re-centres on the scene: the
+  // pivot goes back to the scene centre and the camera turns to face it,
+  // stepping back to a working distance when it flew far away or inside.
   const pivotModeRef = useRef(rotationMode);
   useEffect(() => {
     if (pivotModeRef.current === rotationMode) return;
     pivotModeRef.current = rotationMode;
     const controls = controlsRef.current;
     if (!controls || cameraProjection === "orthographic") return;
-    const forward = camera.getWorldDirection(new Vector3());
-    const center = new Vector3(...(bounds?.center ?? FALLBACK_CAMERA_BOUNDS.center));
-    const depth = rotationMode === "camera"
-      ? sceneRadius * VIEWPORT_3D_FREE_PIVOT_FRACTION
-      : Math.max(center.sub(camera.position).dot(forward), sceneRadius * 0.5);
     handleTransitionStart();
-    controls.target.copy(camera.position).addScaledVector(forward, depth);
+    if (rotationMode === "camera") {
+      const forward = camera.getWorldDirection(new Vector3());
+      controls.target.copy(camera.position).addScaledVector(forward, sceneRadius * VIEWPORT_3D_FREE_PIVOT_FRACTION);
+    } else {
+      const center = new Vector3(...(bounds?.center ?? FALLBACK_CAMERA_BOUNDS.center));
+      const placement = resolveViewport3DOrbitReturn({
+        camera: camera.position.toArray() as [number, number, number],
+        center: center.toArray() as [number, number, number],
+        sceneRadius,
+      });
+      controls.target.copy(center);
+      camera.position.set(...placement);
+    }
     controls.update();
     handleEnd();
     invalidate();

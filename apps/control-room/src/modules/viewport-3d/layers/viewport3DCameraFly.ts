@@ -53,3 +53,39 @@ export function resolveViewport3DFlyStep({
   const close = Number.isFinite(targetDistance) && targetDistance < radius * VIEWPORT_3D_PUSH_TARGET_FRACTION;
   return zoomingIn && close ? { distance: step } : null;
 }
+
+/** Working distance range for orbit, in scene radii, and the distance used to re-enter it. */
+export const VIEWPORT_3D_ORBIT_RETURN_RANGE = { max: 8, min: 0.5, return: 3 } as const;
+
+/**
+ * Camera position when a free camera returns to object orbit around `center`.
+ * The camera keeps its bearing from the centre; it only steps back to the
+ * return distance when it is farther than the range or nearly inside.
+ */
+export function resolveViewport3DOrbitReturn({
+  camera,
+  center,
+  sceneRadius,
+}: {
+  camera: readonly [number, number, number];
+  center: readonly [number, number, number];
+  sceneRadius: number;
+}): [number, number, number] {
+  const radius = Number.isFinite(sceneRadius) && sceneRadius > 0 ? sceneRadius : 1;
+  const offset = [camera[0] - center[0], camera[1] - center[1], camera[2] - center[2]];
+  const distance = Math.hypot(offset[0], offset[1], offset[2]);
+  const range = VIEWPORT_3D_ORBIT_RETURN_RANGE;
+  if (distance >= radius * range.min && distance <= radius * range.max) {
+    return [camera[0], camera[1], camera[2]];
+  }
+  // Inside or on the centre: leave along a fixed diagonal so the view is stable.
+  const direction = distance > radius * 1e-9
+    ? offset.map((value) => value / distance)
+    : [1 / Math.sqrt(3), 1 / Math.sqrt(3), 1 / Math.sqrt(3)];
+  const target = radius * range.return;
+  return [
+    center[0] + direction[0] * target,
+    center[1] + direction[1] * target,
+    center[2] + direction[2] * target,
+  ];
+}
