@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -114,8 +114,10 @@ describe("antenna field ETA", () => {
 });
 
 function Probe({ sample, onRender }: { sample: AntennaEtaObservation | null; onRender?: () => void }) {
-  onRender?.();
   const eta = useAntennaFieldEta(sample);
+  useEffect(() => {
+    onRender?.();
+  });
   return <output data-state={eta.state}>{eta.seconds === null ? "" : formatAntennaFieldEta(eta.seconds)}</output>;
 }
 

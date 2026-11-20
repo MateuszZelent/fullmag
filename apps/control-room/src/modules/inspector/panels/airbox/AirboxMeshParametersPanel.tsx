@@ -394,7 +394,9 @@ export function AirboxMeshParametersPanel({
       });
     });
     if (policy.status === "ready") kernel.bus.emit("mesh:build-history-editor-ready", { target: "universe" });
-    return offRestore;
+    return () => {
+      offRestore();
+    };
   }, [baseDraft, baseKey, identityKey, kernel.bus, policy.status, resource, setFeedback]);
 
   const applyPolicy = async ({ silent = false } = {}) => {
