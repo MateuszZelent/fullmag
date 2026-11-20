@@ -503,12 +503,14 @@ async function ensureSettingsOpen(page, section, timeout) {
 
 async function readSettings(page, _settings, timeout) {
   const exportRegion = await ensureSettingsOpen(page, "Export", timeout);
-  const background = await readChoice(page, "PNG background", timeout);
-  const annotations = await exportRegion.getByRole("switch", {
-    name: "Include annotations",
-    exact: true,
-  }).isChecked({ timeout });
-  const scale = await readChoice(page, "PNG resolution", timeout);
+  const [background, annotations, scale] = await Promise.all([
+    readChoiceInRegion(exportRegion, "PNG background", timeout),
+    exportRegion.getByRole("switch", {
+      name: "Include annotations",
+      exact: true,
+    }).isChecked({ timeout }),
+    readChoiceInRegion(exportRegion, "PNG resolution", timeout),
+  ]);
   const quality = await readChoice(page, "Quality profile", timeout);
   const frame = await readChoice(page, "Grid and axes", timeout);
   if (!Object.values(BACKGROUND_OPTIONS).includes(background)) {
@@ -524,8 +526,12 @@ async function readChoice(page, label, timeout = MAX_ACTION_TIMEOUT_MS) {
   const section = SETTING_SECTIONS_BY_LABEL[label];
   if (!section) throw new Error(`No 3D View Settings section is registered for ${label}`);
   const settings = await ensureViewportSettingsSection(page, section, timeout);
+  return readChoiceInRegion(settings, label, timeout);
+}
+
+async function readChoiceInRegion(region, label, timeout = MAX_ACTION_TIMEOUT_MS) {
   return normalizeText(
-    await settings.getByRole("combobox", { name: label, exact: true }).innerText({ timeout }),
+    await region.getByRole("combobox", { name: label, exact: true }).innerText({ timeout }),
   );
 }
 
