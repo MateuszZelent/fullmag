@@ -192,8 +192,8 @@ export function InspectorShell({
         {/* Full descriptor metadata stays in the DOM for browser audits; the
             visible header shows only the ID and the facts strip. */}
         <dl className="fm-inspector__metadata" data-slot="inspector-metadata" hidden>
-          {descriptor.metadata.map((item, index) => (
-            <div className="fm-inspector__metadata-item" key={`${item.label}:${index}`}>
+          {descriptor.metadata.map((item) => (
+            <div className="fm-inspector__metadata-item" key={`${item.label}=${item.value}`}>
               <dt>{item.label}</dt>
               <dd title={item.value}>{item.value}</dd>
             </div>
