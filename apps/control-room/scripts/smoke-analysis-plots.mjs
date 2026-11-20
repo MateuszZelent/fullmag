@@ -993,11 +993,10 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
     await page.locator("main.fm-workspace-shell").waitFor({ state: "visible", timeout: timeoutMs });
     await openAnalysisPlots(page);
 
-    const resultsTab = page.locator(".fm-explorer .fm-tabs-trigger")
-      .filter({ hasText: /^Results$/ })
+    const resultsTab = page.locator('.fm-side-rail[data-side="left"] [data-rail-item="results"]')
       .first();
     await resultsTab.waitFor({ state: "visible", timeout: timeoutMs });
-    if (await resultsTab.getAttribute("aria-selected") !== "true") {
+    if (await resultsTab.getAttribute("data-active") !== "true") {
       await resultsTab.click({ timeout: timeoutMs });
     }
 
