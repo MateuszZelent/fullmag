@@ -20,6 +20,7 @@ mod accepted_observation_spool;
 mod error;
 #[path = "../accepted_study_worker.rs"]
 mod accepted_study_worker;
+use accepted_study_worker::accepted_solver_profile;
 #[path = "../accepted_project_storage.rs"]
 mod accepted_project_storage;
 #[path = "../study_execution_contract.rs"]
