@@ -1,7 +1,10 @@
 from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -44,6 +47,24 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             result = subprocess.run([*bind, git("rev-parse", "HEAD")], cwd=repo)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(git("ls-remote", "origin", "refs/tags/v1.0.0").split()[0], first)
+
+    def test_extracted_archive_rejects_file_or_identity_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "fullmag"
+            binary.write_bytes(b"binary")
+            manifest = {
+                "tag": "v1", "git_sha": "sha", "source_identity": {"head_commit_full": "sha"},
+                "platform": "linux-x86_64", "files_sha256": {"fullmag": hashlib.sha256(b"binary").hexdigest()},
+            }
+            (root / "release-manifest.json").write_text(json.dumps(manifest))
+            command = [sys.executable, str(ROOT / "scripts/ci/verify_release_bundle.py"), str(root), "v1", "sha"]
+            subprocess.run([*command, "linux-x86_64"], check=True, capture_output=True)
+            self.assertNotEqual(subprocess.run([*command, "windows-x86_64"], capture_output=True).returncode, 0)
+            binary.write_bytes(b"modified")
+            self.assertNotEqual(subprocess.run([*command, "linux-x86_64"], capture_output=True).returncode, 0)
+            binary.unlink()
+            self.assertNotEqual(subprocess.run([*command, "linux-x86_64"], capture_output=True).returncode, 0)
 
     def test_workflow_defines_required_inputs(self) -> None:
         content = RELEASE_WORKFLOW.read_text(encoding="utf-8")

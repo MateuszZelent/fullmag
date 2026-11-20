@@ -205,7 +205,7 @@ jobs:
           bundle="fullmag-${TAG}-linux-x86_64"
           tar -xzf "${bundle}.tar.gz" -C "$RUNNER_TEMP"
           cd "$RUNNER_TEMP/$bundle"
-          python -c 'import json, os; m=json.load(open("release-manifest.json")); assert m["git_sha"] == m["source_identity"]["head_commit_full"] == os.environ["GITHUB_SHA"] and m["tag"] == os.environ["TAG"]'
+          python "$GITHUB_WORKSPACE/scripts/ci/verify_release_bundle.py" . "$TAG" "$GITHUB_SHA" linux-x86_64
           bin/fullmag --help >/dev/null
           bin/fullmag-api --help >/dev/null
 
@@ -310,7 +310,7 @@ jobs:
           if (Test-Path README.md) { Copy-Item README.md "$DIST\" }
           $identity = Get-Content source-identity.json -Raw | ConvertFrom-Json
           $files = @{}
-          Get-ChildItem "$DIST" -File -Recurse | Where-Object { $_.Name -ne "release-manifest.json" } | ForEach-Object {
+          Get-ChildItem "$DIST" -File -Recurse -Force | Where-Object { $_.Name -ne "release-manifest.json" } | ForEach-Object {
             $relative = [System.IO.Path]::GetRelativePath((Resolve-Path $DIST).Path, $_.FullName).Replace('\', '/')
             $files[$relative] = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           }
@@ -369,10 +369,8 @@ jobs:
           $bundle = "fullmag-$env:TAG-windows-x86_64"
           [IO.Compression.ZipFile]::ExtractToDirectory("$PWD/$bundle.zip", $env:RUNNER_TEMP)
           Set-Location "$env:RUNNER_TEMP/$bundle"
-          $manifest = Get-Content release-manifest.json -Raw | ConvertFrom-Json
-          if ($manifest.git_sha -ne $env:GITHUB_SHA -or $manifest.source_identity.head_commit_full -ne $env:GITHUB_SHA -or $manifest.tag -ne $env:TAG) {
-            throw "Release archive identity mismatch"
-          }
+          python "$env:GITHUB_WORKSPACE/scripts/ci/verify_release_bundle.py" . $env:TAG $env:GITHUB_SHA windows-x86_64
+          if ($LASTEXITCODE -ne 0) { throw "Windows archive verification failed" }
           foreach ($binary in 'fullmag.exe', 'fullmag-api.exe') {
             & "./bin/$binary" --help | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "Packaged $binary smoke failed" }
