@@ -546,6 +546,50 @@ obejmują lokalne tłumienie, zachowanie obserwabli oraz niezależną tożsamoś
 źródło–pole dla Heuna i ARS. Ich stan to **source-only: niekompilowane i
 niewykonane**; nie zamykają bramek powyżej.
 
+(fem-cpu-transport-gilbert-rhs-boundary)=
+### 2.6.2a Ta sama konwersja źródła Gilberta — FEM CPU M2 stage callback
+
+**Stan z 2026-11-18: `SOURCE_BUG_CONFIRMED` (audyt
+`docs/audits/2026-11-18-she-implementation-audit.md`, SHE-P0-1); poprawka
+2026-11-20 `SOURCE_ONLY`, runtime `NOT VERIFIED`.** Konwersja
+{eq}`fdm-cpu-transport-gilbert-explicit-source` jest własnością równania LLG,
+nie dyskretyzacji, i obowiązuje każdy lane, który dodaje transportowe źródło
+Gilberta do jawnego RHS w postaci Landaua–Lifshitza. W węźle magnetycznym $i$
+FEM CPU stosuje
+
+```{math}
+:label: fem-cpu-transport-gilbert-explicit-source
+T_{\mathrm{tr,RHS},i}=
+\frac{T_{\mathrm{tr},G,i}+\alpha_i\,m_i\times T_{\mathrm{tr},G,i}}{1+\alpha_i^2}.
+```
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $T_{\mathrm{tr},G,i}$ | węzłowe źródło transportowe przed konwersją, `torque_xyz_per_s` callbacku | $\mathrm{s^{-1}}$ |
+| $T_{\mathrm{tr,RHS},i}$ | jawny wkład transportowy do $\partial_t m_i$ | $\mathrm{s^{-1}}$ |
+| $m_i$ | zredukowana magnetyzacja węzła w próbce etapu RK | $1$ |
+| $\alpha_i$ | lokalne tłumienie Gilberta węzła (`alpha_field` albo materiałowe `damping`) | $1$ |
+
+Callback `fullmag_fem_stage_transport_callback_v1` zwraca surowe źródło
+$-\gamma_e\hbar/(2eM_s)(R_J+R_\phi)$ z
+`backends/fem/cpu/mfem/transport/steady_transport.cpp` (projekcja L2 na węzły).
+Konwersję wykonuje dokładnie raz
+`backends/fem/cpu/mfem/interactions/transport_stage.cpp::add_transport_stage_rhs`
+z tą samą próbką $m$, którą otrzymał `llg_rhs_aos`, i z tym samym lokalnym
+$\alpha_i$ co RHS LLG oraz prescribed SOT (`interactions/sot.cpp`). Węzły
+niemagnetyczne nie otrzymują wkładu. Przed poprawką funkcja dodawała
+$T_{\mathrm{tr},G,i}$ bez konwersji, co zawyżało amplitudę o $1+\alpha^2$ i
+pomijało składową $\alpha\,m\times T$; dotyczy to wyłącznie ograniczonego M2
+FEM CPU ze stage callbackiem. Nota
+`docs/physics/0980-dynamic-current-and-oersted-coupling.md` §4.6.5 odsyła tutaj.
+
+Regresja źródłowa: `backends/fem/tests/rk_explicit_contract.cpp::cpu_stage_transport_callback_samples_exact_stages_and_commits`
+ma niezależną wyrocznię RK4 z $\alpha=0.13$ i nieosiowym $m$, która stosuje
+{eq}`fem-cpu-transport-gilbert-explicit-source` w każdym etapie. Maska targetu
+momentu (`ResolvedFemTorqueTargetIR.element_mask`) nadal nie jest przekazywana
+do natywnego kontekstu; FEM M2 wymaga obecnie pełnej, jednorodnej domeny
+magnetycznej, a zastosowanie maski pozostaje osobną bramką (audyt SHE-P1-12).
+
 (spin-transport-composite-resume-v2)=
 ### 2.6.3. Composite checkpoint v2: accepted ARS i durable outputs
 
