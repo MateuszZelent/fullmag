@@ -1,0 +1,254 @@
+name: bootstrap-python
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  python-contracts:
+    timeout-minutes: 35
+    runs-on: ubuntu-latest
+    env:
+      FULLMAG_GMSH_THREADS: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: packages/fullmag-py/pyproject.toml
+
+      - name: Install Gmsh system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglu1-mesa
+
+      - name: Install just for recipe dispatch contracts
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        with:
+          just-version: '1.51.0'
+
+      - name: Audit managed FEM CPU-only verification configuration
+        run: python scripts/test_audit_fem_cpu_only_runtime.py -v
+
+      - name: Run complete build receipt contracts
+        run: python -B scripts/test_local_runner_build_executor.py -v
+
+      - name: Run strict eigen worker report protocol contracts
+        run: python -B scripts/test_validate_parallel_execution_report.py -v
+
+      - name: Run retained FEM startup diagnostic contracts
+        run: python -B scripts/test_diagnose_managed_fem_startup.py -v
+
+      - name: Run bootstrap workflow contract
+        run: |
+          python -m pip install PyYAML==6.0.3
+          python -B scripts/test_release_workflow_contract.py -v
+          python scripts/test_bootstrap_workflow_contract.py -v
+          python -B scripts/test_ci_workflow_policy.py -v
+
+      - name: Verify Docker host setup and GPU proof contracts
+        run: |
+          python -B scripts/test_setup_docker.py -v
+          python -B scripts/test_fullmag_storage.py -v
+          python -B scripts/test_docker_host_ledger.py -v
+          python -B scripts/test_verify_docker_all_runtime.py -v
+          python -B scripts/test_fem_toolchain_slepc_env.py
+          python -B scripts/test_verify_docker_fem_gpu_workspace.py -v
+
+      - name: Install Python package
+        run: |
+          python -m pip install 'pytest>=9,<10'
+          python -m pip install -e 'packages/fullmag-py[meshing,figures]'
+
+      - name: Verify optimized regional convergence gate
+        run: |
+          python -B -m unittest discover -s scripts/benchmarks -p test_regional_fdm_fem_convergence.py -v
+          python -B -m unittest discover -s scripts/benchmarks -p test_fdm_regional_drive_density_abi_checks.py -v
+
+      - name: Verify precision-specific LLG qualification identities
+        run: |
+          python -B scripts/validate_llg_qualification_registry.py benchmarks/fem-llg/qualification-registry-v1.json --repo-root .
+          python -B -m pytest -q scripts/test_validate_llg_qualification_registry.py
+
+      - name: Verify canonical source snapshot identity
+        run: python -m pytest -q scripts/test_capture_source_snapshot_identity.py
+
+      - name: Verify managed Make native contract ordering
+        run: python -B -m pytest -q scripts/test_backend_dev_build_policy.py
+
+      - name: Run canonical script roundtrip contracts
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_material_assets_roundtrip.py
+          packages/fullmag-py/tests/test_accepted_source_capture.py
+          packages/fullmag-py/tests/test_stage_external_field_roundtrip.py
+
+      - name: Run real Gmsh exact-layer airbox grading regressions
+        run: |
+          python -c "import gmsh"
+          python -m pytest -q scripts/test_box_layered_airbox_mesh.py
+
+      - name: Run Göbel 2019 bimeron reproducibility contracts
+        run: >-
+          python -m pytest -q
+          tests/standard_problems/bimeron/goebel_2019/test_verify.py
+          tests/standard_problems/bimeron/goebel_2019/test_contract.py
+          scripts/test_render_goebel_2019_bimeron_figure.py
+
+      - name: Run eigensolve scene and execution profile merge contracts
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_eigen_scene_merge_contract.py
+          packages/fullmag-py/tests/test_scene_document_problem_ir.py
+          packages/fullmag-py/tests/test_absorbing_boundary.py
+          packages/fullmag-py/tests/test_mesh_stl_fallback_owner_binding.py
+          packages/fullmag-py/tests/test_execution_profile_authoring_roundtrip.py
+          packages/fullmag-py/tests/test_scene_execution_config.py
+          packages/fullmag-py/tests/test_runtime_source_snapshot.py
+
+      - name: Verify absorbing layer reflection inputs and amplitude analysis
+        run: python -m unittest discover -s tests/standard_problems/absorbing_boundary -p test_reflection.py
+
+      - name: Run FEM tested/runtime library identity contracts
+        run: |
+          python scripts/test_fem_modal_library_identity.py -v
+          python -B scripts/test_fem_mfem_hypre_stream_compat.py
+
+      - name: Run managed runtime startup identity contracts
+        run: python -B scripts/test_validate_managed_fem_runtime_bundle.py
+
+      - name: Run managed GPU device cubin requirement contracts
+        run: python -B -m pytest -q scripts/test_export_fem_gpu_runtime_copy_helpers.py -k "export_native_cubin_requirement_follows_expected_device or export_rejects_malformed_expected_device_capability"
+
+      - name: Run managed runtime artifact root contracts
+        run: python scripts/test_managed_runtime_artifact_root.py -v
+
+      - name: Run output storage authoring and lowering contracts
+        run: python scripts/check_output_storage_contract.py
+
+      - name: Run complete SceneDocument authoring roundtrip regressions
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_scratch_authoring_ui_roundtrip.py
+
+      - name: Run frozen probe terminal receipt contracts
+        run: python -B scripts/test_run_de_frozen_v2_probe.py -v
+
+      - name: Run ordered stage script roundtrip regressions
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_script_builder_roundtrip.py
+          packages/fullmag-py/tests/test_study_stages.py
+
+      - name: Run bounded mesh failure diagnostic contracts
+        run: python -B -m unittest discover -s packages/fullmag-py/tests -p 'test_meshing.py' -k MeshFailureDiagnosticTests -v
+
+      - name: Run Python API tests
+        run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_api.py' -v
+
+      - name: Run regional material and thermal authoring regressions
+        run: |
+          python -m unittest discover -s packages/fullmag-py/tests -p 'test_regional_*.py' -v
+          python -m unittest discover -s packages/fullmag-py/tests -p 'test_fem_u32_marker_roundtrip.py' -v
+
+      - name: Run raw single-k checkpoint inspector contracts
+        run: python -B scripts/test_inspect_eigen_sample_checkpoint.py -v
+
+      - name: Run modal progress elapsed clock regression
+        run: |
+          g++ -std=c++17 -Inative/include -Ibackends/fem/include -Ibackends/fem/cpu backends/fem/tests/frequency_domain/modal_progress_elapsed_test.cpp -o "$RUNNER_TEMP/fullmag-modal-progress-clock-test"
+          "$RUNNER_TEMP/fullmag-modal-progress-clock-test"
+
+      - name: Run bounded waveguide dense algebra contracts
+        run: |
+          g++ -std=c++17 -UNDEBUG -Inative/include -Ibackends/fem/include backends/fem/tests/frequency_domain/floquet_waveguide_demag_k_test.cpp backends/fem/cpu/frequency_domain/floquet_waveguide_demag_k.cpp -o "$RUNNER_TEMP/fullmag-waveguide-dense-algebra-test"
+          "$RUNNER_TEMP/fullmag-waveguide-dense-algebra-test"
+
+      - name: Run COMSOL scientific gate regression suite
+        run: python -B scripts/test_validate_comsol_dispersion_scientific_gate.py -v
+
+      - name: Run nonzero-k controller capsule attestation regression
+        run: python -B scripts/test_nonzero_k_validation_controller.py -v
+
+      - name: Run DE Gamma Krylov trial contracts
+        run: python scripts/test_de_gamma_krylov_trial.py -v
+
+      - name: Run DE pilot receipt-bound comparison regressions
+        run: |
+          python -m pip install 'matplotlib>=3,<4'
+          python -c 'import matplotlib'
+          python -B scripts/test_de_pilot_receipts.py -v
+          python -B scripts/test_compare_de_100nm_pilot.py -v
+          python -m pytest -q scripts/test_validate_de_smoke_rows.py
+
+      - name: Run COMSOL A1 receipt-bound frequency comparison contracts
+        run: python -m pytest -q scripts/test_compare_comsol_a1_frequency_reference.py
+
+      - name: Run rejected COMSOL benchmark mesh terminal contract
+        run: >-
+          python -m pytest -q
+          tests/standard_problems/mumag/comsol_nonzero_k_dispersion/test_contract.py
+          -k materialization_cli_terminal_status_follows_benchmark_mesh_acceptance
+      - name: Run STL shell recovery contracts
+        run: |
+          python -B -m unittest discover -s packages/fullmag-py/tests -p 'test_stl_shell_domains.py' -v
+          python -B -m unittest discover -s packages/fullmag-py/tests -p 'test_frozen_boundary_stl_export.py' -v
+
+      - name: Run Python meshing tests
+        env:
+          FULLMAG_MESH_FAILURE_ARTIFACT_DIR: ${{ runner.temp }}/fullmag-mesh-failure-artifacts
+        run: |
+          mkdir -p "$FULLMAG_MESH_FAILURE_ARTIFACT_DIR"
+          set -o pipefail
+          python -X faulthandler -m unittest discover -s packages/fullmag-py/tests -p 'test_meshing.py' -v 2>&1 | tee "$FULLMAG_MESH_FAILURE_ARTIFACT_DIR/unittest.log"
+
+      - name: Preserve Python meshing failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-meshing-failure-diagnostics
+          path: ${{ runner.temp }}/fullmag-mesh-failure-artifacts
+          if-no-files-found: ignore
+      - name: Run texture compatibility contracts
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_mumax3_texture_compatibility.py
+          packages/fullmag-py/tests/test_preset_texture_v2_parity.py
+
+      - name: Repository consistency checks
+        run: python scripts/check_repo_consistency.py
+
+  storage-lifecycle:
+    timeout-minutes: 25
+    runs-on: ubuntu-latest
+    env:
+      FULLMAG_GMSH_THREADS: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: packages/fullmag-py/pyproject.toml
+
+      - name: Install Gmsh system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglu1-mesa
+
+      - name: Install just for recipe dispatch contracts
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        with:
+          just-version: '1.51.0'
+
+      - name: Verify Docker storage probes and runtime lifecycle contracts
+        run: bash scripts/ci/test_storage_lifecycle.sh
