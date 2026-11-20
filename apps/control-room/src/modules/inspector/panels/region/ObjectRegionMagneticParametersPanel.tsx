@@ -50,6 +50,7 @@ import {
   materialFieldDraftKey as materialFieldAssignmentsKey,
   materialFieldRealizationRows,
   materialFieldFromDraft,
+  materialFunctionFieldSummary,
   MATERIAL_FIELD_PARAMETERS,
   sceneObjectMaterialFields,
   unitForMaterialParameter,
@@ -247,6 +248,15 @@ function useObjectRegionMagneticParametersPanelView({
       objectMaterialFields.filter(
         (field) => field.region_id === model.regionId && !isEditableMaterialField(field),
       ).length,
+    [model.regionId, objectMaterialFields],
+  );
+  const functionFieldSummaries = useMemo(
+    () =>
+      objectMaterialFields.flatMap((field) => {
+        if (field.region_id !== model.regionId) return [];
+        const summary = materialFunctionFieldSummary(field);
+        return summary === null ? [] : [summary];
+      }),
     [model.regionId, objectMaterialFields],
   );
   const fieldDraftKey = materialFieldAssignmentsKey(editableRegionAssignments);
@@ -764,6 +774,36 @@ function useObjectRegionMagneticParametersPanelView({
       <InspectorGroup title="Material Fields">
         <FieldRow label="Editable fields" value={fieldDrafts.length} />
         <FieldRow label="Unsupported fields" value={unsupportedRegionFieldCount} />
+        {functionFieldSummaries.map((summary) => (
+          <div
+            className="fm-region-override fm-section-separator"
+            key={`function:${summary.assignmentId}`}
+          >
+            <FieldRow
+              label="Function field"
+              value={`${summary.parameter} (${summary.frame} frame, read-only)`}
+            />
+            {summary.definition !== null ? (
+              <FieldRow label="Definition" value={`def ${summary.definition}(x, y, z, …)`} />
+            ) : null}
+            {summary.locals.map((local) => (
+              <FieldRow
+                key={`local:${local.name}`}
+                label={local.name}
+                mono
+                value={local.expression}
+              />
+            ))}
+            <FieldRow label="Equation" mono unit={summary.unit} value={summary.equation} />
+            {summary.parameters.map((parameter) => (
+              <FieldRow
+                key={`parameter:${parameter.name}`}
+                label={parameter.name}
+                value={String(parameter.value)}
+              />
+            ))}
+          </div>
+        ))}
         {fieldDrafts.length === 0 ? (
           <FieldRow label="Region fields" value="no local parameter fields" />
         ) : null}
