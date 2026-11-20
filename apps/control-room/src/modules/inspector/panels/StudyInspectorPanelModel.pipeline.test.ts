@@ -30,6 +30,27 @@ describe("pipeline telemetry ownership", () => {
     expect(model.stages[1].commandId).toBe("owned-command");
   });
 
+  it("highlights the authored node of the active compiled execution", () => {
+    const stageExecution = execution("script-execution-preparation");
+    stageExecution.stages[0] = {
+      ...stageExecution.stages[0],
+      authored_stage_id: "queue",
+    };
+    const model = resolveStudyInspectorModel({
+      currentRun: null,
+      snapshot: snapshot(),
+      solverStatus: null,
+      stageExecution,
+    });
+
+    expect(model.runtime.activeStageLabel).toBe(model.stages[1].label);
+    expect(model.selectedStage?.index).toBe(1);
+    expect(model.stages[1].status).toBe("running");
+    expect(model.stages.map((stage) => stage.active)).toEqual([false, true]);
+    expect(model.stages[1].stageId).toBe("script-execution-preparation");
+    expect(model.stages[0].status).toBe("disabled");
+  });
+
   it("does not attach an unrelated runtime entry via index fallback", () => {
     const model = resolveStudyInspectorModel({ currentRun: null, snapshot: snapshot(), solverStatus: null,
       stageExecution: execution("definition-not-queue") });

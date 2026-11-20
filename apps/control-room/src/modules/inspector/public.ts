@@ -16,3 +16,9 @@ export {
   type PlanarLayerPass,
   type PlanarLayerState,
 } from "./visualization/planarFieldLayers";
+export {
+  setInspectorActiveTab,
+  useInspectorActiveTab,
+  useInspectorTabs,
+  type InspectorTabInfo,
+} from "./InspectorTabState";

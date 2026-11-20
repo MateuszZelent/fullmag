@@ -42,17 +42,18 @@ export interface NewProblemRequest {
 export function useNewProblemRequest(): readonly [NewProblemRequest, (open: boolean) => void] {
   const kernel = useKernel();
   const [request, setRequest] = useState<NewProblemRequest>({ key: 0, open: false });
-  useEffect(
-    () =>
-      kernel.bus.on("workspace:new-problem-requested", ({ solver }) => {
-        setRequest((current) => ({
-          backend: solver === "FEM" ? "fem" : solver === "FDM" ? "fdm" : undefined,
-          key: current.key + 1,
-          open: true,
-        }));
-      }),
-    [kernel.bus],
-  );
+  useEffect(() => {
+    const unsubscribe = kernel.bus.on("workspace:new-problem-requested", ({ solver }) => {
+      setRequest((current) => ({
+        backend: solver === "FEM" ? "fem" : solver === "FDM" ? "fdm" : undefined,
+        key: current.key + 1,
+        open: true,
+      }));
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [kernel.bus]);
   const setOpen = useCallback((open: boolean) => {
     setRequest((current) => (current.open === open ? current : { ...current, open }));
   }, []);

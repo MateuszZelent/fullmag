@@ -19,6 +19,13 @@ The explorer is the primary navigation and selection surface. It replaces scatte
 
 Tabs filter the same canonical resource graph. They are not separate state models.
 
+Since 2026-11-20 the tabs are presented as icons on the left activity rail
+(`10-shell-menu-and-navigation.md` §1a) rather than as a text tab strip inside
+the panel; the panel header shows the active tab name, a filter field and a
+collapse action. Tree rows use the shared selection rule from
+`09-css-design-system.md` §1a (selected row raised, domain icon, dirty/error dot
+for nodes with unapplied changes or validation errors).
+
 ## 3. Node Contract
 
 Every explorer node uses a common shape:

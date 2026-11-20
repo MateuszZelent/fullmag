@@ -68,9 +68,9 @@ const VIEW_CUBE_EDGE_LINES = buildViewCubeEdgeLines(VIEW_CUBE_HALF);
 const VIEW_CUBE_FACE_LABEL_PX = 17;
 const ORBIT_RING_CHEVRON_ANGLES = [Math.PI * 0.25, Math.PI * 1.25];
 const COMPASS_BAND_HALF_WIDTH = 4.5;
-const COMPASS_RIM_POINTS = [
-  buildCirclePoints(ORBIT_RING_RADIUS - COMPASS_BAND_HALF_WIDTH, 96),
-  buildCirclePoints(ORBIT_RING_RADIUS + COMPASS_BAND_HALF_WIDTH, 96),
+const COMPASS_RIMS = [
+  { id: "inner", points: buildCirclePoints(ORBIT_RING_RADIUS - COMPASS_BAND_HALF_WIDTH, 96) },
+  { id: "outer", points: buildCirclePoints(ORBIT_RING_RADIUS + COMPASS_BAND_HALF_WIDTH, 96) },
 ];
 const COMPASS_TICK_POINTS = buildCompassTickPoints();
 /** Compass headings: the in-plane axes, like N/E/S/W on a CAD view cube. */
@@ -450,13 +450,12 @@ function OrbitRing3D({
   const gl = useThree((state) => state.gl);
   const isDragging = useRef(false);
   const activePointerId = useRef<number | null>(null);
-  const dragController = useRef<AbortController | null>(null);
+  const dragListenersCleanupRef = useRef<(() => void) | null>(null);
   const lastPointer = useRef({ x: 0, y: 0 });
   const controlsRef = useRef(controls);
   const onOrbitRef = useLatestRef(onOrbit);
   const onOrbitEndRef = useLatestRef(onOrbitEnd);
   const releaseControlsRef = useRef<(() => void) | null>(null);
-  const dragListenersAttachedRef = useRef(false);
 
   useEffect(() => {
     controlsRef.current = controls;
@@ -480,11 +479,7 @@ function OrbitRing3D({
   );
 
   const detachWindowDragListeners = useCallback(() => {
-    if (!dragListenersAttachedRef.current) return;
-    dragListenersAttachedRef.current = false;
-    dragController.current?.abort();
-    dragController.current = null;
-    activePointerId.current = null;
+    dragListenersCleanupRef.current?.();
   }, []);
 
   const handleUp = useCallback(() => {
@@ -499,27 +494,37 @@ function OrbitRing3D({
   }, [detachWindowDragListeners, gl, onOrbitEndRef, restoreOrbitControls]);
 
   const attachWindowDragListeners = useCallback(() => {
-    if (dragListenersAttachedRef.current) return;
-    dragListenersAttachedRef.current = true;
+    if (dragListenersCleanupRef.current) return dragListenersCleanupRef.current;
     const listenerController = new AbortController();
-    dragController.current = listenerController;
     const dragMoveListener = (event: PointerEvent) => handleMove(event);
     const dragEndListener = (event: PointerEvent) => {
       if (event.pointerId === activePointerId.current) handleUp();
     };
-    window.addEventListener("pointermove", dragMoveListener, {
-      capture: true,
-      signal: listenerController.signal,
-    });
-    window.addEventListener("pointerup", dragEndListener, {
-      capture: true,
-      signal: listenerController.signal,
-    });
-    window.addEventListener("pointercancel", dragEndListener, {
-      capture: true,
-      signal: listenerController.signal,
-    });
-    window.addEventListener("blur", handleUp, { signal: listenerController.signal });
+    const cleanup = () => {
+      dragListenersCleanupRef.current = null;
+      listenerController.abort();
+      activePointerId.current = null;
+    };
+    try {
+      window.addEventListener("pointermove", dragMoveListener, {
+        capture: true,
+        signal: listenerController.signal,
+      });
+      window.addEventListener("pointerup", dragEndListener, {
+        capture: true,
+        signal: listenerController.signal,
+      });
+      window.addEventListener("pointercancel", dragEndListener, {
+        capture: true,
+        signal: listenerController.signal,
+      });
+      window.addEventListener("blur", handleUp, { signal: listenerController.signal });
+    } catch (error) {
+      cleanup();
+      handleUp();
+      throw error;
+    }
+    return cleanup;
   }, [handleMove, handleUp]);
 
   useEffect(() => () => handleUp(), [handleUp]);
@@ -556,7 +561,7 @@ function OrbitRing3D({
             x: e.nativeEvent.clientX,
             y: e.nativeEvent.clientY,
           };
-          attachWindowDragListeners();
+          dragListenersCleanupRef.current = attachWindowDragListeners();
         }}
       >
         <torusGeometry args={[ORBIT_RING_RADIUS, ORBIT_RING_TUBE, 12, 80]} />
@@ -587,9 +592,9 @@ function OrbitRing3D({
           transparent
         />
       </mesh>
-      {COMPASS_RIM_POINTS.map((points, index) => (
+      {COMPASS_RIMS.map(({ id, points }) => (
         <Line
-          key={index}
+          key={id}
           color={edgeColor}
           depthTest
           depthWrite={false}

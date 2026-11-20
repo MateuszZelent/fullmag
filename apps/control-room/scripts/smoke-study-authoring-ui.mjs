@@ -326,7 +326,7 @@ try {
     );
   }
   await page
-    .locator(".fm-explorer .fm-tabs-trigger", { hasText: "Model" })
+    .locator('.fm-side-rail[data-side="left"] [data-rail-item="model"]')
     .waitFor({ state: "visible", timeout: timeoutMs });
   await assertStatusBarFallbackReadback();
   if (resultsOnly) {
@@ -926,9 +926,8 @@ function simulationPreparation() {
 
 async function verifyFrequencyDomainDrivenResults() {
   const resultsTab = page
-    .locator(".fm-explorer .fm-tabs-trigger")
-    .filter({ hasText: /^Results$/ });
-  await resultsTab.click();
+    .locator('.fm-side-rail[data-side="left"] [data-rail-item="results"]');
+  if ((await resultsTab.getAttribute("data-active")) !== "true") await resultsTab.click();
   const resultsRootId = "results:run:study-authoring-smoke-run";
   await expandExplorerNode(resultsRootId);
   const resonanceRootId = `${resultsRootId}:resonance`;
@@ -1020,10 +1019,10 @@ async function expandExplorerNode(nodeId) {
       .innerText()
       .catch(() => "");
     const activeTabs = await page
-      .locator(".fm-explorer .fm-tabs-trigger")
+      .locator('.fm-side-rail[data-side="left"] .fm-side-rail__item')
       .evaluateAll((tabs) =>
         tabs.map((tab) => ({
-          ariaSelected: tab.getAttribute("aria-selected"),
+          ariaSelected: tab.getAttribute("data-active"),
           text: tab.textContent?.trim(),
         })),
       )

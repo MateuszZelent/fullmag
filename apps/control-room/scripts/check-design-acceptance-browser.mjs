@@ -138,9 +138,9 @@ try {
       const statusState = document.querySelector(".fm-status-bar__item--state")?.getBoundingClientRect();
       const engineBoxes = [...document.querySelectorAll(".fm-status-bar__engine")].map((el) => el.getBoundingClientRect());
       const explorer = document.querySelector('[data-panel-frame="panel-left"]').getBoundingClientRect();
-      const tabs = [...document.querySelectorAll('[aria-label="Explorer resource families"] [role="tab"]')].map((tab) => {
+      const tabs = [...document.querySelectorAll('.fm-side-rail[data-side="left"] .fm-side-rail__item')].map((tab) => {
         const box = tab.getBoundingClientRect();
-        return { name: tab.getAttribute("aria-label"), inside: box.left >= explorer.left - 1 && box.right <= explorer.right + 1 && box.width > 0 };
+        return { name: tab.getAttribute("aria-label"), inside: box.right <= explorer.left + 1 && box.width > 0 };
       });
       const filterRow = document.querySelector(".fm-explorer-filter-row");
       const inspectorText = document.querySelector('[data-panel-frame="panel-right"]').innerText;
@@ -160,7 +160,7 @@ try {
     if (followup.statusDotGap !== null) assert(followup.statusDotGap >= 3, `${theme}: status dot separated from state label (${followup.statusDotGap}px)`);
     if (followup.engineGap !== null) assert(followup.engineGap >= 3, `${theme}: adjacent status bar engine pills separated (${followup.engineGap}px)`);
     assert.equal(followup.tabs.length, 5, `${theme}: five Explorer tabs`);
-    for (const tab of followup.tabs) assert(tab.inside, `${theme}: Explorer tab ${tab.name} fully visible`);
+    for (const tab of followup.tabs) assert(tab.inside, `${theme}: Explorer rail item ${tab.name} visible beside the Explorer`);
     assert.equal(followup.treeActions, 3, `${theme}: tree actions in the filter row`);
     assert.equal(followup.footerToolbar, 0, `${theme}: no Explorer footer row`);
     assert.equal(followup.rawCssInInspector, false, `${theme}: Inspector shows no raw var(--fm-…)`);
@@ -191,7 +191,7 @@ try {
     await page.screenshot({ path: resolve(output, `home-${theme}.png`) });
     await page.getByRole("button", { name: "Back to simulation", exact: true }).click();
 
-    // K6: narrow drawers open from their own edges.
+    // K6: narrow windows keep both side panels docked between their rails.
     await page.setViewportSize({ width: 700, height: 1000 });
     await page.waitForTimeout(300);
     const drawers = await page.evaluate(() => Object.fromEntries(["panel-left", "panel-right"].map((id) => {
@@ -199,9 +199,14 @@ try {
       const box = frame?.hidden ? null : frame?.getBoundingClientRect();
       return [id, box ? [box.left, box.right] : null];
     })));
-    if (drawers["panel-left"]) assert(drawers["panel-left"][0] <= 16, `${theme}: left drawer at left edge ${drawers["panel-left"]}`);
-    if (drawers["panel-right"]) assert(drawers["panel-right"][1] >= 700 - 16, `${theme}: right drawer at right edge ${drawers["panel-right"]}`);
-    if (drawers["panel-left"] && drawers["panel-right"]) assert(drawers["panel-left"][1] <= drawers["panel-right"][0] + 1, `${theme}: open drawers do not overlap ${JSON.stringify(drawers)}`);
+    const rails = await page.evaluate(() => [...document.querySelectorAll(".fm-side-rail")].map((rail) => {
+      const box = rail.getBoundingClientRect();
+      return [box.left, box.right];
+    }));
+    assert.equal(rails.length, 2, `${theme}: both side rails stay visible at 700 px`);
+    if (drawers["panel-left"]) assert(drawers["panel-left"][0] >= rails[0][1] - 1, `${theme}: Explorer docked right of its rail ${drawers["panel-left"]}`);
+    if (drawers["panel-right"]) assert(drawers["panel-right"][1] <= rails[1][0] + 1, `${theme}: Inspector docked left of its rail ${drawers["panel-right"]}`);
+    if (drawers["panel-left"] && drawers["panel-right"]) assert(drawers["panel-left"][1] <= drawers["panel-right"][0] + 1, `${theme}: docked side panels do not overlap ${JSON.stringify(drawers)}`);
 
     results.push({ theme, ribbon, labels: labels.length, workspaceHeader, inspectorMenu, viewportMenu, gl, followup, hostId, homeHeader, tileNames, drawers });
     await context.close();

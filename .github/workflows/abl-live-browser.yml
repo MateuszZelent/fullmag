@@ -1,44 +1,13 @@
 name: ABL live browser
 
 on:
+  workflow_call:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/workflows/abl-live-browser.yml"
-      - "apps/control-room/tests/abl-browser/**"
-      - "apps/control-room/src/modules/ribbon/absorbingBoundaryCommand*"
-      - "apps/control-room/src/modules/ribbon/RibbonModule.tsx"
-      - "apps/control-room/src/shared/domain/physics/absorbingBoundary.ts"
-      - "apps/control-room/src/modules/ribbon/ribbonCommands.ts"
-      - "apps/control-room/src/modules/ribbon/ribbonContributions.tsx"
-      - "apps/control-room/src/modules/inspector/panels/ObjectVisualizationPanel.tsx"
-      - "apps/control-room/src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx"
-      - "apps/control-room/src/modules/inspector/panels/*Absorbing*"
-      - "apps/control-room/src/modules/inspector/panels/absorbingExpression*"
-      - "crates/fullmag-plan/src/spatial_absorber.rs"
-      - "apps/control-room/src/modules/viewport-3d/viewport3dResources.ts"
-      - "apps/control-room/src/kernel/resources/geometryLifecycleResources.ts"
-      - "crates/fullmag-api/src/router_v2/handlers/meshing/mesh.rs"
-      - "crates/fullmag-api/src/live_authored_initial_state/apply_preparation.rs"
-      - "crates/fullmag-api/src/live_authored_damping*"
-      - "crates/fullmag-api/src/live_authored_damping/**"
-      - "crates/fullmag-api/src/session.rs"
-      - "crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs"
-      - "crates/fullmag-cli/src/live_workspace.rs"
-      - "crates/fullmag-cli/src/orchestrator.rs"
-      - "crates/fullmag-cli/src/scratch_runtime.rs"
-      - "crates/fullmag-cli/src/python_bridge.rs"
-      - "crates/fullmag-cli/src/orchestrator/manual_remesh.rs"
-      - "crates/fullmag-ir/src/absorbing_boundary.rs"
-      - "packages/fullmag-py/src/fullmag/model/*absorbing_boundary*"
-      - "examples/fem_spatial_absorbing_layers.py"
-      - "tests/fixtures/abl_browser_fdm/**"
-
 permissions:
   contents: read
 
 concurrency:
-  group: abl-live-browser-${{ github.event.pull_request.number || github.ref }}
+  group: abl-live-browser-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

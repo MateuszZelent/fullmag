@@ -517,6 +517,70 @@ Requested intent is preserved; planner-resolved execution is recorded. Validatio
         )
         self.assertEqual([], validate_page(self.repo, self.manifest, rendered))
 
+    def test_rendered_html_rejects_missing_required_math_and_copy_controls(self) -> None:
+        rendered = self.repo / "exchange.html"
+        rendered.write_text(
+            '<html><body><span class="math notranslate nohighlight">\\\\(A\\\\)</span></body></html>',
+            encoding="utf-8",
+        )
+
+        errors = validate_page(self.repo, self.manifest, rendered)
+
+        self.assertTrue(any("copy control" in error for error in errors), errors)
+
+        rendered.write_text(
+            '<html><body><button class="copybutton">Copy</button></body></html>',
+            encoding="utf-8",
+        )
+        errors = validate_page(self.repo, self.manifest, rendered)
+        self.assertTrue(any("MathJax math nodes" in error for error in errors), errors)
+
+    def test_copybutton_runtime_requires_a_highlighted_code_block(self) -> None:
+        rendered = self.repo / "exchange.html"
+        rendered.write_text(
+            '<html><body><span class="math">A</span>'
+            '<script src="_static/copybutton.js"></script></body></html>',
+            encoding="utf-8",
+        )
+
+        errors = validate_page(self.repo, self.manifest, rendered)
+
+        self.assertTrue(any("copy control" in error for error in errors), errors)
+
+        rendered.write_text(
+            '<html><body><span class="math">A</span>'
+            '<div class="highlight"><pre>example()</pre></div>'
+            '<script src="_static/copybutton.js"></script></body></html>',
+            encoding="utf-8",
+        )
+        self.assertEqual([], validate_page(self.repo, self.manifest, rendered))
+
+    def test_copybutton_assets_are_not_copy_controls(self) -> None:
+        rendered = self.repo / "exchange.html"
+        rendered.write_text(
+            '<html><head><link rel="stylesheet" href="_static/copybutton.css"></head>'
+            '<body><span class="math">A</span>'
+            '<script src="_static/clipboard.min.js"></script></body></html>',
+            encoding="utf-8",
+        )
+
+        errors = validate_page(self.repo, self.manifest, rendered)
+
+        self.assertTrue(any("copy control" in error for error in errors), errors)
+
+    def test_rendered_html_does_not_accept_required_elements_in_comments(self) -> None:
+        rendered = self.repo / "exchange.html"
+        rendered.write_text(
+            '<html><body><!-- <span class="math">A</span> -->'
+            '<!-- <button class="copybutton">Copy</button> --></body></html>',
+            encoding="utf-8",
+        )
+
+        errors = validate_page(self.repo, self.manifest, rendered)
+
+        self.assertTrue(any("MathJax math nodes" in error for error in errors), errors)
+        self.assertTrue(any("copy control" in error for error in errors), errors)
+
     def test_rejects_manifest_placeholders(self) -> None:
         broken = copy.deepcopy(self.manifest)
         broken["sources"][0]["responsibility"] = "TODO explain this mapping"

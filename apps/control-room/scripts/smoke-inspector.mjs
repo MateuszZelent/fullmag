@@ -2605,9 +2605,8 @@ async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, f
   });
 
   const resultsTab = page
-    .locator(".fm-explorer .fm-tabs-trigger")
-    .filter({ hasText: /^Results$/ });
-  await resultsTab.click();
+    .locator('.fm-side-rail[data-side="left"] [data-rail-item="results"]');
+  if ((await resultsTab.getAttribute("data-active")) !== "true") await resultsTab.click();
   const resultRootId = "results:run:inspector-run";
   const resonanceRootId = `${resultRootId}:resonance`;
   const drivenStageId = `${resonanceRootId}:stage:frequency-response:driven_response`;
@@ -2674,9 +2673,8 @@ async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, f
   await plotButton.press("Enter");
 
   const modelTab = page
-    .locator(".fm-explorer .fm-tabs-trigger")
-    .filter({ hasText: /^Model$/ });
-  await modelTab.click();
+    .locator('.fm-side-rail[data-side="left"] [data-rail-item="model"]');
+  if ((await modelTab.getAttribute("data-active")) !== "true") await modelTab.click();
   await expandInspectorNode(page, "model:objects");
   await expandInspectorNode(page, "model:object:film");
   await expandInspectorNode(page, "model:object:film:visualization");
@@ -2933,10 +2931,9 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
       );
 
       const resultsTab = page
-        .locator(".fm-explorer .fm-tabs-trigger")
-        .filter({ hasText: /^Results$/ });
+        .locator('.fm-side-rail[data-side="left"] [data-rail-item="results"]');
       await resultsTab.waitFor({ state: "visible", timeout: 60_000 });
-      await resultsTab.click();
+      if ((await resultsTab.getAttribute("data-active")) !== "true") await resultsTab.click();
       const resultRootId = "results:run:inspector-run";
       const resonanceRootId = `${resultRootId}:resonance`;
       const stageId =
@@ -3219,14 +3216,13 @@ async function qualifyModalDispersionAndPostprocessing(page, inspector, screensh
   sendInspectorRealtimeHello(fixture, 1);
 
   const resultsTab = page
-    .locator(".fm-explorer .fm-tabs-trigger")
-    .filter({ hasText: /^Results$/ });
+    .locator('.fm-side-rail[data-side="left"] [data-rail-item="results"]');
   const runADispersionRequest = page.waitForRequest((request) =>
     new URL(request.url()).pathname ===
       "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
     { timeout: 60_000 },
   );
-  await resultsTab.click();
+  if ((await resultsTab.getAttribute("data-active")) !== "true") await resultsTab.click();
   const resultRootId = "results:run:inspector-run";
   const dispersionRootId = `${resultRootId}:k-resolved`;
   const modalStageId = `${dispersionRootId}:stage:eigen-dispersion:modal_eigen`;
@@ -3285,9 +3281,8 @@ async function qualifyModalDispersionAndPostprocessing(page, inspector, screensh
   }, "modal-driven-response");
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
   const modelTab = page
-    .locator(".fm-explorer .fm-tabs-trigger")
-    .filter({ hasText: /^Model$/ });
-  await modelTab.click();
+    .locator('.fm-side-rail[data-side="left"] [data-rail-item="model"]');
+  if ((await modelTab.getAttribute("data-active")) !== "true") await modelTab.click();
   await expandInspectorNode(page, "model:objects");
   await expandInspectorNode(page, "model:object:film");
   await page.locator('[data-node-id="model:object:film:visualization"]').waitFor({
@@ -3440,9 +3435,8 @@ async function qualifyModalArtifactOwnershipRace(
   const staleModeFieldRequestCount = inspectorModeFieldVectorRequestCount(fixture);
 
   const modelTab = page
-    .locator(".fm-explorer .fm-tabs-trigger")
-    .filter({ hasText: /^Model$/ });
-  await modelTab.click();
+    .locator('.fm-side-rail[data-side="left"] [data-rail-item="model"]');
+  if ((await modelTab.getAttribute("data-active")) !== "true") await modelTab.click();
   await selectInspectorNode(page, inspector, "model:object:film:visualization", {
     owner: "object-visualization",
     label: "Object viewport with unmatched run A artifact",
@@ -3536,14 +3530,12 @@ async function qualifyMatchedRunBModalArtifact(
     realtimeConnectionsBeforeReload + 1,
   );
   const resultsTab = page
-    .locator(".fm-explorer .fm-tabs-trigger")
-    .filter({ hasText: /^Results$/ });
+    .locator('.fm-side-rail[data-side="left"] [data-rail-item="results"]');
   const modelTab = page
-    .locator(".fm-explorer .fm-tabs-trigger")
-    .filter({ hasText: /^Model$/ });
+    .locator('.fm-side-rail[data-side="left"] [data-rail-item="model"]');
   diagnostic.phase = "select-results-tab";
-  if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
-    await resultsTab.click();
+  if ((await resultsTab.getAttribute("data-active")) !== "true") {
+    if ((await resultsTab.getAttribute("data-active")) !== "true") await resultsTab.click();
   }
   diagnostic.phase = "wait-run-b-dispersion-response";
   await runBResponse;
@@ -3618,7 +3610,7 @@ async function qualifyMatchedRunBModalArtifact(
     diagnostic.phase = "click-plot-mode-field-while-stale";
     await plotModeButton.click();
     diagnostic.phase = "switch-to-model-tab";
-    await modelTab.click();
+    if ((await modelTab.getAttribute("data-active")) !== "true") await modelTab.click();
     diagnostic.phase = "select-mode-visualization-node";
     await selectInspectorNode(page, inspector, "model:object:film:visualization:mode-visualization", {
       owner: "object-mode-visualization-overview",
@@ -3677,8 +3669,8 @@ async function qualifyMatchedRunBModalArtifact(
   await waitForInspectorRequestQuiet(page, fixture);
 
   diagnostic.phase = "restore-results-branch";
-  if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
-    await resultsTab.click();
+  if ((await resultsTab.getAttribute("data-active")) !== "true") {
+    if ((await resultsTab.getAttribute("data-active")) !== "true") await resultsTab.click();
   }
   await selectInspectorResultBranch(page, inspector, resultRootId, dispersionRootId, modalStageId);
 }
@@ -3693,10 +3685,9 @@ async function selectInspectorResultBranch(
   let phase = "select-dispersion-result";
   try {
     const resultsTab = page
-      .locator(".fm-explorer .fm-tabs-trigger")
-      .filter({ hasText: /^Results$/ });
-    if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
-      await resultsTab.click();
+      .locator('.fm-side-rail[data-side="left"] [data-rail-item="results"]');
+    if ((await resultsTab.getAttribute("data-active")) !== "true") {
+      if ((await resultsTab.getAttribute("data-active")) !== "true") await resultsTab.click();
     }
     await expandInspectorNode(page, resultRootId);
     await expandInspectorNode(page, dispersionRootId);
@@ -4151,10 +4142,9 @@ async function selectInspectorNode(page, inspector, nodeId, { owner, label }) {
 async function ensureModelNodeVisible(page, nodeId) {
   if (nodeId.startsWith("results:")) return;
   const modelTab = page
-    .locator(".fm-explorer .fm-tabs-trigger")
-    .filter({ hasText: /^Model$/ });
-  if (await modelTab.count() && await modelTab.getAttribute("aria-selected") !== "true") {
-    await modelTab.click();
+    .locator('.fm-side-rail[data-side="left"] [data-rail-item="model"]');
+  if (await modelTab.count() && await modelTab.getAttribute("data-active") !== "true") {
+    if ((await modelTab.getAttribute("data-active")) !== "true") await modelTab.click();
   }
   const parentIds = nodeId.startsWith("model:airbox:")
     ? ["model:universe", "model:airbox"]

@@ -242,9 +242,22 @@ bool build_gpu_exchange_periodic_reduced_csr(
         if (class_seen[reduced] == 0u || representative >= rows ||
             reduced_node[representative] != reduced ||
             !std::isfinite(out.reduced_mass[reduced]) ||
-            out.reduced_mass[reduced] <= 0.0) {
+            out.reduced_mass[reduced] < 0.0) {
             error = "GPU periodic reduced exchange representative or mass is invalid";
             return false;
+        }
+        // A class with zero lumped mass lies entirely in non-magnetic (air)
+        // elements of a shared-domain mesh. Like the CPU reduced path, the
+        // kernels then return H = 0; that is only consistent when the class
+        // carries no exchange stiffness.
+        if (out.reduced_mass[reduced] == 0.0) {
+            for (const auto &[col, value] : rows_by_class[reduced]) {
+                (void)col;
+                if (value != 0.0) {
+                    error = "GPU periodic reduced exchange class has stiffness but zero lumped mass";
+                    return false;
+                }
+            }
         }
     }
     out.row_offsets.reserve(static_cast<size_t>(reduced_rows) + 1u);

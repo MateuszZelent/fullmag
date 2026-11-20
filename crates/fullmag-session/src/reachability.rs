@@ -14,7 +14,7 @@ use fullmag_quantities::SolutionSet;
 
 use crate::accepted_provenance::AcceptedProvenanceManifest;
 use crate::archive_document::{ArchiveDocuments, ArchiveFileSnapshot};
-use crate::typed_documents::{LiveSnapshotArtifactReference, LiveSnapshotArtifactReferences};
+use crate::typed_documents::LiveSnapshotArtifactReferences;
 use crate::types::{
     ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole,
     FmsAcceptedStagePreparationReceipt, FmsArtifactCatalog, FmsBatchExpansionProgress,

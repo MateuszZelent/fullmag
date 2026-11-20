@@ -25,6 +25,10 @@ Points that trip new sessions most often:
   Application code is compiled inside the Docker `backend` service; never on the host.
 - Physics/numerics changes need the scientific note in `docs/physics/` first.
 - Review complexity and contracts using `.agents/skills/google-eng-review-practices/SKILL.md`; file size is a review signal, not an automatic reason to split.
+- Control Room UI quality bar: the glass mockup in `docs/design/inspector-redesign/` (shadcn/ui,
+  one Inspector template, icon rails, full-width dock) is the minimum; glass, shadows, domain hues
+  and motion are expected tools. Visual rules were rewritten on 2026-11-20 in
+  [frontend.md](.agents/instructions/frontend.md); older bans on glass and opacity motion no longer apply.
 
 ## Commands
 

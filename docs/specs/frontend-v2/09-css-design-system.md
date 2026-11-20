@@ -1,11 +1,23 @@
 # Frontend v2 - CSS Design System
 
-**Status:** Proposed architecture
+**Status:** Proposed architecture, visual language revised 2026-11-20
 **Date:** 2026-05-11
 
 ## 1. Design Position
 
 Frontend v2 must feel like a **premium professional application** — beautiful, dense, and purposeful. Think Figma's polish with COMSOL's depth. The visual system serves sustained scientific work with elegance, not with bare-bones utilitarianism.
+
+Since 2026-11-20 the reference is the glass mockup in `docs/design/inspector-redesign/`: the viewport fills the window and the explorer, Inspector, dock, bars and dialogs are frosted, rounded layers above it. The mockup sets the minimum quality bar; implementations may exceed it. Sections 1a, 2, 3, 6 and 8 below define the binding rules; older audit notes that contradict them are superseded.
+
+### 1a. Visual language 2026-11 (binding)
+
+- **Material:** glass over a live viewport. Layers use a translucent surface token, a backdrop blur/saturation token, a hairline border token and a top highlight token. `prefers-reduced-transparency: reduce` swaps glass for opaque panel surfaces.
+- **Recessed fields, raised selection:** inputs, segmented tracks and unselected options sit on a slightly recessed `field` surface tinted from the foreground colour, never bright white in the light theme. The selected option, active tab, active rail icon and selected tree row use the `raised` surface with the `sm` elevation and, where a domain applies, a domain-hue outline.
+- **Domain hues:** geometry, material, physics, study, visualization, mesh and definition each own a hue token. The hue marks the identity glyph, open section icon, selected tile and ribbon icon of that domain. Semantic state colours remain separate.
+- **Elevation:** three shadows, `sm` for controls and selected options, `md` for panels, popovers and menus, `lg` for dialogs, sheets and the command palette. Values follow the `beautiful-shadows` skill. One shadow strength per element state.
+- **Radius scale:** field ≈ 10 px, section ≈ 16 px, panel ≈ 22 px, window ≈ 28 px, pill fully rounded.
+- **Typography:** Inter for UI with tabular figures for numbers, JetBrains Mono only for identifiers, paths and code, an italic serif symbol face (STIX Two Text or compatible) for physics symbols. Sentence case labels.
+- **Both themes are first class** (Catppuccin Mocha and Latte). Every visual change is reviewed in both, with text contrast ≥ 4.5:1 and UI contrast ≥ 3:1.
 
 ### Three-layer CSS strategy
 
@@ -24,15 +36,16 @@ Custom `fm-*` classes define shared primitive variants, layout geometry and doma
 - A segmented radiogroup always offers one keyboard entry when any option is enabled, even if its current value is missing or disabled. Focus fallback does not change the value until the user acts.
 
 
-### Readable Inspector controls (design audit, 2026-10-27)
+### Inspector property rows (revised 2026-11-20, supersedes the 2026-10-27 audit)
 
-Inspector inputs and selects use a dedicated 35 px control height, 8 px radius
-and 13 px control text. Labels sit above ordinary editable fields; specialized
-vectors, checkboxes and other dense controls retain layouts suited to their
-interaction. Labels, values, units and validation remain visible in both
-Catppuccin themes and in narrow panels. Read-only results remain distinguishable
-from editable controls. These Inspector-specific values do not change the global
-compact or regular control geometry.
+Inspector property rows place the label (with an optional physics symbol) and
+the control side by side once the Inspector container is at least ≈ 22 rem
+wide, and stack them below that width (container queries). Vectors switch to
+side by side at ≈ 30 rem. Controls are 28–32 px high on the `field` radius, with
+12.5–13 px text. Units live inside the field as a unit menu that converts the
+displayed value. Labels, values, units and validation remain visible in both
+themes and in narrow panels; read-only values stay distinguishable from editable
+controls.
 
 ### File ownership
 
@@ -78,6 +91,9 @@ Preferencja `light` / `dark` / `system` jest zapisywana pod dotychczasowym klucz
 | `viewport` | 3D/2D visual surface |
 | `overlay` | transient tools, popovers, legends |
 | `selected` | active item/selection |
+| `glass` / `glass-strong` | frosted chrome, rails, panels, dock, overlays above the viewport |
+| `field` | recessed input, segmented track and unselected option surface |
+| `raised` | selected option, active tab, active rail icon, selected tree row |
 | `stale` | resource exists but is behind revision |
 | `degraded` | supported with reduced fidelity |
 | `unsupported` | capability gate blocks action |
@@ -129,6 +145,29 @@ Raw Catppuccin hex values belong only in `src/design/styles/tokens.css` and `src
 
 If a value appears in more than one component, it needs a token.
 
+Additional token families required by the 2026-11 visual language (names are
+indicative; the implementation fixes them in `tokens.css` / `theme.css`):
+
+```css
+:root {
+  --fm-glass-bg: …;          /* translucent layer surface */
+  --fm-glass-strong: …;      /* denser glass for floating bars */
+  --fm-glass-line: …;        /* hairline border of a glass layer */
+  --fm-glass-highlight: …;   /* inset top highlight */
+  --fm-glass-blur: 22px;     /* backdrop blur radius */
+  --fm-glass-saturate: 1.7;  /* backdrop saturation */
+  --fm-field-bg: …;          /* recessed control surface */
+  --fm-raised-bg: …;         /* selected/raised surface */
+  --fm-shadow-sm: …; --fm-shadow-md: …; --fm-shadow-lg: …;
+  --fm-radius-field: 10px; --fm-radius-section: 16px; --fm-radius-panel: 22px; --fm-radius-window: 28px;
+  --fm-hue-geometry: …; --fm-hue-material: …; --fm-hue-physics: …; --fm-hue-study: …;
+  --fm-hue-visualization: …; --fm-hue-mesh: …; --fm-hue-definition: …;
+  --fm-ease-out-soft: cubic-bezier(.3, .7, .2, 1);
+  --fm-duration-micro: 150ms; --fm-duration-panel: 300ms;
+  --fm-font-symbol: "STIX Two Text", "Cambria Math", serif;
+}
+```
+
 ## 4. Layout Geometry
 
 All layout classes use the `fm-` prefix for consistency with component classes.
@@ -179,28 +218,27 @@ Interactive primitives such as menus, ribbon buttons, tabs, dropdowns, dialogs, 
 
 ## 6. Motion and Micro-Animations
 
-Tasteful motion reinforces interaction feedback and visual hierarchy.
+Motion is part of the product quality. It shows what changed, guides the eye and makes the interface feel fluid.
 
 Allowed and encouraged:
 
-- opacity/transform transitions for overlay open/close (150–200ms ease-out);
-- subtle scale/highlight on selection change;
-- smooth panel resize transitions;
-- command progress pulse while a command is active;
-- stale-to-fresh resource transition in status indicators;
-- hover state transitions on interactive elements (100ms);
-- loading skeleton shimmer for async resources;
-- smooth scroll in explorer and inspector.
+- colour, shadow, transform and opacity transitions on interaction (100–200 ms);
+- disclosure animation to the natural height (`interpolate-size`, `::details-content`, Radix collapsible/accordion animations);
+- entry motion (short translate and fade) for content that appears because the user selected a new target, tab or panel;
+- View Transitions when the Inspector target changes;
+- sliding indicators for segmented controls, tabs and rails;
+- overlay, menu, popover, dialog and sheet open/close animations;
+- live-state pulses (running, live) and progress indicators, live ticking counters in telemetry;
+- loading skeletons and smooth scrolling.
 
-Forbidden:
+Limits:
 
-- layout dimension animations in the workspace grid that trigger reflow;
-- perpetual decorative animation near numerical data;
-- glassmorphism, parallax, hero sections, or marketing-style effects;
-- motion that triggers canvas resize loops;
-- animation durations exceeding 300ms for UI state changes.
+- same-target data refresh, resource invalidation and command ACK never replay entry motion, never remount the Inspector and never change the opacity of persistent controls;
+- micro-interactions 100–200 ms, panel and content transitions up to ≈ 320 ms, using the motion tokens;
+- no continuously animated workspace grid dimensions and no motion that resizes the viewport canvas in a loop;
+- perpetual animation only for state indicators, never as decoration next to numerical data.
 
-Respect `prefers-reduced-motion` by disabling transform/opacity transitions, keeping instant state changes.
+Respect `prefers-reduced-motion` by removing translate/fade motion and keeping instant state changes.
 
 ## 7. Accessibility
 
@@ -213,7 +251,8 @@ Respect `prefers-reduced-motion` by disabling transform/opacity transitions, kee
 
 ## 8. Performance Rules
 
-- No expensive blur/noise effects in scroll containers or near canvas.
+- `backdrop-filter` belongs on fixed layers (bars, rails, panels, dock, overlays, dialogs, menus). It is not applied per list row, to content scrolling inside a panel, or to elements animated in a loop.
+- Glass layers above the viewport must not force canvas re-layout: panel changes pass insets to the viewport instead of resizing its DOM. A glass or shadow change near the viewport needs a browser measurement (steady idle FPS, no idle redraw, live WebGL context).
 - Viewport overlays avoid forcing canvas re-layout.
 - CSS variables define visual state; React should not re-render large trees just to change a color.
 - Long lists use virtualization.

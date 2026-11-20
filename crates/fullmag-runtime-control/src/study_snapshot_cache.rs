@@ -7,6 +7,7 @@
 //! run waited for admission indefinitely. The result depends only on the
 //! store, the run, its RunSpec fingerprint and the content addresses of the
 //! study and catalog objects, so it is reused for an identical key.
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -17,7 +18,7 @@ use fullmag_plan::{StudyExecutionPlan, StudyProblemCatalog};
 /// One run's Study is typically all a process needs; keep one spare entry.
 const CAPACITY: usize = 2;
 
-pub(crate) type ValidatedAcceptedStudy = (StudyPlan, StudyProblemCatalog, StudyExecutionPlan);
+pub(crate) type ValidatedAcceptedStudy = (StudyPlan, StudyProblemCatalog, StudyExecutionPlan, BTreeMap<String, String>);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AcceptedStudyKey {

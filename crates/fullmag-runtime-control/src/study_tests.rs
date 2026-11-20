@@ -278,6 +278,7 @@ fn accepted_frequency_response_snapshot() -> super::AcceptedStudySnapshot {
         study,
         catalog,
         lowered,
+        authored_stage_ids: Default::default(),
     }
 }
 

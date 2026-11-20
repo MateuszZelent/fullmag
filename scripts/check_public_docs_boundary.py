@@ -8,16 +8,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_ROOT = ROOT / "public_docs" / "site"
-WORKFLOW = ROOT / ".github" / "workflows" / "documentation.yml"
+WORKFLOWS = ROOT / ".github" / "workflows"
 
 
 def main() -> int:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+    workflow = (WORKFLOWS / "documentation-build.yml").read_text(encoding="utf-8")
+    publisher = (WORKFLOWS / "documentation.yml").read_text(encoding="utf-8")
     expected_build = "public_docs/site public_docs/site/_build/html"
     if expected_build not in workflow:
         print(f"missing public-only build command: {expected_build}", file=sys.stderr)
         return 1
-    if "docs/source" in workflow:
+    if "docs/source" in workflow or "docs/source" in publisher:
         print("workflow references the internal docs/source tree", file=sys.stderr)
         return 1
 

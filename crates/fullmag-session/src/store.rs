@@ -2094,7 +2094,7 @@ impl SessionStore {
         if decision.action == FmsRetryAction::Retry {
             self.ensure_development_admission_open_unlocked()?;
         }
-        let mut catalog = self
+        let catalog = self
             .read_run_catalog(&decision.run_id)?
             .context("retry decision requires a durable run catalog")?;
         let task = catalog

@@ -1,0 +1,610 @@
+name: bootstrap-rust
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-contracts:
+    timeout-minutes: 75
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: packages/fullmag-py/pyproject.toml
+
+      - name: Install Rust
+        id: install-rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test fail-closed exact Cargo selector helper
+        run: python3 -B scripts/ci/test_run_exact_cargo_test.py
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Python runtime and mesh preparation dependencies
+        id: install-python-runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libglu1-mesa
+          python -m pip install -e 'packages/fullmag-py[meshing]'
+
+      - name: Resolve storage for API artifact fixtures
+        run: |
+          python -B - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          result = subprocess.run(
+              [sys.executable, "-B", "scripts/fullmag_storage.py", "resolve",
+               "--profile", "ci-rust-contracts", "--create"],
+              check=True, capture_output=True, text=True,
+          )
+          layout = json.loads(result.stdout)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              environment.write(
+                  f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
+              )
+          PY
+      - name: Run absorbing boundary scene validation
+        run: |
+          cargo test --locked -p fullmag-authoring --lib scene_validation_rejects_invalid_absorbing_boundary
+          cargo test --locked -p fullmag-authoring --lib adding_editing_and_removing_an_absorber
+          RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_
+          cargo test --locked -p fullmag-ir --lib absorbing_boundary::tests
+          cargo test --locked -p fullmag-plan --lib spatial_
+          cargo test --locked -p fullmag-authoring --lib spatial_absorbers_reference_owned_regions_by_stable_id
+          RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api overlapping_csg_boundary_is_rejected_before_mesh_build
+
+      - name: Run material provenance and authoring roundtrip contracts
+        run: cargo test --locked -p fullmag-authoring --lib material_library_roundtrip
+
+      - name: Run spin transport planning and provenance contracts
+        run: |
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-plan --lib spin_transport::tests::fem_planning_omits_spin_transport_inactive_in_physics_graph -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-plan --lib spin_transport::tests::resolves_bounded_fem_m2_torque_to_stage_transport_callback -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-plan --lib spin_transport::tests::reject_unassigned_spin_boundary_policy_fails_closed_without_claims -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-plan --lib spin_transport::tests::resolves_only_fdm_cpu_double_and_preserves_requested_intent -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runner --lib fdm::cpu::spin_transport::tests::reciprocal_and_transient_plans_publish_transport_execution_provenance -- --exact
+
+      - name: Run all spin transport planner and runner unit tests
+        run: |
+          cargo test --locked -p fullmag-plan --lib spin_transport::tests
+          cargo test --locked -p fullmag-runner --lib fdm::cpu::spin_transport::tests
+
+      - name: Verify interleaved Zarr sample indexes after writer drain
+        shell: bash
+        run: |
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runner --lib artifact_pipeline::tests::zarr_field_sample_indexes_survive_interleaved_buffer_flushes -- --exact | tee "$RUNNER_TEMP/zarr-sample-index-test.log"
+          grep -F "test result: ok. 1 passed" "$RUNNER_TEMP/zarr-sample-index-test.log"
+
+      - name: Check FEM CPU runner contracts
+        # Type-check the CPU native lane independently of fem-gpu, including
+        # its tests. This does not link or qualify the MFEM runtime.
+        run: |
+          cargo test --locked -p fullmag-runner --lib native_fem::object_average::tests
+          FULLMAG_FEM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-runner --features fem-native --tests
+
+      - name: Type-check the native FEM frequency-response adapter
+        run: FULLMAG_FEM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-api --features fem-gpu --bins
+
+      - name: Check FDM CUDA runner contracts
+        # cargo check type-checks the CUDA Rust path without linking a native
+        # library. The actual cuFFT operator is qualified on the managed GPU.
+        run: |
+          cargo test --locked -p fullmag-runner --lib periodic_airbox_provenance
+          cargo test --locked -p fullmag-runner --lib cuda_stage_handoff_preserves_reference_and_rejects_changed_state
+          FULLMAG_FDM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-runner --features cuda --tests
+
+      - name: Run closed-loop volume inspection policy contracts
+        run: |
+          cargo test -p fullmag-ir --lib closed_loop_direct_budget_
+          cargo test -p fullmag-plan --lib antenna_current_source::tests::closed_loop_volume_budget_
+          cargo test -p fullmag-plan --lib antenna_current_source::tests::external_lead_does_not_inherit_closed_loop_volume_budget
+          cargo test -p fullmag-runner --lib antenna_field_solution::direct_quadrature
+
+      - name: Run material library and scene assignment contracts
+        run: |
+          cargo test --locked -p fullmag-api --bin fullmag-api material_library
+          cargo test --locked -p fullmag-workspace --lib material_catalog
+          cargo test --locked -p fullmag-application --lib script_source_capture
+
+      - name: Run shared accepted-inspection read contracts
+        run: |
+          cargo test -p fullmag-session --lib read_transaction
+          cargo test -p fullmag-runtime-control --lib accepted_task_stop_is_durable_idempotent_and_terminal_after_stopped_event
+          cargo test -p fullmag-runtime-control --lib failed_no_spawn_stop_without_start_preserves_public_stop_fence_and_replays
+          cargo test --locked -p fullmag-runtime-control --lib no_spawn_genesis_recovers_only_exact_immutable_admission_and_replays
+          cargo test --locked -p fullmag-runtime-control --lib step_output_inputs_are_derived_from_the_current_successful_attempt
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runtime-control --lib tests::accepted_task_stop_waits_for_writer_before_recovery_without_duplicating_stop -- --exact
+          cargo test -p fullmag-runtime-control --lib study_inspection_integrity
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runtime-control --lib claim::scoped_store_io_classification_tests::raw_enodata_is_not_a_global_transient_store_error -- --exact
+          cargo test -p fullmag-api --bin fullmag-api router_v2::handlers::data::antenna_inspection::tests
+
+      - name: Run terminal Docker recovery contracts
+        run: cargo test -p fullmag-session --lib runtime_service::retained_terminal_runs::tests --no-fail-fast
+
+      - name: Run retained manual-held Docker recovery contracts
+        run: |
+          cargo test -p fullmag-session --lib runtime_service::retained_held_manual_runs::tests --no-fail-fast
+          cargo test -p fullmag-session --lib manual_held --no-fail-fast
+
+      - name: Run accepted explicit Compute start-gate contracts
+        run: |
+          cargo test -p fullmag-session --lib accepted_start_gate
+          cargo test -p fullmag-session --lib accepted_stage_receipt
+          cargo test -p fullmag-runtime-control --lib accepted_start
+          cargo test -p fullmag-runtime-control --lib accepted_recovery_requires_release
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker restored_manual_worker_requires_exact_compute_release
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::closed_loop_run_parameter_tests::
+
+      - name: Run Docker accepted workspace startup and projection contracts
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          cargo check --locked -p fullmag-api --bins
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_study_worker::accepted_fdm_precision_tests:: --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::accepted_fdm_precision_tests:: --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::accepted_live_field_cadence_tests:: --no-fail-fast
+          cargo test -p fullmag-plan --lib preparation::tests::fdm_
+          cargo test -p fullmag-api --bin fullmag-api docker_startup::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_solver_profile:: --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_solver_profile:: --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_projection::operation_profile_projection_tests:: --no-fail-fast
+          cargo test -p fullmag-api --bin fullmag-api live_retirement --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api session_status_reports_current_energy --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_live_energy_clock_tests --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::platform::development_restart::tests --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api development_accepted_restore::terminal_observation::tests --no-fail-fast
+          cargo test -p fullmag-api --bin fullmag-api session_output_target_tests --no-fail-fast
+          python3 -B scripts/ci/run_exact_cargo_test.py -p fullmag-api --bin fullmag-api session::tests::active_run_accepts_next_solver_m_after_same_run_stage_preparation -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py -p fullmag-api --bin fullmag-api session::tests::authored_initial_state_retires_finished_run_but_not_another_run -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py -p fullmag-api --bin fullmag-api session::tests::pending_user_magnetization_apply_still_supersedes_its_run -- --exact
+          cargo test -p fullmag-api --bin fullmag-api live_accepted_execution::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::response_source_map::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_compact_response_versions_remain_truthful_in_public_payloads
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_compact_sweep_does_not_read_redundant_dense_v2
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_response_reader_tests_compact_sweep_projects_native_amplitude
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::frequency_response_receipt_tests::response_receipt_reopens_typed_cas_outputs_without_an_accepted_state -- --exact
+          FULLMAG_FDM_EXECUTION=cpu python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runtime-control --lib study::tests::relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_reset -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-api --bin fullmag-api openapi_v2::tests::openapi_exposes_interactive_study_commands_and_exact_result_reads -- --exact
+          cargo test -p fullmag-api --bin fullmag-api live_execution_binding::tests
+          cargo test -p fullmag-api --bin fullmag-api isolated_snapshot_restore::tests
+          cargo test -p fullmag-api --bin fullmag-api development_accepted_restore::tests
+          cargo test -p fullmag-runtime-control --lib scheduler::accepted_start_tests
+          cargo test -p fullmag-api --bin fullmag-api live_accepted_projection::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_run_performance::tests
+          cargo test -p fullmag-api --bin fullmag-api accepted_fem_study_worker::source_contract_tests
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_study_worker::source_contract_tests
+          cargo test -p fullmag-api --bin fullmag-api live_scene_preparation::tests
+          cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler --no-fail-fast
+          cargo test -p fullmag-api --bin fullmag-api accepted_preparation_completion_keeps_reserved_record_after_mesh_revision_moves
+          cargo test -p fullmag-api --bin fullmag-api preparation_failure_and_stop_terminalize_only_their_reserved_records
+          cargo test -p fullmag-api --bin fullmag-api old_preparation_terminalization_does_not_mutate_replacement_session_ledger
+          cargo test -p fullmag-api --bin fullmag-api rejected_accepted_admission_does_not_reserve_a_run_command
+
+      - name: Verify Live Charts table ownership and binary rows
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::tables::modal_history_tests::live_view_continuity_binary_rows_header_pins_exact_a1_and_b1_attempts -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::tables::modal_history_tests::live_view_continuity_rejects_unbound_scalar_table_rows -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-api --bin fullmag-api router_v2::middleware::cors::tests::live_view_continuity_browser_clients_can_read_the_table_series_identity_header -- --exact
+          cargo test --locked -p fullmag-api --bin fullmag-api table_rows_binary
+
+      - name: Run runtime service sampler and control contracts
+        run: cargo test -p fullmag-api --bin fullmag-runtime-service --no-fail-fast
+
+      - name: Check mixed-history recovery CLI contract
+        run: cargo check -p fullmag-cli --bin fullmag
+
+      - name: Run explicit reaped-worker failure recovery contracts
+        run: cargo test -p fullmag-api --bin fullmag-runtime-service failed_worker_recovery::tests --no-fail-fast
+
+      - name: Run disconnected mixed-P1 v2 API summary contracts
+        run: cargo test -p fullmag-api --bin fullmag-api mixed_v2_summary_tests --no-fail-fast
+
+      - name: Run read-only retained snapshot validation contracts
+        run: |
+          cargo test -p fullmag-session --lib retained_snapshot --no-fail-fast
+          cargo test -p fullmag-cli --bin fullmag retained_snapshot --no-fail-fast
+          cargo test -p fullmag-api --bin fullmag-api isolated_snapshot --no-fail-fast
+
+      - name: Run native container recovery capability CLI contracts
+        run: cargo test -p fullmag-cli --bin fullmag container_recovery_capabilities
+
+      - name: Verify read-only saved FDM/FEM playback and binary frame routes
+        run: |
+          # Writer-gate tests launch a child that can briefly inherit unrelated
+          # manifest locks from other test threads before exec.
+          cargo test --locked -p fullmag-workspace-inspect --lib -- --test-threads=1
+          cargo test --locked -p fullmag-api --bin fullmag-api saved_playback_
+
+      - name: Run instance discovery contracts (ADR 0069)
+        run: cargo test -p fullmag-api --bin fullmag-api instance_discovery::tests --no-fail-fast
+
+      - name: Run complete session reachability and archive contracts
+        run: cargo test -p fullmag-session --lib --no-fail-fast
+
+      - name: Verify accepted provenance archive export and read-only import
+        if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          cargo test -p fullmag-session --lib accepted_provenance
+          cargo test -p fullmag-session --lib session_schema_guard_distinguishes_v1_and_readonly_v2_provenance
+          cargo test -p fullmag-api --bin fullmag-api accepted_fms_persistence_tests
+          cargo test -p fullmag-api --bin fullmag-api context_bound_export_rejects_session_identity_before_script_read
+
+      - name: Run fail-closed compact workspace import regression
+        if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
+        env:
+          RUST_MIN_STACK: 8388608
+        run: cargo test -p fullmag-api --bin fullmag-api compact_session_import_missing_declared_artifact_preserves_active_workspace
+
+      - name: Run runner retention preview cancellation contracts
+        env:
+          PYTHONPATH: scripts
+        run: |
+          python -B -m unittest discover -s scripts -p 'test_local_runner_retention*.py'
+          python -B -m unittest discover -s scripts -p 'test_local_runner_source_compaction.py'
+          python -B -m unittest discover -s scripts/tests/local_runner -p 'test_container_api.py'
+          python -B -m unittest discover -s scripts/tests/local_runner -p 'test_container_main.py'
+          python -B -m unittest discover -s scripts -p 'test_local_runner_cli.py'
+          python -B -m unittest discover -s scripts/tests/local_runner -p 'test_observability_review_regressions.py'
+          python -B -m unittest discover -s scripts/tests/local_runner -p 'test_observability.py'
+
+      - name: Run attempt-scoped Relax to Eigen bootstrap contract
+        run: cargo test -p fullmag-runner relax_bootstrap_certificates_are_attempt_scoped_and_worker_plans_bind_their_bytes --lib
+
+      - name: Run deterministic eigen worker input contracts
+        run: cargo test -p fullmag-runner eigen_k_worker --no-fail-fast
+
+      - name: Run CPU direct-minimizer precision-floor and accepted-state contracts
+        run: cargo test --locked -p fullmag-runner direct_minimizer_reference::tests --lib
+      - name: Run FEM live Stop handoff contracts
+        run: |
+          cargo test --locked -p fullmag-runner fem_live_control_tests --lib
+          cargo test --locked -p fullmag-runner fdm_multilayer_interrupt_publishes_accepted_update_before_stop --lib
+      - name: Run native modal cancellation completion contract
+        run: cargo test -p fullmag-runner native_modal_run_result_completion_matches_status --lib
+
+      - name: Run CPU periodic Newell kernel cache regressions
+        run: cargo test -p fullmag-engine periodic_newell_kernel_cache_tests --lib
+
+      - name: Run field_expr.v1 mask function and time bytecode contracts
+        run: cargo test --locked -p fullmag-expr
+
+      - name: Run periodic XY multilayer PG-BB contracts
+        run: |
+          cargo test --locked -p fullmag-fdm-demag --test periodic_xy_kernel
+          cargo test --locked -p fullmag-plan --lib fdm_multilayer_periodic_xy_
+
+      - name: Run local material coefficient regressions
+        run: |
+          cargo test --locked -p fullmag-engine --lib spatial_ms_anisotropy_tests
+          cargo test --locked -p fullmag-plan --lib fem_aex_field_uniformity_uses_relative_si_tolerance
+          cargo test --locked -p fullmag-plan --lib fem_planner_elementwise_material_legality_distinguishes_a_from_ms
+          cargo test --locked -p fullmag-plan --lib fem_spin_transport_ms_realization_admits_only_the_scalar_torque_coefficient
+          cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::torque_
+
+      - name: Run FDM Airbox target membership contracts
+        run: |
+          cargo test --locked -p fullmag-api --bin fullmag-api fdm_airbox_membership
+          cargo test --locked -p fullmag-api --bin fullmag-api multilayer_airbox
+          cargo test --locked -p fullmag-api --bin fullmag-api airbox_scope_is_derived_from_resolved_field_carrier
+
+      - name: Run FDM region exchange operator contracts
+        run: |
+          cargo test --locked -p fullmag-engine --lib fdm::shared::exchange_operator::tests
+          cargo test --locked -p fullmag-runner --lib cpu_snapshot_reuses_observation_fft_workspace_across_states
+          cargo test --locked -p fullmag-engine --lib exchange_face_tests
+          # Cargo returns success when a test-name filter matches nothing.
+          dmi_test_log="$(mktemp)"
+          trap 'rm -f "$dmi_test_log"' EXIT
+          set -o pipefail
+          cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::dmi_decoupled_ 2>&1 | tee "$dmi_test_log"
+          expected_dmi_tests=(
+            fdm::cpu::reference::tests::dmi_decoupled_exchange_connection_is_rejected_before_stepping
+            fdm::cpu::reference::tests::dmi_decoupled_exchange_connection_is_rejected_without_exchange_field
+            fdm::cpu::reference::tests::dmi_decoupled_exchange_gate_ignores_absent_or_zero_dmi
+          )
+          for test_name in "${expected_dmi_tests[@]}"; do
+            if ! grep -Fqx "test ${test_name} ... ok" "$dmi_test_log"; then
+              echo "::error::Expected DMI regression did not pass: ${test_name}" >&2
+              exit 1
+            fi
+          done
+          cargo test --locked -p fullmag-plan --lib fdm_region_
+          cargo test --locked -p fullmag-plan --lib fdm_cuda_region_material_fields
+          cargo test --locked -p fullmag-plan --lib absorbing_boundary_
+          cargo test --locked -p fullmag-plan --lib intra_object_region_exchange_defaults_harmonic_mean
+          cargo test --locked -p fullmag-plan --lib exchange_scale_zero_disables_interface_exchange
+          cargo test --locked -p fullmag-plan --lib pure_inherited_region_preserves_parent_material_and_continuous_exchange
+          cargo test --locked -p fullmag-engine --lib magnetoelastic::tests
+          cargo test --locked -p fullmag-runner --lib scalar_metrics::tests::fdm_average_m_
+          cargo test --locked -p fullmag-engine --lib fem::tests::periodic_dmi_class_field_divides_class_residual_by_class_mass
+          cargo test --locked -p fullmag-engine --lib fem::tests::observe_evaluates_time_dependent_external_field_at_state_time
+
+      - name: Run canonical FEM marker and artifact contracts
+        run: |
+          cargo test --locked -p fullmag-fem-sys --features build-native --lib versioned_stt_extension_is_append_only_after_legacy_plan_prefix
+          cargo test --locked -p fullmag-api --bin fullmag-api sequential_physical_pipeline_counts_only_enabled_physical_steps
+          cargo test --locked -p fullmag-runner --lib resumed_run_artifacts_preserve_stage_start_without_accepted_steps
+          cargo test --locked -p fullmag-runner --lib adaptive_fdm_cuda_identity_is_explicit_but_unvalidated_until_controller_artifact
+          cargo test --locked -p fullmag-runner --lib timestep_qualification::tests
+          cargo test --locked -p fullmag-runner --lib cuda_regional_drive_energy_split_preserves_total_and_single_object_scalars
+          cargo test --locked -p fullmag-runner --lib cuda_publication_clock_is_physical_before_digest_and_keeps_relaxation_local
+          cargo test --locked -p fullmag-api --bin fullmag-api runtime_command_precondition_uses_published_durable_revision
+          cargo test --locked -p fullmag-plan --lib materialized_input_preserves_full_u32_markers
+          cargo test --locked -p fullmag-antenna-artifacts --lib canonical_attributes_preserve_u32_without_accepting_invalid_ranges
+
+      - name: Run typed active eigen Stop and Pause contracts
+        run: |
+          cargo test -p fullmag-engine fem_sparse::tests::lobpcg_control_ --lib
+          cargo test -p fullmag-runner controlled_k_path_retains_only_the_completed_sample_prefix --lib
+          cargo test -p fullmag-runner eigen_path_returns_typed_partial_for_stop_and_pause_before_single_k_execution --lib
+          cargo test -p fullmag-runner writing_artifacts_control_preserves_certified_native_mode_bytes --lib
+          cargo test -p fullmag-runner completed_pool_prefix_precedes_persistent_stop_or_pause --lib
+          cargo test -p fullmag-runner interrupted_sample_diagnostics_do_not_collide_with_accepted_prefix_paths --lib
+          cargo test -p fullmag-runner direct_floquet_runtime_control_preserves_pause_and_stop_reasons --lib
+
+      - name: Run native modal artifact provenance contract
+        run: |
+          cargo test -p fullmag-runner native_modal_artifact_limitations_follow_executed_operator_payload --lib
+          cargo test -p fullmag-runner native_modal_manifest_distinguishes_numeric_solve_from_comparison --lib
+          cargo test -p fullmag-runner actual_path_manifest_distinguishes_numeric_solve_from_comparison --lib
+          cargo test -p fullmag-runner eigen_path_single_k_solver_model_ --lib
+          cargo test -p fullmag-runner relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation --lib
+          cargo test -p fullmag-runner floquet_dynamic_demag_provider_requires_exact_requested_pair_set --lib
+          cargo test -p fullmag-runner spectrum_quantity_ --lib
+
+      - name: Run diagnostic flag contracts through real single-k publishers
+        run: |
+          cargo test -p fullmag-runner eigen::output_selection::tests --lib
+          cargo test -p fullmag-runner eigen::diagnostic_artifact::tests --lib
+          cargo test -p fullmag-runner eigen_diagnostics_ --lib
+
+      - name: Run sample-scoped eigen artifact contracts
+        run: |
+          cargo test -p fullmag-runner output_publication_tests --lib
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runner --lib project_storage::private_scratch_tests::long_run_identity_does_not_expand_native_scratch_path -- --exact
+
+      - name: Run selected-only path potential publication contracts
+        run: |
+          cargo test -p fullmag-runner path_potential_publication_tests --lib
+          cargo test -p fullmag-runner deferred_physical_potential_tests --lib
+
+      - name: Run bias-field sample identity rejection contracts
+        run: cargo test -p fullmag-runner native_field_sweep_identity_tests --lib
+
+      - name: Run bias-field tracked mode publication contracts
+        run: cargo test -p fullmag-runner bias_field_branch_selection_tracks_native_publisher_artifacts_before_publication --lib
+
+      - name: Run eigen artifact and Kittel residual evidence contracts
+        run: cargo test -p fullmag-runner eigen::artifacts::tests --lib
+
+      - name: Run tracking confidence and branch writer contracts
+        run: |
+          cargo test -p fullmag-runner eigen::tracking::tests --lib --no-fail-fast
+          cargo test -p fullmag-runner tracked_pair_overlap_is_published_as_confidence_in_json_and_csv --lib
+          cargo test -p fullmag-runner tracking_only_mode_contributes_to_overlap_summary_without_public_mode_selection --lib
+
+      - name: Run raw single-k checkpoint durability contracts
+        run: cargo test -p fullmag-runner single_k_checkpoint --lib
+
+      - name: Verify the persisted checkpoint with its Python inspector
+        env:
+          FULLMAG_CHECKPOINT_INSPECTOR_PYTHON: python3
+        run: cargo test -p fullmag-runner checkpoint_inspector_accepts_actual_persisted_manifest --lib -- --ignored
+
+      - name: Run eigen path terminal sample admission contracts
+        run: |
+          cargo test -p fullmag-runner noncompleted_single_k_status_preserves_raw_bytes_and_stops_admission --lib
+          cargo test -p fullmag-runner completed_single_k_status_admits_and_publishes_every_path_sample --lib
+          cargo test -p fullmag-runner interrupted_status_keeps_available_raw_diagnostics_with_or_without_checkpoint_root --lib
+          cargo test -p fullmag-runner interrupted_checkpoint_write_failure_is_not_returned_as_cancelled --lib
+          cargo test -p fullmag-runner fem::eigen_path::checkpoint_admission_tests::parallel_pool_bundle_ --lib
+      - name: Run adaptive eigen process pool contracts
+        run: |
+          cargo test -p fullmag-runner k_process_pool --no-fail-fast
+          cargo test -p fullmag-runner adaptive_resources --no-fail-fast
+
+      - name: Run canonical IR, waveguide and typed V04 migration contracts
+        run: cargo test -p fullmag-ir --no-fail-fast
+
+      - name: Run eigen branch selector planning contracts
+        run: |
+          cargo test -p fullmag-plan fem_eigen_branch --lib
+          cargo test -p fullmag-plan fem_eigen_raw_mode_indices_remain_valid_without_path_sampling --lib
+          cargo test -p fullmag-plan eigen_output_validation_tests --lib
+          cargo test -p fullmag-plan eigen_spectrum_quantity_validation_tests --lib
+
+      - name: Run response sweep legacy Results catalog contracts
+        run: cargo test -p fullmag-api response_magnetic_sweep_v1_endpoint_returns_artifact_json
+
+      - name: Run Results artifact stage ownership contracts
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          cargo test -p fullmag-api --bin fullmag-api result_catalog_uses_committed_eigen_owner_after_active_stage_advances
+          cargo test -p fullmag-api --bin fullmag-api result_catalog_rejects_generation_run_and_stage_reference_mismatches
+          cargo test -p fullmag-api --bin fullmag-api result_owner_uses_producer_only_for_exact_generation_members
+          cargo test -p fullmag-api --bin fullmag-api result_owner_resolves_exact_file_and_safe_directory_references
+          cargo test -p fullmag-api --bin fullmag-api result_owner_rejects_stage_reference_conflict_and_ambiguity
+
+      - name: Run modal solver policy planning contracts
+        run: |
+          cargo test -p fullmag-plan fem_eigen_modal_solver_policy --lib
+          cargo test -p fullmag-plan fem_eigen_floquet --lib
+          cargo test -p fullmag-runner floquet_payload_tests --lib
+          cargo test -p fullmag-runner terminal_action_after_completed_pool_does_not_interrupt_but_active_actions_do --lib
+          cargo test -p fullmag-runner fem::eigen_progress::tests --lib
+          cargo test -p fullmag-runner gamma_classification_tests --lib
+          cargo test -p fullmag-runner eigen_diagnostics_reference_single_k_executor_publishes_without_native_provider --lib
+          cargo test -p fullmag-runner relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation --lib
+          cargo test -p fullmag-runner native_gpu_shared_domain_rejects_nonfinite_target_frequency --lib
+          cargo test -p fullmag-plan fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path --lib
+          cargo test -p fullmag-runner shared_domain_modal_scope_rejects_uncertified_local_tangent_terms --lib
+          cargo test -p fullmag-runner material_identity_tests --lib
+          cargo test -p fullmag-runner shared_domain_payload_omits_zero_anisotropy_after_certified_linearization --lib
+
+      - name: Run scene periodic boundary intent contracts
+        run: cargo test -p fullmag-authoring scene_pbc --lib
+
+      - name: Run scene thermal intent preservation contracts
+        run: cargo test -p fullmag-authoring scene_thermal_noise_ --lib
+
+      - name: Run postprocessing settings preservation contracts
+        run: cargo test -p fullmag-authoring postprocessing_settings_ --lib
+
+      - name: Run scene PBC Rust-Python synchronization regression
+        env:
+          FULLMAG_REPO_ROOT: ${{ github.workspace }}
+          RUST_MIN_STACK: 8388608
+        run: cargo test -p fullmag-api --bin fullmag-api scene_pbc_overrides_roundtrip_via_python_helper
+
+      - name: Run typed compute resource authoring bridge regressions
+        env:
+          FULLMAG_REPO_ROOT: ${{ github.workspace }}
+          RUST_MIN_STACK: 8388608
+        run: |
+          cargo test --locked -p fullmag-authoring --lib compute_resources
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-api --bin fullmag-api router_v2::tests::typed_compute_resources_cross_python_scene_rust_builder_and_problem_ir -- --exact
+
+      - name: Run FEM GPU BB typed policy and provenance contracts
+        run: |
+          cargo test --locked -p fullmag-ir --lib gpu_bb
+          cargo test --locked -p fullmag-ir --test gpu_bb_pipeline
+          cargo test --locked -p fullmag-authoring --test gpu_bb_scene_bridge
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-api --bin fullmag-api router_v2::tests::typed_gpu_bb_policy_cross_python_scene_rust_builder_and_problem_ir -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-api --bin fullmag-api script::tests::gpu_bb_preparation_borrows_only_study_and_preserves_physical_payload -- --exact
+          cargo test --locked -p fullmag-plan --lib gpu_bb_policy
+          cargo test --locked -p fullmag-runner --lib relaxation::provenance::tests
+
+      - name: Run full field identity binary transport contracts
+        run: |
+          cargo test -p fullmag-api --bin fullmag-api field_vector_v5
+          cargo test -p fullmag-api --bin fullmag-api analysis_field_vector_binary
+
+      - name: Run frequency-domain artifact ownership contracts
+        env:
+          # Canonical scene ACK contracts traverse a full SceneDocument, as do
+          # the other router contracts using this existing worker stack size.
+          RUST_MIN_STACK: 8388608
+        run: |
+          cargo test -p fullmag-api --bin fullmag-api field_sweep_items_keep_their_owner_identity_and_encode_resource_paths
+          cargo test -p fullmag-api --bin fullmag-api spectrum_v3_items_project_durable_field_identity_without_mutating_payload
+          cargo test -p fullmag-api --bin fullmag-api openapi_mode_field_availability_is_optional_boolean
+          cargo test -p fullmag-api --bin fullmag-api openapi_field_sweep_schema_exposes_typed_dataset_and_sample_contract
+          cargo test -p fullmag-api --bin fullmag-api quantities::tests
+          cargo test -p fullmag-api --bin fullmag-api frequency_domain_
+          cargo test -p fullmag-api --bin fullmag-api authoring_study_runtime_parallel_patch
+          cargo test -p fullmag-api --bin fullmag-api authoring_transaction_ack_
+          cargo test -p fullmag-api --bin fullmag-api modal_history_tests
+
+      - name: Run application materialization and eigen selector contracts
+        run: cargo test -p fullmag-application --no-fail-fast
+
+      - name: Run pinned Study execution profile entry contracts
+        run: |
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_run_and_relax_bind_auto_single_to_pinned_gpu
+          cargo test --locked -p fullmag-api --bin fullmag-api compute_preview::tests
+
+      - name: Run FEM StageAutosave origin contracts
+        run: |
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runner --lib artifact_pipeline::tests::initial_stage_autosave_table_scalar_does_not_write_legacy_scalar_trace -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runner --lib dispatch::tests::native_fem_stage_autosave_initial_table_is_t0_only_and_skips_direct_minimizer -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runner --lib dispatch::tests::native_fem_initial_snapshot_is_lazy_for_headless_time_domain -- --exact
+
+      - name: Run FDM GPU terminal provenance contracts
+        run: |
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runner --lib artifact_pipeline::tests::fdm_multilayer_terminal_provenance_is_preserved_across_zarr_metadata_updates -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runner --lib fdm::gpu::cuda::native::residency::tests::success_finalizer_propagates_terminal_provenance_publication_failure -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runner --lib fdm::gpu::cuda::native::residency::tests::error_finalizer_preserves_primary_error_when_terminal_publication_fails -- --exact
+
+      - name: Run authoritative Zarr stage completion contracts
+        run: |
+          cargo test --locked -p fullmag-runner --lib stage_completion
+          cargo test --locked -p fullmag-runner --lib autosave_storage::tests
+          cargo test --locked -p fullmag-runner --lib regular_zarr_completion
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runner --lib autosave_zarr::tests::metadata_atomic_replace_preserves_exact_bytes -- --exact
+
+      - name: Run FDM CPU BB demag reuse contracts
+        run: |
+          cargo test --locked -p fullmag-engine --lib demag_cache_tests
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runner --lib relaxation::direct_minimizer_reference::tests::projected_gradient_bb_reuses_each_trial_demag_fft_in_aos_and_soa -- --exact
+
+      - name: Run FDM CPU single-layer FFT oracle contracts
+        run: |
+          cargo test --locked -p fullmag-engine --lib half_spectrum_3d_matches_direct_dft_and_normalized_round_trip
+          cargo test --locked -p fullmag-engine --lib single_layer_workspace_shape_has_a_distinct_lifecycle_key
+          cargo test --locked -p fullmag-engine --lib open_single_layer_workspace_matches_legacy_aos_and_soa_oracle
+          cargo test --locked -p fullmag-engine --lib single_layer_specialization_excludes_3d_pbc_and_non_open_demag
+          cargo test --locked -p fullmag-engine --features parallel --lib single_layer_workspace_shape_has_a_distinct_lifecycle_key
+          cargo test --locked -p fullmag-engine --features parallel --lib half_spectrum_3d_matches_direct_dft_and_normalized_round_trip
+          cargo test --locked -p fullmag-engine --features parallel --lib open_single_layer_workspace_matches_legacy_aos_and_soa_oracle
+          cargo test --locked -p fullmag-engine --features parallel --lib single_layer_specialization_excludes_3d_pbc_and_non_open_demag
+
+      - name: Run native session writer lease contracts
+        run: cargo test -p fullmag-session --lib writer --no-fail-fast
+
+      - name: Run Docker accepted FEM GPU and host admission contracts
+        run: |
+          cargo test -p fullmag-api --bin fullmag-api accepted_fem_
+          cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparer preparation_writer_retry_retries_typed_busy_but_not_other_errors
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-fem-preparer preparation_launch_wait_ --no-fail-fast
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_live_layout_tests
+          cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler typed_writer_busy_retry_preserves_preparation_launch_identity
+          cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler pre_admission_snapshot_deferral_classifies_only_typed_busy
+          cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler deferred_recovery_retains_and_joins_an_owned_supervisor
+          cargo test -p fullmag-api --bin fullmag-api common_host_launch_gate_
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker common_host_launch_gate_
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::accepted_worker_claim_retry_tests::
+          python3 -B scripts/ci/run_exact_cargo_test.py -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::reaped_child_receipt_survives_unacknowledged_final_heartbeat -- --exact
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::cuda_trace_diagnostics_ --no-fail-fast
+          python3 -B scripts/ci/run_exact_cargo_test.py -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::host_bound_pre_spawn_retries_writer_busy_without_re_admission -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py -p fullmag-runtime-control --lib host_runtime::recovery_tests::required_current_snapshot_preserves_missing_sample_reason_as_typed_error -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py -p fullmag-runtime-control --lib host_runtime::recovery_tests::required_current_snapshot_keeps_configured_owner_mismatch_fatal -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::missing_sample_retries_exact_claim_without_consuming_launch_permit -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::inactive_inventory_owner_retries_before_spawn_without_releasing_claim -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::exhausted_stale_sample_retry_defers_second_read_and_authorization_without_consuming_claim_start_lease -- --exact
+          cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler scheduler_writer_busy_tests
+          cargo test -p fullmag-runtime-control --lib worker_inbox::tests
+          cargo test -p fullmag-api --bin fullmag-runtime-service orphan_teardown_
+          python3 -B scripts/ci/run_exact_cargo_test.py -p fullmag-runtime-control --lib claim::host_binding_tests::fresh_v2_host_claim_receives_the_canonical_runtime_generation_binding -- --exact
+          cargo test -p fullmag-runner --lib fem_gpu_execution_receipt_contract_tests
+          cargo test -p fullmag-session --lib host_resource_ledger
+          cargo test -p fullmag-runtime-control --lib compute_node_probe
+          cargo test -p fullmag-runtime-control --lib nvml_gpu_partition
+          cargo test -p fullmag-runtime-control --lib host_runtime
+
+      - name: Run native worker orphan teardown contracts
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          cargo test -p fullmag-session --lib worker_orphan_teardown_success_releases_capacity_and_reconciles_unknown
+          cargo test -p fullmag-session --lib worker_orphan_teardown_replays_exactly_and_rejects_changed_pins
+          cargo test -p fullmag-session --lib worker_orphan_teardown_replays_after_partial_proof_and_lease_publication
+          cargo test -p fullmag-session --lib worker_orphan_teardown_requires_inventory_quiescence
+          cargo test -p fullmag-session --lib worker_orphan_teardown_rejects_durable_started_receipt
+          cargo test -p fullmag-session --lib request_rejects_nil_uuid_and_unprefixed_store_identity
+
+      - name: Run Rust quantity, API and CLI contracts
+        env:
+          # The router contract serializes a full SceneDocument; keep the
+          # test worker stack large enough for its nested serde traversal.
+          RUST_MIN_STACK: 8388608
+        run: ./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts

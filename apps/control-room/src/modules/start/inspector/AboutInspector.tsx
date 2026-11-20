@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { tauriInvoke } from "@/kernel/persistence/ProjectDocumentController";
 import { Button } from "@/shared/ui/Button";
 
 import {
@@ -28,6 +27,7 @@ import { readBuildInfo, type BuildInfo } from "../model/buildInfo";
 import { buildDiagnostics } from "../model/diagnostics";
 import { startScreenStore } from "../model/startScreenState";
 import type { ComputeProbeState, RecentIndexState } from "../model/types";
+import { useDesktopInvoke } from "../model/useDesktopInvoke";
 
 export interface AboutInspectorProps {
   readonly compute: ComputeProbeState;
@@ -35,6 +35,7 @@ export interface AboutInspectorProps {
 }
 
 export function AboutInspector({ compute, index }: AboutInspectorProps) {
+  const desktopInvoke = useDesktopInvoke();
   const [build, setBuild] = useState<BuildInfo | null>(null);
   const [copiedBibtex, setCopiedBibtex] = useState(false);
   const [copiedDiag, setCopiedDiag] = useState(false);
@@ -58,7 +59,7 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
 
   const handleCopyDiagnostics = () => {
     const text = buildDiagnostics({
-      host: tauriInvoke() ? "desktop" : "browser",
+      host: desktopInvoke ? "desktop" : "browser",
       userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "SSR",
       locale: typeof navigator !== "undefined" ? navigator.language : "en",
       now: new Date(),
@@ -122,11 +123,11 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
           <h3 className="fm-about-inspector__card-title">Runtime Environment</h3>
           <dl className="fm-about-spec-row fm-about-flush">
             <dt>Platform Host</dt>
-            <dd>{tauriInvoke() ? "Desktop (Tauri)" : "Web Browser"}</dd>
+            <dd>{desktopInvoke ? "Desktop (Tauri)" : "Web Browser"}</dd>
           </dl>
           <dl className="fm-about-spec-row fm-about-flush">
             <dt>CPU Threads</dt>
-            <dd>{compute ? `${compute.cpuThreads} threads` : "Probing..."}</dd>
+            <dd>{compute ? `${compute.cpuThreads} threads` : "Probing…"}</dd>
           </dl>
           <dl className="fm-about-spec-row fm-about-flush">
             <dt>GPU Device</dt>

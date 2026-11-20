@@ -4,6 +4,31 @@ import { useThree } from "@react-three/fiber";
 import { useLayoutEffect, useState } from "react";
 import type { DimensionFramePixelRect } from "../layers/dimensionFrameLabelLayout";
 
+function observeViewportHud(root: Element, measure: () => void) {
+  const resize = new ResizeObserver(measure);
+  const refresh = () => {
+    resize.disconnect();
+    resize.observe(root);
+    for (const node of root.querySelectorAll(".fm-viewport-3d__hud, .fm-viewport-3d__colorbar-stack")) {
+      resize.observe(node);
+    }
+    measure();
+  };
+  const mutations = new MutationObserver(refresh);
+  const cleanup = () => {
+    mutations.disconnect();
+    resize.disconnect();
+  };
+  try {
+    mutations.observe(root, { childList: true, subtree: true });
+    refresh();
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+  return cleanup;
+}
+
 /** Measures DOM chrome only on layout changes; camera frames reuse the same rectangles. */
 export function useViewportHudRegions(viewCubeVisible: boolean, hslReferenceVisible: boolean): readonly DimensionFramePixelRect[] {
   const canvas = useThree((state) => state.gl.domElement);
@@ -26,17 +51,7 @@ export function useViewportHudRegions(viewCubeVisible: boolean, hslReferenceVisi
       }
       setRegions((previous) => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
     };
-    const resize = new ResizeObserver(measure);
-    const observe = () => {
-      resize.disconnect();
-      resize.observe(root);
-      root.querySelectorAll(".fm-viewport-3d__hud, .fm-viewport-3d__colorbar-stack").forEach((node) => resize.observe(node));
-      measure();
-    };
-    const mutations = new MutationObserver(observe);
-    mutations.observe(root, { childList: true, subtree: true });
-    observe();
-    return () => { resize.disconnect(); mutations.disconnect(); };
+    return observeViewportHud(root, measure);
   }, [canvas, hslReferenceVisible, size.height, size.width, viewCubeVisible]);
   return regions;
 }

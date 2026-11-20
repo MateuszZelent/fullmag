@@ -53,7 +53,9 @@ interface PanelFrameProps {
 }
 
 export function PanelFrame({ id, title, visible, children, dockHandle, drawer = false, drawerSide = "right", drawerShared = false, floatable = true, suspendWhenHidden = true, onDockChange, onHide, onMove }: PanelFrameProps) {
-  const storageKey = `fullmag.workspace.panel.${id}.v1`;
+  // v2: drawer gestures no longer persist a floating mode, so v1 entries that
+  // a narrow-window drawer saved as floating are dropped once.
+  const storageKey = `fullmag.workspace.panel.${id}.v2`;
   // Keep this frame safe when rendered outside the workspace hydration boundary.
   const [initial] = useState(() => {
     if (typeof window === "undefined") return { mode: "docked" as PanelMode, geometry: INITIAL_GEOMETRY };
@@ -69,6 +71,10 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
     return { mode: "docked" as PanelMode, geometry: INITIAL_GEOMETRY };
   });
   const [mode, setMode] = useState<PanelMode>(initial.mode);
+  // Moving or resizing a narrow-window drawer adjusts it for this narrow
+  // session only; widening the window docks the panel again.
+  const [drawerAdjusted, setDrawerAdjusted] = useState(false);
+  if (!drawer && drawerAdjusted) setDrawerAdjusted(false);
   const restoreMode = useRef<PanelMode>("docked");
   const [geometry, setGeometry] = useState(initial.geometry);
   const frame = useRef<HTMLElement>(null);
@@ -125,9 +131,9 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
   };
   const hide = () => hideWith(() => onHide?.());
   const interactionGeometry = (): Geometry => {
-    if (!drawer || mode !== "docked") return geometry;
+    if (!drawer || mode !== "docked" || drawerAdjusted) return geometry;
     const bounds = frame.current?.getBoundingClientRect();
-    setMode("floating");
+    setDrawerAdjusted(true);
     return bounds ? { x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height } : geometry;
   };
   const begin = (event: ReactPointerEvent<HTMLButtonElement>, kind: "move" | "resize") => {
@@ -171,7 +177,7 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
   };
   return <section ref={frame} className="fm-panel-frame" data-panel-frame={id} data-panel-mode={effectiveMode} hidden={!visible} aria-label={`${title} panel`}
     onFocusCapture={event => { if (frame.current?.contains(event.target as HTMLElement) && !(event.target as HTMLElement).closest(".fm-panel-chrome")) previousFocus.current = event.target as HTMLElement; }}
-    onScrollCapture={() => { if (visible && frame.current) scroll.current = Array.from(frame.current.querySelectorAll<HTMLElement>("*")).filter(e => e.scrollTop || e.scrollLeft).map(e => [e, e.scrollTop, e.scrollLeft]); }} style={!docked ? (effectiveMode === "maximized" ? maxBounds ?? { inset: 8 } : drawer && mode === "docked" ? { ...(drawerSide === "left" ? { left: 8 } : { right: 8 }), top: 144, width: drawerShared ? "calc(50vw - 12px)" : "min(416px, calc(100vw - 16px))", height: "calc(100dvh - 180px)" } : { left: geometry.x, top: geometry.y, width: geometry.width, height: geometry.height }) : undefined}>
+    onScrollCapture={() => { if (visible && frame.current) scroll.current = Array.from(frame.current.querySelectorAll<HTMLElement>("*")).filter(e => e.scrollTop || e.scrollLeft).map(e => [e, e.scrollTop, e.scrollLeft]); }} style={!docked ? (effectiveMode === "maximized" ? maxBounds ?? { inset: 8 } : drawer && mode === "docked" && !drawerAdjusted ? { ...(drawerSide === "left" ? { left: 8 } : { right: 8 }), top: 144, width: drawerShared ? "calc(50vw - 12px)" : "min(416px, calc(100vw - 16px))", height: "calc(100dvh - 180px)" } : { left: geometry.x, top: geometry.y, width: geometry.width, height: geometry.height }) : undefined}>
     <ChromeContext.Provider value={controls}>
       <Activity mode={!visible && suspendWhenHidden ? "hidden" : "visible"}>{children}</Activity>
     </ChromeContext.Provider>
