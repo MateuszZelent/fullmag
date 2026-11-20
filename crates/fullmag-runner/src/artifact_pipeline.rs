@@ -411,7 +411,7 @@ impl ArtifactPipelineSender {
         self.tx.send(job).map_err(|_| {
             let queue_depth_after_rollback = self
                 .queue_depth
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
                     Some(depth.saturating_sub(1))
                 })
                 .map(|previous| previous.saturating_sub(1))
@@ -681,7 +681,7 @@ impl ArtifactPipelineSender {
     fn rollback_queue_depth(&self) {
         let queue_depth_after_rollback = self
             .queue_depth
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
                 Some(depth.saturating_sub(1))
             })
             .map(|previous| previous.saturating_sub(1))
@@ -2036,7 +2036,7 @@ fn writer_loop(
     };
     for job in rx {
         queue_depth
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
                 Some(depth.saturating_sub(1))
             })
             .ok();

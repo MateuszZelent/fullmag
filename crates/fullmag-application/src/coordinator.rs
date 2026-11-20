@@ -11,7 +11,9 @@ use crate::execution::{
     TaskLifecycle, TaskRecord, WorkerCommand, WorkerCommandEnvelope, WorkerEvent,
     WorkerEventEnvelope, WorkerProtocolLedger, WORKER_PROTOCOL_SCHEMA,
 };
-use crate::preparation::{PreparationReceipt, PreparationReceiptError};
+use crate::preparation::PreparationReceiptError;
+#[cfg(test)]
+use crate::preparation::PreparationReceipt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
