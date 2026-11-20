@@ -86,4 +86,41 @@ describe("Inspector composition primitives", () => {
     expect(html).not.toContain("role=\"button\"");
     expect(html).not.toContain("fm-inspector-summary-tile");
   });
+
+  it("omits facts it cannot state and shows at most four", () => {
+    const html = renderToStaticMarkup(
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Scope", value: "Study pipeline" },
+          { label: "Resource", value: "unknown" },
+          { label: "Execution", value: " Unknown " },
+          { label: "Availability", value: "" },
+          { label: "Method", value: "Relaxation stage" },
+          { label: "Lane", value: "FDM" },
+          { label: "Revision", value: "8" },
+          { label: "Device", value: "GPU" },
+        ]}
+      />,
+    );
+
+    expect(html).not.toMatch(/unknown/i);
+    expect(html).not.toContain("Resource");
+    expect(html).not.toContain("Availability");
+    expect(html.match(/data-slot="inspector-metric"/g)).toHaveLength(4);
+    expect(html).toContain('data-count="4"');
+    expect(html).not.toContain("Device");
+  });
+
+  it("renders nothing when no fact is known", () => {
+    const html = renderToStaticMarkup(
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Resource", value: "unknown" },
+          { label: "Execution", value: null },
+        ]}
+      />,
+    );
+
+    expect(html).toBe("");
+  });
 });

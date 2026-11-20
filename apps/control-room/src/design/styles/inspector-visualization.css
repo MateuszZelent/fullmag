@@ -567,19 +567,6 @@
   font-weight: 650;
 }
 
-/* ── Inspector identity: larger icon box ── */
-.fm-inspector__identity-icon {
-  background: color-mix(in srgb, var(--fm-accent) 8%, var(--fm-bg-panel-raised)) !important;
-  border-color: color-mix(in srgb, var(--fm-accent) 24%, var(--fm-border-subtle)) !important;
-  transition:
-    background var(--fm-transition-fast),
-    box-shadow var(--fm-transition-fast);
-}
-
-.fm-inspector__identity-icon:hover {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-accent) 12%, transparent);
-}
-
 /* ── InspectorGroup icon slot (used in default variant header) ── */
 .fm-inspector-group-icon-box {
   width: var(--fm-field-row-min-height);
@@ -630,86 +617,48 @@
   transform: scale(0.96) !important;
 }
 
-/* Metric strip cards: fixed height, consistent label/value alignment */
+/* Facts (specs/frontend-v2/13 §1a, slot 3): one recessed group with hairline
+   dividers. Each fact draws its own leading and top hairline; the strip clips
+   the ones at its outer edge, so dividers stay correct when the grid wraps. */
+.fm-inspector-metric-strip {
+  overflow: hidden;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-section);
+  background: var(--fm-field-bg);
+  box-shadow: var(--fm-elevation-sm);
+}
+
 .fm-inspector-metric-card {
-  position: relative;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
+  gap: var(--fm-space-1);
   min-width: 0;
-  height: 58px;
-  padding: var(--fm-space-1) var(--fm-space-2);
-  border-radius: var(--fm-radius-md);
-  border: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-panel-raised);
-  overflow: hidden;
-  transition:
-    background var(--fm-transition-fast),
-    border-color var(--fm-transition-fast),
-    box-shadow var(--fm-transition-fast),
-    transform 120ms ease;
-}
-
-/* Tone accent bar along the top edge, keyed to the value's data-state */
-.fm-inspector-metric-card::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 2px;
-  background: var(--fm-border-subtle);
-  transition: background var(--fm-transition-fast);
-}
-
-.fm-inspector-metric-card:has([data-state="success"])::before {
-  background: var(--fm-success);
-}
-
-.fm-inspector-metric-card:has([data-state="warning"])::before {
-  background: var(--fm-warning);
-}
-
-.fm-inspector-metric-card:has([data-state="danger"])::before {
-  background: var(--fm-danger);
-}
-
-.fm-inspector-metric-card:has([data-state="degraded"])::before {
-  background: var(--fm-degraded);
-}
-
-.fm-inspector-metric-card:has([data-state="stale"])::before {
-  background: var(--fm-stale);
+  padding: var(--fm-space-2) var(--fm-space-3);
+  box-shadow:
+    -1px 0 0 0 var(--fm-border-subtle),
+    0 -1px 0 0 var(--fm-border-subtle);
 }
 
 .fm-inspector-metric-card__label {
   display: block;
-  font-size: var(--fm-font-size-2xs);
-  font-weight: 600;
-  line-height: 1.2;
-  color: var(--fm-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
   overflow: hidden;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  font-weight: var(--fm-font-weight-normal);
+  line-height: 1.2;
   text-overflow: ellipsis;
-  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .fm-inspector-metric-card__value {
   display: block;
-  margin-top: var(--fm-space-1);
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--fm-font-size-sm);
-  font-weight: 600;
+  font-size: var(--fm-font-size-md);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fm-font-weight-medium);
   line-height: 1.3;
-  flex-shrink: 0;
-}
-
-.fm-inspector-metric-card:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--fm-shadow-sm);
+  overflow-wrap: anywhere;
 }
 
 /* The overview frame is shared by Visualization and Physics.  Container
@@ -789,7 +738,6 @@ button:hover > .fm-inspector-group-icon-box {
 @media (prefers-reduced-motion: reduce) {
   .fm-viz-render-mode-tile,
   .fm-viz-render-mode-tile__icon,
-  .fm-inspector-metric-card,
   .fm-viz-color-swatch,
   .fm-visualization-toggle,
   .fm-viz-layer-chip,
@@ -809,8 +757,7 @@ button:hover > .fm-inspector-group-icon-box {
     transition-property: background, border-color, color, box-shadow !important;
   }
 
-  .fm-viz-color-swatch,
-  .fm-inspector-metric-card {
+  .fm-viz-color-swatch {
     transition-property: background, border-color, box-shadow !important;
   }
 

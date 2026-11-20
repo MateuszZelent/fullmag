@@ -3,6 +3,7 @@
 import {
   Activity,
   Box,
+  Copy,
   Focus,
   BarChart2,
   Database,
@@ -47,14 +48,35 @@ function statusVariant(
 }
 
 function InspectorIdentityIcon({ icon }: Pick<InspectorDescriptor, "icon">) {
-  if (icon === "airbox") return <Layers3 size={22} strokeWidth={1.5} />;
-  if (icon === "analysis") return <BarChart2 size={22} strokeWidth={1.5} />;
-  if (icon === "diagnostics") return <Gauge size={22} strokeWidth={1.5} />;
-  if (icon === "mesh") return <Database size={22} strokeWidth={1.5} />;
-  if (icon === "mode") return <Activity size={22} strokeWidth={1.5} />;
-  if (icon === "study") return <Play size={22} strokeWidth={1.5} />;
-  if (icon === "visualization") return <Focus size={22} strokeWidth={1.5} />;
-  return <Box size={22} strokeWidth={1.5} />;
+  if (icon === "airbox") return <Layers3 size={20} strokeWidth={1.75} />;
+  if (icon === "analysis") return <BarChart2 size={20} strokeWidth={1.75} />;
+  if (icon === "diagnostics") return <Gauge size={20} strokeWidth={1.75} />;
+  if (icon === "mesh") return <Database size={20} strokeWidth={1.75} />;
+  if (icon === "mode") return <Activity size={20} strokeWidth={1.75} />;
+  if (icon === "study") return <Play size={20} strokeWidth={1.75} />;
+  if (icon === "visualization") return <Focus size={20} strokeWidth={1.75} />;
+  return <Box size={20} strokeWidth={1.75} />;
+}
+
+/** Domain hue of the identity glyph (specs/frontend-v2/09 §1a). */
+export function inspectorDomain(
+  icon: InspectorDescriptor["icon"],
+): "definition" | "geometry" | "mesh" | "study" | "visualization" {
+  if (icon === "airbox" || icon === "mesh") return "mesh";
+  if (icon === "analysis" || icon === "mode" || icon === "visualization") return "visualization";
+  if (icon === "diagnostics") return "definition";
+  if (icon === "study") return "study";
+  return "geometry";
+}
+
+/** The user-facing ID shown in the header: the object ID, else the node ID. */
+export function inspectorDisplayId(
+  metadata: InspectorDescriptor["metadata"],
+): string | undefined {
+  return (
+    metadata.find((item) => item.label === "Object")?.value ??
+    metadata.find((item) => item.label === "Node")?.value
+  );
 }
 
 export function InspectorShell({
@@ -69,6 +91,7 @@ export function InspectorShell({
   const chrome = usePanelChromeControls();
   const contentRef = useRef<HTMLDivElement>(null);
   const nodeId = descriptor.metadata.find((item) => item.label === "Node")?.value;
+  const displayId = inspectorDisplayId(descriptor.metadata);
   const descriptorKey = `${nodeId ?? descriptor.title}:${descriptor.tabs.map((tab) => tab.id).join(",")}`;
   useLayoutEffect(() => {
     configureInspectorTabs(descriptorKey, descriptor.tabs.map((tab) => tab.id));
@@ -134,32 +157,37 @@ export function InspectorShell({
             ))}
           </nav>
         ) : null}
-        <div className="fm-inspector__identity">
+        <div className="fm-inspector__identity" data-domain={inspectorDomain(descriptor.icon)}>
           <span className="fm-inspector__identity-icon" aria-hidden="true">
             <InspectorIdentityIcon icon={descriptor.icon} />
           </span>
           <div className="fm-inspector__identity-copy">
             <h2 className="fm-inspector__title">{descriptor.title}</h2>
-            <div className="fm-inspector__badges">
-              <Badge variant="secondary">{descriptor.typeLabel}</Badge>
-              {descriptor.status ? (
-                <Badge variant={statusVariant(descriptor.status.tone)}>
-                  {descriptor.status.label}
-                </Badge>
+            <div className="fm-inspector__subtitle">
+              <span className="fm-inspector__kind">{descriptor.typeLabel}</span>
+              {displayId ? (
+                <button
+                  aria-label={`Copy ID ${displayId}`}
+                  className="fm-inspector__id-chip"
+                  title="Copy ID"
+                  type="button"
+                  onClick={() => void navigator.clipboard?.writeText(displayId)}
+                >
+                  <span className="fm-inspector__id-chip-text">{displayId}</span>
+                  <Copy aria-hidden="true" size={11} />
+                </button>
               ) : null}
             </div>
           </div>
+          {descriptor.status ? (
+            <Badge
+              className="fm-inspector__state"
+              variant={statusVariant(descriptor.status.tone)}
+            >
+              {descriptor.status.label}
+            </Badge>
+          ) : null}
         </div>
-        {descriptor.metadata.length > 0 ? (
-          <dl className="fm-inspector__metadata-grid">
-            {descriptor.metadata.map((item) => (
-              <div className="fm-inspector__metadata-item" key={item.label}>
-                <dt>{item.label}</dt>
-                <dd title={item.value}>{item.value}</dd>
-              </div>
-            ))}
-          </dl>
-        ) : null}
       </header>
 
       {descriptor.tabs.length > 0 ? (

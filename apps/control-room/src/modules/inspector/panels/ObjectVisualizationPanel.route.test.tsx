@@ -426,11 +426,11 @@ function renderResolvedInspector(selectionValue: Selection): string {
 function expectSharedVisualizationInspectorContract(
   html: string,
   owner: string,
-  title: string,
 ): void {
   expect(html).toMatch(/class="[^"]*fm-scientific-inspector/);
-  expect(html).toContain(`<h3>${title}</h3>`);
-  expect(html).toContain("Display controls");
+  // InspectorShell owns the one identity header (specs/frontend-v2/13 §1a).
+  expect(html).not.toContain("Display controls");
+  expect(html).not.toMatch(/<h3>[^<]*visualization<\/h3>/i);
   expect(html).toContain("Status");
   expect(html).toContain("Resource");
   expect(html).toContain("Execution");
@@ -466,9 +466,6 @@ describe("ObjectVisualizationPanel lane routing", () => {
     testState.discretization = "fdm";
     const html = renderResolvedInspector(selection);
 
-    expect(html.indexOf("Display controls")).toBeLessThan(
-      html.indexOf("Display passes"),
-    );
     expect(html.indexOf("Display passes")).toBeLessThan(html.indexOf("Status"));
     expect(html.indexOf("Status")).toBeLessThan(html.lastIndexOf("Target"));
     expect(html).toContain('data-collapsible="true" data-open="false"');
@@ -479,42 +476,27 @@ describe("ObjectVisualizationPanel lane routing", () => {
 
     const object = renderResolvedInspector(selection);
     expect(object).toContain('data-inspector-owner="object.visualization"');
-    expect(object).toContain("Object visualization");
     expect(object).toContain("Target scope:Magnetic object");
     expect(object).toContain("Target ID:object:film");
     expect(object).toContain("canonical object visualization target");
     expect(object).toContain("Display passes, quantity, vectors, wireframe");
-    expectSharedVisualizationInspectorContract(
-      object,
-      "object.visualization",
-      "Object visualization",
-    );
+    expectSharedVisualizationInspectorContract(object, "object.visualization");
 
     const airbox = renderResolvedInspector(airboxSelection);
     expect(airbox).toContain('data-inspector-owner="airbox.visualization"');
-    expect(airbox).toContain("Universe visualization");
     expect(airbox).toContain("Target scope:Universe (Airbox)");
     expect(airbox).toContain("Target ID:airbox");
     expect(airbox).toContain("Airbox-specific bounds and field support");
     expect(airbox).toContain("Universe sampling mesh, computed field, and display settings");
-    expectSharedVisualizationInspectorContract(
-      airbox,
-      "airbox.visualization",
-      "Universe visualization",
-    );
+    expectSharedVisualizationInspectorContract(airbox, "airbox.visualization");
 
     const meshPart = renderResolvedInspector(meshPartSelection);
     expect(meshPart).toContain('data-inspector-owner="mesh-part.visualization"');
-    expect(meshPart).toContain("Mesh-part visualization");
     expect(meshPart).toContain("Target scope:Mesh part");
     expect(meshPart).toContain("Target ID:part:film-volume");
     expect(meshPart).toContain("canonical mesh-part target");
     expect(meshPart).toContain("Part visibility, render mode, vectors, wireframe");
-    expectSharedVisualizationInspectorContract(
-      meshPart,
-      "mesh-part.visualization",
-      "Mesh-part visualization",
-    );
+    expectSharedVisualizationInspectorContract(meshPart, "mesh-part.visualization");
   });
 
   it("gives every visualization debug route its own owner component", () => {

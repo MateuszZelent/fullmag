@@ -18,7 +18,9 @@ describe("PlaceholderPanel", () => {
 
     const html = renderToStaticMarkup(<PlaceholderPanel selection={selection} />);
 
-    expect(html).toContain("Unsupported Inspector");
+    // The shell renders the title; the panel states the gap as facts.
+    expect(html).toContain("Unsupported selection");
+    expect(html).toContain("Contract gap");
     expect(html).toContain("No dedicated Inspector route is registered");
     expect(html).toContain("results.future.product");
     expect(html).toContain("results:future-product");
