@@ -426,16 +426,6 @@
         "meaning": "function-field value unit metadata",
         "backend_support": "all lanes preserve metadata; runtime does not convert",
         "problem_ir": "`material_parameter_fields[].value.unit`"
-      },
-      {
-        "python": "fm.fields.function.**values",
-        "type": "numbers.Real",
-        "default": "required unless a def default exists",
-        "si_unit": "SI unit of each parameter",
-        "validation": "finite real, not bool; every given name must be used by a string",
-        "meaning": "named parameter values",
-        "backend_support": "sampled by the planner on FDM/FEM CPU/GPU",
-        "problem_ir": "`material_parameter_fields[].value.function.parameters`"
       }
     ]
   }
