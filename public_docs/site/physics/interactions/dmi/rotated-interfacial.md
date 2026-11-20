@@ -125,6 +125,7 @@ has SI unit $\mathrm{J\,m^{-2}}$, and must be finite.
 |---|---|---|---|---|---|---|---|
 | `RotatedInterfacialDMI.D` | `float` | required | $\mathrm{J\,m^{-2}}$ | finite; positive, negative, and zero values are accepted | rDMI strength and chirality | FDM/FEM CPU/GPU subject to lane-specific scientific qualification | `energy_terms[].D` |
 
+````{only} latex
 ```python
 # %% Study and strict CUDA FDM lane
 import fullmag as fm
@@ -171,18 +172,21 @@ study.stages.add_relax(
 )
 study.stages.add_run(stage_id="hold", until=100e-12)
 ```
+````
 
 (rotated-interfacial-dmi-problem-ir)=
 ## ProblemIR
 
 The constructor lowers without conversion to another DMI variant:
 
+````{only} latex
 ```json
 {
   "kind": "rotated_interfacial_dmi",
   "D": 0.003
 }
 ```
+````
 
 The canonical Rust variant is `EnergyTermIR::RotatedInterfacialDmi { d }`.
 Only one rotated-interfacial term may be authored in a problem.
@@ -331,4 +335,3 @@ velocity results in Fig. 3 of the paper.
 | FEM CUDA | [`backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu#L115) | [`dmi_element_residual_kernel`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu#L115) | device element residual |
 | Göbel scenario | [`tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py#L29) | [`study`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py#L29) | canonical public reproduction |
 | Göbel verifier | [`tests/standard_problems/bimeron/goebel_2019/verify.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/tests/standard_problems/bimeron/goebel_2019/verify.py#L344) | [`verify_bundle`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/tests/standard_problems/bimeron/goebel_2019/verify.py#L344) | topology, energy, and execution receipt gates |
-
