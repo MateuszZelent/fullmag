@@ -137,9 +137,12 @@ jobs:
           target/release/fullmag-api --help >/dev/null
 
       - name: Build Python wheel package
+        env:
+          FULLMAG_BUILD_VERSION_FILE: ${{ runner.temp }}/fullmag-release-version.json
         run: |
           python -m pip install --upgrade pip build
-          python -m build packages/fullmag-py
+          python scripts/build_version.py --repo-root . --source-identity source-identity.json --output "${{ runner.temp }}/fullmag-release-version.json"
+          python -m build --wheel packages/fullmag-py
 
       - name: Assemble Linux release bundle
         env:
@@ -250,10 +253,13 @@ jobs:
           "FULLMAG_SOURCE_SNAPSHOT_SHA256=$($identity.source_snapshot_sha256)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build Python wheel package
+        env:
+          FULLMAG_BUILD_VERSION_FILE: ${{ runner.temp }}/fullmag-release-version.json
         shell: pwsh
         run: |
           python -m pip install --disable-pip-version-check build
-          python -m build packages/fullmag-py
+          python scripts/build_version.py --repo-root . --source-identity source-identity.json --output "${{ runner.temp }}/fullmag-release-version.json"
+          python -m build --wheel packages/fullmag-py
 
       - name: Build Rust binaries (CLI & UI)
         shell: pwsh
