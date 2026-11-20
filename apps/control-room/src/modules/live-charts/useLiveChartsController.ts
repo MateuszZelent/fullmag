@@ -24,6 +24,7 @@ import {
   liveChartPreset,
   liveChartRangesEqual,
   normalizeLiveChartRangeForXAxis,
+  resolveLiveChartAxisAndRange,
   type LiveChartPresetId,
 } from "./liveChartsModel";
 import { liveChartsCommandRequests } from "./liveChartsCommandRequests";
