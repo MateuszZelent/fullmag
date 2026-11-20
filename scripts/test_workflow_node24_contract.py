@@ -29,7 +29,7 @@ class WorkflowNode24ContractTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/documentation.yml").read_text(encoding="utf-8")
         self.assertIn("actions/configure-pages@v6", workflow)
         self.assertIn("actions/upload-pages-artifact@v5", workflow)
-        self.assertIn("actions/deploy-pages@v5", workflow)
+        self.assertIn("actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346", workflow)
 
 
 if __name__ == "__main__":
