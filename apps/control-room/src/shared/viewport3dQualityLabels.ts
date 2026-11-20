@@ -15,14 +15,14 @@ export const VIEWPORT_3D_QUALITY_PROFILE_OPTIONS = [
 ] as const satisfies readonly (readonly [Viewport3DQualityProfileId, string])[];
 
 /** What each profile changes: render scale (capped by the display density
- * except Figure), multisampling, and the shadow map used by Presentation. */
+ * for Fast and Standard), multisampling, and the shadow map used by Presentation. */
 export const VIEWPORT_3D_QUALITY_PROFILE_SUMMARIES: Record<
   Viewport3DQualityProfileId,
   string
 > = {
   "interactive-lite": "1× resolution · no anti-aliasing · no shadows or AO",
   interactive: "up to 1.25× resolution · anti-aliasing · 512 px shadows",
-  balanced: "up to 1.5× resolution · anti-aliasing · 1024 px shadows",
+  balanced: "1.5× resolution on every display · anti-aliasing · 1024 px shadows",
   figure: "2× resolution on every display · anti-aliasing · 2048 px shadows, full-res AO",
 };
 
@@ -35,7 +35,7 @@ export const VIEWPORT_3D_QUALITY_PROFILE_DESCRIPTIONS: Record<
   interactive:
     "Standard provides everyday image quality while keeping your selected effects.",
   balanced:
-    "Detailed adds detail to active shadows and raises resolution on high-density displays. Your effect choices stay selected.",
+    "Detailed renders at 1.5× viewport resolution on every display and adds detail to active shadows. Your effect choices stay selected.",
   figure:
     "Figure renders at 2× viewport resolution on every display, including at 100% zoom. In Presentation, choosing Figure—or switching to Presentation while Figure is selected—automatically selects Studio lighting and enables soft shadows and ambient occlusion. You can adjust these effects afterward. It can use more GPU memory and take longer to render.",
 };
