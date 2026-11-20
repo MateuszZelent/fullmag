@@ -832,14 +832,8 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
     }
     let run_id_typed = fullmag_application::RunId::parse(run_id.to_owned())
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let claim = retry_store_writer_busy(|| {
-        fullmag_runtime_control::load_current_task_claim(store, &run_id_typed, task_id)
-    })
-    .context("supervisor requires an exact active task claim")?;
-    let lease =
-        retry_store_writer_busy(|| store.read_active_resource_lease_for_task(run_id, task_id))
-            .context("read active resource lease before accepted-worker spawn")?
-            .context("supervisor requires an active resource lease")?;
+    let (slot, claim, lease) =
+        capture_worker_launch_claim(slot, store, &run_id_typed, task_id)?;
     if lease.run_id != claim.run_id.as_str()
         || lease.task_id != claim.task_id.as_str()
         || lease.attempt_id != claim.attempt_id.as_str()
@@ -1310,6 +1304,30 @@ fn is_retryable_pre_spawn_host_error(error: &anyhow::Error) -> bool {
                 fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent,
             >()
     })
+}
+
+fn capture_worker_launch_claim(
+    slot: SupervisorSlot,
+    store: &SessionStore,
+    run_id: &fullmag_application::RunId,
+    task_id: &str,
+) -> Result<(SupervisorSlot, fullmag_application::TaskClaim, FmsResourceLease)> {
+    let capture = || {
+        let claim = retry_store_writer_busy(|| {
+            fullmag_runtime_control::load_current_task_claim(store, run_id, task_id)
+        })
+        .context("supervisor requires an exact active task claim")?;
+        let lease = retry_store_writer_busy(|| {
+            store.read_active_resource_lease_for_task(run_id.as_str(), task_id)
+        })
+        .context("read active resource lease before accepted-worker spawn")?
+        .context("supervisor requires an active resource lease")?;
+        Ok((claim, lease))
+    };
+    match capture() {
+        Ok((claim, lease)) => Ok((slot, claim, lease)),
+        Err(error) => Err(defer_pre_spawn_worker_launch_error(slot, error)),
+    }
 }
 
 fn defer_pre_spawn_worker_launch_error(
@@ -3361,6 +3379,45 @@ mod tests {
         assert!(!slot_path.exists());
     }
 
+    #[test]
+    fn transient_pre_spawn_claim_read_preserves_the_admitted_task() {
+        let fixture = host_launch_test_fixture();
+        commit_host_launch_fixture_start(&fixture);
+        let run_id = &fixture.claim.run_id;
+        let task_id = fixture.claim.task_id.as_str();
+        let slot = SupervisorSlot::acquire(
+            &fixture.store, run_id.as_str(), task_id, &fixture.lease.resource_id, 1, false,
+        ).unwrap();
+        let slot_path = slot.path.clone();
+        let holder_store = SessionStore::open(fixture.store.root()).unwrap();
+        let (acquired, wait_for_writer) = std::sync::mpsc::sync_channel(1);
+        let (release, wait_for_release) = std::sync::mpsc::sync_channel(1);
+        let holder = std::thread::spawn(move || {
+            let _writer = holder_store.write_transaction().unwrap();
+            acquired.send(()).unwrap();
+            wait_for_release.recv_timeout(Duration::from_secs(30)).unwrap();
+        });
+        wait_for_writer.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let result = capture_worker_launch_claim(slot, &fixture.store, run_id, task_id);
+        release.send(()).unwrap();
+        holder.join().unwrap();
+
+        let error = result.err().expect("the claim read must defer under contention");
+        assert!(error.downcast_ref::<WorkerLaunchDeferred>().is_some());
+        assert!(format!("{error:#}").contains("supervisor requires an exact active task claim"));
+        assert!(!slot_path.exists());
+        assert_eq!(
+            fullmag_runtime_control::load_current_task_claim(&fixture.store, run_id, task_id).unwrap(),
+            fixture.claim,
+        );
+        let saved = fullmag_runtime_control::recover_coordinator(&fixture.store, &fixture.claim).unwrap();
+        assert_eq!(
+            saved.commands.iter().filter(|envelope| matches!(&envelope.command, WorkerCommand::Start)).count(),
+            1,
+        );
+    }
+
     /// Exercise the real journal, inbox, artifact catalog and release replay.
     /// No child, solver, host admission or test-only production bypass is used.
     #[test]
@@ -4151,9 +4208,7 @@ accepted worker failed: execute accepted worker Start: controlled failure\n";
             Some(fullmag_session::host_resource_ledger::HostWorkerLaunchGate::Pending));
     }
 
-    #[test]
-    fn exhausted_stale_sample_retry_defers_second_read_and_authorization_without_consuming_claim_start_lease() {
-        let fixture = host_launch_test_fixture();
+    fn commit_host_launch_fixture_start(fixture: &HostLaunchTestFixture) {
         let task = fullmag_application::TaskRecord {
             run_id: fixture.claim.run_id.clone(),
             task_id: fixture.claim.task_id.clone(),
@@ -4183,6 +4238,12 @@ accepted worker failed: execute accepted worker Start: controlled failure\n";
                     })
             })
             .unwrap();
+    }
+
+    #[test]
+    fn exhausted_stale_sample_retry_defers_second_read_and_authorization_without_consuming_claim_start_lease() {
+        let fixture = host_launch_test_fixture();
+        commit_host_launch_fixture_start(&fixture);
         let started = fullmag_runtime_control::recover_coordinator(&fixture.store, &fixture.claim)
             .unwrap();
         let start_before = started
