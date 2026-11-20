@@ -13,6 +13,11 @@ on:
         required: false
         default: ''
         type: string
+      publish:
+        description: 'Publish verified archives as a GitHub Release'
+        required: true
+        default: true
+        type: boolean
       is_prerelease:
         description: 'Mark as GitHub pre-release'
         required: false
@@ -20,7 +25,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   prepare-release:
@@ -188,6 +193,19 @@ jobs:
           tar -tzf "$ARCHIVE" | grep -Fx "${BUNDLE}/python/site-packages/fullmag/__init__.py" >/dev/null
           tar -tzf "$ARCHIVE" | grep -Fx "${BUNDLE}/release-manifest.json" >/dev/null
 
+      - name: Smoke test the extracted Linux bundle
+        shell: bash
+        env:
+          TAG: ${{ needs.prepare-release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          bundle="fullmag-${TAG}-linux-x86_64"
+          tar -xzf "${bundle}.tar.gz" -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/$bundle"
+          python -c 'import json, os; m=json.load(open("release-manifest.json")); assert m["git_sha"] == m["source_identity"]["head_commit_full"] == os.environ["GITHUB_SHA"] and m["tag"] == os.environ["TAG"]'
+          bin/fullmag --help >/dev/null
+          bin/fullmag-api --help >/dev/null
+
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v7
         with:
@@ -223,7 +241,7 @@ jobs:
           python-version: '3.12'
 
       - name: Capture source identity
-        shell: powershell
+        shell: pwsh
         run: |
           python scripts/capture_source_snapshot_identity.py --repo-root . --ignore-non-runtime-dirty --output source-identity.json
           $identity = Get-Content source-identity.json -Raw | ConvertFrom-Json
@@ -232,24 +250,24 @@ jobs:
           "FULLMAG_SOURCE_SNAPSHOT_SHA256=$($identity.source_snapshot_sha256)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build Python wheel package
-        shell: powershell
+        shell: pwsh
         run: |
           python -m pip install --disable-pip-version-check build
           python -m build packages/fullmag-py
 
       - name: Build Rust binaries (CLI & UI)
-        shell: powershell
+        shell: pwsh
         run: cargo build --locked --release -p fullmag-cli -p fullmag-api -p fullmag-desktop
 
       - name: Run release binary smoke tests
-        shell: powershell
+        shell: pwsh
         run: |
           cargo test --locked -p fullmag-build-info -p fullmag-cli --lib
           .\target\release\fullmag.exe --help | Out-Null
           .\target\release\fullmag-api.exe --help | Out-Null
 
       - name: Build Control Room Web App
-        shell: powershell
+        shell: pwsh
         env:
           FULLMAG_CONTROL_ROOM_STATIC_EXPORT: 1
         run: |
@@ -257,7 +275,7 @@ jobs:
           pnpm --dir apps/control-room build
 
       - name: Assemble Windows release bundle
-        shell: powershell
+        shell: pwsh
         env:
           TAG: ${{ needs.prepare-release.outputs.tag_name }}
           VERSION_PREFIX: ${{ needs.prepare-release.outputs.version_prefix }}
@@ -337,6 +355,23 @@ jobs:
             $archive.Dispose()
           }
 
+      - name: Smoke test the extracted Windows bundle
+        shell: pwsh
+        env:
+          TAG: ${{ needs.prepare-release.outputs.tag_name }}
+        run: |
+          $bundle = "fullmag-$env:TAG-windows-x86_64"
+          [IO.Compression.ZipFile]::ExtractToDirectory("$PWD/$bundle.zip", $env:RUNNER_TEMP)
+          Set-Location "$env:RUNNER_TEMP/$bundle"
+          $manifest = Get-Content release-manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.git_sha -ne $env:GITHUB_SHA -or $manifest.source_identity.head_commit_full -ne $env:GITHUB_SHA -or $manifest.tag -ne $env:TAG) {
+            throw "Release archive identity mismatch"
+          }
+          foreach ($binary in 'fullmag.exe', 'fullmag-api.exe') {
+            & "./bin/$binary" --help | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Packaged $binary smoke failed" }
+          }
+
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v7
         with:
@@ -344,22 +379,35 @@ jobs:
           path: fullmag-*-windows-x86_64.zip
 
   publish-release:
+    if: inputs.publish
+    permissions:
+      contents: write
     needs: [prepare-release, build-linux, build-windows]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+
       - name: Download all build artifacts
         uses: actions/download-artifact@v8
         with:
           path: release-artifacts
           merge-multiple: true
 
-      - name: Display downloaded artifacts
-        run: ls -la release-artifacts/
+      - name: Verify archives and bind release tag to the build commit
+        env:
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          cd release-artifacts
+          sha256sum "fullmag-${RELEASE_TAG}-linux-x86_64.tar.gz" "fullmag-${RELEASE_TAG}-windows-x86_64.zip" > SHA256SUMS
+          bash "$GITHUB_WORKSPACE/scripts/ci/bind_release_tag.sh" "$RELEASE_TAG" "$GITHUB_SHA"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare-release.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
+          fail_on_unmatched_files: true
           name: Fullmag Release ${{ needs.prepare-release.outputs.tag_name }}
           body: |
             ## Fullmag Release `${{ needs.prepare-release.outputs.tag_name }}`
@@ -374,5 +422,8 @@ jobs:
             - `fullmag-${{ needs.prepare-release.outputs.tag_name }}-linux-x86_64.tar.gz`
             - `fullmag-${{ needs.prepare-release.outputs.tag_name }}-windows-x86_64.zip`
           prerelease: ${{ needs.prepare-release.outputs.is_prerelease == 'true' }}
-          files: release-artifacts/*
+          files: |
+            release-artifacts/fullmag-${{ needs.prepare-release.outputs.tag_name }}-linux-x86_64.tar.gz
+            release-artifacts/fullmag-${{ needs.prepare-release.outputs.tag_name }}-windows-x86_64.zip
+            release-artifacts/SHA256SUMS
           token: ${{ secrets.GITHUB_TOKEN }}
