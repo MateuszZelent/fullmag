@@ -288,6 +288,18 @@ class FieldFunctionStudyTests(unittest.TestCase):
         self.assertEqual(film.alpha.value, 0.03)
         self.assertEqual(len(film._material_parameter_assignments), 1)
 
+    def test_invalid_alpha_replacement_preserves_the_previous_assignment(self):
+        with fm.execution_context():
+            study = fm.study("alpha-replacement")
+            film = study.geometry(fm.Box(size=(100e-9, 20e-9, 2e-9)), name="film")
+            film.alpha = fm.fields.function("0.02 + 0*x")
+            before = [assignment.to_ir() for assignment in film._material_parameter_assignments]
+            with self.assertRaisesRegex(ValueError, "Alpha unit"):
+                film.alpha = fm.fields.function("0.1", unit="J/m")
+            self.assertEqual(
+                [assignment.to_ir() for assignment in film._material_parameter_assignments], before,
+            )
+
     def test_scripts_round_trip_through_problem_and_scene_exports(self):
         for form, alpha_line in ALPHA_LINES.items():
             with tempfile.TemporaryDirectory() as directory, self.subTest(form=form):
