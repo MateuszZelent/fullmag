@@ -1,7 +1,7 @@
 "use client";
 
 import { FileUp } from "lucide-react";
-import { useRef, useState, type DragEvent, type FormEvent } from "react";
+import { useReducer, useRef, useState, type DragEvent, type FormEvent } from "react";
 
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
@@ -36,6 +36,33 @@ interface StagedImport {
   readonly translation: Mx3Translation;
 }
 
+type ImportReview =
+  | { kind: "none" }
+  | { kind: "mx3"; staged: StagedImport }
+  | { kind: "python"; source: ScriptProjectSource }
+  | { kind: "stl"; file: File; units: string; scale: string; invalidScale: boolean };
+
+type ImportReviewAction =
+  | { type: "clear" }
+  | { type: "mx3"; staged: StagedImport }
+  | { type: "python"; source: ScriptProjectSource }
+  | { type: "stl"; file: File }
+  | { type: "units"; units: string }
+  | { type: "scale"; scale: string }
+  | { type: "scaleValidity"; invalid: boolean };
+
+function updateImportReview(review: ImportReview, action: ImportReviewAction): ImportReview {
+  switch (action.type) {
+    case "clear": return { kind: "none" };
+    case "mx3": return { kind: "mx3", staged: action.staged };
+    case "python": return { kind: "python", source: action.source };
+    case "stl": return { kind: "stl", file: action.file, units: "", scale: "1", invalidScale: false };
+    case "units": return review.kind === "stl" ? { ...review, units: action.units } : review;
+    case "scale": return review.kind === "stl" ? { ...review, scale: action.scale, invalidScale: false } : review;
+    case "scaleValidity": return review.kind === "stl" ? { ...review, invalidScale: action.invalid } : review;
+  }
+}
+
 const studyNameFor = (fileName: string): string =>
   fileName.replace(/\.[^.]*$/, "").replace(/[^A-Za-z0-9_-]+/g, "_") || "mx3_import";
 
@@ -51,20 +78,16 @@ export function ImportSection({
   const [dragging, setDragging] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [staged, setStaged] = useState<StagedImport | null>(null);
-  const [pythonSource, setPythonSource] = useState<ScriptProjectSource | null>(null);
-  const [stlFile, setStlFile] = useState<File | null>(null);
-  const [stlUnits, setStlUnits] = useState("");
-  const [stlScale, setStlScale] = useState("1");
-  const [stlScaleInvalid, setStlScaleInvalid] = useState(false);
+  const [review, dispatch] = useReducer(updateImportReview, { kind: "none" });
+  const staged = review.kind === "mx3" ? review.staged : null;
+  const pythonSource = review.kind === "python" ? review.source : null;
+  const stl = review.kind === "stl" ? review : null;
   const scaleRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handle = async (file: File | undefined) => {
     if (!file || busy) return;
-    setStaged(null);
-    setPythonSource(null);
-    setStlFile(null);
+    dispatch({ type: "clear" });
     const verdict = classifyImportFile(file.name);
     if (verdict.kind !== "supported") {
       setMessage(verdict.reason);
@@ -77,10 +100,7 @@ export function ImportSection({
           : "Fullmag could not confirm the active workspace. Refresh the session list before importing STL.");
         return;
       }
-      setStlFile(file);
-      setStlUnits("");
-      setStlScale("1");
-      setStlScaleInvalid(false);
+      dispatch({ type: "stl", file });
       setMessage(null);
       return;
     }
@@ -88,7 +108,7 @@ export function ImportSection({
       setBusy(true);
       setMessage(null);
       try {
-        setPythonSource(await readPythonImport(file));
+        dispatch({ type: "python", source: await readPythonImport(file) });
       } catch (error) {
         setMessage(error instanceof Error ? error.message : `Could not read ${file.name}.`);
       } finally {
@@ -102,11 +122,12 @@ export function ImportSection({
       setMessage(null);
       try {
         const translation = translateMx3(await file.text(), { studyName: studyNameFor(file.name) });
-        setStaged({ fileName: file.name, translation });
+        dispatch({ type: "mx3", staged: { fileName: file.name, translation } });
       } catch {
         setMessage(`Could not read ${file.name}.`);
+      } finally {
+        setBusy(false);
       }
-      setBusy(false);
       return;
     }
     if (openDisabledReason) {
@@ -115,17 +136,27 @@ export function ImportSection({
     }
     setBusy(true);
     setMessage(null);
-    setMessage(await onOpenFile(file));
-    setBusy(false);
+    try {
+      setMessage(await onOpenFile(file));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const createStaged = async () => {
     if (!staged) return;
     setBusy(true);
-    const failure = await saveTranslatedMx3(staged.fileName, staged.translation, scriptSaver);
-    setMessage(failure);
-    // A cancelled dialog is not a failure: the report stays so the person can try again.
-    setBusy(false);
+    try {
+      const failure = await saveTranslatedMx3(staged.fileName, staged.translation, scriptSaver);
+      // A cancelled dialog leaves the report available for another attempt.
+      setMessage(failure);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const saveStaged = () => {
@@ -141,22 +172,22 @@ export function ImportSection({
 
   const submitStl = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!stlFile || busy) return;
-    const units = stlUnits as StlLengthUnit;
-    const scale = Number(stlScale);
+    if (!stl || busy) return;
+    const units = stl.units as StlLengthUnit;
+    const scale = Number(stl.scale);
     if (!Number.isFinite(scale) || scale <= 0 || stlScaleToSi(scale, units) === null) {
-      setStlScaleInvalid(true);
+      dispatch({ type: "scaleValidity", invalid: true });
       setMessage("Choose a positive scale that remains finite and greater than zero in metres.");
       scaleRef.current?.focus();
       return;
     }
-    setStlScaleInvalid(false);
+    dispatch({ type: "scaleValidity", invalid: false });
     setBusy(true);
     setMessage(null);
     try {
-      const failure = await onImportStl(stlFile, units, scale);
+      const failure = await onImportStl(stl.file, units, scale);
       setMessage(failure);
-      if (!failure) setStlFile(null);
+      if (!failure) dispatch({ type: "clear" });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "The STL surface could not be imported.");
     } finally {
@@ -219,19 +250,19 @@ export function ImportSection({
             Import is available after Fullmag confirms the active workspace.
           </p>
         ) : null}
-        {stlFile ? (
+        {stl ? (
           <form aria-label="STL import settings" className="fm-start-report" onSubmit={(event) => void submitStl(event)}>
             <fieldset className="fm-start-run-fieldset">
-              <legend>Surface settings for {stlFile.name}</legend>
+              <legend>Surface settings for {stl.file.name}</legend>
               <label className="fm-start-run-field" htmlFor="fm-stl-units">
                 Coordinate length unit
                 <select
                   aria-describedby="fm-stl-units-help"
                   id="fm-stl-units"
                   name="stl_units"
-                  onChange={(event) => setStlUnits(event.currentTarget.value)}
+                  onChange={(event) => dispatch({ type: "units", units: event.currentTarget.value })}
                   required
-                  value={stlUnits}
+                  value={stl.units}
                 >
                   <option value="">Choose a unit…</option>
                   <option value="m">Metres (m)</option>
@@ -247,19 +278,18 @@ export function ImportSection({
                 Positive scale multiplier
                 <Input
                   aria-describedby="fm-stl-scale-help fm-start-import-status"
-                  aria-invalid={stlScaleInvalid || undefined}
+                  aria-invalid={stl.invalidScale || undefined}
                   ref={scaleRef}
                   id="fm-stl-scale"
                   name="stl_scale"
                   min="5e-324"
                   onChange={(event) => {
-                    setStlScale(event.currentTarget.value);
-                    setStlScaleInvalid(false);
+                    dispatch({ type: "scale", scale: event.currentTarget.value });
                   }}
                   required
                   step="any"
                   type="number"
-                  value={stlScale}
+                  value={stl.scale}
                 />
               </label>
               <p className="fm-start-inspector__note" id="fm-stl-scale-help">
@@ -269,7 +299,7 @@ export function ImportSection({
               <Button
                 disabled={busy}
                 onClick={() => {
-                  setStlFile(null);
+                  dispatch({ type: "clear" });
                   setMessage(null);
                 }}
                 type="button"
@@ -303,6 +333,7 @@ export function ImportSection({
         </Button>
         <input
           accept={IMPORT_ACCEPT}
+          aria-label="Import a file"
           className="fm-start-visually-hidden"
           onChange={(event) => {
             void handle(event.target.files?.[0]);
@@ -328,7 +359,7 @@ export function ImportSection({
           </p>
           <pre aria-label="Python source" className="fm-start-report__source" style={{ maxHeight: "24rem", overflow: "auto" }} tabIndex={0}><code>{pythonSource.text}</code></pre>
           <CreateProjectAction creator={projectCreator} disabled={busy} source={pythonSource} />
-          <Button onClick={() => setPythonSource(null)} type="button" variant="ghost">Discard</Button>
+          <Button onClick={() => dispatch({ type: "clear" })} type="button" variant="ghost">Discard</Button>
         </section>
       ) : null}
 
@@ -338,7 +369,7 @@ export function ImportSection({
           fileName={staged.fileName}
           onCopy={() => void copyStaged()}
           onDiscard={() => {
-            setStaged(null);
+            dispatch({ type: "clear" });
             setMessage(null);
           }}
           onCreate={() => void createStaged()}
