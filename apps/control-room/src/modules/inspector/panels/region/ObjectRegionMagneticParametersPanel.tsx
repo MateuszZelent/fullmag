@@ -402,26 +402,28 @@ function useObjectRegionMagneticParametersPanelView({
       sessionScopeKey: operationSessionScopeKey,
     });
     try {
-      const retainedFields = objectMaterialFields.filter(
-        (field) =>
-          field.region_id !== model.regionId || !isEditableMaterialField(field),
-      );
-      const fields = [
-        ...retainedFields,
-        ...submittedFieldDrafts.map((field) =>
-          materialFieldFromDraft(field, model, { meshPolicyLane: meshLane }),
-        ),
-      ];
       const response = await runAuthoringMutationWithHistory(
         historyContext,
         `Update material fields ${model.regionId}`,
-        async ({ baseRevision }) => {
-          const commitRevision = baseRevision ?? model.revision;
-          if (typeof commitRevision !== "number" || !Number.isFinite(commitRevision)) {
-            throw new Error(
-              "The canonical scene revision is unavailable. Refetch the scene before applying.",
-            );
+        async ({ before, baseRevision }) => {
+          const source = before ?? sceneData;
+          const commitRevision = baseRevision ?? source?.scene_revision ?? source?.revision;
+          const owner = source?.objects?.find((object) => object.id === model.objectId);
+          if (!owner || typeof commitRevision !== "number" || !Number.isFinite(commitRevision)) {
+            throw new Error("The canonical object is unavailable. Refetch the scene before applying.");
           }
+          const currentFields = owner.material_parameter_fields ?? [];
+          const editedHere = (field: (typeof currentFields)[number]) =>
+            field.region_id === model.regionId && isEditableMaterialField(field);
+          if (materialFieldAssignmentsKey(currentFields.filter(editedHere)) !== fieldDraftKey) {
+            throw new Error("The region material fields changed. Refetch the scene before applying.");
+          }
+          const fields = [
+            ...currentFields.filter((field) => !editedHere(field)),
+            ...submittedFieldDrafts.map((field) =>
+              materialFieldFromDraft(field, model, { meshPolicyLane: meshLane }),
+            ),
+          ];
           const options = authoringWriteOptions(
             commitRevision,
             operationSessionScopeKey,
