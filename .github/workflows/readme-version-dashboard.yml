@@ -1,44 +1,58 @@
-name: README version dashboard
+# This manual workflow creates a review patch; it never commits or pushes a branch.
+name: README version dashboard patch
+run-name: "README dashboard patch (${{ github.ref_name }})"
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: readme-version-dashboard-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  synchronize:
-    if: github.actor != 'github-actions[bot]'
+  generate-patch:
+    name: Generate review patch for selected ref
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout selected ref
         uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
-      - name: Generate version dashboard
-        run: python3 scripts/update_readme_version_dashboard.py --write
-
-      - name: Commit synchronized README
+      - name: Generate README dashboard patch
+        id: dashboard
         shell: bash
         run: |
           set -euo pipefail
+          patch_path="$RUNNER_TEMP/readme-version-dashboard.patch"
+          python3 scripts/update_readme_version_dashboard.py --write
           if git diff --quiet -- readme.md; then
-            echo "README version dashboard is already current."
+            echo "patch_available=false" >> "$GITHUB_OUTPUT"
+            echo "README dashboard is already current on $GITHUB_REF_NAME; no patch was generated." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          git diff --binary -- readme.md > "$patch_path"
+          echo "patch_available=true" >> "$GITHUB_OUTPUT"
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          Generated patch: readme-version-dashboard.patch
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add readme.md
-          git commit -m "docs: sync README version dashboard"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          Apply on a review branch with:
+          git apply readme-version-dashboard.patch
+
+          Or regenerate in the PR branch with:
+          python3 scripts/update_readme_version_dashboard.py --write
+          SUMMARY
+
+      - name: Upload README dashboard patch
+        if: ${{ steps.dashboard.outputs.patch_available == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: readme-version-dashboard-patch
+          path: ${{ runner.temp }}/readme-version-dashboard.patch
+          if-no-files-found: error
