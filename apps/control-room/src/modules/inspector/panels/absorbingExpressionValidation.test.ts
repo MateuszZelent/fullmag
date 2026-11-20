@@ -3,7 +3,7 @@ import { absorbingExpressionError } from "./absorbingExpressionValidation";
 
 describe("absorbing boundary expressions", () => {
   it("accepts normalized scalar ramps with powers, unary signs and math functions", () => {
-    for (const source of ["u", "u**3", "-(-u)**3", "log1p(9*u)/log(10)"]) {
+    for (const source of ["u", "u**3", "-(-u)**3", "log1p(9*u)/log(10)", "min(2*u, 1)", "sin(pi*u/2)", "atan2(u, 1)/atan2(1, 1)"]) {
       expect(absorbingExpressionError(source, "profile")).toBeUndefined();
     }
   });
@@ -21,7 +21,7 @@ describe("absorbing boundary expressions", () => {
     for (const source of ["min(x)", "x-)", "u", "sin(z,x)", "sqrt(1", "1e999", "x;z", "x**", "01+x"]) {
       expect(absorbingExpressionError(source, "distance")).toBeTruthy();
     }
-    for (const source of ["z", "u+z", "min(u,u)", "u+"]) {
+    for (const source of ["z", "u+z", "u+", "u^2", "heaviside(u)"]) {
       expect(absorbingExpressionError(source, "profile")).toBeTruthy();
     }
   });

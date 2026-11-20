@@ -1,8 +1,15 @@
 type Scalar = (variables: readonly number[]) => number;
 type Operation = (a: number, b: number) => number;
+// Function table of the shared formula language (docs/specs/mask-function-v1.md,
+// section 8): the backend is the authority, this check only guides the form.
 const unary = new Map<string, (x: number) => number>([
-  ["abs", Math.abs], ["sqrt", Math.sqrt], ["exp", Math.exp], ["log", Math.log],
-  ["log1p", Math.log1p], ["tanh", Math.tanh], ["sin", Math.sin], ["cos", Math.cos],
+  ["sin", Math.sin], ["cos", Math.cos], ["tan", Math.tan], ["asin", Math.asin],
+  ["acos", Math.acos], ["atan", Math.atan], ["sinh", Math.sinh], ["cosh", Math.cosh],
+  ["tanh", Math.tanh], ["exp", Math.exp], ["log", Math.log], ["log1p", Math.log1p],
+  ["sqrt", Math.sqrt], ["abs", Math.abs],
+]);
+const binary = new Map<string, (a: number, b: number) => number>([
+  ["atan2", Math.atan2], ["min", Math.min], ["max", Math.max],
 ]);
 const operators = new Map<string, [number, number, Operation]>([
   ["+", [1, 2, (a, b) => a + b]], ["-", [1, 2, (a, b) => a - b]],
@@ -50,20 +57,22 @@ function parse(source: string, variables: readonly string[]): Scalar {
     }
     const index = variables.indexOf(token);
     if (index >= 0) return vars => vars[index];
+    if (token === "pi") return () => Math.PI;
     const fn = unary.get(token);
-    const spatialPair = variables.length === 3 && (token === "min" || token === "max");
-    if (!fn && !spatialPair) throw new Error("Unknown variable or function '" + token + "'.");
+    if (fn) {
+      requireToken("(");
+      const argument = expression(0);
+      requireToken(")");
+      return vars => finite(fn(argument(vars)));
+    }
+    const pair = binary.get(token);
+    if (!pair) throw new Error("Unknown variable or function '" + token + "'.");
     requireToken("(");
     const first = expression(0);
-    if (fn) {
-      requireToken(")");
-      return vars => finite(fn(first(vars)));
-    }
     requireToken(",");
     const second = expression(0);
     requireToken(")");
-    const operation = token === "min" ? Math.min : Math.max;
-    return vars => operation(first(vars), second(vars));
+    return vars => finite(pair(first(vars), second(vars)));
   }
   function expression(minimum: number): Scalar {
     let value = operand();
