@@ -58,7 +58,6 @@ import {
 } from "./antennaFieldEta";
 
 import { resolveFooterPerformanceStep } from "./footerPerformanceProgress";
-import { useBalancedMetricRows } from "./useBalancedMetricRows";
 
 // UI display locale only. Scientific values and exports keep their existing
 // invariant serialization and are not routed through this formatter.
@@ -198,16 +197,11 @@ export function FooterTelemetry({
       userSolvePhase,
     },
   );
-  const metricGroups = telemetry.metrics.reduce<
-    { id: FooterTelemetryGroup; metrics: [FooterTelemetryMetric, ...FooterTelemetryMetric[]] }[]
-  >((groups, metric) => {
-    const id = metricGroup(metric.id);
-    const current = groups.at(-1);
-    if (current?.id === id) current.metrics.push(metric);
-    else groups.push({ id, metrics: [metric] });
-    return groups;
-  }, []);
-  const metricsGridRef = useBalancedMetricRows(telemetry.metrics.length);
+  // One card per group in a fixed order, as on the mockup telemetry board.
+  const metricGroups = FOOTER_TELEMETRY_GROUP_ORDER.flatMap((id) => {
+    const metrics = telemetry.metrics.filter((metric) => metricGroup(metric.id) === id);
+    return metrics.length > 0 ? [{ id, metrics }] : [];
+  });
 
   if (view === "antenna" && !antennaStage) {
     return (
@@ -261,7 +255,7 @@ export function FooterTelemetry({
 
       <TooltipProvider delayDuration={250} skipDelayDuration={120}>
         <div className="fm-footer-telemetry__metrics">
-          <div ref={metricsGridRef} role="group" className="fm-footer-telemetry__metrics-grid" aria-label="Simulation metrics">
+          <div role="group" className="fm-footer-telemetry__metrics-grid" aria-label="Simulation metrics">
             {metricGroups.map(({ id, metrics }) => (
               <div
                 className="fm-footer-telemetry__group"
@@ -270,6 +264,7 @@ export function FooterTelemetry({
                 role="group"
                 aria-label={`${FOOTER_TELEMETRY_GROUP_LABELS[id]} metrics`}
               >
+                <h3 className="fm-footer-telemetry__group-title">{FOOTER_TELEMETRY_GROUP_LABELS[id]}</h3>
                 {metrics.map((metric) => (
                   <TelemetryMetric
                     key={metric.id}
@@ -1759,6 +1754,8 @@ export function resolvePrimaryTelemetryObjectId(
 }
 
 type FooterTelemetryGroup = "runtime" | "solver" | "magnetization" | "energy";
+
+const FOOTER_TELEMETRY_GROUP_ORDER: readonly FooterTelemetryGroup[] = ["runtime", "solver", "magnetization", "energy"];
 
 const FOOTER_TELEMETRY_GROUP_LABELS: Record<FooterTelemetryGroup, string> = {
   runtime: "Runtime",

@@ -5,7 +5,8 @@
   height: 100%;
   min-width: 0;
   min-height: 0;
-  background: var(--fm-bg-chrome);
+  /* The docked bottom panel frame draws the glass surface. */
+  background: transparent;
   color: var(--fm-text-primary);
   font-size: var(--fm-font-size-sm);
   font-variant-numeric: tabular-nums;
@@ -16,9 +17,9 @@
   min-width: 0;
   align-items: center;
   gap: var(--fm-space-2);
-  border-bottom: 1px solid var(--fm-border-default);
-  background: var(--fm-bg-panel);
-  padding: 2px var(--fm-space-2);
+  border-bottom: 1px solid var(--fm-border-muted);
+  background: transparent;
+  padding: var(--fm-space-1) var(--fm-space-2);
 }
 
 .fm-footer__tabs {
@@ -39,28 +40,26 @@
   flex: 0 0 auto;
   min-height: var(--fm-control-height-regular);
   gap: var(--fm-space-2);
-  border: 1px solid transparent;
-  border-bottom: 2px solid transparent;
-  border-radius: var(--fm-radius-sm) var(--fm-radius-sm) 0 0;
+  border: 0;
+  border-radius: var(--fm-radius-pill);
   color: var(--fm-text-secondary);
   font-size: var(--fm-font-size-control);
   padding-inline: var(--fm-space-3);
   white-space: nowrap;
   scroll-margin-inline: var(--fm-space-2);
-  transition-property: border-color;
 }
 
 .fm-footer__tab:hover {
-  background: var(--fm-bg-hover);
+  background: color-mix(in srgb, var(--fm-text-primary) 6%, transparent);
   color: var(--fm-text-primary);
 }
 
+/* Active dock tab: a raised pill, as in the mockup dock. */
 .fm-footer__tab[data-state="active"] {
-  color: var(--fm-accent-text);
-  border-bottom-color: var(--fm-accent);
-  background: var(--fm-accent-soft);
-  box-shadow: none;
-  font-weight: var(--fm-font-weight-bold);
+  color: var(--fm-text-primary);
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm);
+  font-weight: var(--fm-font-weight-semibold);
 }
 
 .fm-footer :is(button, summary, [tabindex]):focus-visible {

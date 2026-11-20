@@ -165,10 +165,10 @@
   }
 }
 
-/* ── Metrics readouts ──
- * One continuous grid: groups flow into each other instead of spending a row
- * per heading. Group identity is the 2px leading marker; names and method
- * notes are in the tooltip. Density follows the dock height. */
+/* ── Metrics readouts (mockup telemetry board) ──
+ * Four group cards: Runtime, Solver, Magnetization and Energy. Each card has
+ * a heading with its category marker and label-left, value-right readouts;
+ * method notes stay in the tooltip. */
 
 .fm-footer-telemetry__metrics {
   container-type: size;
@@ -180,61 +180,69 @@
 
 .fm-footer-telemetry__metrics-grid {
   box-sizing: border-box;
-  /* Wrapping flex instead of an auto-fill grid: every row, including the
-   * last one, grows its readouts to the full dock width, so no empty tracks
-   * are left at the end of a row. --fm-metric-basis follows dock density. */
-  --fm-metric-basis: 136px;
-  display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  align-content: start;
+  gap: var(--fm-space-2);
   height: 100%;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
+  padding: var(--fm-space-2);
   scrollbar-width: thin;
   scrollbar-color: var(--fm-scrollbar-thumb) var(--fm-scrollbar-track);
 }
 
 .fm-footer-telemetry__group {
-  display: contents;
+  --fm-metric-color: var(--fm-accent);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-section);
+  background: var(--fm-section-bg);
+  padding: var(--fm-space-2) var(--fm-space-3);
+}
+
+.fm-footer-telemetry__group-title {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  margin: 0 0 var(--fm-space-1);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-help);
+  font-weight: var(--fm-font-weight-semibold);
+}
+
+.fm-footer-telemetry__group-title::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-metric-color);
 }
 
 .fm-footer-telemetry__metric {
   --fm-metric-color: var(--fm-accent);
-  position: relative;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 1px;
-  /* --fm-metric-width is the balanced share set by useBalancedMetricRows. */
-  flex: 1 1 var(--fm-metric-width, var(--fm-metric-basis));
-  box-sizing: border-box;
-  min-width: min(100%, var(--fm-metric-basis));
-  min-height: 38px;
-  /* Hairline cell edges instead of a gap over a filled grid background: the
-   * unused part of the last row and the area below it stay panel-coloured. */
-  border-block-end: 1px solid var(--fm-border-subtle);
-  border-inline-end: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-panel);
-  padding: 3px var(--fm-space-2) 3px calc(var(--fm-space-2) + 2px);
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  min-height: 24px;
+  border-radius: var(--fm-radius-sm);
+  padding: 1px var(--fm-space-1);
+  margin-inline: calc(-1 * var(--fm-space-1));
   cursor: default;
   outline: none;
-}
-
-.fm-footer-telemetry__metric::before {
-  content: "";
-  position: absolute;
-  inset-block: 5px;
-  inset-inline-start: 0;
-  width: 2px;
-  border-radius: 0 var(--fm-radius-pill) var(--fm-radius-pill) 0;
-  background: var(--fm-metric-color);
+  transition: background-color var(--fm-duration-micro) var(--fm-ease-out-soft);
 }
 
 .fm-footer-telemetry__metric:hover {
-  background: var(--fm-bg-hover);
+  background: color-mix(in srgb, var(--fm-text-primary) 5%, transparent);
 }
 
 .fm-footer-telemetry__metric:focus-visible {
@@ -243,11 +251,11 @@
 }
 
 .fm-footer-telemetry__metric-label {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--fm-text-secondary);
-  font-size: var(--fm-font-size-help);
-  font-weight: var(--fm-font-weight-medium);
+  font-size: var(--fm-font-size-xs);
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -255,15 +263,14 @@
 
 .fm-footer-telemetry__metric-value {
   display: flex;
+  flex: 0 1 auto;
   align-items: baseline;
   gap: 3px;
   min-width: 0;
   color: var(--fm-text-primary);
-  font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-md);
+  font-size: var(--fm-font-size-sm);
   font-weight: var(--fm-font-weight-semibold);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
   line-height: 1.3;
   white-space: nowrap;
 }
@@ -279,43 +286,26 @@
   color: var(--fm-text-tertiary);
   font-size: var(--fm-font-size-2xs);
   font-weight: var(--fm-font-weight-medium);
-  letter-spacing: 0;
 }
 
-/* Category color is limited to the marker; surfaces remain neutral. */
+/* Category color is limited to the group marker; surfaces remain neutral. */
+.fm-footer-telemetry__group[data-group="runtime"],
 .fm-footer-telemetry__metric[data-group="runtime"],
 .fm-footer-telemetry__tooltip[data-group="runtime"] { --fm-metric-color: var(--fm-category-runtime); }
+.fm-footer-telemetry__group[data-group="solver"],
 .fm-footer-telemetry__metric[data-group="solver"],
 .fm-footer-telemetry__tooltip[data-group="solver"] { --fm-metric-color: var(--fm-category-solver); }
+.fm-footer-telemetry__group[data-group="magnetization"],
 .fm-footer-telemetry__metric[data-group="magnetization"],
 .fm-footer-telemetry__tooltip[data-group="magnetization"] { --fm-metric-color: var(--fm-category-magnetization); }
+.fm-footer-telemetry__group[data-group="energy"],
 .fm-footer-telemetry__metric[data-group="energy"],
 .fm-footer-telemetry__tooltip[data-group="energy"] { --fm-metric-color: var(--fm-category-energy); }
 
-/* Low dock: one line per readout, label left and value right. */
-@container footer-metrics (height < 84px) {
-  .fm-footer-telemetry__metrics-grid { --fm-metric-basis: 176px; }
-
-  .fm-footer-telemetry__metric {
-    flex-direction: row;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--fm-space-2);
-    min-height: 24px;
-    padding-block: 2px;
-  }
-
-  .fm-footer-telemetry__metric::before { inset-block: 4px; }
-  .fm-footer-telemetry__metric-label { flex: 0 1 auto; }
-  .fm-footer-telemetry__metric-value { flex: 0 1 auto; font-size: var(--fm-font-size-sm); }
-}
-
 /* Tall dock: readouts gain size instead of stretching empty cards. */
 @container footer-metrics (height >= 168px) and (width >= 640px) {
-  .fm-footer-telemetry__metrics-grid { --fm-metric-basis: 168px; }
-
-  .fm-footer-telemetry__metric { min-height: 48px; gap: 2px; }
-  .fm-footer-telemetry__metric-value { font-size: var(--fm-font-size-lg); }
+  .fm-footer-telemetry__metric { min-height: 28px; }
+  .fm-footer-telemetry__metric-value { font-size: var(--fm-font-size-md); }
 }
 
 /* ── Contextual tooltip ── */

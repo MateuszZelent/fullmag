@@ -138,9 +138,9 @@
   align-items: center;
   gap: 0;
   padding-inline: var(--fm-space-3);
-  color: var(--fm-text-secondary);
-  font-size: var(--fm-font-size-control);
-  letter-spacing: 0.01em;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  letter-spacing: 0;
   user-select: none;
   overflow-x: auto;
   scrollbar-width: thin;
@@ -170,17 +170,17 @@
 
 .fm-status-bar__sep {
   width: 1px;
-  height: var(--fm-slider-thumb-size);
+  height: 14px;
   margin-inline: var(--fm-space-2);
-  background: var(--fm-border-subtle);
+  background: var(--fm-border-default);
   flex-shrink: 0;
 }
 
 .fm-status-bar__dot {
-  width: var(--fm-space-1);
-  height: var(--fm-space-1);
+  width: 6px;
+  height: 6px;
   margin-inline-end: var(--fm-space-1);
-  border-radius: 50%;
+  border-radius: var(--fm-radius-pill);
   background: var(--fm-text-muted);
   flex-shrink: 0;
   transition: background-color var(--fm-transition-normal);
@@ -210,8 +210,8 @@
   align-items: center;
   gap: var(--fm-space-1);
   border: 1px solid var(--fm-border-default);
-  border-radius: var(--fm-radius-sm);
-  background: var(--fm-bg-panel-raised);
+  border-radius: var(--fm-radius-pill);
+  background: transparent;
   color: var(--fm-text-secondary);
   font-family: var(--fm-font-mono);
   padding: 1px var(--fm-space-2);
@@ -233,8 +233,7 @@
     var(--fm-accent) 58%,
     var(--fm-border-default)
   );
-  background: color-mix(in srgb, var(--fm-accent) 13%, var(--fm-bg-panel-raised));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fm-accent) 18%, transparent);
+  background: color-mix(in srgb, var(--fm-accent) 13%, transparent);
   color: var(--fm-text-primary);
 }
 
@@ -245,7 +244,7 @@
     var(--fm-warning) 64%,
     var(--fm-border-default)
   );
-  background: color-mix(in srgb, var(--fm-warning) 12%, var(--fm-bg-panel-raised));
+  background: color-mix(in srgb, var(--fm-warning) 12%, transparent);
 }
 
 .fm-status-bar__engine[data-tone="warning"] .fm-status-bar__engine-label,
@@ -322,11 +321,11 @@
   flex-shrink: 1;
   align-items: center;
   border: 1px solid var(--fm-border-default);
-  border-radius: var(--fm-radius-sm);
-  background: var(--fm-bg-panel-raised);
+  border-radius: var(--fm-radius-pill);
+  background: transparent;
   color: var(--fm-text-secondary);
   overflow: hidden;
-  padding-inline: var(--fm-space-1);
+  padding-inline: var(--fm-space-2);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
