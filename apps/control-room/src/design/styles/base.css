@@ -7,7 +7,7 @@ body {
   width: 100%;
   min-height: 100%;
   margin: 0;
-  background: var(--fm-bg-app);
+  background: var(--fm-page-bg, var(--fm-bg-app));
   color: var(--fm-text-primary);
   font-family: var(--fm-font-ui);
 }

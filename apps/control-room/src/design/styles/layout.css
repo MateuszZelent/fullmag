@@ -5,7 +5,7 @@
   height: 100vh;
   min-height: 0;
   overflow: hidden;
-  background: var(--fm-bg-app);
+  background: var(--fm-page-bg, var(--fm-bg-app));
   color: var(--fm-text-primary);
 }
 
@@ -22,7 +22,7 @@
   flex: 1 1 0%;
   min-height: 0;
   overflow: hidden;
-  background: var(--fm-bg-app);
+  background: transparent;
   color: var(--fm-text-primary);
   isolation: isolate;
 }
@@ -194,6 +194,8 @@
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+  /* Docked panels float over the page backdrop (specs/frontend-v2/10 §1a). */
+  padding: var(--fm-space-1);
 }
 
 .fm-workspace-body > [data-panel-group],
@@ -219,7 +221,20 @@
   height: 100%;
   min-width: 0;
   min-height: 0;
-  background: var(--fm-bg-panel);
+  background: transparent;
+}
+
+/* Every docked window: one rounded panel with a hairline edge and soft lift. */
+.fm-workspace-body .fm-panel-frame:not([data-panel-mode="floating"]):not([data-panel-mode="maximized"]),
+.fm-workspace-body .fm-dock-column > .fm-slot {
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-section);
+  box-shadow: var(--fm-elevation-sm);
+  overflow: hidden;
+}
+
+.fm-workspace-body .fm-panel-frame > .fm-slot {
+  border: 0;
 }
 
 .fm-dock-column[data-dragging="true"] {
@@ -227,8 +242,10 @@
   z-index: 3;
 }
 
+/* Handles are the gutters between floating panels; they light up on use. */
 .fm-resize-handle {
-  background: var(--fm-border-subtle);
+  border-radius: var(--fm-radius-pill);
+  background: transparent;
   transition:
     background-color var(--fm-transition-fast),
     box-shadow var(--fm-transition-fast);
@@ -236,17 +253,16 @@
 
 .fm-resize-handle:hover,
 .fm-resize-handle[data-resize-handle-active] {
-  background: var(--fm-accent);
-  box-shadow: 0 0 0 1px var(--fm-accent-soft);
+  background: color-mix(in srgb, var(--fm-accent) 55%, transparent);
 }
 
 .fm-resize-handle--vertical {
-  width: var(--fm-space-1);
+  width: var(--fm-space-2);
   cursor: col-resize;
 }
 
 .fm-resize-handle--horizontal {
-  height: var(--fm-space-1);
+  height: var(--fm-space-2);
   cursor: row-resize;
 }
 

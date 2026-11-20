@@ -96,13 +96,13 @@ describe("control-room design styles", () => {
   it("maps dark and light themes to Catppuccin Mocha and Latte", () => {
     const themeCss = readAppFile("src/design/styles/theme.css");
 
-    expect(themeCss).toContain("--fm-bg-app: #1e1e2e;");
-    expect(themeCss).toContain("--fm-bg-viewport: #11111b;");
+    expect(themeCss).toContain("--fm-bg-app: #0d0d16;");
+    expect(themeCss).toContain("--fm-bg-viewport: #0b0b13;");
     expect(themeCss).toContain("--fm-text-primary: #cdd6f4;");
     expect(themeCss).toContain("--fm-accent: #89b4fa;");
     expect(themeCss).toContain("--fm-info: #89dceb;");
-    expect(themeCss).toContain("--fm-bg-app: #eff1f5;");
-    expect(themeCss).toContain("--fm-bg-viewport: #dce0e8;");
+    expect(themeCss).toContain("--fm-bg-app: #e9ecf3;");
+    expect(themeCss).toContain("--fm-bg-viewport: #dde2ec;");
     expect(themeCss).toContain("--fm-text-primary: #4c4f69;");
     expect(themeCss).toContain("--fm-accent: #1e66f5;");
     expect(themeCss).toContain("--fm-info: #04a5e5;");
