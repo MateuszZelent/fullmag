@@ -1,9 +1,9 @@
 name: bootstrap
 
 on:
+  workflow_call:
   push:
     branches: [master, main]
-  pull_request:
   workflow_dispatch:
     inputs:
       contract_scope:
@@ -27,7 +27,7 @@ on:
           - retention
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.contract_scope || 'default' }}
+  group: bootstrap-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.contract_scope || 'default' }}
   cancel-in-progress: true
 
 jobs:

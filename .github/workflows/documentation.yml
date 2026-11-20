@@ -20,183 +20,21 @@ on:
       - "scripts/test_check_public_doc_examples.py"
       - ".agents/skills/scientific-documentation-contract/**"
       - ".github/workflows/documentation.yml"
-  pull_request:
-    paths:
-      - "public_docs/site/**"
-      - "public_docs/site/python-api/**"
-      - "public_docs/fullmag_profesjonalna_dokumentacja_architektura.md"
-      - "docs/physics/**"
-      - "docs/audits/**"
-      - "packages/fullmag-py/**"
-      - "crates/fullmag-plan/src/magnetization_textures_v2.rs"
-      - "external_solvers/3"
-      - "scripts/public_docs_information_architecture.py"
-      - "scripts/check_public_docs_information_architecture.py"
-      - "scripts/test_public_docs_information_architecture.py"
-      - "scripts/check_public_doc_examples.py"
-      - "scripts/test_check_public_doc_examples.py"
-      - ".agents/skills/scientific-documentation-contract/**"
-      - ".github/workflows/documentation.yml"
+      - ".github/workflows/documentation-build.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: public-documentation-${{ github.event.pull_request.number || github.ref }}
+  group: public-documentation-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/documentation-build.yml
     permissions:
       contents: read
-      pages: write
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          submodules: recursive
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.11"
-
-      - name: Test scientific documentation validators
-        run: >-
-          python -m unittest discover
-          -s .agents/skills/scientific-documentation-contract/scripts
-          -p 'test_*.py' -v
-
-      - name: Validate public documentation information architecture
-        run: |
-          python -m unittest scripts/test_public_docs_information_architecture.py -v
-          python scripts/check_public_docs_information_architecture.py --root public_docs/site
-
-      - name: Enforce stage-first public Python examples
-        run: |
-          python -m unittest scripts/test_check_public_doc_examples.py -v
-          python scripts/check_public_doc_examples.py --root public_docs/site
-          python -m unittest scripts/test_documentation_changelog_tabs.py -v
-
-      - name: Resolve scientific documentation diff base
-        id: docs-diff
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            base="${{ github.event.pull_request.base.sha }}"
-          elif [[ "${{ github.event.before }}" =~ ^[0-9a-f]{40}$ ]] && [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
-            base="${{ github.event.before }}"
-          else
-            base="$(git rev-parse HEAD^)"
-          fi
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-
-      - name: Require source maps for changed scientific pages
-        run: >-
-          python .agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py
-          --base "${{ steps.docs-diff.outputs.base }}"
-          --head HEAD
-          --repo-root .
-
-      - name: Install public documentation dependencies
-        run: |
-          python -m pip install -r public_docs/site/requirements.txt
-          python -m pip install ./packages/fullmag-py
-
-      - name: Check public and internal documentation boundary
-        run: python scripts/check_public_docs_boundary.py
-
-      - name: Validate scientific documentation source contracts
-        env:
-          DOCS_DIFF_BASE: ${{ steps.docs-diff.outputs.base }}
-        run: |
-          set -euo pipefail
-          map_files="$(git diff --name-only "$DOCS_DIFF_BASE" HEAD -- docs/audits public_docs/site | grep -E '\\.source-map\\.json$' || true)"
-          if [[ -z "$map_files" ]]; then
-            echo "No changed scientific source maps; changed-page validation already ran."
-            exit 0
-          fi
-          while IFS= read -r manifest; do
-            python .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
-              "$manifest" --repo-root .
-          done <<< "$map_files"
-
-      - name: Execute documented Python API contracts
-        env:
-          PYTHONPATH: packages/fullmag-py/src
-        run: |
-          python -m unittest packages/fullmag-py/tests/test_public_python_api_documentation.py -v
-          python -m unittest packages/fullmag-py/tests/test_public_exchange_documentation.py -v
-          python -m unittest packages/fullmag-py/tests/test_material_dmi_units.py -v
-
-      - name: Resolve documentation build time (UTC)
-        id: build-time
-        shell: bash
-        run: echo "value=$(date -u '+%Y-%m-%d %H:%M UTC')" >> "$GITHUB_OUTPUT"
-
-      - name: Build public documentation strictly
-        env:
-          FULLMAG_DOCS_VERSION: ${{ github.ref_name }}
-          FULLMAG_DOCS_BUILD_TIME: ${{ steps.build-time.outputs.value }}
-        run: >-
-          sphinx-build -b html -W -n --keep-going
-          public_docs/site public_docs/site/_build/html
-
-      - name: Build Sphinx version-change index
-        env:
-          FULLMAG_DOCS_VERSION: development
-        run: |
-          set -euo pipefail
-          changes_dir="public_docs/site/_build/version-changes"
-          published_dir="public_docs/site/_build/html/version-changes"
-          rm -rf "$changes_dir" "$published_dir"
-          sphinx-build -b changes -W -n --keep-going \
-            -D version=development \
-            public_docs/site "$changes_dir"
-          test -s "$changes_dir/index.html"
-          test -s "$changes_dir/changes.html"
-          mkdir -p "$published_dir"
-          cp -a "$changes_dir/." "$published_dir/"
-          cp "$changes_dir/changes.html" "$published_dir/index.html"
-          grep --fixed-strings --quiet "development" "$published_dir/changes.html"
-          grep --fixed-strings --quiet "Automatically generated list of changes" "$published_dir/index.html"
-
-      - name: Validate rendered scientific documentation
-        env:
-          DOCS_DIFF_BASE: ${{ steps.docs-diff.outputs.base }}
-        run: |
-          set -euo pipefail
-          map_files="$(git diff --name-only "$DOCS_DIFF_BASE" HEAD -- public_docs/site | grep -E '\\.source-map\\.json$' || true)"
-          if [[ -z "$map_files" ]]; then
-            echo "No changed public scientific source maps; rendered changed-page validation already ran."
-            exit 0
-          fi
-          while IFS= read -r manifest; do
-            relative="${manifest#public_docs/site/}"
-            rendered="public_docs/site/_build/html/${relative%.source-map.json}.html"
-            python .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
-              "$manifest" --repo-root . --rendered-html "$rendered"
-          done <<< "$map_files"
-
-      - name: Upload pull request preview artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: fullmag-public-docs-${{ github.sha }}
-          path: public_docs/site/_build/html
-
-      - name: Configure GitHub Pages
-        if: github.event_name != 'pull_request'
-        uses: actions/configure-pages@v6
-
-      - name: Upload GitHub Pages artifact
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: public_docs/site/_build/html
 
   deploy:
     if: github.event_name != 'pull_request'
@@ -211,9 +49,23 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Download validated public documentation
+        uses: actions/download-artifact@v8
+        with:
+          name: fullmag-public-docs-${{ github.sha }}
+          path: public_docs/site/_build/html
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: public_docs/site/_build/html
+
       - name: Deploy public documentation
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346
 
       - name: Verify deployed documentation and changelog pages
         id: verify

@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-required-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate_plan:
+    name: Select required PR gates
+    runs-on: ubuntu-latest
+    outputs:
+      gates: ${{ steps.plan.outputs.gates }}
+      bootstrap: ${{ steps.plan.outputs.bootstrap }}
+      contract_guard: ${{ steps.plan.outputs.contract_guard }}
+      abl_live_browser: ${{ steps.plan.outputs.abl_live_browser }}
+      dispersion_artifact_consumers: ${{ steps.plan.outputs.dispersion_artifact_consumers }}
+      documentation: ${{ steps.plan.outputs.documentation }}
+      eigensolve_damping_oracle: ${{ steps.plan.outputs.eigensolve_damping_oracle }}
+      eigensolve_method_contracts: ${{ steps.plan.outputs.eigensolve_method_contracts }}
+      eigensolve_ui_method_contracts: ${{ steps.plan.outputs.eigensolve_ui_method_contracts }}
+      pypi_build: ${{ steps.plan.outputs.pypi_build }}
+      scoped_mesh_fields: ${{ steps.plan.outputs.scoped_mesh_fields }}
+      shifted_ksp_true_convergence: ${{ steps.plan.outputs.shifted_ksp_true_convergence }}
+    steps:
+      - name: Checkout pull request head and full history
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test CI gate selector and fail-closed result policy
+        run: python3 -B -m unittest scripts/test_ci_required.py -v
+      - name: Select path-complete gate plan
+        id: plan
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          python3 -B scripts/ci/ci_required.py plan
+          --base "$PR_BASE_SHA"
+          --head "$PR_HEAD_SHA"
+          --event-name "$GITHUB_EVENT_NAME"
+
+  bootstrap:
+    needs: gate_plan
+    if: ${{ needs.gate_plan.result == 'success' && needs.gate_plan.outputs.bootstrap == 'true' }}
+    uses: ./.github/workflows/bootstrap.yml
+
+  contract_guard:
+    needs: gate_plan
+    if: ${{ needs.gate_plan.result == 'success' && needs.gate_plan.outputs.contract_guard == 'true' }}
+    uses: ./.github/workflows/contract-guard.yml
+
+  abl_live_browser:
+    needs: gate_plan
+    if: ${{ needs.gate_plan.result == 'success' && needs.gate_plan.outputs.abl_live_browser == 'true' }}
+    uses: ./.github/workflows/abl-live-browser.yml
+
+  dispersion_artifact_consumers:
+    needs: gate_plan
+    if: ${{ needs.gate_plan.result == 'success' && needs.gate_plan.outputs.dispersion_artifact_consumers == 'true' }}
+    uses: ./.github/workflows/dispersion-artifact-consumers.yml
+
+  documentation:
+    needs: gate_plan
+    if: ${{ needs.gate_plan.result == 'success' && needs.gate_plan.outputs.documentation == 'true' }}
+    uses: ./.github/workflows/documentation-build.yml
+
+  eigensolve_damping_oracle:
+    needs: gate_plan
+    if: ${{ needs.gate_plan.result == 'success' && needs.gate_plan.outputs.eigensolve_damping_oracle == 'true' }}
+    uses: ./.github/workflows/eigensolve-damping-oracle.yml
+
+  eigensolve_method_contracts:
+    needs: gate_plan
+    if: ${{ needs.gate_plan.result == 'success' && needs.gate_plan.outputs.eigensolve_method_contracts == 'true' }}
+    uses: ./.github/workflows/eigensolve-method-contracts.yml
+
+  eigensolve_ui_method_contracts:
+    needs: gate_plan
+    if: ${{ needs.gate_plan.result == 'success' && needs.gate_plan.outputs.eigensolve_ui_method_contracts == 'true' }}
+    uses: ./.github/workflows/eigensolve-ui-method-contracts.yml
+
+  pypi_build:
+    needs: gate_plan
+    if: ${{ needs.gate_plan.result == 'success' && needs.gate_plan.outputs.pypi_build == 'true' }}
+    uses: ./.github/workflows/pypi-build.yml
+
+  scoped_mesh_fields:
+    needs: gate_plan
+    if: ${{ needs.gate_plan.result == 'success' && needs.gate_plan.outputs.scoped_mesh_fields == 'true' }}
+    uses: ./.github/workflows/scoped-mesh-fields.yml
+
+  shifted_ksp_true_convergence:
+    needs: gate_plan
+    if: ${{ needs.gate_plan.result == 'success' && needs.gate_plan.outputs.shifted_ksp_true_convergence == 'true' }}
+    uses: ./.github/workflows/shifted-ksp-true-convergence.yml
+
+  required:
+    name: CI / required
+    if: always()
+    needs:
+      - gate_plan
+      - bootstrap
+      - contract_guard
+      - abl_live_browser
+      - dispersion_artifact_consumers
+      - documentation
+      - eigensolve_damping_oracle
+      - eigensolve_method_contracts
+      - eigensolve_ui_method_contracts
+      - pypi_build
+      - scoped_mesh_fields
+      - shifted_ksp_true_convergence
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gate validator
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Require successful selected checks and intentional skips
+        env:
+          EXPECTED_GATES_JSON: ${{ needs.gate_plan.outputs.gates }}
+          PLAN_RESULT: ${{ needs.gate_plan.result }}
+          RESULT_BOOTSTRAP: ${{ needs.bootstrap.result }}
+          RESULT_CONTRACT_GUARD: ${{ needs.contract_guard.result }}
+          RESULT_ABL_LIVE_BROWSER: ${{ needs.abl_live_browser.result }}
+          RESULT_DISPERSION_ARTIFACT_CONSUMERS: ${{ needs.dispersion_artifact_consumers.result }}
+          RESULT_DOCUMENTATION: ${{ needs.documentation.result }}
+          RESULT_EIGENSOLVE_DAMPING_ORACLE: ${{ needs.eigensolve_damping_oracle.result }}
+          RESULT_EIGENSOLVE_METHOD_CONTRACTS: ${{ needs.eigensolve_method_contracts.result }}
+          RESULT_EIGENSOLVE_UI_METHOD_CONTRACTS: ${{ needs.eigensolve_ui_method_contracts.result }}
+          RESULT_PYPI_BUILD: ${{ needs.pypi_build.result }}
+          RESULT_SCOPED_MESH_FIELDS: ${{ needs.scoped_mesh_fields.result }}
+          RESULT_SHIFTED_KSP_TRUE_CONVERGENCE: ${{ needs.shifted_ksp_true_convergence.result }}
+        run: python3 -B scripts/ci/ci_required.py validate

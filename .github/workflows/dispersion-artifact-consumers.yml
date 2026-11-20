@@ -1,19 +1,7 @@
 name: dispersion-artifact-consumers
 
 on:
-  pull_request:
-    paths:
-      # Consumers import validators, receipts and analytic oracles across scripts.
-      - 'scripts/**/*.py'
-      - 'docs/guides/comsol-dispersion-benchmark/parameters.json'
-      - 'docker/all-in-one/**'
-      - 'crates/fullmag-session/src/docker_desktop_storage.rs'
-      - 'crates/fullmag-workspace-inspect/**'
-      - 'crates/fullmag-session/src/frequency_domain_artifact_generation.rs'
-      - 'crates/fullmag-session/src/lib.rs'
-      - 'crates/fullmag-runner/src/artifact_generation.rs'
-      - 'packages/fullmag-py/**'
-      - '.github/workflows/dispersion-artifact-consumers.yml'
+  workflow_call:
   push:
     branches: [master, main]
     paths:
@@ -33,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: dispersion-artifact-consumers-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
