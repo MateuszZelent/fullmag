@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -27,6 +27,7 @@ import { resolveSessionAuthoringDiscretization } from "@/kernel/resources/sessio
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
+import { createInspectorChildDraftRegistry } from "../inspectorChildDraftRegistry";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import {
   QuantityField,
@@ -242,40 +243,21 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
     state: draftState,
   });
   const auxiliaryDraftOwnerKey = `${selection.kind}:${draftIdentityKey}`;
-  const [auxiliaryDraftState, setAuxiliaryDraftState] = useState<{
-    ownerKey: string;
-    session: RegionAuxiliaryDraftSession;
-  } | null>(null);
-  const auxiliaryDraftSession = auxiliaryDraftState?.ownerKey === auxiliaryDraftOwnerKey
-    ? auxiliaryDraftState.session
+  const [auxiliaryDraftRegistry] = useState(
+    createInspectorChildDraftRegistry<RegionAuxiliaryDraftSession>,
+  );
+  const auxiliaryDraftStatus = useSyncExternalStore(
+    auxiliaryDraftRegistry.subscribe,
+    auxiliaryDraftRegistry.getSnapshot,
+    auxiliaryDraftRegistry.getServerSnapshot,
+  );
+  const auxiliaryDraftSession = auxiliaryDraftStatus?.ownerKey === auxiliaryDraftOwnerKey
+    ? auxiliaryDraftStatus
     : null;
-  const auxiliaryDraftSessionRef = useRef(auxiliaryDraftSession);
   const auxiliaryDraftOwnerKeyRef = useRef(auxiliaryDraftOwnerKey);
   useLayoutEffect(() => {
-    auxiliaryDraftSessionRef.current = auxiliaryDraftSession;
     auxiliaryDraftOwnerKeyRef.current = auxiliaryDraftOwnerKey;
-  }, [auxiliaryDraftOwnerKey, auxiliaryDraftSession]);
-  const reportAuxiliaryDraftSession = useCallback(
-    (ownerKey: string, session: RegionAuxiliaryDraftSession | null) => {
-      setAuxiliaryDraftState((current) => {
-        if (session === null) {
-          return current?.ownerKey === ownerKey ? null : current;
-        }
-        if (
-          current?.ownerKey === ownerKey &&
-          current.session.applying === session.applying &&
-          current.session.dirty === session.dirty &&
-          current.session.valid === session.valid &&
-          current.session.apply === session.apply &&
-          current.session.reset === session.reset
-        ) {
-          return current;
-        }
-        return { ownerKey, session };
-      });
-    },
-    [],
-  );
+  }, [auxiliaryDraftOwnerKey]);
 
   const membership = useMeshRegionMembershipResource(model.objectId, model.regionId, {
     enabled:
@@ -754,7 +736,7 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
 
   const revert = () => {
     fieldDrafts.store.clear();
-    resetRegionAggregateDraft(auxiliaryDraftSessionRef.current, () => {
+    resetRegionAggregateDraft(auxiliaryDraftRegistry.getSession(auxiliaryDraftOwnerKey), () => {
       setDraftState(initialInspectorDraftState({ baseDraft, baseKey: draftKey, identityKey: draftIdentityKey }));
     });
     setFeedback(null);
@@ -764,7 +746,7 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
   async function applyInspectorDraft(): Promise<boolean> {
     const expectedOwnerKey = auxiliaryDraftOwnerKey;
     const auxiliaryApplyAtStart = captureRegionAuxiliaryDraftApply(
-      auxiliaryDraftSessionRef.current,
+      auxiliaryDraftRegistry.getSession(expectedOwnerKey),
     );
     let applied = false;
     if (regionDraftDirty) {
@@ -825,7 +807,7 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
     materialFields: materialFields.data ?? null,
     couplingDependencies,
     auxiliaryDraftOwnerKey,
-    reportAuxiliaryDraftSession,
+    auxiliaryDraftRegistry,
   };
 
   return (

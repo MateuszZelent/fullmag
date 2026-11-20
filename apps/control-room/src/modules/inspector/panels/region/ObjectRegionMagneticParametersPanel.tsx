@@ -1,7 +1,8 @@
 "use client";
 
 import type { ChangeEvent } from "react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useInspectorChildDraftRegistration } from "../../useInspectorChildDraftRegistration";
 import type { MaterialParameterFieldListResource, SceneResource } from "@/kernel/api/apiTypes";
 import {
   authoringWriteOptions,
@@ -24,7 +25,6 @@ import {
   ObjectRegionMetadataSection,
   ObjectRegionActionsSection,
   ObjectRegionInlineDiagnostics,
-  type RegionAuxiliaryDraftSession,
   type RegionSubPanelProps,
 } from "./shared";
 import {
@@ -220,7 +220,7 @@ function useObjectRegionMagneticParametersPanelView({
   feedback,
   materialFields,
   auxiliaryDraftOwnerKey,
-  reportAuxiliaryDraftSession,
+  auxiliaryDraftRegistry,
 }: RegionSubPanelProps) {
   const { api, authoringHistory, commands, resources } = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
@@ -484,27 +484,13 @@ function useObjectRegionMagneticParametersPanelView({
     () => auxiliaryResetRef.current(),
     [],
   );
-  useEffect(() => {
-    if (!auxiliaryDraftOwnerKey || !reportAuxiliaryDraftSession) return;
-    const session: RegionAuxiliaryDraftSession = {
-      applying: draftApplyPending || fieldPending,
-      apply: applyAuxiliaryDraft,
-      dirty: fieldDraftDirty,
-      reset: resetAuxiliaryDraft,
-      valid: fieldDraftValid,
-    };
-    reportAuxiliaryDraftSession(auxiliaryDraftOwnerKey, session);
-    return () => reportAuxiliaryDraftSession(auxiliaryDraftOwnerKey, null);
-  }, [
-    applyAuxiliaryDraft,
-    auxiliaryDraftOwnerKey,
-    fieldDraftDirty,
-    fieldDraftValid,
-    fieldPending,
-    draftApplyPending,
-    reportAuxiliaryDraftSession,
-    resetAuxiliaryDraft,
-  ]);
+  useInspectorChildDraftRegistration(auxiliaryDraftRegistry, auxiliaryDraftOwnerKey, {
+    applying: draftApplyPending || fieldPending,
+    apply: applyAuxiliaryDraft,
+    dirty: fieldDraftDirty,
+    reset: resetAuxiliaryDraft,
+    valid: fieldDraftValid,
+  });
 
   const overriddenParams = new Set(
     draft.materialOverrides.map((override) => override.parameter),

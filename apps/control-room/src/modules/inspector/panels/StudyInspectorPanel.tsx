@@ -97,6 +97,7 @@ import {
   stageExecutionForCurrentScope,
   studySnapshotFromScene,
 } from "./StudyInspectorPanelModel";
+import { createInspectorChildDraftRegistry } from "../inspectorChildDraftRegistry";
 import { StudyPipelineSection } from "./StudyPipelineSection";
 import { StudyExecutionProfileSection, type StudyExecutionProfileEditSession } from "./StudyExecutionProfileSection";
 import {
@@ -1186,32 +1187,17 @@ export function StudyInspectorPanel({
     stageExecution,
     state,
   } = useStudyInspectorPanelController(selection);
-  const profileEditSessionRef = useRef<StudyExecutionProfileEditSession | null>(null);
-  const [profileEditState, setProfileEditState] = useState({
-    dirty: false,
-    profileBound: false,
-    valid: true,
-  });
-  const onProfileEditSessionChange = useCallback(
-    (session: StudyExecutionProfileEditSession | null) => {
-      profileEditSessionRef.current = session;
-      const next = session
-        ? {
-            dirty: session.dirty,
-            profileBound: session.profileBound,
-            valid: session.valid,
-          }
-        : { dirty: false, profileBound: false, valid: true };
-      setProfileEditState((current) =>
-        current.dirty === next.dirty &&
-        current.profileBound === next.profileBound &&
-        current.valid === next.valid
-          ? current
-          : next,
-      );
-    },
-    [],
+  const [profileDraftRegistry] = useState(
+    createInspectorChildDraftRegistry<StudyExecutionProfileEditSession>,
   );
+  const profileEditState = useSyncExternalStore(
+    profileDraftRegistry.subscribe,
+    profileDraftRegistry.getSnapshot,
+    profileDraftRegistry.getServerSnapshot,
+  );
+  const profileDirty = profileEditState?.dirty ?? false;
+  const profileBound = profileEditState?.profileBound ?? false;
+  const profileValid = profileEditState?.valid ?? true;
   const sceneMagneticObjectIds = magneticObjectIds(scene.data);
   const globalValidation = validateStudyGlobalDraft(state.globalDraft, {
     studyStages: rawStudyStages(scene.data),
@@ -1219,7 +1205,7 @@ export function StudyInspectorPanel({
     activeLane: runtimeStatus?.capabilities.active_lane ?? null,
     algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
     executionProfileBound:
-      hasStudyExecutionProfile(scene.data) || profileEditState.profileBound,
+      hasStudyExecutionProfile(scene.data) || profileBound,
     magneticObjectCount: sceneMagneticObjectCount,
     magneticObjectIds: sceneMagneticObjectIds,
     sessionDiscretization: resolveSessionDiscretization(runtimeStatus),
@@ -1244,9 +1230,9 @@ export function StudyInspectorPanel({
   const stagesDirty =
     JSON.stringify(state.stageDrafts) !== JSON.stringify(state.baselineStageDrafts);
   const applyInspectorDraft = useCallback(async () => {
-    if (profileEditState.dirty) {
+    if (profileDirty) {
       if (globalDirty || stagesDirty) return false;
-      return (await profileEditSessionRef.current?.apply()) === true;
+      return (await profileDraftRegistry.getSession("execution-profile")?.apply()) === true;
     }
     return applyStudyDraftsWithPartialFailure({
       globalDirty,
@@ -1254,24 +1240,24 @@ export function StudyInspectorPanel({
       commitGlobal: commitGlobalDraft,
       commitStages: commitStageDrafts,
     });
-  }, [commitGlobalDraft, commitStageDrafts, globalDirty, profileEditState.dirty, stagesDirty]);
+  }, [commitGlobalDraft, commitStageDrafts, globalDirty, profileDirty, profileDraftRegistry, stagesDirty]);
   const resetInspectorDraft = useCallback(() => {
     dispatch({ type: "revertGlobalDraft" });
     dispatch({ type: "revertStageDrafts" });
-    profileEditSessionRef.current?.reset();
-  }, [dispatch]);
+    profileDraftRegistry.getSession("execution-profile")?.reset();
+  }, [dispatch, profileDraftRegistry]);
   useRegisterInspectorEditSession(
     "staged",
     state.authoringBusy,
-    globalDirty || stagesDirty || profileEditState.dirty,
+    globalDirty || stagesDirty || profileDirty,
     ![...globalValidation, ...stageValidation].some(
       (issue) => issue.severity === "error",
-    ) && profileEditState.valid,
+    ) && profileValid,
     state.authoringBusy ? "Study changes are being saved." : undefined,
     applyInspectorDraft,
     resetInspectorDraft,
     {
-      applyBlockReason: profileEditState.dirty && (globalDirty || stagesDirty)
+      applyBlockReason: profileDirty && (globalDirty || stagesDirty)
         ? "Apply or cancel the execution profile first, then save the other Study edits."
         : undefined,
       historyMode: "mutation-owned",
@@ -1382,9 +1368,9 @@ export function StudyInspectorPanel({
               }
               draft={state.globalDraft}
               executionProfileBound={
-                hasStudyExecutionProfile(scene.data) || profileEditState.profileBound
+                hasStudyExecutionProfile(scene.data) || profileBound
               }
-              executionProfileDraftDirty={profileEditState.dirty}
+              executionProfileDraftDirty={profileDirty}
               model={model}
               magneticObjectCount={sceneMagneticObjectCount}
               magneticObjectIds={sceneMagneticObjectIds}
@@ -1408,7 +1394,7 @@ export function StudyInspectorPanel({
               sessionScopeKey={sessionScopeKey}
               stages={[...rawStudyStages(scene.data), ...state.stageDrafts]}
               onApply={commitExecutionProfile}
-              onEditSessionChange={onProfileEditSessionChange}
+              draftRegistry={profileDraftRegistry}
             />
           </>
         ) : null}
@@ -1429,9 +1415,9 @@ export function StudyInspectorPanel({
             commandDisabledReason={commandDisabledReason}
             demagEnabled={state.globalDraft.demagEnabled}
             executionProfileBound={
-              hasStudyExecutionProfile(scene.data) || profileEditState.profileBound
+              hasStudyExecutionProfile(scene.data) || profileBound
             }
-            executionProfileDraftDirty={profileEditState.dirty}
+            executionProfileDraftDirty={profileDirty}
             k0ModalReadinessFor={k0ModalReadinessFor}
             draft={state.stageDrafts[state.selectedDraftIndex] ?? null}
             draftIndex={state.selectedDraftIndex}

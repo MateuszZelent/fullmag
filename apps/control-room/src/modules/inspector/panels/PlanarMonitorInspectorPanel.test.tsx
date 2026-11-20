@@ -377,6 +377,41 @@ describe("PlanarMonitorInspectorPanel", () => {
     }
   });
 
+  it("refreshes a clean draft without replacing its input or publishing a dirty preview", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const renderPanel = () => root.render(
+      <InspectorEditSessionProvider>
+        <PlanarMonitorInspectorPanel selection={selection()} />
+        <InspectorEditSessionProbe />
+      </InspectorEditSessionProvider>,
+    );
+    const publishedDrafts: unknown[] = [];
+    const unsubscribe = planarMonitorFramePreviewStore.subscribe(() => {
+      const draft = planarMonitorFramePreviewStore.getDraftSnapshot();
+      if (draft) publishedDrafts.push(draft);
+    });
+    try {
+      await act(async () => renderPanel());
+      const nameInput = findControl(container, "Name");
+      expect(controlValue(nameInput)).toBe("Mid-plane");
+
+      mocks.resourceMonitor = { ...monitorFixture, name: "Refreshed monitor" };
+      mocks.resourceSceneRevision = 8;
+      await act(async () => renderPanel());
+
+      expect(findControl(container, "Name")).toBe(nameInput);
+      expect(controlValue(nameInput)).toBe("Refreshed monitor");
+      expect(findSessionProbe(container).textContent).toBe("staged:false");
+      expect(publishedDrafts).toEqual([]);
+    } finally {
+      unsubscribe();
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("blocks local and global Apply after an external definition change until Revert", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
