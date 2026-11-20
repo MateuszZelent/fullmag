@@ -170,6 +170,10 @@ node $\mathbf x_i$; there is no averaging over the cell or quadrature:
 p_i=F\bigl(\mathbf x_f(\mathbf x_i);\boldsymbol\theta\bigr).
 ```
 
+At unit transition weight the resolved coefficient equals the sampled field
+value directly. Evaluating this endpoint as a subtraction and addition of the
+base coefficient can round a small positive damping to zero.
+
 Worked example, the damping ramp in front of an absorbing edge
 (mumax3-style position-dependent $\alpha$):
 

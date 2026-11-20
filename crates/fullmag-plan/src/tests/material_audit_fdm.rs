@@ -486,3 +486,20 @@ fn function_alpha_is_sampled_at_every_cell_in_the_declared_frame() {
         assert!(ramp_cells > 0 && ramp_cells < alpha.len(), "frame {frame}");
     }
 }
+
+#[test]
+fn whole_object_function_preserves_small_positive_damping() {
+    let mut ir = translated_strip_ir();
+    ir.material_parameter_fields.push(
+        serde_json::from_value(serde_json::json!({
+            "assignment_id": "strip:object:alpha", "owner_object": "strip", "parameter": "alpha",
+            "value": {"kind": "function", "function": {
+                "expression_version": "field_expr.v1", "outputs": ["1e-20"]
+            }}
+        })).unwrap(),
+    );
+    let fdm = fdm_plan(&ir);
+    let alpha = fdm.material.alpha_field.expect("the sample differs from the base damping");
+    assert!(!alpha.is_empty());
+    assert!(alpha.iter().all(|&value| value == 1e-20));
+}

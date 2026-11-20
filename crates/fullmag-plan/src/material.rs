@@ -511,7 +511,13 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                         error
                     }
                 })?;
-                resolved_values.push(base_value + selected.3 * (value - base_value));
+                let weight = selected.3;
+                let resolved = if weight == 1.0 {
+                    value
+                } else {
+                    base_value + weight * (value - base_value)
+                };
+                resolved_values.push(resolved);
             }
         }
         resolved_values
