@@ -7,12 +7,20 @@ kind) and docs/specs/mask-function-v1.md, section 9.
 from __future__ import annotations
 
 import math
+import tempfile
 import unittest
 from fractions import Fraction
 from math import cos, exp, pi
+from pathlib import Path
 
 import fullmag as fm
 from fullmag.model.field_function import FieldFunctionError, compile_field_function
+from fullmag.runtime.scene_document import build_scene_document_from_builder
+from fullmag.runtime.script_builder import (
+    export_builder_draft,
+    render_scene_document_as_script,
+    rewrite_loaded_problem_script,
+)
 
 ALPHA_TEXT = "a0 + a_max*max(0.0, (x - x_edge)/L)**3"
 ALPHA_VALUES = {"a0": 0.01, "a_max": 0.5, "x_edge": 2e-6, "L": 600e-9}
@@ -224,6 +232,42 @@ class FieldFunctionEvaluationTests(unittest.TestCase):
             compile_field_function({"expression_version": "field_expr.v1", "outputs": ["q*x"]})
 
 
+SCRIPT = '''import fullmag as fm
+from math import exp
+
+study = fm.study("alpha-function")
+study.engine("fdm").device("cpu").mode("strict")
+study.cell(5e-9, 5e-9, 5e-9)
+film = study.geometry(fm.Box(size=(200e-9, 50e-9, 5e-9)), name="film")
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.01
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+
+def ramp(x, y, z, a0, a_max, x_edge, L):
+    s = max(0.0, (x - x_edge) / L)
+    return a0 + a_max * s ** 3 * exp(0.0 * y)
+
+
+{alpha_line}
+core = film.add_region("core", fm.Box(size=(50e-9, 50e-9, 5e-9)))
+core.set_material("Aex", fm.fields.function("A0*(1 + 0.1*heaviside(x))", A0=13e-12, unit="J/m"))
+film.set_material_field(
+    "Ms",
+    fm.fields.function("800e3 - 1e3*cos(pi*y/50e-9)", frame="world", unit="A/m"),
+    region=core,
+)
+study.run(1e-12)
+'''
+
+ALPHA_LINES = {
+    "string": 'film.alpha = fm.fields.function("a0 + a_max*max(0.0, (x - x_edge)/L)**3", '
+    "a0=0.01, a_max=0.5, x_edge=50e-9, L=50e-9)",
+    "def": "film.alpha = fm.fields.function(ramp, a0=0.01, a_max=0.5, x_edge=50e-9, L=50e-9)",
+}
+
+
 class FieldFunctionStudyTests(unittest.TestCase):
     def test_film_alpha_assignment_creates_one_object_field_and_replaces_it(self):
         study = fm.study("alpha-setter")
@@ -243,6 +287,54 @@ class FieldFunctionStudyTests(unittest.TestCase):
         film.alpha = 0.03
         self.assertEqual(film.alpha.value, 0.03)
         self.assertEqual(len(film._material_parameter_assignments), 1)
+
+    def test_scripts_round_trip_through_problem_and_scene_exports(self):
+        for form, alpha_line in ALPHA_LINES.items():
+            with tempfile.TemporaryDirectory() as directory, self.subTest(form=form):
+                root = Path(directory)
+                source = root / "source.py"
+                source.write_text(SCRIPT.replace("{alpha_line}", alpha_line), encoding="utf-8")
+                loaded = fm.load_problem_from_script(source, lightweight_assets=True)
+                original = loaded.problem.to_ir(include_geometry_assets=False)
+                fields = {
+                    item["assignment_id"]: item["value"]
+                    for item in original["material_parameter_fields"]
+                }
+                alpha_field = fields["film:object:alpha"]["function"]
+                self.assertEqual("name" in alpha_field, form == "def")
+                scene = build_scene_document_from_builder(export_builder_draft(loaded))
+                exports = {
+                    "problem": rewrite_loaded_problem_script(loaded)["rendered_source"],
+                    "scene": render_scene_document_as_script(scene),
+                }
+                for path, rendered in exports.items():
+                    with self.subTest(path=path):
+                        if form == "string":
+                            self.assertIn(
+                                '.alpha = fm.fields.function("a0 + a_max*max(0.0, (x - x_edge)/L)**3", '
+                                "a0=0.01, a_max=0.5, x_edge=5e-08, L=5e-08)",
+                                rendered,
+                            )
+                            self.assertNotIn("def ramp", rendered)
+                        else:
+                            self.assertIn("from math import exp", rendered)
+                            self.assertIn("def ramp(x, y, z, a0, a_max, x_edge, L):", rendered)
+                            self.assertIn(".alpha = fm.fields.function(ramp, a0=0.01", rendered)
+                        self.assertIn(
+                            'fm.fields.function("A0*(1 + 0.1*heaviside(x))", A0=1.3e-11, unit="J/m")',
+                            rendered,
+                        )
+                        target = root / f"exported_{path}.py"
+                        target.write_text(rendered, encoding="utf-8")
+                        reloaded = fm.load_problem_from_script(target, lightweight_assets=True)
+                        actual = reloaded.problem.to_ir(include_geometry_assets=False)
+                        self.assertEqual(
+                            actual["material_parameter_fields"], original["material_parameter_fields"]
+                        )
+                        self.assertEqual(
+                            [r["material_overrides"] for r in actual["object_regions"]],
+                            [r["material_overrides"] for r in original["object_regions"]],
+                        )
 
 
 if __name__ == "__main__":
