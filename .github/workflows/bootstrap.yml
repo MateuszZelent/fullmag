@@ -124,6 +124,14 @@ jobs:
       - name: Run material provenance and authoring roundtrip contracts
         run: cargo test --locked -p fullmag-authoring --lib material_library_roundtrip
 
+      - name: Run spin transport planning and provenance contracts
+        run: |
+          cargo test --locked -p fullmag-plan --lib spin_transport::tests::fem_planning_omits_spin_transport_inactive_in_physics_graph -- --exact
+          cargo test --locked -p fullmag-plan --lib spin_transport::tests::resolves_bounded_fem_m2_torque_to_stage_transport_callback -- --exact
+          cargo test --locked -p fullmag-plan --lib spin_transport::tests::reject_unassigned_spin_boundary_policy_fails_closed_without_claims -- --exact
+          cargo test --locked -p fullmag-plan --lib spin_transport::tests::resolves_only_fdm_cpu_double_and_preserves_requested_intent -- --exact
+          cargo test --locked -p fullmag-runner --lib fdm::cpu::spin_transport::tests::reciprocal_and_transient_plans_publish_transport_execution_provenance -- --exact
+
       - name: Verify interleaved Zarr sample indexes after writer drain
         shell: bash
         run: |

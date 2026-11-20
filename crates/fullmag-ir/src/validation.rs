@@ -3856,6 +3856,20 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
             {
                 errors.push(format!("{prefix}.materials[{material_index}] theta_sh must be finite and lambda_sf_m > 0"));
             }
+            for (name, length) in [
+                ("lambda_j_m", &material.lambda_j_m),
+                ("lambda_phi_m", &material.lambda_phi_m),
+            ] {
+                // An infinite length is the explicit `disabled` reaction, never
+                // a zero or non-finite coefficient in sigma_s / (2 lambda^2).
+                if let crate::ReactionLengthIR::Enabled(value) = length {
+                    if !value.is_finite() || *value <= 0.0 {
+                        errors.push(format!(
+                            "{prefix}.materials[{material_index}].{name} must be finite and > 0 or 'disabled'"
+                        ));
+                    }
+                }
+            }
             let density_of_states = material.density_of_states_per_spin_j_inv_m3;
             let has_physical_capacitance_source =
                 material.spin_capacitance_as_per_v_m3.is_some() || density_of_states.is_some();
@@ -4124,6 +4138,14 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
         {
             errors.push(format!(
                 "{prefix}.solver carries unsupported operator/residual version"
+            ));
+        }
+        if !matches!(
+            module.solver.default_external_boundary.as_str(),
+            "spin_insulating" | "reject_unassigned"
+        ) {
+            errors.push(format!(
+                "{prefix}.solver.default_external_boundary must be 'spin_insulating' or 'reject_unassigned'"
             ));
         }
         if reciprocal {
