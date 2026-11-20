@@ -429,7 +429,12 @@ export function useStudyInspectorPanelController(
   const model = resolveStudyInspectorModel({
     activeLane: runtimeStatus?.capabilities.active_lane ?? null,
     commandQueue: commandQueue.data,
-    currentRun: currentRun.data,
+    currentRun:
+      currentRun.data &&
+      currentRun.data.run_id === runtimeStatus?.run?.run_id &&
+      currentRun.data.session_id === runtimeStatus.session.session_id
+        ? currentRun.data
+        : null,
     energyHistory: energyHistory.data,
     selectedNodeId: selection.nodeId,
     selectedStageRef,
@@ -523,7 +528,6 @@ export function useStudyInspectorPanelController(
     state.stageDrafts,
     studySignature,
   ]);
-  const activeStageIndex = scopedStageExecutionData?.active_stage_index ?? null;
   const commandContext = createCommandContext("inspector", kernel, {
     resourceData: {
       ...buildRuntimeCommandControlResourceData({
@@ -1236,7 +1240,6 @@ export function useStudyInspectorPanelController(
   const commitGlobalDraft = owner.commitGlobalDraft;
   const commitExecutionProfile = owner.commitExecutionProfile;
   return {
-    activeStageIndex,
     buildStudyProgress,
     checkpointCatalog,
     checkpoints,
@@ -1287,7 +1290,6 @@ export function StudyInspectorPanel({
 }) {
   const {
     buildStudyProgress,
-    activeStageIndex,
     checkpointCatalog,
     checkpoints,
     commandDetail,
@@ -1549,7 +1551,6 @@ export function StudyInspectorPanel({
             readOnlyReason={readStudyStageSource(asRecord(scene.data)?.study).kind !== "flat"
               ? readStudyStageSource(asRecord(scene.data)?.study).error ?? "Canonical pipeline inspection is read-only. Flat-stage editing cannot preserve its groups and references."
               : null}
-            activeStageIndex={activeStageIndex}
             activeLane={runtimeStatus?.capabilities.active_lane ?? null}
             algorithmsAvailable={runtimeStatus?.capabilities.algorithms_available}
             authoringBusy={state.authoringBusy}
