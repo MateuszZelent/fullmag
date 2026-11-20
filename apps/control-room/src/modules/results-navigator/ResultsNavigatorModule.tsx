@@ -247,18 +247,9 @@ function CurrentResultsNavigator({
   const [resultBranchFilterDatasetId, setResultBranchFilterDatasetId] =
     useState<string | null>(null);
   const [resultFollowedBranchId, setResultFollowedBranchId] = useState<string | null>(null);
-  const effectiveResultAxisFilters = useMemo(
-    () =>
-      resultAxisFilterDatasetId === resultDatasetId
-        ? resultAxisFilters
-        : selectedResultAxisFilters,
-    [
-      resultAxisFilterDatasetId,
-      resultAxisFilters,
-      resultDatasetId,
-      selectedResultAxisFilters,
-    ],
-  );
+  const effectiveResultAxisFilters = resultAxisFilterDatasetId === resultDatasetId
+    ? resultAxisFilters
+    : selectedResultAxisFilters;
   const resultManifest = useAnalysisResultDatasetManifestResource(
     resultRunId,
     resultDatasetId,

@@ -47,7 +47,7 @@ export function StartStatusBar({ compute, index, preferences, sessionLabel = "No
     describeIndexCount(index),
   ].filter((item): item is string => item !== null);
   return (
-    <footer aria-label="Status" className="fm-start-status" role="contentinfo">
+    <footer aria-label="Status" className="fm-start-status">
       {items.map((item) => (
         <span className="fm-start-status__item" key={item}>
           {item}
