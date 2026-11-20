@@ -73,7 +73,7 @@ import { designCheckUrl } from "./lib/design-browser-env.mjs";
     await nameInput.focus();
     await p.getByRole("button", { name: "Inspector panel menu", exact: true }).click();
     await p.getByRole("menuitem", { name: "Hide panel", exact: true }).click();
-    await p.getByRole("button", { name: "Restore Inspector", exact: true }).click();
+    await p.locator('[data-restore-panel="panel-right"]').click();
     assert.equal(
       await p.evaluate(
         () => window.__panelMarker === document.querySelector('[data-panel-frame="panel-right"] .fm-inspector'),
@@ -102,17 +102,13 @@ import { designCheckUrl } from "./lib/design-browser-env.mjs";
     await panel.getByRole("heading", { name: "Domain policy", exact: true }).waitFor();
     assert.equal(await panel.locator(".fm-scientific-inspector__identity").count(), 0);
     await capture("airbox.png");
-    await p.setViewportSize({ width: 900, height: 1000 });
-    await p.waitForTimeout(200);
-    const drawerBefore = await panel.boundingBox();
-    await p.getByRole("button", { name: "Move Inspector with arrow keys", exact: true }).focus();
-    await p.keyboard.press("ArrowLeft");
-    const drawerMoved = await panel.boundingBox();
-    assert(drawerMoved.x < drawerBefore.x, "Responsive drawer handle must move the panel");
-    await p.getByRole("button", { name: "Resize Inspector with arrow keys", exact: true }).focus();
-    await p.keyboard.press("ArrowRight");
-    const drawerResized = await panel.boundingBox();
-    assert(drawerResized.width > drawerMoved.width, "Responsive drawer handle must resize the panel");
+    // Narrow windows scale the dock: the Inspector stays docked beside its rail.
+    await p.setViewportSize({ width: 720, height: 1000 });
+    await p.waitForTimeout(300);
+    assert.equal(await panel.getAttribute("data-panel-mode"), "docked", "Narrow Inspector must stay docked");
+    const narrowPanel = await panel.boundingBox();
+    const rightRail = await p.locator('.fm-side-rail[data-side="right"]').boundingBox();
+    assert(narrowPanel && rightRail && narrowPanel.x + narrowPanel.width <= rightRail.x + 1, "Narrow Inspector must sit left of its rail");
     const metrics = await p
       .locator(".fm-footer-telemetry__metrics-grid")
       .evaluate((e) => ({

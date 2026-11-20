@@ -1,0 +1,249 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Glass inspector system for Fullmag Control Room.
+   Palette: Catppuccin Latte / Mocha (the Control Room theme), accent = Control Room blue.
+   Type: Inter (UI), JetBrains Mono (identifiers), STIX Two Text italic (physics symbols). */
+@theme inline {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+  --font-sym: "STIX Two Text", "Cambria Math", "Times New Roman", serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-err: var(--err);
+  --color-info: var(--info);
+  --color-live: var(--live);
+  --color-ax-x: var(--ax-x);
+  --color-ax-y: var(--ax-y);
+  --color-ax-z: var(--ax-z);
+  --color-glass: var(--glass-bg);
+  --color-glass-strong: var(--glass-strong);
+  --color-glass-line: var(--glass-line);
+  --color-field: var(--field);
+  --color-raised: var(--raised);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  --ease-out-soft: cubic-bezier(.3, .7, .2, 1);
+}
+
+:root {
+  --radius: 0.75rem;
+  --background: #e9ecf3;
+  --foreground: #4c4f69;
+  --card: rgb(255 255 255 / 0.62);
+  --card-foreground: #4c4f69;
+  --popover: rgb(250 251 253 / 0.82);
+  --popover-foreground: #4c4f69;
+  --primary: #1e66f5;
+  --primary-foreground: #ffffff;
+  --secondary: rgb(204 208 218 / 0.6);
+  --secondary-foreground: #4c4f69;
+  --muted: rgb(220 224 232 / 0.7);
+  --muted-foreground: #5f627a;
+  --accent: rgb(76 79 105 / 0.07);
+  --accent-foreground: #4c4f69;
+  --destructive: #d20f39;
+  --border: rgb(76 79 105 / 0.12);
+  --input: rgb(76 79 105 / 0.16);
+  --ring: #1e66f5;
+  --chart-1: #1e66f5;
+  --chart-2: #179299;
+  --chart-3: #40a02b;
+  --chart-4: #fe640b;
+  --chart-5: #8839ef;
+  --sidebar: rgb(255 255 255 / 0.6);
+  --sidebar-foreground: #4c4f69;
+  --sidebar-primary: #1e66f5;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: rgb(30 102 245 / 0.1);
+  --sidebar-accent-foreground: #4c4f69;
+  --sidebar-border: rgb(76 79 105 / 0.12);
+  --sidebar-ring: #1e66f5;
+
+  --ok: #40a02b; --warn: #c27b12; --err: #d20f39; --info: #1e66f5; --live: #179299;
+  --ax-x: #d20f39; --ax-y: #40a02b; --ax-z: #1e66f5;
+  --h-geometry: #1e66f5; --h-material: #8839ef; --h-physics: #fe640b;
+  --h-study: #40a02b; --h-visualization: #179299; --h-mesh: #04a5e5; --h-definition: #ea76cb;
+  --glass-bg: rgb(255 255 255 / 0.58);
+  --glass-strong: rgb(255 255 255 / 0.78);
+  --glass-line: rgb(255 255 255 / 0.85);
+  --glass-hi: rgb(255 255 255 / 0.95);
+  --field: rgb(76 79 105 / 0.055);
+  --raised: #ffffff;
+  --vp-base: #dde2ec;
+  --vp-glow-a: rgb(136 57 239 / 0.16);
+  --vp-glow-b: rgb(4 165 229 / 0.18);
+  --vp-side: #b6bccb; --vp-grid: rgb(76 79 105 / 0.09);
+  --cm-lo: #5b8ef0; --cm-mid: #f2f3f7; --cm-hi: #e5566f;
+  --page-bg: radial-gradient(1200px 600px at 10% -10%, rgb(30 102 245 / 0.10), transparent 60%),
+             radial-gradient(900px 500px at 100% 0%, rgb(136 57 239 / 0.10), transparent 60%), #e9ecf3;
+}
+
+.dark {
+  --background: #0d0d16;
+  --foreground: #cdd6f4;
+  --card: rgb(30 30 46 / 0.55);
+  --card-foreground: #cdd6f4;
+  --popover: rgb(32 32 50 / 0.8);
+  --popover-foreground: #cdd6f4;
+  --primary: #89b4fa;
+  --primary-foreground: #11111b;
+  --secondary: rgb(69 71 90 / 0.55);
+  --secondary-foreground: #cdd6f4;
+  --muted: rgb(49 50 68 / 0.55);
+  --muted-foreground: #a6adc8;
+  --accent: rgb(205 214 244 / 0.07);
+  --accent-foreground: #cdd6f4;
+  --destructive: #f38ba8;
+  --border: rgb(205 214 244 / 0.09);
+  --input: rgb(205 214 244 / 0.12);
+  --ring: #89b4fa;
+  --chart-1: #89b4fa;
+  --chart-2: #94e2d5;
+  --chart-3: #a6e3a1;
+  --chart-4: #fab387;
+  --chart-5: #cba6f7;
+  --sidebar: rgb(24 24 37 / 0.6);
+  --sidebar-foreground: #cdd6f4;
+  --sidebar-primary: #89b4fa;
+  --sidebar-primary-foreground: #11111b;
+  --sidebar-accent: rgb(137 180 250 / 0.14);
+  --sidebar-accent-foreground: #cdd6f4;
+  --sidebar-border: rgb(205 214 244 / 0.09);
+  --sidebar-ring: #89b4fa;
+
+  --ok: #a6e3a1; --warn: #f9e2af; --err: #f38ba8; --info: #89b4fa; --live: #94e2d5;
+  --ax-x: #f38ba8; --ax-y: #a6e3a1; --ax-z: #89b4fa;
+  --h-geometry: #89b4fa; --h-material: #cba6f7; --h-physics: #fab387;
+  --h-study: #a6e3a1; --h-visualization: #94e2d5; --h-mesh: #89dceb; --h-definition: #f5c2e7;
+  --glass-bg: rgb(24 24 37 / 0.56);
+  --glass-strong: rgb(30 30 46 / 0.78);
+  --glass-line: rgb(205 214 244 / 0.1);
+  --glass-hi: rgb(255 255 255 / 0.07);
+  --field: rgb(17 17 27 / 0.45);
+  --raised: rgb(255 255 255 / 0.11);
+  --vp-base: #0b0b13;
+  --vp-glow-a: rgb(203 166 247 / 0.14);
+  --vp-glow-b: rgb(137 180 250 / 0.12);
+  --vp-side: #2b2c3d; --vp-grid: rgb(205 214 244 / 0.05);
+  --cm-lo: #89b4fa; --cm-mid: #c9d0ea; --cm-hi: #f38ba8;
+  --page-bg: radial-gradient(1200px 600px at 10% -10%, rgb(137 180 250 / 0.10), transparent 60%),
+             radial-gradient(900px 500px at 100% 0%, rgb(203 166 247 / 0.09), transparent 60%), #0d0d16;
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  html { @apply font-sans; }
+  body {
+    @apply text-foreground;
+    background: var(--page-bg);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  :root { interpolate-size: allow-keywords; }
+}
+
+/* Unlayered on purpose: a host page reset (outside any layer) would otherwise win over @layer base
+   and leave body text, background and color-scheme on the host's light defaults. */
+html:root { color-scheme: light; }
+html:root.dark { color-scheme: dark; }
+html body {
+  margin: 0;
+  background: var(--page-bg);
+  background-attachment: fixed;
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+/* Frosted surfaces: one recipe for panels, toolbars and overlays. */
+@utility glass {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(22px) saturate(1.7);
+  backdrop-filter: blur(22px) saturate(1.7);
+  border: 1px solid var(--glass-line);
+}
+@utility glass-hi {
+  box-shadow: inset 0 1px 0 0 var(--glass-hi);
+}
+
+/* Overlays share the glass recipe, so every window in the app reads as one family. */
+[data-slot="popover-content"], [data-slot="dropdown-menu-content"], [data-slot="dropdown-menu-sub-content"],
+[data-slot="context-menu-content"], [data-slot="context-menu-sub-content"], [data-slot="hover-card-content"],
+[data-slot="select-content"], [data-slot="tooltip-content"], [data-slot="menubar-content"], [data-slot="menubar-sub-content"], [data-slot="dialog-content"],
+[data-slot="alert-dialog-content"], [data-slot="sheet-content"] {
+  -webkit-backdrop-filter: blur(24px) saturate(1.7);
+  backdrop-filter: blur(24px) saturate(1.7);
+}
+[data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"], [data-slot="sheet-overlay"] {
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+
+.sym { font-family: var(--font-sym); font-style: italic; letter-spacing: 0; font-size: 1.1em; }
+.sym sub, .sym sup { font-size: .7em; }
+sub, sup { line-height: 0; }
+
+/* Anatomy pins */
+.show-anat [data-pin] { outline: 1.5px dashed #ea76cb; outline-offset: -2px; position: relative; }
+.show-anat [data-pin]::after {
+  content: attr(data-pin); position: absolute; z-index: 30; top: 4px; right: 4px; display: grid; place-items: center;
+  width: 18px; height: 18px; border-radius: 999px; background: #ea76cb; color: #fff; font-size: 11px; font-weight: 700;
+}
+
+@keyframes row-flash { 0% { background: color-mix(in oklab, var(--ok) 22%, transparent); } }
+@keyframes row-flash-live { 0% { background: color-mix(in oklab, var(--live) 20%, transparent); } }
+@keyframes row-focus { 0%, 60% { background: color-mix(in oklab, var(--primary) 18%, transparent); } }
+.animate-row-flash { animation: row-flash 1.2s ease-out; }
+.animate-row-flash-live { animation: row-flash-live .8s ease-out; }
+.animate-row-focus { animation: row-focus 1.6s ease-out; }
+@keyframes pulse-dot { 50% { opacity: .35; } }
+.animate-pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+@keyframes rise { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+.animate-rise { animation: rise .32s var(--ease-out-soft) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

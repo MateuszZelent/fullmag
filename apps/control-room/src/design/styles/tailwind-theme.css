@@ -26,6 +26,20 @@
   --color-fm-danger: var(--fm-danger);
   --color-fm-stale: var(--fm-stale);
   --color-fm-degraded: var(--fm-degraded);
+  /* Visual language 2026-11 */
+  --color-fm-glass: var(--fm-glass-bg);
+  --color-fm-glass-strong: var(--fm-glass-strong);
+  --color-fm-glass-line: var(--fm-glass-line);
+  --color-fm-field: var(--fm-field-bg);
+  --color-fm-raised-selection: var(--fm-raised-bg);
+  --color-fm-section: var(--fm-section-bg);
+  --color-fm-hue-geometry: var(--fm-hue-geometry);
+  --color-fm-hue-material: var(--fm-hue-material);
+  --color-fm-hue-physics: var(--fm-hue-physics);
+  --color-fm-hue-study: var(--fm-hue-study);
+  --color-fm-hue-visualization: var(--fm-hue-visualization);
+  --color-fm-hue-mesh: var(--fm-hue-mesh);
+  --color-fm-hue-definition: var(--fm-hue-definition);
   /* Spacing — generic scale */
   --spacing-fm-control-sm: var(--fm-control-height-sm);
   --spacing-fm-control-md: var(--fm-control-height-md);
@@ -53,6 +67,11 @@
   --radius-fm-sm: var(--fm-radius-sm);
   --radius-fm-md: var(--fm-radius-md);
   --radius-fm-lg: var(--fm-radius-lg);
+  --radius-fm-field: var(--fm-radius-field);
+  --radius-fm-section: var(--fm-radius-section);
+  --radius-fm-panel: var(--fm-radius-panel);
+  --radius-fm-window: var(--fm-radius-window);
+  --radius-fm-pill: var(--fm-radius-pill);
   /* Shadows */
   --shadow-fm-overlay: var(--fm-shadow-elevated);
   --shadow-fm-sm: var(--fm-shadow-sm);
@@ -63,9 +82,14 @@
   --shadow-fm-control-hover: var(--fm-shadow-control-hover);
   --shadow-fm-control-pressed: var(--fm-shadow-control-pressed);
   --shadow-fm-control-inset: var(--fm-shadow-control-inset);
+  --shadow-fm-elevation-sm: var(--fm-elevation-sm);
+  --shadow-fm-elevation-md: var(--fm-elevation-md);
+  --shadow-fm-elevation-lg: var(--fm-elevation-lg);
   /* Fonts */
   --font-fm-ui: var(--fm-font-ui);
   --font-fm-mono: var(--fm-font-mono);
+  --font-fm-symbol: var(--fm-font-symbol);
+  --ease-fm-out-soft: var(--fm-ease-out-soft);
   /* Named font sizes — enables text-fm-xs, text-fm-sm, text-fm-md etc. */
   --text-fm-2xs: var(--fm-font-size-2xs);
   --text-fm-xs: var(--fm-font-size-xs);

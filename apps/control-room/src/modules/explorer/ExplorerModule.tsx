@@ -138,6 +138,7 @@ import {
   modelTreeSnapshotWithStageExecution,
 } from "./builders/sceneModelTreeAdapter";
 import { ExplorerTabBar } from "./ExplorerTabBar";
+import { publishExplorerNodePath } from "./explorerNodePath";
 import { resolveCurrentFemAirboxEvidence } from "./femAirboxEvidence";
 import {
   explorerCrossSectionsEqual,
@@ -960,6 +961,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     () => filterExplorerNodes(baseNodes, filterText, selectedNodeId),
     [baseNodes, filterText, selectedNodeId],
   );
+  // The Inspector shows the selected node's full tree path.
+  useEffect(() => {
+    publishExplorerNodePath(baseNodes, selectedNodeId);
+  }, [baseNodes, selectedNodeId]);
 
   useEffect(() => {
     previousCurrentRunId.current = currentRunId;
@@ -1109,10 +1114,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   return (
     <WorkspaceRenderProfiler id="ExplorerModule">
       <section className="fm-explorer" aria-label="Explorer">
-        <ExplorerTabBar
-          activeTab={activeTab}
-          onTabChange={setExplorerActiveTab}
-        />
+        <ExplorerTabBar activeTab={activeTab} />
         {activeTab === "results" ? (
           <>
             <ResultContextSelector

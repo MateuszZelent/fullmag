@@ -15,8 +15,8 @@
   gap: var(--fm-space-1);
   padding: var(--fm-space-1);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-chrome);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-field-bg);
 }
 
 .fm-tabs-trigger {
@@ -27,29 +27,30 @@
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
-  border-radius: var(--fm-radius-md);
+  border-radius: var(--fm-radius-pill);
   background: transparent;
   color: var(--fm-text-secondary);
   cursor: pointer;
   font: inherit;
   font-size: var(--fm-font-size-control);
-  font-weight: 560;
-  padding-inline: var(--fm-space-2);
+  font-weight: 500;
+  padding-inline: var(--fm-space-3);
   transition:
-    background-color var(--fm-transition-fast),
-    border-color var(--fm-transition-fast),
-    color var(--fm-transition-fast);
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    box-shadow var(--fm-duration-micro) var(--fm-ease-out-soft),
+    color var(--fm-duration-micro) var(--fm-ease-out-soft);
   white-space: nowrap;
 }
 
 .fm-tabs-trigger:hover:not(:disabled) {
-  background: var(--fm-bg-panel-raised);
+  background: color-mix(in srgb, var(--fm-text-primary) 6%, transparent);
   color: var(--fm-text-primary);
 }
 
+/* Active tab: lifted on the raised surface (specs/frontend-v2/09 §1a). */
 .fm-tabs-trigger[data-state="active"] {
-  border-color: var(--fm-border-default);
-  background: var(--fm-bg-selected);
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm);
   color: var(--fm-text-primary);
 }
 
@@ -58,6 +59,7 @@
   border-bottom: 2px solid transparent;
   border-radius: 0;
   background: transparent;
+  box-shadow: none;
 }
 
 .fm-tabs-list--line .fm-tabs-trigger[data-state="active"]:not(:disabled) {

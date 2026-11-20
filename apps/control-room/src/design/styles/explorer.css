@@ -6,7 +6,7 @@
   container-name: fm-explorer-panel;
   height: 100%;
   min-height: 0;
-  background: var(--fm-bg-panel);
+  background: transparent;
 }
 
 .fm-explorer > :not(.fm-explorer-tree) {
@@ -47,9 +47,9 @@
   margin: var(--fm-space-2) var(--fm-space-2);
   height: var(--fm-control-height-regular);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-panel-raised);
-  padding-inline: var(--fm-space-2);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-field-bg);
+  padding-inline: var(--fm-space-3);
   color: var(--fm-text-muted);
   transition:
     border-color var(--fm-transition-fast),
@@ -175,7 +175,7 @@
   align-items: center;
   gap: var(--fm-space-1);
   border: 1px solid transparent;
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-field);
   color: var(--fm-text-secondary);
   cursor: default;
   font-size: var(--fm-font-size-sm);
@@ -191,18 +191,17 @@
 
 .fm-explorer-tree-row:hover,
 .fm-explorer-tree-row:focus-visible {
-  border-color: var(--fm-border-subtle);
-  background: var(--fm-bg-panel-raised);
+  background: color-mix(in srgb, var(--fm-text-primary) 5%, transparent);
   color: var(--fm-text-primary);
   outline: none;
 }
 
-/* Selected state: blue left accent + stronger tint */
+/* Selection is a raised row (specs/frontend-v2/09 §1a). */
 .fm-explorer-tree-row[data-active="true"] {
-  background: color-mix(in srgb, var(--fm-accent) 10%, var(--fm-bg-panel));
-  border-color: color-mix(in srgb, var(--fm-accent) 24%, transparent);
+  background: var(--fm-raised-bg);
+  border-color: transparent;
   color: var(--fm-text-primary);
-  box-shadow: inset 2px 0 0 var(--fm-accent);
+  box-shadow: var(--fm-elevation-sm);
 }
 
 .fm-explorer-tree-row--active-analysis-field {
@@ -620,4 +619,10 @@
   .fm-explorer-toolbar__action {
     transition-property: background-color, border-color, color;
   }
+}
+
+.fm-explorer-tabs__title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-2);
 }
