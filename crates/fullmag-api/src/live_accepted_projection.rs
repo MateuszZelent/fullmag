@@ -1447,11 +1447,14 @@ fn build_stage_execution(
                 crate::types::StageLifecycleState::Pending
             }
         };
-        let mut record = crate::session::accepted_stage_record(
-            &step.step_id,
-            None,
-            stage_status,
-        );
+        let kind = matches!(
+            &step.kind,
+            fullmag_authoring::StudyStepKind::Primitive {
+                stage_kind: fullmag_authoring::StudyPrimitiveStageKind::FrequencyResponse,
+            }
+        )
+        .then(|| "frequency_response".to_owned());
+        let mut record = crate::session::accepted_stage_record(&step.step_id, kind, stage_status);
         record.antenna_solve_stage_id = match &step.kind {
             fullmag_authoring::StudyStepKind::ClosedLoopInspection { stage_id, .. } => {
                 Some(stage_id.clone())
@@ -5593,6 +5596,65 @@ mod tests {
         let result = load_durable_projection_with_journal(store.root(), &context, None, &mut None,
             &mut |_, _, _| panic!("optional reader cannot run without the mandatory core fence"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepted_frequency_response_stage_is_visible_to_progress_reader() {
+        use crate::types::StageLifecycleState;
+        use fullmag_authoring::{StudyPrimitiveStageKind, StudyStepKind};
+        use fullmag_session::FmsTaskLifecycle;
+
+        let (_directory, store, context, mut catalog) = preclaim_cancelled_fixture();
+        let mut accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+            &store,
+            &fullmag_application::RunId::parse(context.run_id).unwrap(),
+            &fullmag_application::ProjectId::parse("project-cancel").unwrap(),
+        )
+        .unwrap();
+        let step = &mut accepted.lowered.steps[0];
+        step.kind = StudyStepKind::Primitive {
+            stage_kind: StudyPrimitiveStageKind::FrequencyResponse,
+        };
+        let step_id = step.step_id.clone();
+        let task_id = fullmag_session::task_id_for_study_step(&catalog.run_id, &step_id).unwrap();
+        let task_index = catalog
+            .tasks
+            .iter()
+            .position(|task| task.task_id == task_id)
+            .unwrap();
+
+        for (task_status, run_status, expected) in [
+            (
+                FmsTaskLifecycle::Running,
+                "running",
+                StageLifecycleState::Running,
+            ),
+            (
+                FmsTaskLifecycle::Cancelled,
+                "cancelled",
+                StageLifecycleState::Cancelled,
+            ),
+        ] {
+            catalog.tasks[task_index].lifecycle = task_status;
+            let execution = build_stage_execution(
+                &accepted,
+                &catalog.tasks,
+                None,
+                &[],
+                &StageJournalDetailsCache::new(),
+                run_status,
+            )
+            .unwrap();
+            let response = execution
+                .stages
+                .iter()
+                .find(|stage| stage.kind.as_deref() == Some("frequency_response"))
+                .expect("frequency response must match the public progress reader");
+            assert_eq!(response.stage_id.as_deref(), Some(step_id.as_str()));
+            assert_eq!(response.status, expected);
+            assert_eq!(execution.stages.len(), 2);
+            assert_eq!(execution.stages[1].kind, None);
+        }
     }
 
     #[test]
