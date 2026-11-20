@@ -286,6 +286,17 @@ jobs:
           cargo test --locked -p fullmag-fdm-demag --test periodic_xy_kernel
           cargo test --locked -p fullmag-plan --lib fdm_multilayer_periodic_xy_
 
+      - name: Check spatial material functions from scene authoring through solver planning
+        run: |
+          cargo test --locked -p fullmag-ir --test material_field_function --test material_field_units
+          cargo test --locked -p fullmag-authoring --test material_field_function_scene
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-plan --lib material::tests::function_field_is_sampled_in_its_frame_at_cells_and_nodes -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-plan --lib material::tests::absorbing_boundary_adds_on_top_of_a_function_field -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-plan --lib material::tests::function_field_values_are_checked_against_the_parameter_range -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-plan --lib tests::material_audit_fdm::function_alpha_is_sampled_at_every_cell_in_the_declared_frame -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-plan --lib tests::material_audit_fdm::whole_object_function_preserves_small_positive_damping -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-plan --lib tests::material_audit_fem::fem_function_alpha_is_sampled_at_every_node -- --exact
+
       - name: Run local material coefficient regressions
         run: |
           cargo test --locked -p fullmag-engine --lib spatial_ms_anisotropy_tests
