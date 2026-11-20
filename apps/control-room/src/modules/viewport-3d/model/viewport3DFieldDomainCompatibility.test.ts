@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveTrustedViewport3DResponseDomainGenerationId,
   resolveViewport3DFieldDomainCompatibility,
+  retryViewport3DFieldDomainMismatch,
   resolveViewport3DFieldVectorForDomain,
   safeViewport3DDomainGenerationId,
 } from "./viewport3DFieldDomainCompatibility";
@@ -453,5 +454,28 @@ describe("resolveTrustedViewport3DResponseDomainGenerationId", () => {
         null,
       ),
     ).toBe("fdm-8");
+  });
+});
+
+
+describe("retryViewport3DFieldDomainMismatch", () => {
+  it("revalidates the live mesh before retrying a field from another generation", () => {
+    const requests: string[] = [];
+    retryViewport3DFieldDomainMismatch(
+      "domain-generation-mismatch",
+      () => requests.push("field"),
+      () => requests.push("mesh"),
+    );
+    expect(requests).toEqual(["mesh", "field"]);
+  });
+
+  it("keeps retry local to the field for unrelated compatibility errors", () => {
+    const requests: string[] = [];
+    retryViewport3DFieldDomainMismatch(
+      "missing-node-indices",
+      () => requests.push("field"),
+      () => requests.push("mesh"),
+    );
+    expect(requests).toEqual(["field"]);
   });
 });

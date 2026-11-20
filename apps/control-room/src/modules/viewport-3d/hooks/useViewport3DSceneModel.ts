@@ -224,6 +224,7 @@ import {
   liveFemDampingLocationMismatch,
   resolveViewport3DFieldDomainCompatibility,
   resolveViewport3DFieldVectorForDomain,
+  retryViewport3DFieldDomainMismatch,
   safeViewport3DDomainGenerationId,
 } from "../model/viewport3DFieldDomainCompatibility";
 import {
@@ -7752,6 +7753,19 @@ export function useViewport3DSceneModel({
     materializationState: primaryMagnitudeFieldMeta.data?.state ?? null,
     status: fieldVector.status,
   });
+  const refreshLiveFemDomain = useCallback(() => {
+    domainMeta.refetch();
+    sharedDomainManifest.refetch();
+    topology.refetch();
+    magneticPartFieldVectors.refetch();
+    targetQuantityFieldVectors.refetch();
+  }, [
+    domainMeta.refetch,
+    magneticPartFieldVectors.refetch,
+    sharedDomainManifest.refetch,
+    targetQuantityFieldVectors.refetch,
+    topology.refetch,
+  ]);
   const fieldDomainIssue = useMemo<Viewport3DFieldDataIssue | null>(() => {
     let reason: Parameters<typeof describeViewport3DFieldDomainMismatch>[0] | null = null;
     if (fdmLaneActive && fdmFieldCompatibility?.status === "mismatch") {
@@ -7765,14 +7779,23 @@ export function useViewport3DSceneModel({
       }
     }
     if (!reason) return null;
+    const mismatch = reason;
+    const liveFemDomainRefresh = femLaneActive && currentFieldSelection
+      ? refreshLiveFemDomain
+      : undefined;
     return {
-      key: `${fieldVectorResourceKey}:domain-mismatch:${reason}`,
-      message: describeViewport3DFieldDomainMismatch(reason),
-      quantityId: reason === "damping-location-mismatch" ? "mat_alpha" : primaryFieldQuantityId,
+      key: `${fieldVectorResourceKey}:domain-mismatch:${mismatch}`,
+      message: describeViewport3DFieldDomainMismatch(mismatch),
+      quantityId: mismatch === "damping-location-mismatch" ? "mat_alpha" : primaryFieldQuantityId,
       resourceKey: fieldVectorResourceKey,
-      retry: fieldVector.refetch,
+      retry: () => retryViewport3DFieldDomainMismatch(
+        mismatch,
+        fieldVector.refetch,
+        liveFemDomainRefresh,
+      ),
     };
   }, [
+    currentFieldSelection,
     fdmFieldCompatibility,
     fdmLaneActive,
     femLaneActive,
@@ -7780,6 +7803,7 @@ export function useViewport3DSceneModel({
     fieldVector.refetch,
     fieldVectorResourceKey,
     primaryFieldQuantityId,
+    refreshLiveFemDomain,
   ]);
   // The issue banner is the foreground surface for these failures; the HUD
   // status pill must not repeat them. The FDM mismatch wording differs from the

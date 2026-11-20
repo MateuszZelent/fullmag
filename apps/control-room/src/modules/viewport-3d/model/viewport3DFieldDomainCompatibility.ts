@@ -64,6 +64,17 @@ const FIELD_DOMAIN_MISMATCH_TEXT: Record<Viewport3DFieldDomainMismatchReason, st
     "the field sample count does not match the displayed domain",
 };
 
+export function retryViewport3DFieldDomainMismatch(
+  reason: Viewport3DFieldDomainMismatchReason,
+  retryField: () => void,
+  refreshLiveFemDomain?: () => void,
+): void {
+  if (reason === "domain-generation-mismatch") {
+    refreshLiveFemDomain?.();
+  }
+  retryField();
+}
+
 /**
  * User-facing explanation for a blocked field buffer. The internal reason
  * code stays available for diagnostics; the renderer never guesses a map.
