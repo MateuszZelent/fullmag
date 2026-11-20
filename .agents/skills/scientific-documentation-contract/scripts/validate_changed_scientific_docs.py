@@ -361,31 +361,18 @@ def validate_changed(
     manifests: set[str] = set()
     errors: list[str] = []
 
-    for path in changed:
-        if path in EXEMPT_PATHS:
-            if path.startswith("public_docs/site/") and path.endswith(".md"):
-                manifest = _manifest_for(path)
-                if _exists(repo, head, path):
-                    if _exists(repo, head, manifest):
-                        manifests.add(manifest)
-                elif _exists(repo, head, manifest):
-                    errors.append(f"deleted scientific page left an orphan sidecar manifest: {manifest}")
-            continue
-        if _is_scientific_page(path):
+    for path in sorted(changed):
+        requires_manifest = path not in EXEMPT_PATHS and _is_scientific_page(path)
+        public_page = path.startswith("public_docs/site/") and path.endswith(".md")
+        if public_page or requires_manifest:
             manifest = _manifest_for(path)
+            has_manifest = _exists(repo, head, manifest)
             if _exists(repo, head, path):
-                if _exists(repo, head, manifest):
+                if has_manifest:
                     manifests.add(manifest)
-                elif not is_registered_scaffold(repo / path, repo):
+                elif requires_manifest and not is_registered_scaffold(repo / path, repo):
                     errors.append(f"changed scientific page requires sidecar manifest: {manifest}")
-            elif _exists(repo, head, manifest):
-                errors.append(f"deleted scientific page left an orphan sidecar manifest: {manifest}")
-        elif path.startswith("public_docs/site/") and path.endswith(".md"):
-            manifest = _manifest_for(path)
-            if _exists(repo, head, path):
-                if _exists(repo, head, manifest):
-                    manifests.add(manifest)
-            elif _exists(repo, head, manifest):
+            elif has_manifest:
                 errors.append(f"deleted scientific page left an orphan sidecar manifest: {manifest}")
         elif path.endswith(".source-map.json"):
             page = _page_for(path)
