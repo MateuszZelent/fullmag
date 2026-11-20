@@ -1804,6 +1804,8 @@
 }
 
 .fm-inspector-contexts { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; min-width: 0; overflow: hidden; }
+/* Selection has no header row since the contexts moved onto the side rail. */
+.fm-inspector-contexts:not(:has(> .fm-inspector-contexts__header)) { grid-template-rows: minmax(0, 1fr); }
 .fm-inspector-contexts__header { container-type: inline-size; display: flex; align-items: center; min-width: 0; border-bottom: 1px solid var(--fm-border-subtle); }
 .fm-inspector-contexts__actions { flex: none; border-bottom: 0; padding-inline: 0; }
 .fm-inspector-contexts__content { min-height: 0; min-width: 0; height: 100%; overflow: hidden; }

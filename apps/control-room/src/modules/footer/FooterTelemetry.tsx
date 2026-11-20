@@ -200,7 +200,7 @@ export function FooterTelemetry({
   const stageProgress = resolveFooterStageProgress(stageExecution.data);
   const history = useTelemetryHistory(
     status?.run?.run_id ?? null,
-    telemetry.metrics.find((metric) => metric.id === "sim-time")?.numeric ?? null,
+    telemetry.metrics.find((metric) => metric.id === "time")?.numeric ?? null,
     telemetry.metrics.find((metric) => metric.id === "energy-total")?.numeric ?? null,
     telemetry.metrics.find((metric) => metric.id === "max-torque")?.numeric ?? null,
   );
@@ -728,6 +728,7 @@ export function buildFooterTelemetryModel(
           : timeSource,
         unit: directMinimizerWithoutPseudoTime ? undefined : "s",
         value: formatScientific(primaryTimeSeconds, "—"),
+        numeric: finiteOrNull(primaryTimeSeconds),
       },
       ...(usesPseudoTime
         ? [
@@ -2030,7 +2031,7 @@ function TelemetryBoardGroup({
   metrics: readonly FooterTelemetryMetric[];
   stage: FooterStageProgress | null;
 }) {
-  const hero = id === "runtime" ? metrics.find((metric) => metric.id === "sim-time") : undefined;
+  const hero = id === "runtime" ? metrics.find((metric) => metric.id === "time") : undefined;
   const rows = metrics.filter((metric) => metric !== hero);
   return (
     <section
@@ -2047,7 +2048,7 @@ function TelemetryBoardGroup({
       {hero ? (
         <div className="fm-footer-telemetry__hero" title={hero.detail}>
           <span className="fm-footer-telemetry__hero-value">{hero.value}</span>
-          {hero.unit ? <span className="fm-footer-telemetry__hero-unit">{hero.unit} simulated</span> : null}
+          <span className="fm-footer-telemetry__hero-unit">{hero.unit ? `${hero.unit} · ` : ""}{hero.label}</span>
         </div>
       ) : null}
       {stage && stage.percent !== null ? (
