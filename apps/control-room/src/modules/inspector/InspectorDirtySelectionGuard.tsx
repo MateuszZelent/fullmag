@@ -240,8 +240,8 @@ export function InspectorDirtySelectionGuard({
       }
     } finally {
       transition.running = false;
-      // react-doctor-disable-next-line react-doctor/no-loading-flag-reset-outside-finally -- This reset is in finally; keep the ownership guard so a late request cannot clear a newer transition's busy state.
       if (pendingRef.current === null || (pendingRef.current === transition && !transition.acknowledged)) {
+        // react-doctor-disable-next-line react-doctor/no-loading-flag-reset-outside-finally -- The ownership guard keeps an older request from clearing the busy state of a newer transition.
         setBusy(false);
       }
     }
