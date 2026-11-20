@@ -133,6 +133,23 @@
   --fm-hud-cube-face: #585b70;
   --fm-hud-cube-edge: #9399b2;
   --fm-hud-cube-shade: #11111b;
+
+  /* Visual language 2026-11: glass layers, recessed fields, raised selection, domain hues */
+  --fm-glass-bg: rgb(24 24 37 / 0.56);
+  --fm-glass-strong: rgb(30 30 46 / 0.78);
+  --fm-glass-line: rgb(205 214 244 / 0.1);
+  --fm-glass-highlight: rgb(255 255 255 / 0.07);
+  --fm-field-bg: rgb(17 17 27 / 0.45);
+  --fm-raised-bg: rgb(255 255 255 / 0.11);
+  --fm-viewport-glow-a: rgb(203 166 247 / 0.14);
+  --fm-viewport-glow-b: rgb(137 180 250 / 0.12);
+  --fm-hue-geometry: var(--fm-accent);
+  --fm-hue-material: var(--fm-chart-mauve);
+  --fm-hue-physics: var(--fm-chart-peach);
+  --fm-hue-study: var(--fm-success);
+  --fm-hue-visualization: var(--fm-chart-teal);
+  --fm-hue-mesh: var(--fm-chart-sky);
+  --fm-hue-definition: var(--fm-chart-pink);
 }
 
 /* ===== Catppuccin Latte (light) ===== */
@@ -268,6 +285,34 @@
   --fm-hud-cube-face: #eff1f5;
   --fm-hud-cube-edge: #8c8fa1;
   --fm-hud-cube-shade: #4c4f69;
+
+  /* Visual language 2026-11: fields are recessed, never bright white */
+  --fm-glass-bg: rgb(255 255 255 / 0.58);
+  --fm-glass-strong: rgb(255 255 255 / 0.78);
+  --fm-glass-line: rgb(255 255 255 / 0.85);
+  --fm-glass-highlight: rgb(255 255 255 / 0.95);
+  --fm-field-bg: rgb(76 79 105 / 0.055);
+  --fm-raised-bg: #ffffff;
+  --fm-viewport-glow-a: rgb(136 57 239 / 0.16);
+  --fm-viewport-glow-b: rgb(4 165 229 / 0.18);
+  --fm-hue-geometry: var(--fm-accent);
+  --fm-hue-material: var(--fm-chart-mauve);
+  --fm-hue-physics: var(--fm-chart-peach);
+  --fm-hue-study: var(--fm-success);
+  --fm-hue-visualization: var(--fm-chart-teal);
+  --fm-hue-mesh: var(--fm-chart-sky);
+  --fm-hue-definition: var(--fm-chart-pink);
+}
+
+/* Reduced transparency: glass layers become opaque panel surfaces. */
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  [data-theme="dark"],
+  [data-theme="light"] {
+    --fm-glass-bg: var(--fm-bg-panel);
+    --fm-glass-strong: var(--fm-bg-panel);
+    --fm-glass-backdrop: none;
+  }
 }
 
 .fm-inspector-alert {

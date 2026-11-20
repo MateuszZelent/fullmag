@@ -108,6 +108,58 @@ describe("control-room design styles", () => {
     expect(themeCss).toContain("--fm-info: #04a5e5;");
   });
 
+  it("defines the 2026-11 glass visual language in both themes", () => {
+    const tokensCss = readAppFile("src/design/styles/tokens.css");
+    const themeCss = readAppFile("src/design/styles/theme.css");
+    const bridgeCss = readAppFile("src/design/styles/tailwind-theme.css");
+    const themeBlock = (selector: string) => {
+      const start = themeCss.indexOf(`${selector} {`);
+      expect(start).toBeGreaterThanOrEqual(0);
+      return themeCss.slice(start, themeCss.indexOf("\n}", start));
+    };
+
+    for (const token of [
+      "--fm-elevation-sm:",
+      "--fm-elevation-md:",
+      "--fm-elevation-lg:",
+      "--fm-radius-field: 10px;",
+      "--fm-radius-section: 16px;",
+      "--fm-radius-panel: 22px;",
+      "--fm-radius-window: 28px;",
+      "--fm-glass-backdrop:",
+      "--fm-ease-out-soft:",
+      "--fm-font-symbol:",
+    ]) {
+      expect(tokensCss).toContain(token);
+    }
+    const themed = [
+      "--fm-glass-bg:",
+      "--fm-glass-strong:",
+      "--fm-glass-line:",
+      "--fm-glass-highlight:",
+      "--fm-field-bg:",
+      "--fm-raised-bg:",
+      "--fm-hue-geometry:",
+      "--fm-hue-material:",
+      "--fm-hue-physics:",
+      "--fm-hue-study:",
+      "--fm-hue-visualization:",
+      "--fm-hue-mesh:",
+      "--fm-hue-definition:",
+    ];
+    for (const block of [themeBlock('[data-theme="dark"]'), themeBlock('[data-theme="light"]')]) {
+      for (const token of themed) expect(block).toContain(token);
+    }
+    // Light fields are recessed, never bright white; the selected option is.
+    expect(themeBlock('[data-theme="light"]')).not.toMatch(/--fm-field-bg:\s*#fff/i);
+    expect(themeCss).toMatch(
+      /@media \(prefers-reduced-transparency: reduce\)[\s\S]*--fm-glass-backdrop: none;/,
+    );
+    expect(bridgeCss).toContain("--color-fm-glass: var(--fm-glass-bg);");
+    expect(bridgeCss).toContain("--shadow-fm-elevation-md: var(--fm-elevation-md);");
+    expect(bridgeCss).toContain("--radius-fm-panel: var(--fm-radius-panel);");
+  });
+
   it("keeps raw palette values out of the start-screen token layer", () => {
     const startTokens = readAppFile("src/design/styles/start-screen.tokens.css")
       .replace(/\/\*[\s\S]*?\*\//g, "");
