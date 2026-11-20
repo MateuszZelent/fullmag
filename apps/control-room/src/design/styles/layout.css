@@ -239,9 +239,11 @@
 
 /* Docked side panels are glass: the page glow reads through a frosted fill
    (specs/frontend-v2/09 §1a). The viewport keeps its own opaque scene. */
-.fm-workspace-body .fm-panel-frame:not([data-panel-frame="viewport-main"]):not([data-panel-mode="floating"]):not([data-panel-mode="maximized"]) {
+/* Every docked window, the viewport frame included, uses the same strong
+   glass so neighbouring panels do not pick up different glow tints. */
+.fm-workspace-body .fm-panel-frame:not([data-panel-mode="floating"]):not([data-panel-mode="maximized"]) {
   border-color: var(--fm-glass-line);
-  background: var(--fm-glass-bg);
+  background: var(--fm-glass-strong);
   /* No outer shadow: attached panels and rails would darken their shared corners. */
   box-shadow: inset 0 1px 0 var(--fm-glass-highlight);
   -webkit-backdrop-filter: var(--fm-glass-backdrop);
@@ -274,7 +276,7 @@
   overflow: hidden;
   border: 1px solid var(--fm-glass-line);
   border-radius: 20px;
-  background: var(--fm-glass-bg);
+  background: var(--fm-glass-strong);
   box-shadow: inset 0 1px 0 var(--fm-glass-highlight);
   -webkit-backdrop-filter: var(--fm-glass-backdrop);
   backdrop-filter: var(--fm-glass-backdrop);

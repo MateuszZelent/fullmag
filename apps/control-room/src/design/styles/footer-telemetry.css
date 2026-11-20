@@ -669,7 +669,7 @@
   min-height: 48px;
   margin-top: var(--fm-space-1);
   border-radius: var(--fm-radius-field);
-  background: linear-gradient(to bottom, color-mix(in srgb, var(--fm-metric-color) 7%, transparent), transparent);
+  background: var(--fm-section-bg);
 }
 
 .fm-footer-telemetry__spark-frame .fm-footer-telemetry__spark {
