@@ -28,6 +28,9 @@ import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   createDimensionFrameLineGeometry,
   createDimensionFrameOrientationStore,
+  DIMENSION_FRAME_TICK_DIRECTION_ATTRIBUTE,
+  DIMENSION_FRAME_TICK_ENDPOINT_ATTRIBUTE,
+  DIMENSION_FRAME_TICK_START_ATTRIBUTE,
   dimensionFrameLabelRuns,
   releaseDimensionFrameGeometry,
   resolveDimensionFrameLayerColors,

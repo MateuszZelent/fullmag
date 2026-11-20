@@ -41,6 +41,10 @@ export function createDimensionFrameOrientationStore(
   };
 }
 
+export const DIMENSION_FRAME_TICK_DIRECTION_ATTRIBUTE = "dimensionFrameTickDirection";
+export const DIMENSION_FRAME_TICK_ENDPOINT_ATTRIBUTE = "dimensionFrameTickEndpoint";
+export const DIMENSION_FRAME_TICK_START_ATTRIBUTE = "dimensionFrameTickStart";
+
 export interface DimensionFrameScreenTickAttributes {
   directions: Float32Array;
   endpoints: Float32Array;
@@ -100,9 +104,9 @@ export function createDimensionFrameLineGeometry(
   if (screenSpaceTicks) {
     // The renderer releases these buffers from geometry.attributes on dispose.
     const { directions, endpoints, starts } = createDimensionFrameScreenTickAttributes(positions);
-    geometry.setAttribute("dimensionFrameTickDirection", new BufferAttribute(directions, 3));
-    geometry.setAttribute("dimensionFrameTickEndpoint", new BufferAttribute(endpoints, 1));
-    geometry.setAttribute("dimensionFrameTickStart", new BufferAttribute(starts, 3));
+    geometry.setAttribute(DIMENSION_FRAME_TICK_DIRECTION_ATTRIBUTE, new BufferAttribute(directions, 3));
+    geometry.setAttribute(DIMENSION_FRAME_TICK_ENDPOINT_ATTRIBUTE, new BufferAttribute(endpoints, 1));
+    geometry.setAttribute(DIMENSION_FRAME_TICK_START_ATTRIBUTE, new BufferAttribute(starts, 3));
   }
   geometry.computeBoundingSphere();
   return geometry;
