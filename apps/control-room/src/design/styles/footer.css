@@ -19,7 +19,7 @@
   gap: var(--fm-space-2);
   border-bottom: 1px solid var(--fm-border-muted);
   background: transparent;
-  padding: var(--fm-space-1) var(--fm-space-2);
+  padding: 2px var(--fm-space-2);
 }
 
 .fm-footer__tabs {

@@ -229,7 +229,6 @@
 .fm-workspace-body .fm-dock-column > .fm-slot {
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-section);
-  box-shadow: var(--fm-elevation-sm);
   overflow: hidden;
 }
 
@@ -243,7 +242,8 @@
 .fm-workspace-body .fm-panel-frame:not([data-panel-frame="viewport-main"]):not([data-panel-mode="floating"]):not([data-panel-mode="maximized"]) {
   border-color: var(--fm-glass-line);
   background: var(--fm-glass-bg);
-  box-shadow: var(--fm-elevation-md), inset 0 1px 0 var(--fm-glass-highlight);
+  /* No outer shadow: attached panels and rails would darken their shared corners. */
+  box-shadow: inset 0 1px 0 var(--fm-glass-highlight);
   -webkit-backdrop-filter: var(--fm-glass-backdrop);
   backdrop-filter: var(--fm-glass-backdrop);
 }
@@ -270,12 +270,12 @@
   width: 48px;
   min-height: 0;
   padding: var(--fm-space-2) 0;
-  overflow-y: auto;
-  scrollbar-width: none;
+  /* Rails never scroll; their items are few and fixed. */
+  overflow: hidden;
   border: 1px solid var(--fm-glass-line);
   border-radius: 20px;
   background: var(--fm-glass-bg);
-  box-shadow: var(--fm-elevation-md), inset 0 1px 0 var(--fm-glass-highlight);
+  box-shadow: inset 0 1px 0 var(--fm-glass-highlight);
   -webkit-backdrop-filter: var(--fm-glass-backdrop);
   backdrop-filter: var(--fm-glass-backdrop);
 }
@@ -327,8 +327,8 @@
   transition: scale var(--fm-duration-micro) var(--fm-ease-out-soft);
 }
 
-.fm-side-rail[data-side="left"] .fm-side-rail__item::before { left: -7px; }
-.fm-side-rail[data-side="right"] .fm-side-rail__item::before { right: -7px; }
+.fm-side-rail[data-side="left"] .fm-side-rail__item::before { right: -6px; }
+.fm-side-rail[data-side="right"] .fm-side-rail__item::before { left: -6px; }
 .fm-side-rail__item[aria-pressed="true"]::before { scale: 1 1; }
 
 @media (width < 760px) {

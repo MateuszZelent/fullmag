@@ -5,9 +5,11 @@
   flex-direction: column;
   height: 100%;
   min-width: 0;
-  min-height: 64px;
+  /* The dock decides the height; the metrics grid scrolls inside it instead
+     of pushing the last row under the status bar. */
+  min-height: 0;
   overflow: hidden;
-  background: var(--fm-bg-panel);
+  background: transparent;
   color: var(--fm-text-primary);
 }
 
