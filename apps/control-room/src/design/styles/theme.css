@@ -141,6 +141,7 @@
   --fm-glass-highlight: rgb(255 255 255 / 0.07);
   --fm-field-bg: rgb(17 17 27 / 0.45);
   --fm-raised-bg: rgb(255 255 255 / 0.11);
+  --fm-section-bg: rgb(205 214 244 / 0.025);
   --fm-viewport-glow-a: rgb(203 166 247 / 0.14);
   --fm-viewport-glow-b: rgb(137 180 250 / 0.12);
   --fm-hue-geometry: var(--fm-accent);
@@ -293,6 +294,7 @@
   --fm-glass-highlight: rgb(255 255 255 / 0.95);
   --fm-field-bg: rgb(76 79 105 / 0.055);
   --fm-raised-bg: #ffffff;
+  --fm-section-bg: rgb(76 79 105 / 0.03);
   --fm-viewport-glow-a: rgb(136 57 239 / 0.16);
   --fm-viewport-glow-b: rgb(4 165 229 / 0.18);
   --fm-hue-geometry: var(--fm-accent);

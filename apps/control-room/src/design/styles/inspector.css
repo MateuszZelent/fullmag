@@ -585,6 +585,7 @@
 
 /* ── Redesigned Inspector Shell ── */
 .fm-inspector {
+  --fm-inspector-hue: var(--fm-hue-geometry);
   display: grid;
   grid-template-rows: auto auto var(--fm-control-height-regular) minmax(0, 1fr) auto;
   height: 100%;
@@ -639,26 +640,26 @@
 /* Identity: domain-hue glyph, name, kind, copyable ID and one state pill
    (specs/frontend-v2/13 §1a, slot 2). */
 .fm-inspector__identity {
-  --fm-inspector-hue: var(--fm-hue-geometry);
   display: flex;
   align-items: center;
   gap: var(--fm-space-3);
   min-width: 0;
 }
 
-.fm-inspector__identity[data-domain="mesh"] {
+/* The domain hue is set on the Inspector root so sections inherit it. */
+.fm-inspector[data-domain="mesh"] {
   --fm-inspector-hue: var(--fm-hue-mesh);
 }
 
-.fm-inspector__identity[data-domain="visualization"] {
+.fm-inspector[data-domain="visualization"] {
   --fm-inspector-hue: var(--fm-hue-visualization);
 }
 
-.fm-inspector__identity[data-domain="study"] {
+.fm-inspector[data-domain="study"] {
   --fm-inspector-hue: var(--fm-hue-study);
 }
 
-.fm-inspector__identity[data-domain="definition"] {
+.fm-inspector[data-domain="definition"] {
   --fm-inspector-hue: var(--fm-hue-definition);
 }
 
@@ -1563,8 +1564,7 @@
   font-size: var(--fm-font-size-sm);
 }
 
-.fm-inspector [data-slot="inspector-group-heading"] h3,
-.fm-inspector [data-slot="inspector-group"][data-variant="nav"] [data-slot="inspector-group-trigger"] > span.flex-1 {
+.fm-inspector [data-slot="inspector-group-heading"] h3 {
   font-size: var(--fm-inspector-control-font-size);
   line-height: 1.25;
 }
@@ -1720,4 +1720,93 @@
 
 @container (max-width: 350px) {
   .fm-inspector-contexts__tabs .fm-tabs-trigger svg { display: none; }
+}
+
+/* ── Sections (specs/frontend-v2/13 §1a, slot 6) ──
+   One glass card for every Inspector group: chevron next to the title, a
+   domain-hue icon while open, a value summary and the content grid. Nested
+   groups render flat inside their parent card. */
+.fm-inspector-group {
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-section);
+  background: var(--fm-section-bg);
+}
+
+.fm-inspector-group .fm-inspector-group {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.fm-inspector-group__row {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  width: 100%;
+  min-width: 0;
+  min-height: calc(var(--fm-control-height-regular) + var(--fm-space-2));
+  padding: 0 var(--fm-space-3);
+  border: 0;
+  border-radius: var(--fm-radius-section);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.fm-inspector-group__row--toggle {
+  cursor: pointer;
+  transition: background-color var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-inspector-group__row--toggle:hover {
+  background: color-mix(in srgb, var(--fm-text-primary) 4%, transparent);
+}
+
+.fm-inspector-group__row--toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-inspector-group__chevron {
+  flex: none;
+  color: var(--fm-text-muted);
+  transition: rotate var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-inspector-group[data-open="true"] > .fm-inspector-group__row .fm-inspector-group__chevron {
+  rotate: 90deg;
+}
+
+.fm-inspector-group__icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--fm-text-muted);
+  transition: color var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-inspector-group__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.fm-inspector-group:not([data-open="false"]) > .fm-inspector-group__row .fm-inspector-group__icon {
+  color: var(--fm-inspector-hue, var(--fm-accent));
+}
+
+.fm-inspector-group__content {
+  padding: 0 var(--fm-space-3) var(--fm-space-3);
+}
+
+.fm-inspector-group .fm-inspector-group > .fm-inspector-group__row,
+.fm-inspector-group .fm-inspector-group > .fm-inspector-group__content {
+  padding-inline: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-inspector-group__chevron,
+  .fm-inspector-group__row--toggle,
+  .fm-inspector-group__icon {
+    transition: none;
+  }
 }

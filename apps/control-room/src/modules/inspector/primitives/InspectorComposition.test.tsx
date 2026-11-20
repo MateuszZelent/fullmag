@@ -87,6 +87,32 @@ describe("Inspector composition primitives", () => {
     expect(html).not.toContain("fm-inspector-summary-tile");
   });
 
+  it("draws default and nav groups as the same section card", () => {
+    const collapsible = renderToStaticMarkup(
+      <InspectorGroup collapsible icon={<svg />} summary="Box, 1600 nm" title="Geometry">
+        <div>Size</div>
+      </InspectorGroup>,
+    );
+    const nav = renderToStaticMarkup(
+      <InspectorGroup icon={<svg />} summary="Global" title="Scope" variant="nav">
+        <div>Scope rows</div>
+      </InspectorGroup>,
+    );
+
+    for (const html of [collapsible, nav]) {
+      expect(html).toContain('class="fm-inspector-group min-w-0"');
+      expect(html).toContain("fm-inspector-group__row fm-inspector-group__row--toggle");
+      expect(html).toContain("fm-inspector-group__icon");
+      expect(html).not.toContain("fm-inspector-group-nav");
+      expect(html).not.toContain("fm-inspector-group-icon-box");
+    }
+    // The chevron sits before the title, next to the label it controls.
+    expect(collapsible.indexOf("fm-inspector-group__chevron")).toBeLessThan(
+      collapsible.indexOf("Geometry"),
+    );
+    expect(collapsible).toContain("Box, 1600 nm");
+  });
+
   it("omits facts it cannot state and shows at most four", () => {
     const html = renderToStaticMarkup(
       <InspectorMetricStrip

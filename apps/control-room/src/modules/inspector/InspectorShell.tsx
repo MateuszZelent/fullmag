@@ -104,6 +104,7 @@ export function InspectorShell({
     <section
       aria-label="Inspector"
       className="fm-inspector"
+      data-domain={inspectorDomain(descriptor.icon)}
       data-inspector-owner={descriptor.ownerId}
     >
       <PanelChrome
@@ -157,7 +158,7 @@ export function InspectorShell({
             ))}
           </nav>
         ) : null}
-        <div className="fm-inspector__identity" data-domain={inspectorDomain(descriptor.icon)}>
+        <div className="fm-inspector__identity">
           <span className="fm-inspector__identity-icon" aria-hidden="true">
             <InspectorIdentityIcon icon={descriptor.icon} />
           </span>

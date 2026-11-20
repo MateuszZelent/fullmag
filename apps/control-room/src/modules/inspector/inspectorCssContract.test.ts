@@ -28,6 +28,22 @@ describe("Inspector visual contract", () => {
     expect(css.match(/^\.fm-inspector__header\s*\{/gm)).toHaveLength(1);
   });
 
+  it("draws one section card style with the domain hue and flat nested groups", () => {
+    const css = readdirSync(stylesRoot)
+      .filter((name) => /^inspector.*\.css$/.test(name))
+      .map((name) => readFileSync(join(stylesRoot, name), "utf8"))
+      .join("\n")
+      .replace(/\r\n/g, "\n");
+
+    expect(css).toMatch(/^\.fm-inspector-group\s*\{[^}]*border-radius: var\(--fm-radius-section\);[^}]*background: var\(--fm-section-bg\);/m);
+    expect(css).toMatch(/\.fm-inspector-group \.fm-inspector-group\s*\{[^}]*border: 0;[^}]*background: transparent;/);
+    expect(css).toMatch(/\.fm-inspector-group__icon\s*\{[^}]*\}[\s\S]*color: var\(--fm-inspector-hue, var\(--fm-accent\)\);/);
+    expect(css).toMatch(/\.fm-inspector\s*\{\n  --fm-inspector-hue: var\(--fm-hue-geometry\);/);
+    // The former nav rows with circular icons and the icon box are gone.
+    expect(css).not.toContain("fm-inspector-group-nav");
+    expect(css).not.toContain("fm-inspector-group-icon-box");
+  });
+
   it("keeps Inspector fields and readouts readable and tokenized", () => {
     const css = readdirSync(stylesRoot)
       .filter((name) => /^inspector.*\.css$/.test(name))

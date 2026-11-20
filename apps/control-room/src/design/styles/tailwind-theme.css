@@ -32,6 +32,7 @@
   --color-fm-glass-line: var(--fm-glass-line);
   --color-fm-field: var(--fm-field-bg);
   --color-fm-raised-selection: var(--fm-raised-bg);
+  --color-fm-section: var(--fm-section-bg);
   --color-fm-hue-geometry: var(--fm-hue-geometry);
   --color-fm-hue-material: var(--fm-hue-material);
   --color-fm-hue-physics: var(--fm-hue-physics);
