@@ -2,8 +2,8 @@
 
 import { Line } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, memo } from "react";
-import { BufferAttribute, BufferGeometry, LessEqualDepth, LineBasicMaterial, Vector3, type Camera, type Sprite } from "three";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, memo } from "react";
+import { LessEqualDepth, Vector3, type BufferGeometry, type Camera, type LineBasicMaterial, type Sprite } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
@@ -28,7 +28,6 @@ import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   createDimensionFrameLineGeometry,
   createDimensionFrameOrientationStore,
-  createDimensionFrameScreenTickAttributes,
   dimensionFrameLabelRuns,
   releaseDimensionFrameGeometry,
   resolveDimensionFrameLayerColors,
@@ -191,8 +190,8 @@ export const DimensionFrameLayer = memo(function DimensionFrameLayer({
     tracker,
     majorLinesVisible ? model.majorLines : null,
   );
-  const majorTickGeometry = useTrackedLineGeometry(tracker, model.majorTickLines);
-  const minorTickGeometry = useTrackedLineGeometry(tracker, model.minorTickLines);
+  const majorTickGeometry = useTrackedLineGeometry(tracker, model.majorTickLines, true);
+  const minorTickGeometry = useTrackedLineGeometry(tracker, model.minorTickLines, true);
   const extentGeometry = useTrackedLineGeometry(tracker, model.extentLines);
   const resolvedGridOpacity = clampGridContrast(gridOpacity);
 
@@ -280,10 +279,6 @@ interface DimensionFrameTickShaderState {
   viewportHeight: number;
 }
 
-const DIMENSION_FRAME_TICK_START_ATTRIBUTE = "dimensionFrameTickStart";
-const DIMENSION_FRAME_TICK_DIRECTION_ATTRIBUTE = "dimensionFrameTickDirection";
-const DIMENSION_FRAME_TICK_ENDPOINT_ATTRIBUTE = "dimensionFrameTickEndpoint";
-
 function FrameLines({
   color,
   geometry,
@@ -302,37 +297,6 @@ function FrameLines({
     shader: null,
     viewportHeight: 1,
   });
-  const tickAttributes = useMemo(() => {
-    if (!geometry || screenLengthPx === undefined) return null;
-    const positions = geometry.getAttribute("position").array;
-    return createDimensionFrameScreenTickAttributes(positions);
-  }, [geometry, screenLengthPx]);
-  const gpuAttributes = useMemo(() => {
-    if (!tickAttributes) return null;
-    return {
-      direction: new BufferAttribute(tickAttributes.directions, 3),
-      endpoint: new BufferAttribute(tickAttributes.endpoints, 1),
-      start: new BufferAttribute(tickAttributes.starts, 3),
-    };
-  }, [tickAttributes]);
-
-  useLayoutEffect(() => {
-    if (!geometry || !gpuAttributes) return undefined;
-    geometry.setAttribute(DIMENSION_FRAME_TICK_START_ATTRIBUTE, gpuAttributes.start);
-    geometry.setAttribute(DIMENSION_FRAME_TICK_DIRECTION_ATTRIBUTE, gpuAttributes.direction);
-    geometry.setAttribute(DIMENSION_FRAME_TICK_ENDPOINT_ATTRIBUTE, gpuAttributes.endpoint);
-    return () => {
-      if (geometry.getAttribute(DIMENSION_FRAME_TICK_START_ATTRIBUTE) === gpuAttributes.start) {
-        geometry.deleteAttribute(DIMENSION_FRAME_TICK_START_ATTRIBUTE);
-      }
-      if (geometry.getAttribute(DIMENSION_FRAME_TICK_DIRECTION_ATTRIBUTE) === gpuAttributes.direction) {
-        geometry.deleteAttribute(DIMENSION_FRAME_TICK_DIRECTION_ATTRIBUTE);
-      }
-      if (geometry.getAttribute(DIMENSION_FRAME_TICK_ENDPOINT_ATTRIBUTE) === gpuAttributes.endpoint) {
-        geometry.deleteAttribute(DIMENSION_FRAME_TICK_ENDPOINT_ATTRIBUTE);
-      }
-    };
-  }, [geometry, gpuAttributes]);
 
   useFrame(({ camera, size }) => {
     if (screenLengthPx === undefined || size.height <= 0) return;
@@ -439,10 +403,11 @@ function sameDimensionFrameOrientation(
 function useTrackedLineGeometry(
   tracker: Viewport3DResourceTracker,
   positions: Float32Array | null,
+  screenSpaceTicks = false,
 ): BufferGeometry | null {
   const geometry = useMemo(
-    () => (positions ? createDimensionFrameLineGeometry(positions) : null),
-    [positions],
+    () => (positions ? createDimensionFrameLineGeometry(positions, screenSpaceTicks) : null),
+    [positions, screenSpaceTicks],
   );
   useEffect(() => {
     if (!geometry) return undefined;

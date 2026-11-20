@@ -82,6 +82,29 @@ describe("DimensionFrameLayer resources", () => {
     expect(tracker.getSnapshot().geometries).toBe(0);
   });
 
+  it("keeps all GPU tick attributes attached when the tracked geometry is disposed", () => {
+    const tracker = new Viewport3DResourceTracker();
+    const geometry = createDimensionFrameLineGeometry(
+      new Float32Array([0, 0, 0, 1, 0, 0]),
+      true,
+    );
+    if (!geometry) throw new Error("Expected tick geometry");
+    const attributeNamesAtDispose: string[] = [];
+    geometry.addEventListener("dispose", () => {
+      attributeNamesAtDispose.push(...Object.keys(geometry.attributes).sort());
+    });
+
+    trackDimensionFrameGeometry(tracker, geometry);
+    releaseDimensionFrameGeometry(tracker, geometry);
+
+    expect(attributeNamesAtDispose).toEqual([
+      "dimensionFrameTickDirection",
+      "dimensionFrameTickEndpoint",
+      "dimensionFrameTickStart",
+      "position",
+    ]);
+  });
+
   it("outlines labels with the viewport background instead of a grey", () => {
     expect(resolveDimensionFrameLayerColors(colors)).toEqual({
       axis: { x: "#cdd6f4", y: "#cdd6f4", z: "#89b4fa" },

@@ -1285,8 +1285,9 @@ mod all_in_gpu_fem_transfer_audit_tests {
     use super::{
         CpuFixedCouplingTelemetry, CpuFixedTransferDiagnostics,
         ExecutionProvenance, FdmMultilayerStageTelemetry, FdmMultilayerTransferTelemetry,
-        FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation, StepStats,
+        FemRepresentationReceipt, StepStats,
     };
+    use fullmag_quantities::{FemMaterialFieldLocation, FemStateRepresentation};
 
     #[test]
     fn step_stats_carry_hot_loop_transfer_audit() {

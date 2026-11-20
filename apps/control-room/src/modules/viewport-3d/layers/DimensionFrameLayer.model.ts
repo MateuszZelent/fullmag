@@ -92,10 +92,18 @@ const TICK_LABEL_MIN_SPACING_PX = 34;
 
 export function createDimensionFrameLineGeometry(
   positions: Float32Array,
+  screenSpaceTicks = false,
 ): BufferGeometry | null {
   if (positions.length === 0) return null;
   const geometry = new BufferGeometry();
   geometry.setAttribute("position", new BufferAttribute(positions, 3));
+  if (screenSpaceTicks) {
+    // The renderer releases these buffers from geometry.attributes on dispose.
+    const { directions, endpoints, starts } = createDimensionFrameScreenTickAttributes(positions);
+    geometry.setAttribute("dimensionFrameTickDirection", new BufferAttribute(directions, 3));
+    geometry.setAttribute("dimensionFrameTickEndpoint", new BufferAttribute(endpoints, 1));
+    geometry.setAttribute("dimensionFrameTickStart", new BufferAttribute(starts, 3));
+  }
   geometry.computeBoundingSphere();
   return geometry;
 }
