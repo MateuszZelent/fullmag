@@ -134,13 +134,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// TODO(openapi): after OpenAPI/TS codegen the generated `SceneMaterialParameterField`
-// has the `function` variant; until then the payload is read through `unknown`.
+// The schema types the `function` payload as an open record, so its members are
+// checked here before they are shown.
 export function materialFunctionFieldSummary(
   field: SceneMaterialParameterAssignment,
 ): MaterialFunctionFieldSummary | null {
-  const value: unknown = field.value;
-  if (!isRecord(value) || value.kind !== "function" || !isRecord(value.function)) {
+  const value = field.value;
+  if (value.kind !== "function" || !isRecord(value.function)) {
     return null;
   }
   const fn = value.function;

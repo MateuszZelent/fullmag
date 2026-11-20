@@ -215,7 +215,7 @@ describe("ObjectRegionMaterialFieldsModel", () => {
   });
 
   it("summarizes a function field read-only and keeps it out of the editors", () => {
-    // TODO(openapi): the cast goes away when codegen adds the `function` variant.
+    // The fixture omits fields the summary does not read.
     const assignment = {
       assignment_id: "film:object:alpha",
       owner_object: "film",
