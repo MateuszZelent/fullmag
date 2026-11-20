@@ -26,13 +26,13 @@
   min-height: var(--fm-control-height-regular);
   align-items: center;
   gap: var(--fm-space-2);
-  border-radius: var(--fm-radius-md);
+  border-radius: var(--fm-radius-field);
   padding: 0 var(--fm-space-2);
-  transition: background-color var(--fm-transition-fast);
+  transition: background-color var(--fm-duration-micro) var(--fm-ease-out-soft);
 }
 
 .fm-inspector-field-row:hover {
-  background: color-mix(in srgb, var(--fm-bg-panel-raised) 60%, transparent);
+  background: color-mix(in srgb, var(--fm-text-primary) 4%, transparent);
 }
 
 .fm-inspector-field-row__label {
@@ -205,29 +205,77 @@
   min-width: 0;
   height: var(--fm-control-height-compact);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-panel-raised);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-field-bg);
   color: var(--fm-text-primary);
   font-family: var(--fm-font-ui);
   font-size: var(--fm-font-size-xs);
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
   padding: 0 var(--fm-space-2);
   outline: none;
   transition:
-    border-color var(--fm-transition-fast),
-    box-shadow var(--fm-transition-fast),
-    background-color var(--fm-transition-fast);
+    border-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    box-shadow var(--fm-duration-micro) var(--fm-ease-out-soft),
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft);
 }
 
 .fm-inspector-input:hover:not(:disabled) {
   border-color: var(--fm-border-default);
-  background: color-mix(in srgb, var(--fm-bg-panel-raised) 100%, var(--fm-bg-hover));
 }
 
 .fm-inspector-input:focus-visible {
   border-color: var(--fm-accent);
-  background: var(--fm-bg-panel-raised);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 18%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-accent) 18%, transparent);
+}
+
+/* Field box: a recessed field holding the value and its fixed unit
+   (specs/frontend-v2/13 §1a, slot 7). The inner input stays transparent. */
+.fm-inspector-field-box {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+  height: var(--fm-inspector-control-height);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-field-bg);
+  transition:
+    border-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    box-shadow var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-inspector-field-box:hover:not(:has(:disabled)) {
+  border-color: var(--fm-border-default);
+}
+
+.fm-inspector-field-box:focus-within {
+  border-color: var(--fm-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-accent) 18%, transparent);
+}
+
+.fm-inspector-field-box:has(:is(:user-invalid, [aria-invalid="true"])) {
+  border-color: var(--fm-danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-danger) 18%, transparent);
+}
+
+.fm-inspector-field-box:has(:disabled) {
+  border-color: var(--fm-border-disabled);
+  background: var(--fm-bg-disabled);
+}
+
+.fm-inspector-field-box > .fm-inspector-input,
+.fm-inspector-field-box > .fm-inspector-input:is(:hover, :focus-visible, :user-invalid, [aria-invalid="true"], :disabled) {
+  height: 100%;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.fm-inspector-field-box > .fm-inspector-form-field__unit {
+  padding-inline: var(--fm-space-1) var(--fm-space-3);
+  font-family: var(--fm-font-symbol);
+  font-size: var(--fm-font-size-sm);
 }
 
 /* Invalid only after interaction: :user-invalid (native constraints) and the
@@ -266,9 +314,8 @@
   min-width: 0;
   height: var(--fm-control-height-regular);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-canvas);
-  box-shadow: var(--fm-shadow-sm);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-field-bg);
   transition:
     border-color var(--fm-transition-fast),
     box-shadow var(--fm-transition-fast);
@@ -288,7 +335,7 @@
 
 .fm-inspector-vector3-item:focus-within:not([data-disabled="true"]) {
   border-color: var(--fm-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 20%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-accent) 18%, transparent);
 }
 
 .fm-inspector-vector3-item__badge {
@@ -300,8 +347,8 @@
   font-size: var(--fm-font-size-2xs);
   font-weight: 850;
   user-select: none;
-  border-top-left-radius: calc(var(--fm-radius-md) - 1px);
-  border-bottom-left-radius: calc(var(--fm-radius-md) - 1px);
+  border-top-left-radius: calc(var(--fm-radius-field) - 1px);
+  border-bottom-left-radius: calc(var(--fm-radius-field) - 1px);
   border-right: 1px solid var(--fm-border-subtle);
 }
 
@@ -359,8 +406,8 @@
   min-width: 0;
   min-height: 72px;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-canvas);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-field-bg);
   color: var(--fm-text-primary);
   font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-xs);
@@ -379,7 +426,7 @@
 
 .fm-inspector-textarea:focus-visible {
   border-color: var(--fm-accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--fm-accent) 30%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-accent) 18%, transparent);
 }
 
 .fm-inspector-textarea:disabled {
@@ -407,8 +454,8 @@
   -moz-appearance: none;
   appearance: none;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background-color: var(--fm-bg-panel-raised);
+  border-radius: var(--fm-radius-field);
+  background-color: var(--fm-field-bg);
   background-image:
     linear-gradient(45deg, transparent 50%, var(--fm-text-muted) 50%),
     linear-gradient(135deg, var(--fm-text-muted) 50%, transparent 50%);
@@ -430,12 +477,11 @@
 
 .fm-inspector-select:hover:not(:disabled) {
   border-color: var(--fm-border-default);
-  background-color: color-mix(in srgb, var(--fm-bg-panel-raised) 100%, var(--fm-bg-hover));
 }
 
 .fm-inspector-select:focus-visible {
   border-color: var(--fm-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 18%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-accent) 18%, transparent);
   outline: none;
 }
 
@@ -455,7 +501,7 @@
   flex-shrink: 0;
   border: 1px solid var(--fm-border-default);
   border-radius: var(--fm-radius-xs);
-  background: var(--fm-bg-canvas);
+  background: var(--fm-field-bg);
   cursor: pointer;
   position: relative;
   transition:

@@ -52,7 +52,7 @@ describe("Inspector visual contract", () => {
     const tokens = readFileSync(join(stylesRoot, "tokens.css"), "utf8");
 
     expect(tokens).toMatch(/--fm-inspector-control-height:\s*35px;/);
-    expect(tokens).toMatch(/--fm-inspector-control-radius:\s*8px;/);
+    expect(tokens).toMatch(/--fm-inspector-control-radius:\s*var\(--fm-radius-field\);/);
     expect(tokens).toMatch(/--fm-inspector-control-font-size:\s*13px;/);
     expect(css).toContain("height: var(--fm-inspector-control-height)");
     expect(css).toContain("border-radius: var(--fm-inspector-control-radius)");
