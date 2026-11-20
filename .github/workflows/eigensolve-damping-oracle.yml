@@ -1,22 +1,18 @@
 name: eigensolve-damping-oracle
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     branches: [master, main]
     paths:
       - 'scripts/test_eigensolve_complex_damping_oracle.py'
       - '.github/workflows/eigensolve-damping-oracle.yml'
-  pull_request:
-    paths:
-      - 'scripts/test_eigensolve_complex_damping_oracle.py'
-      - '.github/workflows/eigensolve-damping-oracle.yml'
-
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: eigensolve-damping-oracle-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

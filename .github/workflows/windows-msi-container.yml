@@ -1,20 +1,29 @@
-name: windows-msi-native
+# Preserve this workflow path for its Actions history and local consumers.
+# Packaging runs natively with Windows MSVC and WiX; it is not container-based.
+name: Native Windows MSI
+run-name: "Native Windows MSI (FEM: ${{ inputs.fem_mode || 'cpu' }}, CUDA: ${{ inputs.cuda && 'enabled' || 'disabled' }})"
 
 on:
   workflow_dispatch:
     inputs:
       fem_mode:
-        description: Native FEM assembly scope; none is diagnostic FDM-only
+        description: "Native FEM runtime: cpu, gpu, or none for an FDM-only installer."
         type: choice
         default: cpu
         options: [cpu, gpu, none]
       cuda:
-        description: Include CUDA FDM; required for FEM gpu
+        description: "Include native CUDA FDM; required when FEM mode is gpu."
         type: boolean
         default: false
+
+permissions:
+  contents: read
+
 jobs:
   build-windows-msi:
+    name: Build with native Windows MSVC and WiX
     runs-on: [self-hosted, windows, x64, fullmag-native-msvc-wix]
+    timeout-minutes: 360
     concurrency:
       group: fullmag-windows-msi-native
       cancel-in-progress: false
@@ -53,7 +62,7 @@ jobs:
           path: ${{ steps.package.outputs.msi_path }}
           if-no-files-found: error
 
-      - name: Upload Windows stage manifest
+      - name: Upload Windows MSI stage manifest
         uses: actions/upload-artifact@v7
         with:
           name: fullmag-windows-msi-manifest
