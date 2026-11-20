@@ -30,6 +30,10 @@ def _close(a: float, b: float) -> bool:
     return a == b or abs(a - b) <= 1e-14 * max(abs(a), abs(b))
 
 
+def _within_ulps(a: float, b: float, ulps: int = 4) -> bool:
+    return a == b or abs(a - b) <= ulps * math.ulp(max(abs(a), abs(b)))
+
+
 class AbsorbingBoundaryFormulaTableTests(unittest.TestCase):
     """The case table of absorbing-boundary formulas, read by Rust and Python."""
 
@@ -55,8 +59,10 @@ class AbsorbingBoundaryFormulaTableTests(unittest.TestCase):
                     self.assertTrue(_close(profile(u), expected), (u, profile(u), expected))
                 old = self.baseline["profile"].get(case["name"])
                 if old is not None:
-                    # Exact: the same binary64 operations through the same libm.
-                    self.assertEqual([profile(k / 256) for k in range(257)], old)
+                    # The old values were recorded with one libm; another libm may
+                    # differ in the last bits of log1p, exp and friends.
+                    for k, value in enumerate(old):
+                        self.assertTrue(_within_ulps(profile(k / 256), value), (k, profile(k / 256), value))
                     compared += 1
         self.assertEqual(compared, len(self.baseline["profile"]))
 
@@ -74,7 +80,8 @@ class AbsorbingBoundaryFormulaTableTests(unittest.TestCase):
                     self.assertTrue(_close(value, expected), (value, expected))
                 old = self.baseline["distance"].get(case["name"])
                 if old is not None:
-                    self.assertEqual(values, old)
+                    for value, recorded in zip(values, old, strict=True):
+                        self.assertTrue(_within_ulps(value, recorded), (value, recorded))
                     compared += 1
         self.assertEqual(compared, len(self.baseline["distance"]))
 
