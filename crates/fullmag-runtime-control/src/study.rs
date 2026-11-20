@@ -19,12 +19,15 @@ use fullmag_plan::{
 use fullmag_session::{FmsTaskPreparationReceipt, SessionStore};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 pub struct AcceptedStudySnapshot {
     pub run: crate::AcceptedRunSnapshot,
     pub study: StudyPlan,
     pub catalog: StudyProblemCatalog,
     pub lowered: StudyExecutionPlan,
+    /// Captured execution ID to authored pipeline node ID for compiled scripts.
+    pub authored_stage_ids: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Copy)]
@@ -3835,12 +3838,13 @@ pub fn load_accepted_study_snapshot(
     let validated = crate::study_snapshot_cache::get_or_try_insert(key, || {
         validate_accepted_study_inputs(store.cas(), &run, study_ref, catalog_ref)
     })?;
-    let (study, catalog, lowered) = (*validated).clone();
+    let (study, catalog, lowered, authored_stage_ids) = (*validated).clone();
     Ok(AcceptedStudySnapshot {
         run,
         study,
         catalog,
         lowered,
+        authored_stage_ids,
     })
 }
 
@@ -3859,13 +3863,14 @@ pub fn load_accepted_study_snapshot_from_run(
         .study_catalog_object_ref
         .as_deref()
         .context("accepted run has no immutable study catalog object")?;
-    let (study, catalog, lowered) =
+    let (study, catalog, lowered, authored_stage_ids) =
         validate_accepted_study_inputs(cas, &run, study_ref, catalog_ref)?;
     Ok(AcceptedStudySnapshot {
         run,
         study,
         catalog,
         lowered,
+        authored_stage_ids,
     })
 }
 
@@ -3921,17 +3926,30 @@ fn validate_accepted_study_inputs(
             format!("accepted run asset `{}` object is missing", asset.asset_id)
         })?;
     }
+    let mut authored_stage_ids = BTreeMap::new();
     if study.schema_version==fullmag_authoring::STUDY_PLAN_SCHEMA_VERSION_V4 {
         let asset=specification.immutable_assets.iter().find(|asset|asset.asset_id==fullmag_application::SCRIPT_PIPELINE_SOURCE_ASSET_ID)
             .context("accepted v4 requires captured compiled source asset")?;
         let bytes=cas.get_bounded(&asset.content_sha256,16*1024*1024)?.context("accepted v4 source asset missing")?;
         let source=fullmag_application::validate_accepted_script_pipeline_source(&study,&catalog,&bytes)?;
         fullmag_application::validate_script_source_assets(specification,&source,|hash,maximum|cas.get_bounded(hash,maximum)?.context("accepted source file missing"))?;
+        let executions = source["executions"]
+            .as_array()
+            .context("validated source executions are missing")?;
+        for execution in executions {
+            let step_id = execution["execution_id"]
+                .as_str()
+                .context("validated execution ID is missing")?;
+            let authored_id = execution["authored_step_id"]
+                .as_str()
+                .context("validated authored ID is missing")?;
+            authored_stage_ids.insert(step_id.to_owned(), authored_id.to_owned());
+        }
     }
     let lowered = lower_study_plan_with_catalog(&study, &catalog)
         .context("lower immutable study through canonical planner")?;
     validate_requested_execution(specification, &catalog, &lowered)?;
-    Ok((study, catalog, lowered))
+    Ok((study, catalog, lowered, authored_stage_ids))
 }
 
 pub fn validate_requested_execution(
@@ -4295,6 +4313,7 @@ mod accepted_start_preparation_tests {
             study,
             catalog,
             lowered,
+            authored_stage_ids: BTreeMap::new(),
         }
     }
 

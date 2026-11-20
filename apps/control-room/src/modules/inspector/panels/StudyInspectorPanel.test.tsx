@@ -465,7 +465,6 @@ describe("StudyInspectorPanel", () => {
     const html = renderToStaticMarkup(
       <Accordion type="multiple" defaultValue={["pipeline"]}>
         <StudyPipelineSection
-          activeStageIndex={null}
           authoringBusy={false}
           authoringFeedback={null}
           commandDisabledReason={() => null}
@@ -1171,7 +1170,6 @@ describe("StudyInspectorPanel", () => {
     const html = renderToStaticMarkup(
       <Accordion type="multiple" defaultValue={["pipeline"]}>
         <StudyPipelineSection
-          activeStageIndex={0}
           authoringBusy={false}
           authoringFeedback={null}
           commandDisabledReason={() => null}
@@ -1198,6 +1196,7 @@ describe("StudyInspectorPanel", () => {
             selectedStage: null,
             stages: [
               {
+                active: true,
                 algorithm: "llg_overdamped",
                 artifactRefs: [],
                 checkpointRef: null,
@@ -1239,6 +1238,8 @@ describe("StudyInspectorPanel", () => {
     );
 
     expect(html).toContain("Stage Pipeline");
+    expect(html).toContain('aria-current="step"');
+    expect(html).toContain('data-active="true"');
     expect(html).toContain("Save stages");
     expect(html).toContain("Duplicate");
     expect(html).toContain("Remove");
@@ -1298,7 +1299,6 @@ describe("StudyInspectorPanel", () => {
     const html = renderToStaticMarkup(
       <Accordion type="multiple" defaultValue={["pipeline"]}>
         <StudyPipelineSection
-          activeStageIndex={0}
           authoringBusy={false}
           authoringFeedback={null}
           commandDisabledReason={() => null}
@@ -1657,7 +1657,6 @@ describe("StudyInspectorPanel", () => {
     const html = renderToStaticMarkup(
       <Accordion type="multiple" defaultValue={["pipeline"]}>
         <StudyPipelineSection
-          activeStageIndex={0}
           authoringBusy={false}
           authoringFeedback={null}
           commandDisabledReason={() => null}
@@ -1997,7 +1996,6 @@ describe("StudyInspectorPanel", () => {
     const html = renderToStaticMarkup(
       <Accordion type="multiple" defaultValue={["pipeline"]}>
         <StudyPipelineSection
-          activeStageIndex={0}
           authoringBusy={false}
           authoringFeedback={null}
           commandDisabledReason={() => null}
@@ -2154,7 +2152,6 @@ describe("StudyInspectorPanel", () => {
     const html = renderToStaticMarkup(
       <Accordion type="multiple" defaultValue={["pipeline"]}>
         <StudyPipelineSection
-          activeStageIndex={0}
           authoringBusy={false}
           authoringFeedback={null}
           commandDisabledReason={() => null}

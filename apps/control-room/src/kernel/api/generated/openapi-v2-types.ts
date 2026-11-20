@@ -17016,6 +17016,8 @@ export interface components {
             /** @description Exact authored antenna definition ID, not the study node or runtime ID. */
             antenna_solve_stage_id?: string | null;
             artifact_refs?: string[];
+            /** @description Authored pipeline node owning this compiled execution. */
+            authored_stage_id?: string | null;
             checkpoint_ref?: string | null;
             command_id?: string | null;
             /** Format: int64 */

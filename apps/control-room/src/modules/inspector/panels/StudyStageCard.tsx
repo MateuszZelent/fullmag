@@ -43,6 +43,7 @@ export function StageCard({
     return (
       <button
         className="fm-study-stage-card"
+        aria-current={active ? "step" : undefined}
         data-active={active ? "true" : undefined}
         data-selected={selected ? "true" : undefined}
         data-status={stage.status}
@@ -57,6 +58,7 @@ export function StageCard({
   return (
     <div
       className="fm-study-stage-card"
+      aria-current={active ? "step" : undefined}
       data-active={active ? "true" : undefined}
       data-selected={selected ? "true" : undefined}
       data-status={stage.status}

@@ -1934,6 +1934,7 @@ mod accepted_start_tests {
             study,
             catalog,
             lowered,
+            authored_stage_ids: Default::default(),
         };
         if prepared {
             for step in &accepted.lowered.steps {
