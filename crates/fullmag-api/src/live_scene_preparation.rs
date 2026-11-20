@@ -1192,13 +1192,17 @@ fn task_attempt_changed() -> ApiError {
     )
 }
 
+const PREPARATION_ATTEMPT_FENCE_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
+
 fn hold_current_accepted_attempt_fence(
     store: &fullmag_session::SessionStore,
     expected: &AcceptedTaskAttemptIdentity,
     expected_claim: Option<&fullmag_application::TaskClaim>,
+    wait: std::time::Duration,
 ) -> Result<fullmag_session::ReadTransaction, ApiError> {
-    let transaction = store
-        .read_transaction()
+    // Wait on this blocking thread without holding any store lock. Validate
+    // the attempt under the acquired fence before allowing publication.
+    let transaction = fullmag_runtime_control::acquire_store_read_transaction(store, wait)
         .map_err(|error| accepted_step_output_store_read_error(
             "accepted attempt final read fence failed",
             &expected.step_id,
@@ -1460,6 +1464,7 @@ async fn hold_current_accepted_attempt_fence_async(
     store_root: PathBuf,
     expected: AcceptedTaskAttemptIdentity,
     expected_claim: Option<fullmag_application::TaskClaim>,
+    wait: std::time::Duration,
 ) -> Result<fullmag_session::ReadTransaction, ApiError> {
     tokio::task::spawn_blocking(move || {
         let store = fullmag_session::SessionStore::open_existing(&store_root).map_err(|error| {
@@ -1469,7 +1474,7 @@ async fn hold_current_accepted_attempt_fence_async(
                 error,
             )
         })?;
-        hold_current_accepted_attempt_fence(&store, &expected, expected_claim.as_ref())
+        hold_current_accepted_attempt_fence(&store, &expected, expected_claim.as_ref(), wait)
     })
     .await
     .map_err(|error| ApiError::internal(format!("accepted attempt final fence task failed: {error}")))?
@@ -1481,9 +1486,10 @@ async fn hold_current_accepted_attempt_fence_async(
 pub(crate) async fn hold_live_observation_publication_fence(
     store_root: &std::path::Path,
     header: &crate::accepted_study_worker::AcceptedLiveObservationHeader,
+    wait: std::time::Duration,
 ) -> Result<fullmag_session::ReadTransaction, ApiError> {
     let expected = AcceptedTaskAttemptIdentity::from_live_header(header)?;
-    hold_current_accepted_attempt_fence_async(store_root.to_path_buf(), expected, None).await
+    hold_current_accepted_attempt_fence_async(store_root.to_path_buf(), expected, None, wait).await
 }
 
 async fn hold_verified_stage_output_fence_async(
@@ -3105,6 +3111,7 @@ async fn publish_accepted_task_preparation_with_mode(
                 final_fence_store_root.clone(),
                 identity.clone(),
                 expected_initial_state_claim.clone(),
+                PREPARATION_ATTEMPT_FENCE_WAIT,
             ).await?)
         }
         (AcceptedPreparationPublicationMode::Active, _) => {
@@ -3119,6 +3126,7 @@ async fn publish_accepted_task_preparation_with_mode(
                         ownership_epoch: claim.ownership_epoch.value(),
                     },
                     Some(claim),
+                    PREPARATION_ATTEMPT_FENCE_WAIT,
                 ).await?)
             } else {
                 None
@@ -5908,6 +5916,42 @@ mod tests {
                 .is_ok()
         );
         assert!(validate_requested_device_value("cpu", Some("gpu")).is_err());
+    }
+
+    #[test]
+    fn final_attempt_fence_rechecks_identity_after_short_native_writer_contention() {
+        use std::time::Duration;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("store");
+        let store = fullmag_session::SessionStore::open(&root).unwrap();
+        let reader = fullmag_session::SessionStore::open_existing(&root).unwrap();
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let transaction = store.write_transaction().unwrap();
+            held_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            std::thread::sleep(Duration::from_millis(40));
+            drop(transaction);
+        });
+        held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(reader.read_transaction().is_err(), "expected a busy native store");
+        release_tx.send(()).unwrap();
+        let expected = AcceptedTaskAttemptIdentity {
+            run_id: "run-live-test".into(),
+            task_id: "task-live-test".into(),
+            step_id: "step-live-test".into(),
+            attempt_id: "attempt-live-test".into(),
+            ownership_epoch: 1,
+        };
+        // The store only contains writer metadata. A correct read must get past
+        // contention and reject the nonexistent attempt; it must not publish it.
+        let error = hold_current_accepted_attempt_fence(
+            &reader, &expected, None, PREPARATION_ATTEMPT_FENCE_WAIT,
+        ).err().unwrap();
+        writer.join().unwrap();
+        assert_eq!(error.code.as_deref(), Some("accepted_preparation_current_state_changed"));
     }
 
     #[test]

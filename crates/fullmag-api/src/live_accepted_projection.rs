@@ -17,10 +17,31 @@ use crate::types::{
 use fullmag_authoring::SceneExecutionInputIdentity;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+const LIVE_PUBLICATION_FENCE_WAIT: Duration = Duration::from_secs(3);
 /// Ceiling for retrying one unchanged deferral. Each retry reloads the run's
 /// durable outputs, which on a multi-million-cell grid kept a core busy and
 /// the API's memory high for as long as the deferral lasted.
 const MAX_DEFERRAL_BACKOFF: Duration = Duration::from_secs(30);
+
+fn projection_deferral_backoff(error: &ApiError, repeated: u32) -> Duration {
+    // Recording a heartbeat or committing a worker checkpoint can briefly
+    // own the store writer. Retry at the normal poll cadence so identical
+    // contention does not stall live samples or performance invalidations.
+    if matches!(
+        error.code.as_deref(),
+        Some(
+            "accepted_preparation_pending"
+                | "accepted_projection_store_pending"
+                | "accepted_projection_current_state_changed"
+                | "accepted_projection_current_session_changed"
+        )
+    ) {
+        return Duration::ZERO;
+    }
+    POLL_INTERVAL
+        .saturating_mul(1_u32 << repeated.min(6))
+        .min(MAX_DEFERRAL_BACKOFF)
+}
 
 /// Diagnostics only: observe the original future without cancelling or replaying it.
 /// Box before constructing the returned future: an async function argument would
@@ -353,10 +374,10 @@ pub(crate) fn spawn(state: Arc<AppState>) {
                         // Back off an unchanged deferral; a new run, session
                         // or error still retries on the next interval.
                         repeated_deferrals = repeated_deferrals.saturating_add(1);
-                        let backoff = POLL_INTERVAL
-                            .saturating_mul(1_u32 << repeated_deferrals.min(6))
-                            .min(MAX_DEFERRAL_BACKOFF);
-                        tokio::time::sleep(backoff).await;
+                        let backoff = projection_deferral_backoff(&error, repeated_deferrals);
+                        if !backoff.is_zero() {
+                            tokio::time::sleep(backoff).await;
+                        }
                     }
                 }
             }
@@ -645,7 +666,21 @@ fn load_durable_projection_with_journal(
         &store,
         Duration::from_secs(4),
     )
-    .map_err(|error| ApiError::conflict(format!("read accepted projection core fence: {error:#}")))?;
+    .map_err(|error| {
+        let message = format!("read accepted projection core fence: {error:#}");
+        if error.chain().any(|cause| matches!(
+            cause.downcast_ref::<std::fs::TryLockError>(),
+            Some(std::fs::TryLockError::WouldBlock)
+        )) {
+            ApiError::with_status_and_code(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "accepted_projection_store_pending",
+                message,
+            )
+        } else {
+            ApiError::conflict(message)
+        }
+    })?;
     let Some(intent) = store
         .read_run_intent(&context.run_id)
         .map_err(|error| ApiError::internal(format!("read accepted RunIntent: {error}")))?
@@ -3627,6 +3662,32 @@ fn accepted_profile_candidate(
     candidate
 }
 
+async fn validate_observation_publication_candidate(
+    state: &AppState,
+    context: &ProjectionContext,
+    display_revision: u64,
+    expected: &ProjectionPublicationFence,
+) -> Result<(), ApiError> {
+    if state.current_display_selection.read().await.revision != display_revision {
+        return Err(ApiError::conflict_with_code(
+            "accepted_projection_current_state_changed",
+            "display selection changed while accepted output was being projected",
+        ));
+    }
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    ensure_projection_context(state, context, snapshot)?;
+    if ProjectionPublicationFence::capture(snapshot)? != *expected {
+        return Err(ApiError::conflict_with_code(
+            "accepted_projection_current_state_changed",
+            "current live resources changed while accepted output was being projected",
+        ));
+    }
+    Ok(())
+}
+
 async fn apply_projection(
     state: &Arc<AppState>,
     context: &ProjectionContext,
@@ -4141,26 +4202,7 @@ async fn apply_projection(
     // only the final identity/revision CAS, terminal command completion, and
     // state pointer swap.
     let transition = state.current_live_session_transition.lock().await;
-    let current_display_revision = state.current_display_selection.read().await.revision;
-    if current_display_revision != display_revision {
-        return Err(ApiError::conflict_with_code(
-            "accepted_projection_current_state_changed",
-            "display selection changed while accepted output was being projected",
-        ));
-    }
-    {
-        let current = state.current_live_state.read().await;
-        let snapshot = current
-            .as_ref()
-            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        ensure_projection_context(state, context, snapshot)?;
-        if ProjectionPublicationFence::capture(snapshot)? != publication_fence {
-            return Err(ApiError::conflict_with_code(
-                "accepted_projection_current_state_changed",
-                "current live resources changed while accepted output was being projected",
-            ));
-        }
-    }
+    validate_observation_publication_candidate(state, context, display_revision, &publication_fence).await?;
     let journal_before = state.current_command_journal_revision.load(std::sync::atomic::Ordering::Acquire);
     if let Some(record) = projection.recovered_compute {
         crate::live_command_journal::recover_accepted_compute(state, &next, record).await?;
@@ -4187,20 +4229,52 @@ async fn apply_projection(
         drop(transition);
         return Ok(());
     }
-    let observation_fence = if let Some((_, observation)) = projection.live_observation.as_ref().filter(|_| live_stage_is_newer) {
-        let store_root = state.submit_store_root.as_deref()
-            .ok_or_else(|| ApiError::conflict("accepted live observation requires its session store"))?;
-        Some(crate::live_scene_preparation::hold_live_observation_publication_fence(
-            store_root, &observation.header,
-        ).await?)
-    } else {
-        None
-    };
+    let (transition, observation_fence, retried_fence) =
+        if let Some((_, observation)) = projection.live_observation.as_ref().filter(|_| live_stage_is_newer) {
+            let store_root = state.submit_store_root.as_deref()
+                .ok_or_else(|| ApiError::conflict("accepted live observation requires its session store"))?;
+            use crate::live_scene_preparation::hold_live_observation_publication_fence;
+
+            match hold_live_observation_publication_fence(store_root, &observation.header, Duration::ZERO).await {
+                Ok(fence) => (transition, Some(fence), false),
+                Err(error) if error.code.as_deref() == Some("accepted_preparation_pending") => {
+                    // Keep the prepared candidate, but let commands proceed
+                    // while the durable writer is busy. Never wait for the
+                    // transition while holding a store fence: command paths
+                    // may already hold it and need the store's writer.
+                    drop(transition);
+                    let fence = hold_live_observation_publication_fence(
+                        store_root,
+                        &observation.header,
+                        LIVE_PUBLICATION_FENCE_WAIT,
+                    ).await?;
+                    let transition = state.current_live_session_transition.try_lock().map_err(|_| {
+                        ApiError::conflict_with_code(
+                            "accepted_projection_current_state_changed",
+                            "session transition is busy after reading the live observation",
+                        )
+                    })?;
+                    validate_observation_publication_candidate(
+                        state, context, display_revision, &publication_fence,
+                    ).await?;
+                    (transition, Some(fence), true)
+                }
+                Err(error) => return Err(error),
+            }
+        } else {
+            (transition, None, false)
+        };
     let previous = {
         let mut current = state.current_live_state.write().await;
         std::mem::replace(&mut *current, Some(next))
     };
     drop(observation_fence);
+    if retried_fence {
+        let current = state.current_live_state.read().await;
+        if let Some(snapshot) = current.as_ref() {
+            realtime_state = crate::current_live_realtime_state_from_snapshot(state, snapshot, display_revision).await;
+        }
+    }
     if let Some(sample) = scalar_sample {
         crate::queue_current_live_realtime_scalar_sample(state.as_ref(), sample).await?;
     }
@@ -4427,6 +4501,20 @@ fn unix_time_millis_now() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retryable_store_contention_keeps_the_normal_live_poll_period() {
+        for code in ["accepted_preparation_pending", "accepted_projection_store_pending"] {
+            let transient = ApiError::with_status_and_code(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                code,
+                "writer holds the session store",
+            );
+            assert_eq!(projection_deferral_backoff(&transient, 20), Duration::ZERO);
+        }
+        let invalid = ApiError::conflict("invalid field carrier");
+        assert_eq!(projection_deferral_backoff(&invalid, 20), MAX_DEFERRAL_BACKOFF);
+    }
 
     #[test]
     fn observer_future_keeps_large_operation_on_heap_before_first_poll() {
@@ -5435,7 +5523,25 @@ mod tests {
             assert_eq!(snapshot.latest_scalar_source.as_ref().unwrap().series.as_ref().unwrap().identity, previous);
         }
         assert!(projection.preferred_live_observation().is_some());
-        apply_projection(&state, &context, projection).await.unwrap();
+        let writer_store = SessionStore::open_existing(store.root()).unwrap();
+        let writer = writer_store.write_transaction().unwrap();
+        assert!(store.read_transaction().is_err());
+        let release_writer = async {
+            // Simulate a durable publisher spanning multiple short contention
+            // retries. The API transition must remain usable while it waits.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let transition = tokio::time::timeout(
+                Duration::from_millis(500),
+                state.current_live_session_transition.lock(),
+            ).await.expect("publication must not hold the API transition while waiting for the store");
+            let revision = state.current_live_state.read().await.as_ref().unwrap().scalar_revision;
+            assert_eq!(revision, previous_revision);
+            drop(transition);
+            drop(writer);
+        };
+        let (result, ()) = tokio::join!(apply_projection(&state, &context, projection), release_writer);
+        result.unwrap();
+        assert!(writer_store.write_transaction().is_ok(), "publication retained the read fence");
         let current = state.current_live_state.read().await;
         let snapshot = current.as_ref().unwrap();
         assert!(snapshot.scalar_revision > previous_revision);
