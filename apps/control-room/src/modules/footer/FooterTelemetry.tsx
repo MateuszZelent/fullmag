@@ -100,6 +100,8 @@ const FOOTER_RELAXATION_ALGORITHMS = new Set<FooterRelaxationAlgorithm>([
 ]);
 
 const FOOTER_SCALAR_COLUMNS = ["step", "time", "mx", "my", "mz", "e_total"] as const;
+const FOOTER_HISTORY_COLUMNS = ["step", "e_total", "max_torque_T"] as const;
+const HISTORY_LIMIT = 120;
 
 export function FooterTelemetry({
   bus,
@@ -136,6 +138,18 @@ export function FooterTelemetry({
     enabled: generalTelemetryEnabled && Boolean(status?.run?.run_id),
   });
   const liveSample = useFooterLiveScalarSample(bus);
+  const runId = status?.run?.run_id ?? null;
+  const sessionEpoch = status?.sessionEpoch ?? null;
+  const historyWindow = useScalarWindowResource({
+    columns: FOOTER_HISTORY_COLUMNS,
+    enabled: generalTelemetryEnabled && runId !== null,
+    limit: HISTORY_LIMIT,
+    tail: true,
+  });
+  const acceptedHistory = useMemo(
+    () => resolveAcceptedFooterHistory(historyWindow.data, runId, sessionEpoch),
+    [historyWindow.data, runId, sessionEpoch],
+  );
   const scalarWindow = useScalarWindowResource({
     columns: FOOTER_SCALAR_COLUMNS,
     enabled: generalTelemetryEnabled,
@@ -198,12 +212,13 @@ export function FooterTelemetry({
     },
   );
   const stageProgress = resolveFooterStageProgress(stageExecution.data);
-  const history = useTelemetryHistory(
-    status?.run?.run_id ?? null,
-    telemetry.metrics.find((metric) => metric.id === "time")?.numeric ?? null,
+  const legacyHistory = useTelemetryHistory(
+    acceptedHistory ? null : runId,
+    acceptedHistory ? null : telemetry.metrics.find((metric) => metric.id === "time")?.numeric ?? null,
     telemetry.metrics.find((metric) => metric.id === "energy-total")?.numeric ?? null,
     telemetry.metrics.find((metric) => metric.id === "max-torque")?.numeric ?? null,
   );
+  const history = acceptedHistory ?? legacyHistory;
 
   if (view === "antenna" && !antennaStage) {
     return (
@@ -1949,8 +1964,35 @@ function resolveFooterStageProgress(
 }
 
 type TelemetryHistory = { energy: readonly number[]; torque: readonly number[] };
-const HISTORY_LIMIT = 120;
 const EMPTY_HISTORY: TelemetryHistory = { energy: [], torque: [] };
+
+function resolveAcceptedFooterHistory(
+  window: ScalarWindowResource | null | undefined,
+  runId: string | null,
+  sessionEpoch: string | null,
+): TelemetryHistory | null {
+  if (!runId || !sessionEpoch || window?.series?.run_id !== runId) return null;
+
+  const stepColumn = window.columns.indexOf("step");
+  const energyColumn = window.columns.indexOf("e_total");
+  const torqueColumn = window.columns.indexOf("max_torque_T");
+  if (stepColumn < 0 || window.rows.length !== window.observation_frames.length) return EMPTY_HISTORY;
+
+  const energy: number[] = [];
+  const torque: number[] = [];
+  for (const [index, row] of window.rows.entries()) {
+    const frame = window.observation_frames[index];
+    const step = row[stepColumn];
+    if (frame.session_epoch !== sessionEpoch || frame.source_step !== step || !Number.isSafeInteger(step) || step < 0) {
+      continue;
+    }
+    const total = row[energyColumn];
+    const maxTorque = row[torqueColumn];
+    if (Number.isFinite(total)) energy.push(total);
+    if (Number.isFinite(maxTorque)) torque.push(maxTorque);
+  }
+  return { energy, torque };
+}
 
 /** Keeps the readings observed in the current run, one point per new sim time. */
 function useTelemetryHistory(
@@ -2121,7 +2163,7 @@ function TelemetryBoard({
                 <div className="fm-footer-telemetry__energy-total">
                   <span className="fm-footer-telemetry__energy-value" title={total?.detail}>{total?.value ?? "—"}</span>
                   <TelemetrySparkline label="Total energy" values={history.energy} />
-                  <span className="fm-footer-telemetry__caption">E<sub>total</sub>(t), this run</span>
+                  <span className="fm-footer-telemetry__caption">E<sub>total</sub>, this run</span>
                 </div>
               </div>
             ) : card.id === "convergence" ? (
