@@ -1831,14 +1831,14 @@ button.fm-inspector__breadcrumb:hover {
 /* Selection has no header row since the contexts moved onto the side rail. */
 .fm-inspector-contexts:not(:has(> .fm-inspector-contexts__header)) { grid-template-rows: minmax(0, 1fr); }
 .fm-inspector-contexts__header { container-type: inline-size; display: flex; align-items: center; min-width: 0; border-bottom: 1px solid var(--fm-border-subtle); }
-.fm-inspector-contexts__actions { flex: none; border-bottom: 0; padding-inline: 0; }
+.fm-inspector-contexts__actions { flex: 1; border-bottom: 0; }
 .fm-inspector-contexts__content { min-height: 0; min-width: 0; height: 100%; overflow: hidden; }
 .fm-inspector-contexts__content[hidden] { display: none; }
 .fm-viewport-inspector-outlet { height: 100%; min-height: 0; overflow: hidden; }
 
 .fm-inspector-view { display: grid; grid-template-rows: minmax(0, 1fr); height: 100%; min-height: 0; min-width: 0; }
 .fm-viewport-inspector-outlet__placeholder { margin: 0; padding: var(--fm-space-4); color: var(--fm-text-secondary); font-size: var(--fm-font-size-control); line-height: 1.5; }
-.fm-viewport-inspector-outlet:has(> [aria-label="3D View Settings"]) > .fm-viewport-inspector-outlet__placeholder { display: none; }
+.fm-viewport-inspector-outlet:has(> [aria-label="3D View Settings"], > [aria-label="3D Export"]) > .fm-viewport-inspector-outlet__placeholder { display: none; }
 
 /* ── Sections (specs/frontend-v2/13 §1a, slot 6) ──
    One glass card for every Inspector group: chevron next to the title, a

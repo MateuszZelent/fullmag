@@ -8,17 +8,8 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/shared/ui/Accordion";
-import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/shared/ui/Select";
 import { Slider } from "@/shared/ui/Slider";
-import { Switch } from "@/shared/ui/Switch";
 import {
   Tabs,
   TabsContent,
@@ -33,10 +24,15 @@ import {
   type Viewport3DQualityProfileId,
 } from "@/shared/viewport3dQualityLabels";
 
+import {
+  Choice,
+  SettingsGroup,
+  TogglePreference,
+} from "./Viewport3DSettingsPrimitives";
 import { Viewport3DVisualizationModeControl } from "./Viewport3DVisualizationModeControl";
 import { viewport3dStore, useViewport3DCommandState } from "../viewport3dStore";
 
-export type Viewport3DSettingsSection = "view" | "appearance" | "quality" | "export";
+export type Viewport3DSettingsSection = "view" | "appearance" | "quality";
 
 type Viewport3DSettingsContentProps = {
   activeSection: Viewport3DSettingsSection;
@@ -52,7 +48,6 @@ const SETTINGS_SECTIONS: readonly {
   { id: "view", label: "View" },
   { id: "appearance", label: "Appearance" },
   { id: "quality", label: "Quality" },
-  { id: "export", label: "Export" },
 ];
 
 export function Viewport3DSettingsContent({
@@ -423,158 +418,9 @@ export function Viewport3DSettingsContent({
               </Accordion>
             </SettingsGroup>
           </TabsContent>
-
-          <TabsContent forceMount hidden={activeSection !== "export"} className="fm-viewport-3d-settings__panel" value="export">
-            <SettingsGroup title="PNG export">
-              <Choice
-                id="fm-view-export-background"
-                label="PNG background"
-                onChange={(value) => viewport3dStore.setAppearance({ exportBackground: value as typeof appearance.exportBackground })}
-                options={[["view", "Match viewport"], ["transparent", "Transparent"]]}
-                value={appearance.exportBackground}
-              />
-              <Choice
-                id="fm-view-export-scale"
-                label="PNG resolution"
-                onChange={(value) => viewport3dStore.setAppearance({ exportScale: Number(value) as 1 | 2 | 4 })}
-                options={[["1", "1× viewport"], ["2", "2× viewport"], ["4", "4× viewport"]]}
-                value={String(appearance.exportScale)}
-              />
-              <p className="fm-viewport-3d-settings__help">
-                PNG uses the active geometry effects. Large captures may need a lower scale on this device.
-              </p>
-              <TogglePreference
-                description="Include the reference scale, legend and orientation in the captured image."
-                id="fm-view-export-annotations"
-                label="Include annotations"
-                onCheckedChange={(exportAnnotations) => viewport3dStore.setAppearance({ exportAnnotations })}
-                checked={appearance.exportAnnotations}
-              />
-              <div className="fm-viewport-3d-settings__actions">
-                <Button onClick={() => onCommand("viewport-3d.capture-frame")} variant="primary">
-                  Export PNG
-                </Button>
-              </div>
-            </SettingsGroup>
-          </TabsContent>
         </div>
       </Tabs>
     </section>
-  );
-}
-
-function SettingsGroup({
-  children,
-  onReset,
-  resetLabel,
-  title,
-}: {
-  children: ReactNode;
-  onReset?: () => void;
-  resetLabel?: string;
-  title: string;
-}) {
-  return (
-    <fieldset className="fm-viewport-3d-settings__group">
-      <legend className="fm-viewport-3d-settings__legend">{title}</legend>
-      <div className="fm-viewport-3d-settings__field-list">{children}</div>
-      {onReset && resetLabel ? (
-        <div className="fm-viewport-3d-settings__actions">
-          <Button onClick={onReset} size="sm" variant="secondary">
-            {resetLabel}
-          </Button>
-        </div>
-      ) : null}
-    </fieldset>
-  );
-}
-
-function Choice({
-  describedBy,
-  disabled = false,
-  id,
-  label,
-  onChange,
-  options,
-  value,
-}: {
-  describedBy?: string;
-  disabled?: boolean;
-  id: string;
-  label: string;
-  onChange: (value: string) => void;
-  options: readonly (readonly [string, string])[];
-  value: string;
-}) {
-  return (
-    <div className="fm-viewport-3d-settings__field">
-      <label className="fm-viewport-3d-settings__label" htmlFor={id}>
-        {label}
-      </label>
-      <Select
-        disabled={disabled}
-        onValueChange={(next) => {
-          if (next !== undefined) onChange(next);
-        }}
-        value={value}
-      >
-        <SelectTrigger
-          aria-label={label}
-          aria-describedby={describedBy}
-          className="fm-viewport-3d-settings__select"
-          id={id}
-        >
-          <SelectValue>{options.find(([optionValue]) => optionValue === value)?.[1]}</SelectValue>
-        </SelectTrigger>
-        <SelectContent>
-          {options.map(([optionValue, optionLabel]) => (
-            <SelectItem key={optionValue} value={optionValue}>
-              {optionLabel}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-}
-
-function TogglePreference({
-  checked,
-  description,
-  disabled = false,
-  id,
-  label,
-  onCheckedChange,
-}: {
-  checked: boolean;
-  description: string;
-  disabled?: boolean;
-  id: string;
-  label: string;
-  onCheckedChange: (checked: boolean) => void;
-}) {
-  const labelId = `${id}-label`;
-  const descriptionId = `${id}-description`;
-  return (
-    <div className="fm-viewport-3d-settings__toggle">
-      <div className="fm-viewport-3d-settings__toggle-copy">
-        <span className="fm-viewport-3d-settings__label" id={labelId}>
-          {label}
-        </span>
-        <span className="fm-viewport-3d-settings__help" id={descriptionId}>
-          {description}
-        </span>
-      </div>
-      <Switch
-        aria-describedby={descriptionId}
-        aria-label={label}
-        aria-labelledby={labelId}
-        checked={checked}
-        disabled={disabled}
-        id={id}
-        onCheckedChange={onCheckedChange}
-      />
-    </div>
   );
 }
 

@@ -11,40 +11,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/Dialog";
-import {
-  type Export3DFormat,
-  type Export3DResult,
-} from "@/shared/export-3d/export3dTypes";
+import type { Export3DFormat } from "@/shared/export-3d/export3dTypes";
 
-import type { Viewport3DExportSource } from "./extractViewport3DExportSource";
 import { viewport3dStore } from "../viewport3dStore";
+import {
+  computeViewportModelExportCapabilities,
+  defaultIncludeVectorsForSource,
+  downloadExport3DModel,
+  executeViewportModelExport,
+  EXPORT_3D_FORMATS,
+  formatViewportModelSourceSummary,
+  type ViewportModelSource,
+} from "./viewportModelExportAction";
 
-export type ViewportModelSource = Pick<
-  Viewport3DExportSource,
-  "defaultColorMode" | "defaultPalette" | "provenance" | "quantityId" |
-  "sourceLabel" | "suggestedFilenameStem" | "targets" | "warnings"
->;
-
-const FORMATS = {
-  glb: "GLB (.glb)",
-  gltf: "glTF (.gltf)",
-  vtu: "VTK Unstructured Grid (.vtu)",
-  vtu_zip: "ParaView archive (.vtu.zip)",
-} satisfies Record<Export3DFormat, string>;
-
-function downloadModel(result: Export3DResult) {
-  const url = URL.createObjectURL(new Blob([new Uint8Array(result.bytes)], { type: result.mimeType }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = result.filename;
-  try {
-    document.body.append(link);
-    link.click();
-  } finally {
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-}
+export type { ViewportModelSource } from "./viewportModelExportAction";
 
 export default function Viewport3DExportDialog({ getSource }: { getSource: () => Promise<ViewportModelSource> }) {
   // Keep the opening view while the extraction module loads.
@@ -60,9 +40,7 @@ export default function Viewport3DExportDialog({ getSource }: { getSource: () =>
       if (!active) return;
       setSource(next);
       setFilename(next.suggestedFilenameStem);
-      setIncludeVectors(next.targets.some((target) =>
-        target.role !== "airbox" && target.field?.componentCount === 3 && target.appearance?.includeVectors,
-      ));
+      setIncludeVectors(defaultIncludeVectorsForSource(next));
     }).catch((error: unknown) => {
       if (active) setSourceError(error instanceof Error ? error.message : "Could not read the current 3D view.");
     });
@@ -75,13 +53,14 @@ export default function Viewport3DExportDialog({ getSource }: { getSource: () =>
   const job = useRef<AbortController | null>(null);
   useEffect(() => () => job.current?.abort(), []);
 
-  const vtk = format === "vtu" || format === "vtu_zip";
-  const hasAirbox = source?.targets.some((target) => target.role === "airbox") ?? false;
-  const targets = source?.targets.filter((target) => includeAirbox || target.role !== "airbox") ?? [];
-  const hasVectors = targets.some((target) => target.field?.componentCount === 3);
-  const canAnimate = format !== "vtu" && targets.some(({ field }) =>
-    field?.kind === "complex" && (field.complexRepresentation ?? "phase_rotated_real") === "phase_rotated_real",
-  );
+  const {
+    canAnimate,
+    hasAirbox,
+    hasVectors,
+    missingAirboxVectors,
+    targets,
+    vtk,
+  } = computeViewportModelExportCapabilities(source, format, includeAirbox);
 
   async function onExport() {
     if (!source || job.current || targets.length === 0) return;
@@ -90,29 +69,17 @@ export default function Viewport3DExportDialog({ getSource }: { getSource: () =>
     setError(null);
     setExporting(true);
     try {
-      const { export3DModel } = await import("@/shared/export-3d");
-      const result = await export3DModel({
-        targets: targets.map((target) => ({
-          ...target,
-          appearance: {
-            ...target.appearance,
-            includeVectors: includeVectors && target.field?.componentCount === 3,
-            includeSurface: target.appearance?.includeSurface || !target.appearance?.includeWireframe,
-          },
-        })),
-        options: {
-          format,
-          filename,
-          animationMode: animate && canAnimate ? "phase_cycle" : "static",
-          vtkIncludeVectorData: includeVectors,
-          colorMode: source.defaultColorMode,
-          colorPalette: source.defaultPalette,
-          provenance: { ...source.provenance, quantity_id: source.quantityId },
-          signal: controller.signal,
-        },
+      const result = await executeViewportModelExport({
+        animate,
+        filename,
+        format,
+        includeAirbox,
+        includeVectors,
+        signal: controller.signal,
+        source,
       });
       if (!controller.signal.aborted) {
-        downloadModel(result);
+        downloadExport3DModel(result);
         viewport3dStore.setExport3DDialogOpen(false);
       }
     } catch (cause) {
@@ -131,7 +98,7 @@ export default function Viewport3DExportDialog({ getSource }: { getSource: () =>
         <DialogHeader>
           <DialogTitle>Export 3D model</DialogTitle>
           <DialogDescription>
-            {source ? [source.sourceLabel, source.quantityId].filter((label, i, labels) => label && labels.indexOf(label) === i).join(" · ") : "Current 3D view"}
+            {formatViewportModelSourceSummary(source)}
           </DialogDescription>
         </DialogHeader>
         <div className="fm-export-3d-dialog__body">
@@ -142,7 +109,7 @@ export default function Viewport3DExportDialog({ getSource }: { getSource: () =>
                   <span className="fm-export-3d-dialog__label">Format</span>
                   <select className="fm-export-3d-dialog__input" value={format} disabled={exporting}
                     onChange={(event) => setFormat(event.currentTarget.value as Export3DFormat)}>
-                    {Object.entries(FORMATS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    {Object.entries(EXPORT_3D_FORMATS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                   </select>
                 </label>
                 <label className="fm-export-3d-dialog__field">
@@ -178,9 +145,7 @@ export default function Viewport3DExportDialog({ getSource }: { getSource: () =>
               ) : null}
               {!hasAirbox ? (
                 <p className="fm-export-3d-dialog__hint">Airbox geometry is unavailable.</p>
-              ) : includeAirbox && includeVectors && !targets.some((target) =>
-                target.role === "airbox" && target.field?.componentCount === 3,
-              ) ? (
+              ) : includeVectors && missingAirboxVectors ? (
                 <p className="fm-export-3d-dialog__hint">Airbox vector data is unavailable.</p>
               ) : null}
               {source.warnings.length ? (
