@@ -17,6 +17,7 @@ use std::ffi::CString;
 
 mod current_display;
 mod record;
+#[cfg(any(feature = "fem-native", feature = "fem-gpu"))]
 pub(crate) use current_display::decode_current_display;
 #[cfg(any(feature = "fem-native", feature = "fem-gpu"))]
 pub(crate) use current_display::AcceptedExternalLeadCurrentDisplay;
@@ -24,12 +25,15 @@ pub(crate) use current_display::AcceptedExternalLeadCurrentDisplay;
 pub(crate) use record::inspection_test_bundle;
 #[cfg(any(feature = "fem-native", feature = "fem-gpu"))]
 pub(crate) use record::validate_bundle_request;
-pub(crate) use record::{decode_owned_bundle, AcceptedExternalLeadBundle};
+pub(crate) use record::AcceptedExternalLeadBundle;
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
+pub(crate) use record::decode_owned_bundle;
 #[cfg(any(feature = "fem-native", feature = "fem-gpu"))]
 mod input;
 #[cfg(any(feature = "fem-native", feature = "fem-gpu"))]
 pub(crate) use input::with_materialized_external_lead_request;
 
+#[cfg(any(feature = "fem-native", feature = "fem-gpu"))]
 pub(crate) use fullmag_antenna_artifacts::bundle::{
     ExternalLeadBoundary, ExternalLeadBranch, ExternalLeadQuadraturePolicy, MAX_PAYLOAD_BYTES,
 };

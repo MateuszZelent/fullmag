@@ -251,56 +251,6 @@ impl FrequencyDomainSweepProgress {
         }
     }
 
-    pub(crate) fn completed(
-        total_frequency_points: u64,
-        completed_frequency_points: u64,
-        written_frequency_point_artifacts: u64,
-        current_frequency_hz: f64,
-        latest_artifact_manifest_path: &str,
-    ) -> Self {
-        #[cfg(feature = "fem-gpu")]
-        {
-            let mut progress = empty_ffi_sweep_progress();
-            let manifest_path = std::ffi::CString::new(latest_artifact_manifest_path)
-                .unwrap_or_else(|_| std::ffi::CString::new("").expect("empty CString is valid"));
-            let rc = unsafe {
-                ffi::fullmag_fem_frequency_domain_completed_sweep_progress(
-                    total_frequency_points,
-                    completed_frequency_points,
-                    written_frequency_point_artifacts,
-                    current_frequency_hz,
-                    manifest_path.as_ptr(),
-                    &mut progress,
-                )
-            };
-            if rc == ffi::FULLMAG_FEM_OK {
-                return Self::from_ffi(progress);
-            }
-        }
-
-        let partial_artifacts_available =
-            completed_frequency_points > 0 || written_frequency_point_artifacts > 0;
-        Self {
-            total_frequency_points,
-            completed_frequency_points,
-            written_frequency_point_artifacts,
-            current_frequency_hz,
-            partial_artifacts_available,
-            latest_artifact_manifest_path: latest_artifact_manifest_path.to_string(),
-            progress_json: Self::progress_json(
-                "completed",
-                Some("ready"),
-                Some(true),
-                total_frequency_points,
-                completed_frequency_points,
-                written_frequency_point_artifacts,
-                current_frequency_hz,
-                partial_artifacts_available,
-                latest_artifact_manifest_path,
-            ),
-        }
-    }
-
     fn not_started_fallback(total_frequency_points: u64) -> Self {
         Self {
             total_frequency_points,

@@ -33,7 +33,7 @@ use crate::router_v2::handlers::analysis::frequency_domain::{
 };
 use crate::router_v2::handlers::analysis::spin_wave_response::{
     dynamic_structure_factor_axis_indices, DynamicStructureFactorResource, SpinWaveGammaResource,
-    SpinWavePeakResource, MAX_DYNAMIC_STRUCTURE_FACTOR_CELLS,
+    MAX_DYNAMIC_STRUCTURE_FACTOR_CELLS,
 };
 use crate::schemas::hysteresis::HysteresisPointSchema;
 use crate::types::{AppState, StageExecutionRecord, StageLifecycleState};
@@ -2020,6 +2020,7 @@ fn hex_digit(byte: u8) -> Option<u8> {
     }
 }
 
+#[cfg(test)]
 fn field_sweep_item(
     run_id: &str,
     dataset_id: &str,
@@ -2141,6 +2142,7 @@ fn result_mesh_ref(
     })
 }
 
+#[cfg(test)]
 fn build_spectrum_v3_index(
     payload: FrequencyDomainSpectrumV3ArtifactPayload,
     source_digest: String,
@@ -3473,6 +3475,7 @@ fn build_dsf_projection(
     BTreeMap::from([(projection_id, projection)])
 }
 
+#[cfg(test)]
 fn spectrum_v3_item(
     run_id: &str,
     dataset_id: &str,
@@ -4246,28 +4249,6 @@ fn dataset_summary(dataset: &ResultDatasetIndex) -> AnalysisResultDatasetSummary
             .sample_index_resource
             .replace("/samples", ""),
     }
-}
-
-/// Read once, then derive both the decoded value and revision from those bytes.
-/// A pathname replaced between hash and decode must never pair two generations.
-pub(super) fn read_result_artifact_snapshot(
-    artifact_dir: &Path,
-    artifact_path: &str,
-) -> Result<Option<(Value, String)>, ApiError> {
-    let Some(path) = try_resolve_artifact_path(artifact_dir, artifact_path)? else {
-        return Ok(None);
-    };
-    let file = std::fs::File::open(path).map_err(|error| {
-        ApiError::internal(format!(
-            "failed to open result artifact '{artifact_path}': {error}"
-        ))
-    })?;
-    if !file.metadata()?.is_file() {
-        return Err(ApiError::internal(format!(
-            "RESULT_ARTIFACT_NOT_REGULAR: '{artifact_path}' must be a regular file"
-        )));
-    }
-    decode_result_artifact_snapshot(file, artifact_path, MAX_RESULT_ARTIFACT_BYTES).map(Some)
 }
 
 fn read_result_artifact_snapshot_with_identity_and_generation_fallback(
@@ -5361,6 +5342,7 @@ fn item_matches(
 mod tests {
     use super::*;
     use crate::router_v2::handlers::analysis::frequency_domain::FrequencyDomainArtifactExtras;
+    use crate::router_v2::handlers::analysis::spin_wave_response::SpinWavePeakResource;
 
     #[test]
     fn accepted_response_reader_tests_compact_sweep_projects_native_amplitude() {

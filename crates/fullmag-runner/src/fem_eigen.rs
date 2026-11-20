@@ -170,7 +170,7 @@ pub fn validate_recomputed_fem_linearization_certificate(
         return Err(reject("comparison evidence is incomplete or non-finite"));
     }
 
-    let mut validate_field_difference = |label: &str,
+    let validate_field_difference = |label: &str,
                                          recorded: f64,
                                          recomputed: Option<f64>,
                                          scale: f64|

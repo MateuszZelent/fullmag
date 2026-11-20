@@ -1,7 +1,4 @@
-mod worker_startup_gate;
-
-#[path = "compute_operator_env.rs"]
-mod compute_operator_env;
+use crate::worker_startup_gate;
 
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
@@ -44,7 +41,7 @@ struct LocalGpu {
     memory_free_bytes: u64,
 }
 
-fn main() {
+pub(super) fn main() {
     if let Err(error) = run() {
         eprintln!("scheduler resource pool publication failed: {error:#}");
         std::process::exit(1);

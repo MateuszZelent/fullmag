@@ -106,6 +106,7 @@ pub async fn patch_communication_policy(
     Ok(Json(resource))
 }
 
+#[cfg(test)]
 pub(crate) async fn publish_communication_policy_change_with_context(
     state: &Arc<AppState>,
     revision: u64,

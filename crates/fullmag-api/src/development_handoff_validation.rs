@@ -41,7 +41,6 @@ const MAX_VALIDATOR_REQUEST_BYTES: usize = MAX_SNAPSHOT_BYTES + 16 * 1024;
 const MAX_VALIDATOR_ACK_BYTES: usize = 16 * 1024;
 const VALIDATOR_REQUEST_SCHEMA: &str = "fullmag.development-cold-handoff-validation-request.v1";
 const VALIDATOR_ACK_SCHEMA: &str = "fullmag.development-cold-handoff-validation-ack.v1";
-const MAX_VALIDATOR_FILE_BYTES: usize = 256 * 1024 * 1024;
 const WINDOWS_MSVC_TARGET: &str = "x86_64-pc-windows-msvc";
 
 const BINARY_NAMES: [&str; 13] = [

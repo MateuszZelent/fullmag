@@ -202,7 +202,7 @@ impl LinuxWorkerCgroup {
             path: child_path,
             identity,
         };
-        let mut setup = SetupGuard::new(directory);
+        let setup = SetupGuard::new(directory);
 
         let result = (|| {
             setup.directory().ensure_exact_path()?;

@@ -1,5 +1,4 @@
-#[path = "accepted_fem_preparation_supervisor.rs"]
-mod accepted_fem_preparation_supervisor;
+use crate::accepted_fem_preparation_supervisor;
 
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
@@ -17,7 +16,7 @@ struct SupervisorArgs {
     heartbeat_interval: Duration,
 }
 
-fn main() {
+pub(super) fn main() {
     if let Err(error) = run() {
         eprintln!("accepted FEM preparation supervisor failed: {error:#}");
         std::process::exit(1);

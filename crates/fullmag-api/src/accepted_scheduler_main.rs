@@ -1,16 +1,7 @@
-mod scheduler_idle_backoff;
-mod scheduler_owner_control;
-mod worker_startup_gate;
-
-#[path = "accepted_study_supervisor.rs"]
-mod accepted_study_supervisor;
-#[path = "run_intent_persistence.rs"]
-mod run_intent_persistence;
-#[path = "schemas/output_storage.rs"]
-mod output_storage_schema;
-mod schemas {
-    pub(crate) use crate::output_storage_schema as output_storage;
-}
+use crate::{
+    accepted_study_supervisor, run_intent_persistence, scheduler_idle_backoff,
+    scheduler_owner_control, worker_startup_gate,
+};
 
 use anyhow::{bail, Context, Result};
 use fullmag_application::{ResourceBudget, ResourceKind, ResourceLease, RunId, RunSpecification};
@@ -251,7 +242,7 @@ impl From<&SchedulerResourceOffer> for FmsSchedulerResourceOffer {
     }
 }
 
-fn main() {
+pub(super) fn main() {
     if let Err(error) = run() {
         eprintln!("accepted task scheduler failed: {error:#}");
         std::process::exit(1);

@@ -36,9 +36,8 @@ pub(crate) mod frequency_response_lifecycle;
 #[path = "accepted_scalar_history.rs"]
 pub(crate) mod scalar_history;
 
-#[path = "accepted_worker_execution_receipt.rs"]
-mod accepted_worker_execution_receipt;
-use accepted_worker_execution_receipt::{
+use crate::accepted_worker_execution_receipt;
+use crate::accepted_worker_execution_receipt::{
     validate_reported_native_failure_started,
     worker_execution_identity_from_plan, WorkerExecutionReceiptIdentity,
     WorkerExecutionStartedReceipt, WORKER_EXECUTION_RECEIPT_SCHEMA,
@@ -2823,44 +2822,6 @@ pub(crate) fn accepted_runner_horizon(accepted_step: &AcceptedWorkerStep) -> Res
         bail!("accepted worker runner horizon is invalid");
     }
     Ok(until_seconds)
-}
-
-/// Execute the explicitly supported accepted-study lane after a durable Start
-/// has entered the worker inbox. This is a narrow adapter: unsupported request
-/// semantics, acceptance rules, or device overrides fail closed until they
-/// have dedicated bindings and qualification.
-pub(crate) fn execute_accepted_worker_start(
-    store: &SessionStore,
-    project_id: &fullmag_application::ProjectId,
-    start: &fullmag_application::WorkerCommandEnvelope,
-    accepted_step: &AcceptedWorkerStep,
-    case_id: &str,
-    interrupt_requested: Option<&AtomicBool>,
-) -> Result<AcceptedRunnerExecution> {
-    validate_accepted_worker_start_preconditions(store, start, accepted_step, case_id)?;
-
-    let snapshot_started_at = Instant::now();
-    let accepted = retry_store_writer_busy(|| {
-        fullmag_runtime_control::load_accepted_study_snapshot(
-            store,
-            &accepted_step.claim.run_id,
-            project_id,
-        )
-    })
-    .context("load immutable accepted study for worker execution")?;
-    eprintln!(
-        "accepted worker immutable study snapshot loaded (elapsed_ms={})",
-        snapshot_started_at.elapsed().as_millis()
-    );
-
-    execute_accepted_worker_start_with_snapshot(
-        store,
-        &accepted,
-        start,
-        accepted_step,
-        case_id,
-        interrupt_requested,
-    )
 }
 
 /// Execute a Start using the immutable accepted snapshot already validated by

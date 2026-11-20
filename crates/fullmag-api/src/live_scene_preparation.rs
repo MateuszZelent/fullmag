@@ -63,7 +63,6 @@ enum AcceptedPreparationPublicationMode {
     Active,
     ActiveObservation(AcceptedTaskAttemptIdentity),
     VerifiedOutput(AcceptedStageOutputIdentity),
-    TerminalObservation(crate::development_accepted_restore::AcceptedRunReattachIdentity),
     TerminalVerifiedOutput {
         reattach: crate::development_accepted_restore::AcceptedRunReattachIdentity,
         output: AcceptedStageOutputIdentity,
@@ -124,7 +123,7 @@ impl AcceptedPreparationPublicationMode {
                 attempt_id: identity.attempt_id.clone(),
                 ownership_epoch: identity.ownership_epoch,
             }),
-            Self::Active | Self::TerminalObservation(_) => None,
+            Self::Active => None,
         }
     }
 
@@ -133,7 +132,7 @@ impl AcceptedPreparationPublicationMode {
     }
 
     fn is_terminal_observation(&self) -> bool {
-        matches!(self, Self::TerminalObservation(_) | Self::TerminalVerifiedOutput { .. })
+        matches!(self, Self::TerminalVerifiedOutput { .. })
     }
 
     fn resolves_step_initial_state(&self) -> bool {
@@ -194,22 +193,6 @@ impl AcceptedPreparationPublicationFence {
                     return Err(ApiError::conflict_with_code(
                         "accepted_preparation_output_identity_invalid",
                         "verified output domain belongs to another current run",
-                    ));
-                }
-            }
-            AcceptedPreparationPublicationMode::TerminalObservation(identity) => {
-                let run = snapshot.run.as_ref().ok_or_else(|| ApiError::conflict(
-                    "terminal domain restoration requires an accepted run",
-                ))?;
-                let revision = snapshot.scene_document.as_ref().map(|scene| scene.revision);
-                if !matches!(run.status.as_str(), "completed" | "failed" | "cancelled")
-                    || !revision.is_some_and(|revision| identity.matches(
-                        &run.run_id, &snapshot.session.session_id, session_epoch, revision,
-                    ))
-                {
-                    return Err(ApiError::conflict_with_code(
-                        "accepted_terminal_domain_identity_mismatch",
-                        "terminal domain restoration requires the exact process-authenticated restored run",
                     ));
                 }
             }
@@ -1793,223 +1776,6 @@ pub(crate) async fn materialize_current_live_preparation(
     })
 }
 
-/// Prepare a Docker live scene directly from a command while the caller owns
-/// the current-live transition fence. This is the mesh/preparation branch of
-/// the command dispatcher: it commits the canonical receipt and publishes the
-/// same mesh/preparation read model consumed by the existing viewport. It does
-/// not create a RunIntent, queue a solver, or wake the legacy scratch worker.
-pub(crate) async fn prepare_current_live_scene_with_transition(
-    state: &Arc<AppState>,
-    context: &CurrentLiveRequestContext,
-    command_id: &str,
-    command_kind: &str,
-) -> Result<PublishedLiveScenePreparation, ApiError> {
-    let (
-        scene_document,
-        run_id,
-        requested_execution,
-        display_projection,
-        preparation_revision,
-        existing_preparation,
-    ) = {
-        let current = state.current_live_state.read().await;
-        let snapshot = current
-            .as_ref()
-            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        crate::ensure_current_live_request_context(
-            snapshot,
-            context,
-            state
-                .current_live_session_epoch
-                .load(std::sync::atomic::Ordering::Acquire),
-        )?;
-        let scene_document = snapshot
-            .scene_document
-            .clone()
-            .ok_or_else(|| ApiError::not_found("no scene document available for preparation"))?;
-        let requested_execution = RequestedExecution {
-            backend: scene_document.study.requested_backend.clone(),
-            device: scene_document.study.requested_device.clone(),
-            precision: scene_document.study.requested_precision.clone(),
-            mode: scene_document.study.requested_mode.clone(),
-            minimum_resources: None,
-        };
-        requested_execution
-            .validate()
-            .map_err(|error| ApiError::bad_request(error.to_string()))?;
-        let display_projection =
-            serde_json::to_value(&snapshot.display_selection).map_err(|error| {
-                ApiError::internal(format!("failed to encode display projection: {error}"))
-            })?;
-        let run_id = snapshot
-            .run
-            .as_ref()
-            .map(|run| run.run_id.clone())
-            .unwrap_or_else(|| snapshot.session.run_id.clone());
-        let preparation_revision = snapshot.simulation_preparation_revision.saturating_add(1);
-        let existing_preparation = snapshot.simulation_preparation.as_ref().map(|preparation| {
-            (
-                preparation.preparation_id.clone(),
-                preparation.started_at_unix_ms,
-            )
-        });
-        (
-            scene_document,
-            run_id,
-            requested_execution,
-            display_projection,
-            preparation_revision,
-            existing_preparation,
-        )
-    };
-
-    let preparation_id = format!(
-        "live-prep-{}",
-        fullmag_session::hex_sha256(
-            format!(
-                "{}\0{}\0{}\0{}\0{}",
-                state.request_scope_instance_id,
-                context.session_id,
-                context.session_epoch,
-                scene_document.revision,
-                command_id,
-            )
-            .as_bytes(),
-        )
-    );
-    let preparation_started_at_unix_ms = existing_preparation
-        .filter(|(existing_id, _)| existing_id == &preparation_id)
-        .map(|(_, started_at)| started_at)
-        .unwrap_or_else(|| {
-            u64::try_from(crate::session::unix_time_millis_now()).unwrap_or(u64::MAX)
-        });
-    let materialized = materialize_live_scene_preparation_model(LiveScenePreparationInput {
-        repo_root: state.repo_root.clone(),
-        workspace_root: state.current_workspace_root.clone(),
-        scene_document: scene_document.clone(),
-        preparation_id: preparation_id.clone(),
-        scene_revision: scene_document.revision,
-        requested_execution: requested_execution.clone(),
-        display_projection,
-    })
-    .await?;
-
-    let disposition = commit_live_preparation_receipt_for_context_under_transition(
-        state,
-        context,
-        materialized.receipt,
-        Some(scene_document.revision),
-        None,
-        Some(&run_id),
-    )
-    .await?;
-    let disposition = match disposition {
-        fullmag_session::PreparationReceiptCommitDisposition::Accepted => "accepted",
-        fullmag_session::PreparationReceiptCommitDisposition::Replayed => "replayed",
-    };
-    let plan_fingerprint = materialized.read_model.plan_fingerprint.clone();
-    let read_model = materialized.read_model;
-    let receipt_sha256 = materialized.binding.receipt_sha256;
-    let now = u64::try_from(crate::session::unix_time_millis_now()).unwrap_or(u64::MAX);
-    let execution_plan = serde_json::to_value(&read_model.execution_plan).map_err(|error| {
-        ApiError::internal(format!(
-            "failed to encode live preparation execution plan: {error}"
-        ))
-    })?;
-    let mesh_workspace = serde_json::json!({
-        "schema_version": LIVE_SCENE_PREPARATION_READ_MODEL_SCHEMA,
-        "preparation_id": &read_model.preparation_id,
-        "source_scene_revision": read_model.scene_revision,
-        "plan_fingerprint": &read_model.plan_fingerprint,
-        "status": "completed",
-        "active_build": null,
-        "last_build_error": null,
-        "execution_plan": execution_plan,
-        "mesh_pipeline_status": [{
-            "id": command_kind,
-            "status": "completed",
-            "detail": "canonical live scene preparation ready",
-        }],
-    });
-    let preparation = SimulationPreparationSnapshot {
-        preparation_id: preparation_id.clone(),
-        revision: preparation_revision,
-        status: "ready".into(),
-        active_stage_id: None,
-        started_at_unix_ms: preparation_started_at_unix_ms,
-        completed_at_unix_ms: Some(now),
-        stages: canonical_completed_preparation_stages(
-            now,
-            "canonical live preparation receipt committed",
-        ),
-        log_tail: vec![canonical_ready_preparation_log(
-            now,
-            "canonical live authored model preparation ready; Compute has not run",
-        )],
-        failure: None,
-    };
-    {
-        let mut current = state.current_live_state.write().await;
-        let snapshot = current
-            .as_mut()
-            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        crate::ensure_current_live_request_context(
-            snapshot,
-            context,
-            state
-                .current_live_session_epoch
-                .load(std::sync::atomic::Ordering::Acquire),
-        )?;
-        let (metadata, fem_mesh) = prepared_domain_publication(snapshot, &read_model)?;
-        let session_status = preparation_session_status(snapshot);
-        let mut prepared_snapshot = snapshot.clone();
-        crate::live_authored_damping::retire_for_prepared_domain(&mut prepared_snapshot);
-        crate::session::apply_current_live_snapshot(
-            &mut prepared_snapshot,
-            CurrentLiveSnapshotRequest {
-                session_id: context.session_id.clone(),
-                session: None,
-                session_status,
-                metadata: Some(metadata),
-                mesh_workspace: Some(mesh_workspace),
-                stage_execution: None,
-                simulation_preparation: Some(preparation),
-                run: None,
-                live_state: None,
-                frozen_spins_runtime_status: None,
-                coupled_checkpoint: None,
-                latest_scalar_row: None,
-                latest_fields: None,
-                replace_latest_fields: false,
-                field_generation: None,
-                preview_fields: None,
-                clear_preview_cache: false,
-                engine_log: None,
-                solver_profile: None,
-                fem_mesh,
-            },
-        )?;
-        publish_prepared_initial_state(&mut prepared_snapshot, &read_model, false)?;
-        *snapshot = prepared_snapshot;
-    }
-    if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
-        let display_revision = state.current_display_selection.read().await.revision;
-        let realtime_state =
-            crate::current_live_realtime_state_from_snapshot(state, &snapshot, display_revision)
-                .await;
-        crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0)
-            .await?;
-    }
-    Ok(PublishedLiveScenePreparation {
-        disposition,
-        preparation_id,
-        run_id,
-        plan_fingerprint,
-        receipt_sha256,
-        read_model,
-    })
-}
-
 /// Wait for the dependency-ready accepted Study frontier and publish its
 /// immutable preparation receipt into the existing live read model.
 ///
@@ -2449,32 +2215,6 @@ fn observe_accepted_preparation_failure(
     )
 }
 
-/// Publish preparation that was produced by the accepted task lane.
-///
-/// The accepted FEM preparer is the only component allowed to create native
-/// mesh/space evidence.  Consequently the live API cannot re-materialize a
-/// FEM receipt from the current scene after a RunIntent is accepted.  This
-/// bridge reads the immutable task receipt and the pinned execution plan,
-/// validates both through `AcceptedStudySnapshot`, and only then binds the
-/// receipt to the current-live read model.  FDM uses the same path when its
-/// accepted preparation receipt is already available, keeping the two lanes
-/// on one publication contract.
-/// The transition fence is held only while capturing the current publication
-/// identity and for the final CAS/commit. Durable snapshot, plan, and task
-/// receipt validation runs without the transition lock so large accepted
-/// catalogs cannot stall current-session resource reads.
-pub(crate) async fn publish_accepted_task_preparation(
-    state: &Arc<AppState>,
-    context: &CurrentLiveRequestContext,
-    run_id: &str,
-    step_id: &str,
-    command_kind: &str,
-) -> Result<PublishedLiveScenePreparation, ApiError> {
-    publish_accepted_task_preparation_with_mode(
-        state, context, run_id, step_id, command_kind, AcceptedPreparationPublicationMode::Active, None, None,
-    ).await
-}
-
 /// Publish a live stage domain only for the exact worker attempt whose
 /// observation header triggered the request.
 pub(crate) async fn publish_accepted_task_preparation_for_observation(
@@ -2533,25 +2273,6 @@ pub(crate) async fn publish_accepted_task_domain_for_output<'a>(
         Some(Box::new(install_verified_output)),
     )
     .await
-}
-
-/// Reconstruct only the domain read-model of an authenticated terminal restore.
-/// The immutable accepted plan and native preparation receipts are still fully
-/// checked; this path never schedules work or authorizes Start.
-pub(crate) async fn restore_terminal_task_domain(
-    state: &Arc<AppState>,
-    context: &CurrentLiveRequestContext,
-    run_id: &str,
-    step_id: &str,
-) -> Result<PublishedLiveScenePreparation, ApiError> {
-    let identity = state.accepted_run_reattach_identity.read().await.clone()
-        .ok_or_else(|| ApiError::conflict("terminal domain restore has no process-local authority"))?;
-    publish_accepted_task_preparation_with_mode(
-        state, context, run_id, step_id, "accepted_projection_stage_preparation",
-        AcceptedPreparationPublicationMode::TerminalObservation(identity),
-        None,
-        None,
-    ).await
 }
 
 /// Restore a terminal domain after API restart only with the process-local
@@ -2633,7 +2354,6 @@ async fn publish_accepted_task_preparation_with_mode(
                 AcceptedPreparationPublicationFence::capture(snapshot, context, session_epoch)?,
             AcceptedPreparationPublicationMode::ActiveObservation(_)
             | AcceptedPreparationPublicationMode::VerifiedOutput(_)
-            | AcceptedPreparationPublicationMode::TerminalObservation(_)
             | AcceptedPreparationPublicationMode::TerminalVerifiedOutput { .. } =>
                 AcceptedPreparationPublicationFence::capture_with_mode(
                     snapshot, context, session_epoch, mode.clone(),
@@ -3125,8 +2845,8 @@ async fn publish_accepted_task_preparation_with_mode(
             }
         }
         (
-            AcceptedPreparationPublicationMode::VerifiedOutput(identity)
-            | AcceptedPreparationPublicationMode::TerminalVerifiedOutput { output: identity, .. },
+            AcceptedPreparationPublicationMode::VerifiedOutput(_)
+            | AcceptedPreparationPublicationMode::TerminalVerifiedOutput { .. },
             Some(verified),
         ) => {
             Some(hold_verified_stage_output_fence_async(
@@ -4099,17 +3819,6 @@ pub(crate) async fn materialize_live_scene_preparation_model_with_fem_evidence(
     .map_err(|error| {
         ApiError::internal(format!("preparation materialization task failed: {error}"))
     })?
-}
-
-/// Legacy callers need only the durable receipt. Keep them on the same
-/// canonical adapter so they cannot create a second planning/materialization
-/// route.
-pub(crate) async fn materialize_live_scene_preparation(
-    input: LiveScenePreparationInput,
-) -> Result<PreparationReceipt, ApiError> {
-    Ok(materialize_live_scene_preparation_model(input)
-        .await?
-        .receipt)
 }
 
 fn validate_requested_device_binding(

@@ -948,7 +948,6 @@ fn planned_source_mesh_identity(plan: &FemFrequencyResponsePlanIR) -> Result<Sou
 fn published_source_mesh_identity(plan: &FemFrequencyResponsePlanIR) -> Result<SourceMeshIdentity, RunError> {
     let asset = crate::types::StageFemMeshAsset::build_from_fem_frequency_response_plan(plan);
     let topology_fingerprint = crate::types::fem_mesh_topology_fingerprint(&asset.payload);
-    let planned = planned_source_mesh_identity(plan)?;
     Ok(SourceMeshIdentity {
         mesh_generation_id: asset.identity.generation_id().to_string(),
         topology_fingerprint,
@@ -1171,8 +1170,8 @@ struct NativePoint {
     frequency_hz: f64,
     #[serde(default)]
     frequency_point_artifact_path: Option<String>,
-    #[serde(default)]
-    angular_frequency_rad_per_s: Option<f64>,
+    #[serde(default, rename = "angular_frequency_rad_per_s")]
+    _angular_frequency_rad_per_s: Option<f64>,
     #[serde(default)]
     response_amplitude: Option<f64>,
     #[serde(default)]
@@ -1213,12 +1212,12 @@ struct NativePoint {
     #[serde(default)]
     compatibility_binary_payload_path: Option<String>,
     // Dense values are explicitly ignored while still walking the JSON tree.
-    #[serde(default)]
-    m_complex: Option<StrictIgnoredAny>,
-    #[serde(default)]
-    component_response_amplitude: Option<StrictIgnoredAny>,
-    #[serde(default)]
-    component_response_phase: Option<StrictIgnoredAny>,
+    #[serde(default, rename = "m_complex")]
+    _m_complex: Option<StrictIgnoredAny>,
+    #[serde(default, rename = "component_response_amplitude")]
+    _component_response_amplitude: Option<StrictIgnoredAny>,
+    #[serde(default, rename = "component_response_phase")]
+    _component_response_phase: Option<StrictIgnoredAny>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
