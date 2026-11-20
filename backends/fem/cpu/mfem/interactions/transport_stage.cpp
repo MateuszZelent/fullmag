@@ -2,6 +2,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
+#include "fem_common.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -181,13 +182,42 @@ bool materialize_transport_stage_rhs(
 
 void add_transport_stage_rhs(
     const Context &ctx,
+    const std::vector<double> &m_xyz,
     std::vector<double> &rhs_xyz,
     double &max_rhs)
 {
-    const size_t count = std::min(rhs_xyz.size(), ctx.stage_transport.torque_xyz_per_s.size());
-    for (size_t index = 0; index < count; ++index) {
-        rhs_xyz[index] += ctx.stage_transport.torque_xyz_per_s[index];
-        max_rhs = std::max(max_rhs, std::abs(rhs_xyz[index]));
+    // The callback publishes the raw Gilbert-form source
+    // T_G = -gamma_e hbar / (2 e Ms) (R_J + R_phi). The explicit
+    // Landau-Lifshitz RHS needs (T_G + alpha m x T_G) / (1 + alpha^2), with
+    // the same local alpha and stage sample m as llg_rhs_aos (0970 §2.6.2a).
+    const auto &torque = ctx.stage_transport.torque_xyz_per_s;
+    const size_t count = std::min({rhs_xyz.size(), torque.size(), m_xyz.size()}) / 3u;
+    for (size_t node = 0; node < count; ++node) {
+        if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[node] == 0u) {
+            continue;
+        }
+        const size_t base = node * 3u;
+        const double alpha = scalar_field_value(
+            ctx.material_fields.alpha_field,
+            node,
+            ctx.material_fields.material.damping);
+        const double inverse_gilbert = 1.0 / (1.0 + alpha * alpha);
+        const double mx = m_xyz[base + 0u];
+        const double my = m_xyz[base + 1u];
+        const double mz = m_xyz[base + 2u];
+        const double tx = torque[base + 0u];
+        const double ty = torque[base + 1u];
+        const double tz = torque[base + 2u];
+        const double cross[3] = {
+            my * tz - mz * ty,
+            mz * tx - mx * tz,
+            mx * ty - my * tx,
+        };
+        const double source[3] = {tx, ty, tz};
+        for (size_t axis = 0; axis < 3u; ++axis) {
+            rhs_xyz[base + axis] += (source[axis] + alpha * cross[axis]) * inverse_gilbert;
+            max_rhs = std::max(max_rhs, std::abs(rhs_xyz[base + axis]));
+        }
     }
 }
 

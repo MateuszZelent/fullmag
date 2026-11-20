@@ -1,8 +1,9 @@
 //! Rust-side adapter for the native CPU reciprocal transport torque callback.
 //!
 //! The callback owns one full FEM M2 solve per exact RK stage.  It publishes
-//! the solver's direct Gilbert torque in 1/s; the native backend adds that
-//! vector to the LLG RHS and keeps the attempt transaction separate from the
+//! the solver's raw Gilbert-form torque source in 1/s; the native backend
+//! converts it once with the local damping before adding it to the LLG RHS
+//! (0970 §2.6.2a) and keeps the attempt transaction separate from the
 //! Oersted interaction.
 
 use super::stage_coupled::{StageM2CoupledProvider, FEM_STAGE_TRANSPORT_OERSTED_CALLBACK_POLICY};

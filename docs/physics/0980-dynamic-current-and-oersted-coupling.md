@@ -2210,7 +2210,8 @@ planner/runtime kończy się fail-closed. Kompletny one-way `external_lead` jest
 obsługiwany przez ten sam CPU callback, lecz bez publicznego managed artefaktu
 nie ma jeszcze statusu kwalifikacji. Ten callback zwraca wyłącznie `H_oe`;
 reciprocal torque korzysta z osobnej polityki transportowej albo wspólnej
-polityki M2/Oersted z §4.6.5 i jest bezpośrednim składnikiem RHS LLG.
+polityki M2/Oersted z §4.6.5; jego źródło Gilberta wchodzi do RHS LLG po
+konwersji z 0970 §2.6.2a.
 
 ### 4.6.4. Stage-time envelope dla one-way FEM/FDM CPU
 
@@ -2273,8 +2274,12 @@ każdego RHS provider kopiuje `m_stage` do requestu, ewaluje wspólny envelope
 na `t_stage`, skaluje różnice `charge_dirichlet` względem elektrody
 referencyjnej, a następnie wywołuje
 `solve_native_fem_steady_transport` z konstytutywnym modelem
-`ReciprocalM2`. Wynikowy `torque_xyz_per_s` jest kopiowany do ABI i dodawany
-do RHS LLG przez natywny integrator po standardowych składnikach LLG/STT/SOT.
+`ReciprocalM2`. Wynikowy `torque_xyz_per_s` jest surowym źródłem Gilberta
+$T_{\mathrm{tr},G}$ w $\mathrm{s^{-1}}$. Natywny integrator dodaje go do RHS
+LLG po standardowych składnikach LLG/STT/SOT dopiero po jednokrotnej
+konwersji Gilberta z lokalnym $\alpha_i$, zgodnie z
+`0970-spin-hall-drift-diffusion-transport.md` §2.6.2a
+(`fem-cpu-transport-gilbert-explicit-source`).
 
 Append-only ABI `fullmag_fem_backend_set_stage_transport_callback_v1` nie
 zmienia istniejących struktur FEM/Oersteda. `TransportStageRuntimeState`
