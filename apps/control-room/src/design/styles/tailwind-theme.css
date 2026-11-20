@@ -71,6 +71,7 @@
   --radius-fm-section: var(--fm-radius-section);
   --radius-fm-panel: var(--fm-radius-panel);
   --radius-fm-window: var(--fm-radius-window);
+  --radius-fm-pill: var(--fm-radius-pill);
   /* Shadows */
   --shadow-fm-overlay: var(--fm-shadow-elevated);
   --shadow-fm-sm: var(--fm-shadow-sm);
