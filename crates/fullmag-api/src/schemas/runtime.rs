@@ -198,6 +198,9 @@ impl From<&fullmag_runner::AntennaOperationProgress> for AntennaOperationProgres
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct StageExecutionRecordResource {
     pub stage_id: String,
+    /// Authored pipeline node owning this compiled execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authored_stage_id: Option<String>,
     /// Exact authored antenna definition ID, not the study node or runtime ID.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub antenna_solve_stage_id: Option<String>,

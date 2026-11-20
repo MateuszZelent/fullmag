@@ -1455,6 +1455,7 @@ fn build_stage_execution(
         )
         .then(|| "frequency_response".to_owned());
         let mut record = crate::session::accepted_stage_record(&step.step_id, kind, stage_status);
+        record.authored_stage_id = accepted.authored_stage_ids.get(&step.step_id).cloned();
         record.antenna_solve_stage_id = match &step.kind {
             fullmag_authoring::StudyStepKind::ClosedLoopInspection { stage_id, .. } => {
                 Some(stage_id.clone())
@@ -5737,6 +5738,31 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn accepted_projection_preserves_compiled_stage_owner() {
+        let (_directory, store, context, mut catalog) = preclaim_cancelled_fixture();
+        let mut accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+            &store,
+            &fullmag_application::RunId::parse(context.run_id).unwrap(),
+            &fullmag_application::ProjectId::parse("project-cancel").unwrap(),
+        ).unwrap();
+        let runtime_id = accepted.lowered.steps[0].step_id.clone();
+        accepted.authored_stage_ids.insert(runtime_id.clone(), "authored-node".into());
+        catalog.tasks.iter_mut().find(|task| {
+            task.task_id == fullmag_session::task_id_for_study_step(
+                accepted.run.specification.run_id.as_str(), &runtime_id,
+            ).unwrap()
+        }).unwrap().lifecycle = fullmag_session::FmsTaskLifecycle::Running;
+
+        let projected = build_stage_execution(
+            &accepted, &catalog.tasks, None, &[], &StageJournalDetailsCache::new(), "running",
+        ).unwrap();
+        assert_eq!(projected.active_stage_index, Some(0));
+        assert_eq!(projected.stages[0].stage_id.as_deref(), Some(runtime_id.as_str()));
+        assert_eq!(projected.stages[0].authored_stage_id.as_deref(), Some("authored-node"));
+        assert!(projected.stages[1].authored_stage_id.is_none());
     }
 
     #[test]

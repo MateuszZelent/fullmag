@@ -9,6 +9,7 @@ const paths = {
   adapter: "src/modules/explorer/builders/sceneModelTreeAdapter.ts",
   "@/kernel/selection/selectionTypes": "src/kernel/selection/selectionTypes.ts",
   "@/shared/domain/physics/torqueUnits": "src/shared/domain/physics/torqueUnits.ts",
+  "@/shared/domain/study/stageExecutionIdentity": "src/shared/domain/study/stageExecutionIdentity.ts",
   "@/shared/domain/study/studyStageSource": "src/shared/domain/study/studyStageSource.ts",
   "@/shared/domain/mesh/regionMeshLifecycle": "src/shared/domain/mesh/regionMeshLifecycle.ts",
   "@/kernel/visualization/visualizationDisplayResolution": "src/kernel/visualization/visualizationDisplayResolution.ts",

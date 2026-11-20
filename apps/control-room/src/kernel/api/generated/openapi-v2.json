@@ -45778,6 +45778,13 @@
             },
             "type": "array"
           },
+          "authored_stage_id": {
+            "description": "Authored pipeline node owning this compiled execution.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "checkpoint_ref": {
             "type": [
               "string",

@@ -2449,6 +2449,7 @@ StageExecutionRecordResource = TypedDict(
         'antenna_progress': 'Optional[AntennaOperationProgressResource]',
         'antenna_solve_stage_id': 'Optional[str]',
         'artifact_refs': 'List[str]',
+        'authored_stage_id': 'Optional[str]',
         'checkpoint_ref': 'Optional[str]',
         'command_id': 'Optional[str]',
         'completed_at_unix_ms': 'Optional[int]',

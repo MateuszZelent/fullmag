@@ -3872,6 +3872,43 @@ describe("buildModelTree", () => {
     ).toMatchObject({ label: "Run 2", status: "completed" });
   });
 
+  it("shows the running compiled execution on its authored study node", () => {
+    const scene = modelTreeSnapshotFromScene({
+      objects: [],
+      study: {
+        study_pipeline: {
+          nodes: [
+            { id: "setup", node_kind: "primitive", stage_kind: "table_autosave" },
+            { id: "prepare", node_kind: "primitive", stage_kind: "run" },
+          ],
+        },
+      },
+    });
+    const snapshot = modelTreeSnapshotWithStageExecution(scene, {
+      active_stage_index: 0,
+      completed_stage_indexes: [],
+      request_scope_epoch: "scope",
+      revision: 2,
+      run_id: "run",
+      runtime_state: "running",
+      session_epoch: "epoch",
+      session_id: "session",
+      stage_statuses: ["running"],
+      stages: [{
+        authored_stage_id: "prepare",
+        converged: false,
+        index: 0,
+        stage_id: "script-execution-preparation",
+        status: "running",
+      }],
+      total_stages: 1,
+    });
+
+    const rows = flattenExplorerNodes(buildModelTree(snapshot));
+    expect(rows.find((row) => row.id === "model:study:stages:stage:prepare")?.status).toBe("running");
+    expect(rows.find((row) => row.id === "model:study:stages:stage:setup")?.status).not.toBe("running");
+  });
+
   it("does not synthesize legacy electrical families when physics graph status is omitted", () => {
     const nodes = flattenExplorerNodes(buildModelTree());
 

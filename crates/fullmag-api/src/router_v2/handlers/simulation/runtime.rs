@@ -643,6 +643,7 @@ pub async fn get_stage_execution(
                         .stage_id
                         .clone()
                         .unwrap_or_else(|| stage_id_for_index(index)),
+                    authored_stage_id: record.authored_stage_id.clone(),
                     antenna_solve_stage_id: record.antenna_solve_stage_id.clone(),
                     antenna_inspection: None,
                     antenna_progress: record.antenna_progress.as_ref()
