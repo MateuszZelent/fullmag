@@ -133,6 +133,8 @@ export function WorkspaceDockLayout() {
   // A rail icon still opens a panel docked in a narrow window.
   const narrowRestore = useRef<{ left: boolean; right: boolean } | null>(null);
   useEffect(() => {
+    // Environments without media queries (jsdom, embedded hosts) keep the layout as is.
+    if (typeof window.matchMedia !== "function") return;
     const query = window.matchMedia("(max-width: 759px)");
     const apply = () => {
       const visibleNow = kernel.layout.get().panelVisible;
