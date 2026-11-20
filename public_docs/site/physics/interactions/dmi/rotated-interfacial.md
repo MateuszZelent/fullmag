@@ -125,6 +125,7 @@ has SI unit $\mathrm{J\,m^{-2}}$, and must be finite.
 |---|---|---|---|---|---|---|---|
 | `RotatedInterfacialDMI.D` | `float` | required | $\mathrm{J\,m^{-2}}$ | finite; positive, negative, and zero values are accepted | rDMI strength and chirality | FDM/FEM CPU/GPU subject to lane-specific scientific qualification | `energy_terms[].D` |
 
+````{only} latex
 ```python
 # %% Study and strict CUDA FDM lane
 import fullmag as fm
@@ -171,18 +172,21 @@ study.stages.add_relax(
 )
 study.stages.add_run(stage_id="hold", until=100e-12)
 ```
+````
 
 (rotated-interfacial-dmi-problem-ir)=
 ## ProblemIR
 
 The constructor lowers without conversion to another DMI variant:
 
+````{only} latex
 ```json
 {
   "kind": "rotated_interfacial_dmi",
   "D": 0.003
 }
 ```
+````
 
 The canonical Rust variant is `EnergyTermIR::RotatedInterfacialDmi { d }`.
 Only one rotated-interfacial term may be authored in a problem.
