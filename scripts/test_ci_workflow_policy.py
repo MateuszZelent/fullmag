@@ -61,6 +61,7 @@ class WorkflowPolicyTests(unittest.TestCase):
         events = workflow["on"]
         self.assertIn("pull_request", events)
         self.assertNotIn("paths", events["pull_request"])
+        self.assertIn("edited", events["pull_request"]["types"])
         self.assertEqual(workflow["permissions"], {"contents": "read"})
         self.assertIn("ci-required", workflow["concurrency"]["group"])
         self.assertIn("github.event.pull_request.number", workflow["concurrency"]["group"])
