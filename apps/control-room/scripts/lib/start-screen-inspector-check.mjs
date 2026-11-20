@@ -27,25 +27,25 @@ export async function loadInspectorMarkup() {
     server: { middlewareMode: true, hmr: false, watch: null },
     optimizeDeps: { noDiscovery: true, include: [] },
   });
-  const load = (path) => server.ssrLoadModule(path);
   // React stays a plain Node import, so the modules Vite loads share this instance.
-  const [
-    react,
-    { renderToStaticMarkup },
-    types,
-    { ProjectDetails },
-    { ScriptInspector },
-    { ResultInspector },
-    adapters,
-  ] = await Promise.all([
+  const [react, { renderToStaticMarkup }] = await Promise.all([
     import("react"),
     import("react-dom/server"),
-    load("/src/modules/start/model/workspaceApiTypes.ts"),
-    load("/src/modules/start/inspector/ProjectDetails.tsx"),
-    load("/src/modules/start/inspector/ScriptInspector.tsx"),
-    load("/src/modules/start/inspector/ResultInspector.tsx"),
-    load("/src/modules/start/model/workspaceApiAdapters.ts"),
   ]);
+
+  // These inspector modules can share dependencies in one Vite SSR runner.
+  // Finish each evaluation before starting the next to avoid partial exports.
+  const modules = [];
+  await visitSequentially([
+    "/src/modules/start/model/workspaceApiTypes.ts",
+    "/src/modules/start/inspector/ProjectDetails.tsx",
+    "/src/modules/start/inspector/ScriptInspector.tsx",
+    "/src/modules/start/inspector/ResultInspector.tsx",
+    "/src/modules/start/model/workspaceApiAdapters.ts",
+  ], async (path) => {
+    modules.push(await server.ssrLoadModule(path));
+  });
+  const [types, { ProjectDetails }, { ScriptInspector }, { ResultInspector }, adapters] = modules;
 
   const h = react.createElement;
   const render = (component, props) => renderToStaticMarkup(h(component, props));
