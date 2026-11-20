@@ -74,19 +74,23 @@ pub(crate) struct FdmSpinTransportResolutionContext<'a> {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct ActiveFdmTransportGraph {
+/// Physics-graph activation of spin transport and transport-torque modules.
+///
+/// Activation is a property of the authored physics graph, not of the
+/// discretization, so FDM and FEM planning share this single owner.
+pub(crate) struct ActiveTransportGraph {
     pub spin_module_ids: BTreeSet<String>,
     pub torque_module_ids: BTreeSet<String>,
     pub coupled_current_source_ids: BTreeSet<String>,
     pub has_active_torque_modules: bool,
 }
 
-pub(crate) fn resolve_active_fdm_transport_graph(
+pub(crate) fn resolve_active_transport_graph(
     problem: &ProblemIR,
-) -> Result<ActiveFdmTransportGraph, PlanError> {
-    let mut graph = ActiveFdmTransportGraph {
+) -> Result<ActiveTransportGraph, PlanError> {
+    let mut graph = ActiveTransportGraph {
         has_active_torque_modules: crate::spin_torque::has_active_spin_torque_modules(problem)?,
-        ..ActiveFdmTransportGraph::default()
+        ..ActiveTransportGraph::default()
     };
     let mut errors = Vec::new();
 
@@ -172,7 +176,7 @@ pub(crate) fn resolve_spin_transport(
     resolved_backend: BackendTarget,
     context: &FdmSpinTransportResolutionContext<'_>,
 ) -> Result<Vec<ResolvedSpinTransportPlanIR>, PlanError> {
-    let active_graph = resolve_active_fdm_transport_graph(problem)?;
+    let active_graph = resolve_active_transport_graph(problem)?;
     resolve_spin_transport_with_active_graph(problem, resolved_backend, context, &active_graph)
 }
 
@@ -180,7 +184,7 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
     context: &FdmSpinTransportResolutionContext<'_>,
-    active_graph: &ActiveFdmTransportGraph,
+    active_graph: &ActiveTransportGraph,
 ) -> Result<Vec<ResolvedSpinTransportPlanIR>, PlanError> {
     let mut plans = Vec::with_capacity(problem.spin_transport_modules.len());
     let mut errors = Vec::new();
@@ -1096,9 +1100,13 @@ pub(crate) fn resolve_m1_fem_spin_transport(
     saturation_magnetization_apm: f64,
     gamma0_m_per_a_s: f64,
 ) -> Result<Vec<ResolvedSpinTransportPlanIR>, PlanError> {
+    let active_graph = resolve_active_transport_graph(problem)?;
     let mut plans = Vec::with_capacity(problem.spin_transport_modules.len());
     let mut errors = Vec::new();
     for module in &problem.spin_transport_modules {
+        if !active_graph.spin_module_ids.contains(&module.id) {
+            continue;
+        }
         let prefix = format!("FEM spin transport '{}'", module.id);
         if module.boundaries.iter().any(|boundary| {
             matches!(boundary, SpinBoundaryIR::HomogeneousSpinPotentialGradient { .. })
@@ -1269,6 +1277,7 @@ pub(crate) fn resolve_m1_fem_spin_transport(
             gamma0_m_per_a_s,
             reciprocal,
             time_envelope,
+            &active_graph,
         );
         match descriptor {
             Ok(descriptor) => plans.push(ResolvedSpinTransportPlanIR {
@@ -1327,6 +1336,7 @@ fn materialize_fem_descriptor(
     gamma0_m_per_a_s: f64,
     reciprocal: bool,
     time_envelope: Option<&fullmag_ir::TimeEnvelopeIR>,
+    active_graph: &ActiveTransportGraph,
 ) -> Result<ResolvedFemSpinTransportIR, Vec<String>> {
     let prefix = format!("FEM spin transport '{}'", module.id);
     let charge_components = materialize_fem_charge_components(
@@ -1475,20 +1485,30 @@ fn materialize_fem_descriptor(
             SpinInterfaceIR::MixingConductance { .. } => None,
         })
         .collect();
-    let torque_target = problem
+    let matching_torques: Vec<_> = problem
         .spin_torque_modules
         .iter()
-        .find_map(|torque| match torque {
+        .filter_map(|torque| match torque {
             SpinTorqueModuleIR::DriftDiffusionSpinTorque {
                 id,
                 solve_id,
                 target,
                 formula_version,
                 ..
-            } if solve_id == &module.id => Some((id, target, formula_version)),
+            } if solve_id == &module.id && active_graph.torque_module_ids.contains(id) => {
+                Some((id, target, formula_version))
+            }
             _ => None,
-        });
-    let torque_target = torque_target
+        })
+        .collect();
+    if matching_torques.len() > 1 {
+        return Err(vec![format!(
+            "{prefix} has more than one active DriftDiffusionSpinTorque consumer"
+        )]);
+    }
+    let torque_target = matching_torques
+        .into_iter()
+        .next()
         .map(|(id, target, formula_version)| -> Result<_, Vec<String>> {
             Ok(fullmag_ir::ResolvedFemTorqueTargetIR {
                 torque_module_id: id.clone(),
@@ -2646,7 +2666,7 @@ fn materialize_fdm_descriptor(
     charge: &fullmag_ir::ChargeTransportDefinitionIR,
     context: &FdmSpinTransportResolutionContext<'_>,
     time_envelope: Option<&fullmag_ir::TimeEnvelopeIR>,
-    active_graph: &ActiveFdmTransportGraph,
+    active_graph: &ActiveTransportGraph,
 ) -> Result<ResolvedFdmSpinTransportIR, Vec<String>> {
     if charge.external_lead_preparation.is_some() {
         return Err(vec![format!("spin transport '{}' external_lead_preparation requires execution-only materialization; no FDM fallback", module.id)]);
@@ -5989,6 +6009,54 @@ mod tests {
         assert_eq!(
             descriptor.validation_scope,
             "fem_cpu_double_conforming_h1_p1_reciprocal_m2"
+        );
+    }
+
+    #[test]
+    fn fem_planning_omits_spin_transport_inactive_in_physics_graph() {
+        let (mesh, segments, parts) = fem_mesh_fixture();
+        let mut problem = fem_problem();
+        problem.backend_policy.requested_backend = BackendTarget::Fem;
+        problem.spin_transport_modules[0]
+            .requested_execution
+            .discretization = BackendTarget::Fem;
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 1,
+            "modules": [
+                {
+                    "id": "charge",
+                    "kind": "current_transport",
+                    "applies_to": [{"kind": "global"}],
+                    "solve_domain": [],
+                    "depends_on": [],
+                    "activation": "active"
+                },
+                {
+                    "id": "spin",
+                    "kind": "spin_transport",
+                    "applies_to": [{"kind": "global"}],
+                    "solve_domain": [],
+                    "depends_on": [],
+                    "activation": "inactive"
+                }
+            ],
+            "edges": []
+        }));
+
+        let plans = resolve_m1_fem_spin_transport(
+            &problem,
+            &mesh,
+            &segments,
+            &parts,
+            &[[0.0, 0.0, 1.0]; 8],
+            8.0e5,
+            2.211e5,
+        )
+        .expect("an inactive FEM spin transport is omitted, not rejected");
+        assert!(
+            plans.is_empty(),
+            "physics_graph activation must gate FEM spin transport exactly as on FDM"
         );
     }
 
