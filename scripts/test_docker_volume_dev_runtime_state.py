@@ -148,7 +148,7 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
         self.assertIn('"invalid_solver_profile"', script)
         self.assertIn('"accepted_solver_profile_unsupported"', script)
 
-    def test_restart_probe_authenticates_cuda_trace_refusal_marker_at_runtime(self):
+    def test_restart_probe_authenticates_rejection_markers_with_cuda_trace(self):
         request_id = "cuda-trace-refusal"
         source_sha256 = "b" * 64
         relative = "examples/sp4.py"
@@ -269,7 +269,12 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
                 self.assertEqual(accepted["solver_profile_sha256"], profile_sha256)
                 self.assertEqual(accepted["cuda_trace_sha256"], expected_trace_sha256)
 
-            for code in ("accepted_script_capture_invalid", "accepted_script_capture_required", "accepted_script_compilation_failed"):
+            for code in (
+                "accepted_script_capture_invalid",
+                "accepted_script_capture_required",
+                "accepted_script_compilation_failed",
+                "accepted_frequency_response_unsupported",
+            ):
                 marker["result"]["rejection"]["code"] = code
                 marker_path.write_text(json.dumps(marker), encoding="utf-8")
                 accepted = namespace["rejected_startup_marker"](status, (session_id, 1, 1))

@@ -271,6 +271,7 @@ struct DurableProjection {
     artifact_catalog_revision: Option<u64>,
     terminal_without_outputs: bool,
     status: &'static str,
+    frequency_response_root: Option<std::path::PathBuf>,
     accepted_runtime_capabilities: Option<fullmag_runner::BackendCapabilities>,
     accepted_runtime_mode: Option<fullmag_ir::ExecutionMode>,
     accepted_runtime_problem: Option<fullmag_ir::ProblemIR>,
@@ -1007,6 +1008,14 @@ fn load_durable_projection_with_journal(
         // or rebuild the read model until a durable or live sequence changes.
         return Ok(None);
     }
+    let frequency_response_root = if durable_changed && terminal_status {
+        artifact_catalog.as_ref().map(|catalog|
+            completed_frequency_response_root(&store, context, &run_catalog, catalog,
+                specification.requested_execution.minimum_resources.as_ref().map(|reserve| reserve.memory_bytes))
+        ).transpose()?.flatten()
+    } else {
+        None
+    };
     let verified = {
         let _elapsed = ProjectionPhaseTimer::new("verified_outputs");
         if durable_changed {
@@ -1189,6 +1198,7 @@ fn load_durable_projection_with_journal(
         artifact_catalog_revision,
         terminal_without_outputs,
         status,
+        frequency_response_root,
         accepted_runtime_capabilities: None,
         accepted_runtime_mode: None,
         accepted_runtime_problem,
@@ -1437,11 +1447,14 @@ fn build_stage_execution(
                 crate::types::StageLifecycleState::Pending
             }
         };
-        let mut record = crate::session::accepted_stage_record(
-            &step.step_id,
-            None,
-            stage_status,
-        );
+        let kind = matches!(
+            &step.kind,
+            fullmag_authoring::StudyStepKind::Primitive {
+                stage_kind: fullmag_authoring::StudyPrimitiveStageKind::FrequencyResponse,
+            }
+        )
+        .then(|| "frequency_response".to_owned());
+        let mut record = crate::session::accepted_stage_record(&step.step_id, kind, stage_status);
         record.antenna_solve_stage_id = match &step.kind {
             fullmag_authoring::StudyStepKind::ClosedLoopInspection { stage_id, .. } => {
                 Some(stage_id.clone())
@@ -2424,6 +2437,198 @@ fn projected_status_for_gate(catalog_status: &'static str, start_permitted: bool
     catalog_status
 }
 
+pub(crate) struct AcceptedFrequencyProgressView {
+    pub status: String,
+    pub total_frequency_count: u64,
+    pub completed_frequency_count: u64,
+    pub current_frequency_hz: Option<f64>,
+    pub frequency_index: Option<u64>,
+    pub iteration: Option<u64>,
+    pub relative_residual_l2_norm: Option<f64>,
+}
+
+pub(crate) async fn read_current_accepted_frequency_progress(
+    state: &Arc<AppState>,
+) -> Result<Option<AcceptedFrequencyProgressView>, ApiError> {
+    let Some(store_root) = state.submit_store_root.clone() else { return Ok(None); };
+    let request_context = crate::capture_current_live_request_context(state).await?;
+    let (run_id, step_id) = {
+        let current = state.current_live_state.read().await;
+        let Some(snapshot) = current.as_ref() else { return Ok(None); };
+        let Some(run) = snapshot.run.as_ref().filter(|run| run.run_id.starts_with("run-live-")) else { return Ok(None); };
+        let Some(stage) = snapshot.stage_execution.as_ref().and_then(|execution| execution.stages.iter()
+            .find(|stage| stage.kind.as_deref() == Some("frequency_response"))) else { return Ok(None); };
+        let Some(step_id) = stage.stage_id.clone() else { return Ok(None); };
+        (run.run_id.clone(), step_id)
+    };
+    let expected_run = run_id.clone();
+    let progress = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        use fullmag_session::FmsTaskLifecycle as Lifecycle;
+        let store = fullmag_session::SessionStore::open_existing(&store_root)?;
+        let task_id = fullmag_session::task_id_for_study_step(&run_id, &step_id)?;
+        let Some(catalog) = store.read_run_catalog(&run_id)? else { return Ok(None); };
+        let Some(task) = catalog.tasks.iter().find(|task| task.task_id == task_id) else { return Ok(None); };
+        let Some((attempt, epoch)) = task.attempt_id.as_deref().zip(task.ownership_epoch) else { return Ok(None); };
+        let status = match task.lifecycle {
+            Lifecycle::Running => "running",
+            Lifecycle::Stopping => "stopping",
+            Lifecycle::Cancelled => "cancelled",
+            Lifecycle::Failed | Lifecycle::Interrupted => "failed",
+            // Completion is served from the immutable published generation.
+            _ => return Ok(None),
+        };
+        let frame = crate::accepted_study_worker::frequency_response_lifecycle::read_progress(
+            &store_root, &run_id, &task_id, &step_id, attempt, epoch,
+        )?;
+        Ok(frame.map(|frame| {
+            let metric = |key| frame.metrics.get(key).copied();
+            AcceptedFrequencyProgressView {
+                status: status.into(), total_frequency_count: frame.frequency_count,
+                completed_frequency_count: metric("completed_frequency_count").unwrap_or(0.0) as u64,
+                current_frequency_hz: metric("frequency_hz"),
+                frequency_index: metric("frequency_index").map(|v| v as u64),
+                iteration: metric("iteration").map(|v| v as u64),
+                relative_residual_l2_norm: metric("relative_residual_l2_norm"),
+            }
+        }))
+    }).await.map_err(|error| ApiError::internal(format!("response progress reader panicked: {error}")))?
+        .map_err(|error| ApiError::conflict(format!("invalid accepted response progress: {error:#}")))?;
+    crate::validate_current_live_request_context(state, &request_context).await?;
+    let current = state.current_live_state.read().await;
+    if current.as_ref().and_then(|snapshot| snapshot.run.as_ref())
+        .is_none_or(|run| run.run_id != expected_run)
+    { return Err(ApiError::conflict("current run changed while reading response progress")); }
+    Ok(progress)
+}
+
+fn completed_frequency_response_root(
+    store: &fullmag_session::SessionStore,
+    context: &ProjectionContext,
+    run: &fullmag_session::FmsRunCatalog,
+    catalog: &fullmag_session::FmsArtifactCatalog,
+    memory_reserve: Option<u64>,
+) -> Result<Option<std::path::PathBuf>, ApiError> {
+    let result = (|| -> anyhow::Result<_> {
+        use anyhow::{bail, Context};
+        use fullmag_session::{FmsArtifactStatus, FmsTaskLifecycle};
+        let mut root = None;
+        for task in run.tasks.iter().filter(|task| task.lifecycle == FmsTaskLifecycle::Succeeded) {
+            let Some((attempt_id, epoch)) = task.attempt_id.as_deref().zip(task.ownership_epoch) else {
+                continue;
+            };
+            for entry in &catalog.entries {
+                let Some(output) = &entry.study_output else { continue; };
+                if output.port_id != "response" || entry.status != FmsArtifactStatus::Published
+                    || entry.task_id != task.task_id || entry.attempt_id != attempt_id
+                    || entry.ownership_epoch != epoch || !task.artifact_ids.contains(&entry.artifact_id)
+                { continue; }
+                if root.is_some() { bail!("multiple accepted response index owners"); }
+                let hash = entry.object_ref.as_deref().filter(|hash| *hash == entry.content_sha256)
+                    .context("response index has no exact CAS pin")?;
+                let bytes = store.cas().get_bounded(hash, fullmag_application::FREQUENCY_RESPONSE_BUNDLE_MAX_BYTES as u64)?
+                    .context("response index is absent from CAS")?;
+                let bundle = fullmag_application::decode_frequency_response_index_bundle(
+                    &bytes, fullmag_application::FREQUENCY_RESPONSE_BUNDLE_MAX_BYTES,
+                )?;
+                let owner = &bundle.manifest().identity;
+                if owner.session_id != context.session_id || owner.run_id != run.run_id
+                    || owner.task_id != task.task_id || owner.stage_id != output.step_id
+                    || owner.attempt_id != attempt_id || owner.ownership_epoch != epoch
+                    || owner.case_id != output.case_id
+                { bail!("response index identifies a different accepted attempt"); }
+                let expected: fullmag_runner::artifact_generation::GenerationCommit =
+                    serde_json::from_value(bundle.manifest().native_metadata.get("generation")
+                        .cloned().context("response index generation missing")?)?;
+                let path = crate::accepted_study_worker::frequency_response_lifecycle::published_root(
+                    store, &run.run_id, task,
+                )?;
+                let expected_owner = fullmag_runner::artifact_generation::PublicationOwner {
+                    run_id: run.run_id.clone(), stage_id: output.step_id.clone(), stage_kind: "frequency_response".into(),
+                };
+                if expected.content.producer.as_ref() != Some(&expected_owner)
+                    || expected.content.schema_version != fullmag_session::frequency_domain_artifact_generation::IMMUTABLE_SCHEMA
+                    || fullmag_session::frequency_domain_artifact_generation::generation_id(&expected.content)? != expected.generation_id
+                { bail!("response index has a different generation owner"); }
+                if let Some(capture) = fullmag_runner::artifact_generation::capture(&path)? {
+                    if capture.commit != expected { bail!("published response generation differs from CAS"); }
+                } else {
+                    restore_completed_frequency_response_root(store, task, catalog, &bundle, &expected,
+                        &path, memory_reserve.context("response restoration has no admitted RAM reserve")?)?;
+                }
+                root = Some(path);
+            }
+        }
+        Ok(root)
+    })();
+    result.map_err(|error| ApiError::conflict(format!("invalid accepted frequency response: {error:#}")))
+}
+
+fn restore_completed_frequency_response_root(
+    store: &fullmag_session::SessionStore,
+    task: &fullmag_session::FmsTaskCatalogEntry,
+    catalog: &fullmag_session::FmsArtifactCatalog,
+    index: &fullmag_application::FrequencyResponseBundle,
+    generation: &fullmag_runner::artifact_generation::GenerationCommit,
+    destination: &std::path::Path,
+    memory_reserve: u64,
+) -> anyhow::Result<()> {
+    use anyhow::{bail, Context};
+    use fullmag_application::FREQUENCY_RESPONSE_BUNDLE_MAX_BYTES as MAX_BUNDLE;
+    let maximum = memory_reserve / 8;
+    let member_bytes = generation.content.members.values()
+        .try_fold(0_u64, |total, member| total.checked_add(member.byte_length))
+        .context("response restoration byte count overflow")?;
+    if member_bytes > maximum || index.byte_length() as u64 > maximum {
+        bail!("response restoration requires more than its admitted RAM reserve");
+    }
+    let owner = &index.manifest().identity;
+    let mut files = std::collections::BTreeMap::new();
+    let mut retain = |bundle: &fullmag_application::FrequencyResponseBundle| -> anyhow::Result<()> {
+        for (path, bytes) in bundle.payloads() {
+            let expected = generation.content.members.get(path).context("unexpected response member")?;
+            if expected.byte_length != bytes.len() as u64
+                || expected.sha256 != fullmag_session::frequency_domain_artifact_generation::digest(bytes)
+                || files.insert(path.clone(), bytes.clone()).is_some()
+            { bail!("response member differs from the pinned generation"); }
+        }
+        Ok(())
+    };
+    retain(index)?;
+    let mut framed_bytes = index.byte_length() as u64;
+    for point in &index.manifest().points {
+        let mut entries = catalog.entries.iter().filter(|entry| {
+            entry.task_id == owner.task_id && entry.attempt_id == owner.attempt_id
+                && entry.ownership_epoch == owner.ownership_epoch
+                && entry.status == fullmag_session::FmsArtifactStatus::Published
+                && task.artifact_ids.contains(&entry.artifact_id)
+                && entry.study_output.as_ref().is_some_and(|output| output.port_id == point.port_id
+                    && output.step_id == owner.stage_id && output.case_id == owner.case_id)
+        });
+        let entry = entries.next().context("frequency point is missing from the accepted catalog")?;
+        if entries.next().is_some() || entry.object_ref.as_deref() != Some(point.bundle_sha256.as_str())
+            || entry.content_sha256 != point.bundle_sha256
+        { bail!("frequency point does not have one exact CAS pin"); }
+        let bytes = store.cas().get_bounded(&point.bundle_sha256, (MAX_BUNDLE as u64).min(maximum.saturating_sub(framed_bytes)))?
+            .context("frequency point is absent from CAS")?;
+        let bundle = fullmag_application::decode_frequency_response_point_bundle(&bytes, MAX_BUNDLE)?;
+        let record = bundle.manifest().point.as_ref().context("frequency point metadata missing")?;
+        if &bundle.manifest().identity != owner || bundle.manifest().frequency_count != index.manifest().frequency_count
+            || record.index != point.index || record.port_id != point.port_id
+            || record.frequency_hz.to_bits() != point.frequency_hz.to_bits()
+        { bail!("frequency point differs from its accepted index"); }
+        framed_bytes = framed_bytes.checked_add(bytes.len() as u64).context("response frame length overflow")?;
+        retain(&bundle)?;
+    }
+    if files.len() != generation.content.members.len() {
+        bail!("response restoration closure is incomplete");
+    }
+    let actual = fullmag_runner::artifact_generation::publish_immutable(
+        destination, generation.content.producer.clone(), files,
+    )?;
+    if &actual != generation { bail!("restored response generation changed identity"); }
+    Ok(())
+}
+
 fn load_verified_outputs(
     store: &fullmag_session::SessionStore,
     run_catalog: &fullmag_session::FmsRunCatalog,
@@ -2513,6 +2718,14 @@ fn load_verified_outputs(
                 .object_ref
                 .clone()
                 .ok_or_else(|| ApiError::conflict("accepted output has no CAS reference"))?;
+            if matches!(output.codec_id.as_str(),
+                fullmag_application::FREQUENCY_RESPONSE_INDEX_CODEC_ID
+                    | fullmag_application::FREQUENCY_RESPONSE_POINT_CODEC_ID)
+            {
+                // Dense analysis fields are served from the verified artifact
+                // generation, never decoded into the scalar/state projection.
+                continue;
+            }
             let bytes = store
                 .cas()
                 .get(&object_ref)
@@ -3461,6 +3674,13 @@ async fn apply_projection(
     let mut changed = profile_changed;
     let mut scalar_sample_advanced = false;
     if let Some(run) = next.run.as_mut() {
+        if let Some(root) = &projection.frequency_response_root {
+            let root = root.to_str().ok_or_else(|| ApiError::conflict("non-UTF8 response artifact root"))?;
+            if run.artifact_dir != root {
+                run.artifact_dir = root.to_owned();
+                changed = true;
+            }
+        }
         if run.status != projection.status {
             run.status = projection.status.to_string();
             changed = true;
@@ -4400,6 +4620,7 @@ mod tests {
             &["step:run", "step:run-2", "step:run-3"],
             false,
             serial_completion_chain,
+            "run-cancel",
         );
         let task = &mut catalog.tasks[0];
         task.lifecycle = fullmag_session::FmsTaskLifecycle::Failed;
@@ -4492,7 +4713,7 @@ mod tests {
     fn accepted_projection_fixture(
         authored: Option<&fullmag_authoring::SceneDocument>, step_ids: &[&str], cancel: bool,
     ) -> (tempfile::TempDir, fullmag_session::SessionStore, ProjectionContext, fullmag_session::FmsRunCatalog) {
-        accepted_projection_fixture_with_chain(authored, step_ids, cancel, false)
+        accepted_projection_fixture_with_chain(authored, step_ids, cancel, false, "run-cancel")
     }
 
     fn accepted_projection_fixture_with_chain(
@@ -4500,6 +4721,7 @@ mod tests {
         step_ids: &[&str],
         cancel: bool,
         serial_completion_chain: bool,
+        run_id: &str,
     ) -> (
         tempfile::TempDir,
         fullmag_session::SessionStore,
@@ -4570,7 +4792,7 @@ mod tests {
             StudyProblemCatalogEntry::from_step(step, problem)
         }).collect()).unwrap();
         let context = ProjectionContext {
-            session_id: "session-cancel".into(), run_id: "run-cancel".into(), session_epoch: 4,
+            session_id: "session-cancel".into(), run_id: run_id.into(), session_epoch: 4,
             scene_revision: authored.map_or(9, |scene| scene.revision),
             execution_input: authored.map(|scene| crate::live_execution_binding::input_identity(scene).unwrap()),
             api_instance_id: "api-cancel".into(),
@@ -5375,6 +5597,146 @@ mod tests {
         let result = load_durable_projection_with_journal(store.root(), &context, None, &mut None,
             &mut |_, _, _| panic!("optional reader cannot run without the mandatory core fence"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepted_frequency_response_stage_is_visible_to_progress_reader() {
+        use crate::types::StageLifecycleState;
+        use fullmag_authoring::{StudyPrimitiveStageKind, StudyStepKind};
+        use fullmag_session::FmsTaskLifecycle;
+
+        let (_directory, store, context, mut catalog) = preclaim_cancelled_fixture();
+        let mut accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+            &store,
+            &fullmag_application::RunId::parse(context.run_id).unwrap(),
+            &fullmag_application::ProjectId::parse("project-cancel").unwrap(),
+        )
+        .unwrap();
+        let step = &mut accepted.lowered.steps[0];
+        step.kind = StudyStepKind::Primitive {
+            stage_kind: StudyPrimitiveStageKind::FrequencyResponse,
+        };
+        let step_id = step.step_id.clone();
+        let task_id = fullmag_session::task_id_for_study_step(&catalog.run_id, &step_id).unwrap();
+        let task_index = catalog
+            .tasks
+            .iter()
+            .position(|task| task.task_id == task_id)
+            .unwrap();
+
+        for (task_status, run_status, expected) in [
+            (
+                FmsTaskLifecycle::Running,
+                "running",
+                StageLifecycleState::Running,
+            ),
+            (
+                FmsTaskLifecycle::Cancelled,
+                "cancelled",
+                StageLifecycleState::Cancelled,
+            ),
+        ] {
+            catalog.tasks[task_index].lifecycle = task_status;
+            let execution = build_stage_execution(
+                &accepted,
+                &catalog.tasks,
+                None,
+                &[],
+                &StageJournalDetailsCache::new(),
+                run_status,
+            )
+            .unwrap();
+            let response = execution
+                .stages
+                .iter()
+                .find(|stage| stage.kind.as_deref() == Some("frequency_response"))
+                .expect("frequency response must match the public progress reader");
+            assert_eq!(response.stage_id.as_deref(), Some(step_id.as_str()));
+            assert_eq!(response.status, expected);
+            assert_eq!(execution.stages.len(), 2);
+            assert_eq!(execution.stages[1].kind, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn accepted_frequency_progress_reads_current_attempt_with_bootstrap_artifact_dir() {
+        use crate::accepted_study_worker::frequency_response_lifecycle::PROGRESS_FILE;
+        use crate::types::StageLifecycleState;
+        use fullmag_session::FmsTaskLifecycle;
+
+        let step_id = "step-response";
+        let run_id = "run-live-response-progress";
+        let (_directory, store, context, mut catalog) =
+            accepted_projection_fixture_with_chain(None, &[step_id], false, false, run_id);
+        let task_id = catalog.tasks[0].task_id.clone();
+        catalog.tasks[0].attempt_id = Some("attempt-response".into());
+        catalog.tasks[0].ownership_epoch = Some(2);
+        let attempt_dir = store.root().join(format!(
+            "runs/{run_id}/worker-attempts/{task_id}/attempt-response/epoch-2"
+        ));
+        std::fs::create_dir_all(&attempt_dir).unwrap();
+        let frame_path = attempt_dir.join(PROGRESS_FILE);
+        let mut frame = json!({
+            "schema_version": "fullmag.accepted_frequency_response_progress.v1",
+            "run_id": run_id, "task_id": task_id, "step_id": step_id,
+            "attempt_id": "attempt-response", "ownership_epoch": 2,
+            "sequence": 1, "frequency_count": 64, "metrics": {
+                "completed_frequency_count": 5.0, "total_frequency_count": 64.0,
+                "frequency_index": 5.0, "frequency_hz": 2e9,
+                "iteration": 12.0, "relative_residual_l2_norm": 0.125
+            }
+        });
+        std::fs::write(&frame_path, serde_json::to_vec(&frame).unwrap()).unwrap();
+
+        let mut state = projection_workspace(&context).await;
+        Arc::get_mut(&mut state).unwrap().submit_store_root = Some(store.root().to_owned());
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            snapshot.run.as_mut().unwrap().artifact_dir =
+                "/opt/fullmag/runtime-control/local-live/current/runs/run-docker-startup-test"
+                    .into();
+            let stage = crate::session::accepted_stage_record(
+                step_id,
+                Some("frequency_response".into()),
+                StageLifecycleState::Running,
+            );
+            snapshot.stage_execution = Some(crate::session::accepted_stage_execution_state(
+                vec![stage],
+                crate::session::accepted_runtime_lifecycle_state("running"),
+            ));
+        }
+
+        for (lifecycle, expected) in [
+            (FmsTaskLifecycle::Running, "running"),
+            (FmsTaskLifecycle::Cancelled, "cancelled"),
+        ] {
+            catalog.tasks[0].lifecycle = lifecycle;
+            catalog.revision += 1;
+            store.commit_run_catalog(&catalog).unwrap();
+            let progress = read_current_accepted_frequency_progress(&state)
+                .await
+                .unwrap()
+                .expect("bootstrap artifact path must preserve accepted progress");
+            assert_eq!(progress.status, expected);
+            assert_eq!(progress.total_frequency_count, 64);
+            assert_eq!(progress.completed_frequency_count, 5);
+            assert_eq!(progress.current_frequency_hz, Some(2e9));
+        }
+
+        frame["attempt_id"] = json!("attempt-stale");
+        std::fs::write(&frame_path, serde_json::to_vec(&frame).unwrap()).unwrap();
+        assert!(read_current_accepted_frequency_progress(&state)
+            .await
+            .is_err());
+
+        catalog.tasks[0].lifecycle = FmsTaskLifecycle::Succeeded;
+        catalog.revision += 1;
+        store.commit_run_catalog(&catalog).unwrap();
+        assert!(read_current_accepted_frequency_progress(&state)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[test]

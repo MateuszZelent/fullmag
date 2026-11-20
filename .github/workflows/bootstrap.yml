@@ -137,6 +137,9 @@ jobs:
           cargo test --locked -p fullmag-runner --lib native_fem::object_average::tests
           FULLMAG_FEM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-runner --features fem-native --tests
 
+      - name: Type-check the native FEM frequency-response adapter
+        run: FULLMAG_FEM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-api --features fem-gpu --bins
+
       - name: Check FDM CUDA runner contracts
         # cargo check type-checks the CUDA Rust path without linking a native
         # library. The actual cuFFT operator is qualified on the managed GPU.
@@ -209,6 +212,11 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api session::tests::authored_initial_state_retires_finished_run_but_not_another_run -- --exact
           cargo test -p fullmag-api --bin fullmag-api session::tests::pending_user_magnetization_apply_still_supersedes_its_run -- --exact
           cargo test -p fullmag-api --bin fullmag-api live_accepted_execution::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::response_source_map::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_compact_response_versions_remain_truthful_in_public_payloads
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_compact_sweep_does_not_read_redundant_dense_v2
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_response_reader_tests_compact_sweep_projects_native_amplitude
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::frequency_response_receipt_tests::response_receipt_reopens_typed_cas_outputs_without_an_accepted_state -- --exact
           FULLMAG_FDM_EXECUTION=cpu cargo test --locked -p fullmag-runtime-control --lib study::tests::relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_reset -- --exact
           cargo test --locked -p fullmag-api --bin fullmag-api openapi_v2::tests::openapi_exposes_interactive_study_commands_and_exact_result_reads -- --exact
           cargo test -p fullmag-api --bin fullmag-api live_execution_binding::tests
@@ -394,7 +402,9 @@ jobs:
           cargo test -p fullmag-runner eigen_diagnostics_ --lib
 
       - name: Run sample-scoped eigen artifact contracts
-        run: cargo test -p fullmag-runner output_publication_tests --lib
+        run: |
+          cargo test -p fullmag-runner output_publication_tests --lib
+          cargo test --locked -p fullmag-runner --lib project_storage::private_scratch_tests::long_run_identity_does_not_expand_native_scratch_path -- --exact
 
       - name: Run selected-only path potential publication contracts
         run: |

@@ -3588,6 +3588,38 @@ pub(crate) fn cold_accepted_worker_step(store: &SessionStore,
         problem, execution_plan: plan, until_seconds: lowered.until_seconds, resolved_input: resolved })
 }
 
+pub(super) fn ensure_accepted_prepare_genesis(
+    store: &SessionStore,
+    checkpoint: &fullmag_application::CoordinatorCheckpoint,
+) -> Result<()> {
+    let _writer = store.write_transaction()?;
+    let run_id = checkpoint.claim.run_id.as_str();
+    let task_id = checkpoint.claim.task_id.as_str();
+    let catalog = store
+        .read_run_catalog(run_id)?
+        .context("coordinator genesis requires a durable run catalog")?;
+    let task = catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .context("coordinator genesis task is missing from the run catalog")?;
+    let Some(genesis) = &task.coordinator_genesis else {
+        crate::commit_coordinator_genesis(store, checkpoint)?;
+        return Ok(());
+    };
+    let original: fullmag_application::CoordinatorCheckpoint =
+        serde_json::from_value(genesis.checkpoint.clone())
+            .context("decoding the persisted coordinator genesis checkpoint")?;
+    let restored = fullmag_application::WorkerCoordinator::restore(original.clone(), &[], &[])?;
+    if &original != checkpoint && &restored.checkpoint() != checkpoint {
+        bail!("Prepare coordinator checkpoint differs from its immutable genesis");
+    }
+    // Restore marks the in-memory observation as reconciling. Replay the
+    // original genesis so the store still fences the current lease and epoch.
+    store.commit_coordinator_genesis(run_id, task_id, genesis)?;
+    Ok(())
+}
+
 /// Publish a worker Prepare command only after resolving its task input from
 /// the durable receipt and immutable accepted-study snapshot. The coordinator
 /// journal is the outbox boundary: this does not send a transport message,
@@ -3615,7 +3647,7 @@ pub fn publish_accepted_task_prepare(
         }
     }
 
-    retry_store_writer_busy(|| crate::commit_coordinator_genesis(store, &checkpoint))
+    retry_store_writer_busy(|| ensure_accepted_prepare_genesis(store, &checkpoint))
         .context("publishing accepted task coordinator genesis")?;
 
     let mut publication_error = None;
