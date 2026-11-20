@@ -53,6 +53,31 @@ int main()
         2u,
         reduced,
         error));
+    // Air-only class of a shared-domain mesh: zero mass and zero stiffness.
+    check(build_gpu_exchange_periodic_reduced_csr(
+        3,
+        {0u, 1u, 2u, 3u},
+        {1u, 0u, 2u},
+        {2.0, 2.0, 0.0},
+        {1.0, 1.0, 0.0},
+        {0u, 0u, 1u},
+        {0u, 2u},
+        2u,
+        reduced,
+        error));
+    check(reduced.reduced_mass == std::vector<double>({2.0, 0.0}));
+    // Zero mass with nonzero stiffness stays invalid.
+    check(!build_gpu_exchange_periodic_reduced_csr(
+        3,
+        {0u, 1u, 2u, 3u},
+        {1u, 0u, 0u},
+        {2.0, 2.0, 5.0},
+        {1.0, 1.0, 0.0},
+        {0u, 0u, 1u},
+        {0u, 2u},
+        2u,
+        reduced,
+        error));
     GpuExchangeOperatorKind kind = GpuExchangeOperatorKind::LegacySparse;
     check(resolve_gpu_exchange_operator_kind("legacy_sparse_gpu", true, kind, error));
     check(kind == GpuExchangeOperatorKind::LegacySparse);
