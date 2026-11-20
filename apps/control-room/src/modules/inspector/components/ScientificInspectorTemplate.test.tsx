@@ -35,9 +35,29 @@ describe("ScientificInspectorTemplate", () => {
     expect(context).toContain("Provenance");
   });
 
+  it("leaves identity to the Inspector shell unless asked", () => {
+    const props = {
+      breadcrumbs: ["Results", "Resonance & FMR"],
+      methodLabel: "Modal eigensolve",
+      physicalLabel: "Resonance",
+      status: { availability: "available", execution: "completed", resource: "unknown" },
+      title: "Eigenfrequency Spectrum",
+    } as const;
+    const nested = renderToStaticMarkup(<ScientificInspectorTemplate {...props} />);
+    const standalone = renderToStaticMarkup(<ScientificInspectorTemplate {...props} showIdentity />);
+
+    expect(nested).not.toContain('aria-label="Scientific result path"');
+    expect(nested).not.toContain("<h3>Eigenfrequency Spectrum</h3>");
+    expect(nested).toMatch(/Method<\/span><span[^>]*>Modal eigensolve</);
+    const facts = nested.slice(0, nested.indexOf("</ul>"));
+    expect(facts).not.toContain("unknown");
+    expect(standalone).toContain('aria-label="Scientific result path"');
+  });
+
   it("renders identity, independent statuses, SI properties, provenance, and diagnostics", () => {
     const html = renderToStaticMarkup(
       <ScientificInspectorTemplate
+        showIdentity
         breadcrumbs={["Results", "Resonance & FMR"]}
         diagnostics={["Observable contract unavailable"]}
         methodLabel="Modal eigensolve"

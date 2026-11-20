@@ -551,7 +551,7 @@ fn open_regular_nofollow(path: &Path) -> Result<File> {
 }
 
 fn read_bounded_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>> {
-    let mut file = open_regular_nofollow(path)?;
+    let file = open_regular_nofollow(path)?;
     if file.metadata()?.len() > maximum {
         bail!(
             "evidence file exceeds the bounded read limit: {}",

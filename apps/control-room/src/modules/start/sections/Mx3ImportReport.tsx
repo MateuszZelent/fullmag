@@ -128,8 +128,8 @@ export function Mx3ImportReport({
       <p className="fm-start-inspector__note">
         Save translated script asks where to save the .py file, lists it under Recent scripts and
         selects it. Nothing runs until you choose Run in new window. Create project, after you
-        confirm, evaluates the translated script twice — once to read its model into a project that
-        keeps the script and once more to check the round trip — without starting a solver. Any
+        confirm, evaluates the translated script twice. The first evaluation reads its model into a
+        project that keeps the script. The second checks the round trip. The solver stays idle. Any
         side effects or random choices in the script happen on each evaluation.
       </p>
     </section>

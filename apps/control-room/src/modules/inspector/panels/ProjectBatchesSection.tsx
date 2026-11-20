@@ -977,7 +977,7 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
                         </p>
                       ) : null}
                       {publishedRun && selectedRunId === publishedRun.run_id ? (
-                        <div className="grid min-w-0 gap-1 rounded-md border border-fm-subtle p-2">
+                        <div className="grid min-w-0 gap-1 border-t border-fm-subtle pt-2">
                           {selectedRun.status === "loading" && !selectedRun.data ? <p>Loading run details…</p> : null}
                           {selectedRun.error ? <p role="alert">Could not load run details: {selectedRun.error.message}</p> : null}
                           {selectedRunResource ? (

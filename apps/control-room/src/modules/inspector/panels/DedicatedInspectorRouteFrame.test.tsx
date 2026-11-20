@@ -21,7 +21,7 @@ const selection = {
 } satisfies Selection;
 
 describe("DedicatedInspectorRouteFrame", () => {
-  it("gives each route a visible semantic identity while preserving shared Inspector chrome", () => {
+  it("leaves identity to the shell and states the route method as a fact", () => {
     const html = renderToStaticMarkup(
       <DedicatedInspectorRouteFrame owner="object.magnetic-texture.asset" selection={selection}>
         <div>Asset content</div>
@@ -29,7 +29,10 @@ describe("DedicatedInspectorRouteFrame", () => {
     );
 
     expect(html).toContain('data-inspector-route-owner="object.magnetic-texture.asset"');
-    expect(html).toContain("Magnetic texture asset");
+    // InspectorShell renders the one identity header (specs/frontend-v2/13 §1a).
+    expect(html).not.toContain("Scientific result path");
+    expect(html).not.toContain("<h3>Magnetic texture asset</h3>");
+    expect(html).toMatch(/Method<\/span><span[^>]*>Published asset</);
     expect(html).toContain("Physical properties");
     expect(html).toContain("Asset content");
   });
@@ -41,8 +44,24 @@ describe("DedicatedInspectorRouteFrame", () => {
       </DedicatedInspectorRouteFrame>,
     );
 
-    expect(html).toContain("Magnetic texture transform");
+    expect(html).toMatch(/Method<\/span><span[^>]*>Coordinate transform</);
     expect(html).not.toContain('data-inspector-route-owner="object.magnetic-texture.asset"');
+  });
+
+  it("omits facts the route cannot state instead of showing unknown", () => {
+    const html = renderToStaticMarkup(
+      <DedicatedInspectorRouteFrame owner="object.magnetic-texture.asset" selection={selection}>
+        <div>Asset content</div>
+      </DedicatedInspectorRouteFrame>,
+    );
+    const strip = html.slice(
+      html.indexOf('data-slot="inspector-metric-strip"'),
+      html.indexOf("</ul>"),
+    );
+
+    expect(strip).toContain("Scope");
+    expect(strip).not.toContain("unknown");
+    expect(strip).not.toContain("Resource");
   });
 
   it.each(["object.geometry", "builder.primitive", "fdm.cell"])(

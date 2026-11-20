@@ -2,7 +2,7 @@
 use anyhow::{bail, Context, Result};
 use fullmag_application::{
     COORDINATOR_TRANSITION_SCHEMA, CoordinatorError, CoordinatorMessage, CoordinatorTransition,
-    DurableWorkerCoordinator, AcceptedPreparationReceipt, ClosedLoopPreparationReceipt, PreparationBinding, PreparationReceipt, ProjectId, ResolvedInput,
+    DurableWorkerCoordinator, AcceptedPreparationReceipt, ClosedLoopPreparationReceipt, PreparationReceipt, ProjectId, ResolvedInput,
     ResolvedStudyArtifact, ResolvedTaskInput, RunId, RunSpecification, TaskClaim, TaskRecord,
     WorkerCommand, WorkerCommandEnvelope,
 };

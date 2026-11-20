@@ -421,13 +421,12 @@ async function openStudyInspector(browser, { id, stage, realtime = false }) {
   });
 
   const modelTab = page
-    .locator(".fm-explorer .fm-tabs-trigger")
-    .filter({ hasText: /^Model$/ });
+    .locator('.fm-side-rail[data-side="left"] [data-rail-item="model"]');
   if (
     (await modelTab.count()) > 0 &&
-    (await modelTab.getAttribute("aria-selected")) !== "true"
+    (await modelTab.getAttribute("data-active")) !== "true"
   ) {
-    await modelTab.click();
+    if ((await modelTab.getAttribute("data-active")) !== "true") await modelTab.click();
   }
   const studyNode = page.locator('[data-node-id="model:study"]').first();
   await studyNode.waitFor({ state: "visible", timeout: 60_000 });

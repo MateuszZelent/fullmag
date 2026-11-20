@@ -1,187 +1,142 @@
 # Frontend i API Fullmag
 
-Wiążące rozwinięcie [AGENTS.md](../../AGENTS.md). Czytaj sekcje dotyczące zadania. Zachowano numerację kontraktów dla łatwego wyszukiwania; ścieżki w backtickach są względem repozytorium. Zasady procesu i uprawnień określa główny AGENTS.md.
+Wiążące rozwinięcie [AGENTS.md](../../AGENTS.md) dla `apps/control-room`, API v2 i wszystkiego, co użytkownik widzi w Control Room. Czytaj sekcje dotyczące zadania. Ścieżki w backtickach są względem repozytorium. Zasady procesu, uprawnień i worktree określa główny AGENTS.md.
 
-### 9.1 Control-room API invariant
+Wersja z 20.11.2026 zastępuje wcześniejsze reguły wizualne. Dawne zakazy glassmorphizmu, animacji przezroczystości i rozmycia nie obowiązują; obowiązują reguły z sekcji 3–7.
 
-The canonical local browser contract is the v2 session-scoped resource-first API documented in:
+## 1. Cel i punkt odniesienia
 
-- `docs/specs/resource-first-control-room-api-v2.md`
-- `docs/adr/0011-resource-first-api.md`
+Control Room ma wyglądać i działać jak najlepsze profesjonalne narzędzia projektowe i naukowe: nowocześnie, spójnie, czytelnie i z charakterem. Estetyka jest wymaganiem, nie dodatkiem. Każdy ekran, panel i okno używa tego samego języka wizualnego.
 
-Rules:
+- Referencją wyglądu i zachowania jest makieta w `docs/design/inspector-redesign/` (React + shadcn/ui, uruchamiana przez `npm ci && npm run dev` w tym katalogu). Opis zasad: `docs/design/inspector-redesign/README.md`.
+- Kontrakty szczegółowe: `docs/specs/frontend-v2/09-css-design-system.md` (tokeny, szkło, cienie, ruch), `10-shell-menu-and-navigation.md` (powłoka), `11-explorer-view.md` (panele lewej listwy), `13-inspector-and-property-editing.md` (szablon Inspectora).
+- Jeżeli makieta i specyfikacja się różnią, najpierw zaktualizuj specyfikację, potem kod. Makieta pokazuje kierunek; wartości przykładowe w niej nie są danymi fizycznymi.
 
-- frontend work targets `/v2/platform/...` and `/v2/sessions/current/...`; public `/v1/live/current/...` has been removed,
-- v2 route families are `platform`, `sessions`, `model`, `meshing`, `simulation`, `data`, `visualization`, `workspace`, `analysis`, `persistence`, and `diagnostics`,
-- `GET /v2/sessions/current/status` stays thin and revision-driven,
-- domain, field, scalar, artifact, mesh, workspace, and session data are fetched as named resources,
-- heavy fields and topology belong on the binary data plane, not inside status,
-- mesh/topology and field samples must support scoped access for selected objects, mesh parts, airbox, and workspace selection,
-- frontend code must use the central typed client/facade and must not hand-roll endpoint strings outside the API client layer,
-- JSON contract changes must be reflected in OpenAPI and shared frontend types.
+## 2. Architektura (bez zmian merytorycznych)
 
-### 9.0 Granica buildów i artefaktów frontendu
+- Kanoniczny kontrakt przeglądarki to API v2 sesji i zasobów (`docs/specs/resource-first-control-room-api-v2.md`, `docs/adr/0011-resource-first-api.md`): trasy `/v2/platform/...` i `/v2/sessions/current/...`, rodziny `platform`, `sessions`, `model`, `meshing`, `simulation`, `data`, `visualization`, `workspace`, `analysis`, `persistence`, `diagnostics`. `GET /v2/sessions/current/status` pozostaje cienki i rewizyjny; ciężkie pola i topologia idą binarnym data plane ze scope dla obiektu, części siatki, airboxa i zaznaczenia.
+- Jeden typowany klient API, jedna warstwa resource hooks, jedno słownictwo capability, jedna warstwa adapterów domeny, jedno drzewo UI, jedna powłoka workspace. Komponenty nie wywołują `fetch()` ani nie składają ścieżek endpointów; zmiana JSON aktualizuje OpenAPI i typy (`just docker-dev-codegen`).
+- Moduły v2 mają manifest i komunikują się przez kernel, event bus, rejestr poleceń, resource hooks albo wspólne prymitywy (`docs/adr/0013-frontend-v2-module-kernel.md`, `docs/specs/frontend-v2/README.md`). Menu, ribbon, toolbary, skróty, menu kontekstowe i paleta poleceń renderują jeden rejestr poleceń.
+- Jeden workspace z kontekstami (`Workspace`, `View`, `Definitions`, `Geometry`, `Materials`, `Physics`, `Mesh`, `Study`, `Results`, `Automation`). Kontekst zmienia grupy ribbonu, domyślne panele, presety viewportu i dostępność poleceń; nie przełącza osobnej aplikacji. Brak osobnych drzew FDM/FEM i brak etapów `Build`/`Study`/`Analyze` jako źródła prawdy.
+- Kod legacy (dawne `legacy_web`) jest tylko referencją zachowania; kod v2 go nie importuje ani nie kopiuje hurtowo.
+- Dotykając `apps/control-room`, załaduj właściwy skill `.agents/skills/frontend-v2-*`.
 
-Build/cache/browser storage podlega [ADR
-0030](../../docs/adr/0030-project-storage-and-build-concurrency.md) oraz
-root `AGENTS.md`. W codziennym Docker DEV cache frontendu i `node_modules`
-mieszczą się w `private/frontend` stabilnego `BuildControl.volume` zgodnie z
-[ADR 0076](../../docs/adr/0076-single-private-volume-per-dev-group.md); frontend
-nie dostaje rootu control ani danych backendu. Store pnpm pozostaje
-project-scoped i współdzielony. Poza tą trasą `apps/control-room` pozostaje
-repozytoryjnym źródłem kodu, ale nie jest magazynem dużych artefaktów:
+## 3. Język wizualny
 
-- `FULLMAG_PROJECT_STORAGE_ROOT` jest jedynym override’em project storage po
-  walidacji; lokalizację hosta określa `FULLMAG_PROJECT_STORAGE_ROOT` w `.env`
-  głównego checkoutu;
-- poza codziennym Docker DEV pnpm store/home, npm/pip/uv cache, Playwright
-  browsers, Vite/TypeScript cache i duże test outputs muszą być potomkami
-  zaakceptowanego `storage/cache`, `storage/builds/<worktree-id>/<profile-id>`
-  albo jawnego `storage/runs/<task-id>/<run-id>`; w Docker DEV obowiązuje
-  podział shared pnpm store oraz prywatnego `private/frontend` z ADR 0076;
-- `node_modules` jest zależne od worktree. W Docker DEV zapisuj je wyłącznie w
-  `private/frontend`; poza nim nie kopiuj między checkoutami. Kontrolowany link
-  jest dozwolony tylko, gdy narzędzie i rejestr storage zachowują własność oraz
-  izolację;
-- każdy test lub build, który generuje duży output, wybiera profil przypisany
-  do worktree i zapisuje manifest/status. Zgodne kolejne uruchomienia mogą
-  reuse’ować profil pod blokadą; równoczesny zapis do mutable outputu czeka albo
-  kończy się błędem;
-- odmowa ścieżki lub uprawnień kończy polecenie przed instalacją i kompilacją.
-  Nie wolno przekierować outputu do checkoutu, rootu dysku, profilu użytkownika
-  ani niekwalifikowanego `TEMP`.
+Materiał: **szkło nad żywym viewportem**. Viewport wypełnia okno aplikacji; drzewo, Inspector, dok, paski i okna są matowymi, zaokrąglonymi warstwami nad nim. Głębię budują przezroczystość, rozmycie tła, cień i delikatna jasna krawędź u góry warstwy.
 
-Control Room nie tworzy osobnej gałęzi storage dla FDM i FEM. Różnice urządzeń
-i backendów należą do profilu builda oraz capability/runtime provenance.
+- **Tokeny.** Wszystkie decyzje wizualne to tokeny `--fm-*` w `src/design/styles/*`. Surowe wartości kolorów (Catppuccin Mocha dla ciemnego, Latte dla jasnego) występują tylko w plikach tokenów i motywu. Komponenty i CSS modułów używają tokenów albo utility Tailwinda zbudowanych na tokenach.
+- **Powierzchnie.** Rodziny tokenów: tło aplikacji i viewportu (z miękkimi poświatami), szkło (`glass`, `glass-strong`, krawędź, jasny refleks), pole wklęsłe (`field`), powierzchnia uniesiona (`raised`), stany semantyczne (ok, warn, error, info, live, stale, degraded, unsupported).
+- **Zasada zaznaczenia.** Pola i niewybrane opcje są lekko wklęsłe i nie świecą bielą; wybrana opcja jest uniesiona (`raised` + cień sm + obrys w kolorze domeny). Dotyczy przełączników, kafelków, kart, nakładek, listew ikon i drzewa.
+- **Kolory domen.** Geometria, materiał, fizyka, badanie, wizualizacja, siatka i definicje mają własny odcień (token `--fm-hue-*`). Odcień oznacza domenę w ikonie tożsamości, aktywnej sekcji, kafelkach wyboru i ribbonie. Kolor semantyczny stanu jest oddzielony od koloru domeny.
+- **Cienie.** Skala elewacji `sm` (pola, pigułki, wybrane opcje), `md` (panele, popovery, menu), `lg` (dialogi, arkusze, paleta poleceń). Wartości odpowiadają skillowi `beautiful-shadows`; na jednym elemencie jedna siła cienia na stan.
+- **Promienie.** Skala tokenów od pola (ok. 10 px) przez sekcję (ok. 16 px) i panel (ok. 22 px) do okna (ok. 28 px) oraz pigułki (pełne zaokrąglenie). Bez kwadratowych paneli i jednego promienia dla wszystkiego.
+- **Typografia.** Inter dla UI (z cyframi tabelarycznymi dla liczb), JetBrains Mono wyłącznie dla identyfikatorów, ścieżek i kodu, kursywa szeryfowa (STIX Two Text lub zgodna) dla symboli fizycznych (Mₛ, A_ex, α, ξ_DL, B₀). Etykiety w sentence case, bez wersalików w etykietach pól.
+- **Gęstość.** Zwarta, ale czytelna: kontrolki 28–32 px, wiersze właściwości w układzie etykieta | kontrolka od ok. 22 rem szerokości panelu, pionowo poniżej (container queries). Jednostka siedzi w polu jako menu jednostek z przeliczaniem.
+- **Oba motywy są pierwszorzędne.** Każda zmiana jest sprawdzana w jasnym i ciemnym motywie. Kontrast tekstu co najmniej 4.5:1, elementów interfejsu 3:1. `prefers-reduced-transparency` przełącza szkło na nieprzezroczyste powierzchnie.
 
-### 9.2 Frontend architecture invariant
+## 4. Powłoka aplikacji
 
-The control room must use:
+Od góry: pasek instancji (Home i karty sesji) → pasek aplikacji (logo, menu główne File/Edit/View/Simulation/Tools/Help, szybkie akcje, wyszukiwarka Ctrl+K, stan API, sterowanie obliczeniami, motyw, licznik problemów) → ribbon (zakładki kontekstów z grupami poleceń; zwijany) → obszar roboczy → pasek statusu.
 
-- one typed API client,
-- one resource-hook layer,
-- one capability vocabulary,
-- one domain-adapter layer,
-- one unified UI tree,
-- one workspace shell whose active module changes the interface context.
-- one Catppuccin token system: Mocha for dark mode, Latte for light mode.
-- one shadcn/ui-based primitive layer for interactive chrome such as menu, ribbon, tabs,
-  command palette, dialogs, dropdowns, context menus, switches, and tooltips.
+- **Obszar roboczy:** lewa i prawa listwa ikon w stylu Photoshopa na pełną wysokość; między nimi panele i viewport, a pod nimi dok na pełną szerokość między listwami.
+- **Lewa listwa** przełącza panele budowy modelu (Model, Results, Live charts, Library i kolejne zakładki Explorera). **Prawa listwa** przełącza karty Inspectora (Inspector zaznaczenia, 3D View, History, Python i kolejne). Kliknięcie aktywnej ikony zwija panel, a viewport zajmuje zwolnione miejsce. Szerokość prawego panelu jest regulowana uchwytem.
+- **Pasek narzędzi viewportu** pływa u góry viewportu, wycentrowany; przy wąskim viewportcie chowa mniej ważne grupy (container queries).
+- **Dok** (Telemetry, Problems, Logs, Operations, Engine, Quick chart) jest zwijany i ma pełną szerokość.
+- **Mały ekran:** panele stają się arkuszami, ribbon przewija się poziomo, menu przechodzi pod przycisk menu, viewport pozostaje głównym obszarem. Żadna pozycja menu nie znika tylko przez breakpoint.
 
-The control room must not:
+## 5. Inspector: jeden szablon
 
-- call `fetch()` directly from React components,
-- fork the product tree into separate FDM and FEM applications,
-- reintroduce stage-switched workspace shells such as `Build`, `Study`, and `Analyze`,
-- use legacy workspace stage state as the source of truth for ribbon, inspector, viewport, or docking behavior,
-- treat old `bootstrap` / `poll` / `preview/*` flows as canonical architecture.
-- hardcode one-off colors in components or module CSS outside `src/design/styles/*`.
-- hand-roll accessibility-sensitive primitives that shadcn/ui already covers unless the exception is documented in the module manifest or spec.
+Każdy węzeł Explorera ma własny widok Inspectora, ale wszystkie widoki renderuje ten sam szablon ze specyfikacji panelu. Panel nie rysuje własnego nagłówka, kafelków stanu ani grup.
 
-Workspace UI doctrine:
+Osiem miejsc w stałej kolejności:
 
-- `/workspace` is one unified workspace, not a family of build/study/analyze workspaces.
-- Top-level modules such as `Home`, `Definitions`, `Geometry`, `Materials`, `Physics`, `Mesh`,
-  `Study`, `Results`, and `Automation` are modular interface contexts inside the same workspace.
-- Module selection may change visible ribbon groups, inspector content, viewport presets, and commands,
-  but it must not switch to a separate application shell or duplicate the workspace model.
-- Geometry authoring must run in the same unified 3D viewport used for FDM and FEM; Geometry mode is
-  a viewport/display preset, not a separate builder viewport.
-- Remove remaining `Build`/`Study`/`Analyze` stage assumptions when the requested change depends on them. Preserve explicitly transitional compatibility shims; report unrelated legacy cleanup separately.
+1. Ścieżka (breadcrumb) i akcje węzła (szukaj pola, dopasuj widok, menu).
+2. Tożsamość: ikona w kolorze domeny, nazwa (edytowalna, gdy węzeł na to pozwala), rodzaj, ID do skopiowania, jedna pigułka stanu.
+3. Fakty: najwyżej cztery kluczowe wartości. Wartości nieznane są pomijane, nigdy nie wyświetla się „unknown”. Fakty chowają się przy przewijaniu.
+4. Karty, tylko gdy węzeł ma tryby.
+5. Komunikaty: ton, tytuł, opis i szybka naprawa albo skok do pola. Błąd walidacji jest też przypięty do pola.
+6. Sekcje: jedna zwijana sekcja dla wszystkich paneli, z podsumowaniem wartości po zwinięciu i znacznikiem zmiany lub błędu.
+7. Wiersz właściwości: etykieta, symbol fizyczny z kartą definicji (nazwa, definicja, jednostka SI, typowy zakres), pole z jednostką, cofnięcie pola, komunikat. Wartości liczbowe można regulować przeciąganiem symbolu.
+8. Pasek zmian: tryby `staged` (Revert/Apply z licznikiem, Ctrl+Enter, potwierdzenie dla operacji kosztownych jak przebudowa siatki), `liveViewport` (zmiany od razu, Reset display), `immediate` (nazwane operacje panelu), brak sesji (bez przycisków mutacji). Przyciski pojawiają się dopiero, gdy jest co zatwierdzić.
 
-Interactive chart doctrine:
+Wykresy, tabele i podglądy wchodzą jako wiersz `custom` w zwykłej sekcji. Surowy JSON tylko w jawnie opisanej sekcji zaawansowanej albo w oknie podglądu.
 
-- Charts are analysis surfaces, not decorative widgets. Use physically meaningful axes, visible SI units,
-  clear legends, formatted tooltips, selectable observables, and explicit unsupported/degraded states.
-- Do not mix unrelated units on one y-axis unless the chart offers a selector, split panels, or a clearly labelled dual-axis design.
-- Large chart data must be bounded, decimated, paged, or virtualized before rendering. Do not spread large
-  arrays into `Math.min`/`Math.max`, put large typed arrays in React state, or rebuild chart models on unrelated renders.
-- ECharts and similar renderers need explicit lifecycle ownership: create once per mounted chart, update only from
-  resource revisions or user interaction, resize by observer, dispose on unmount, and avoid interval polling or idle redraw loops.
-- Chart styling must use `--fm-*` tokens, readable contrast, stable panel geometry, tabular numeric formatting,
-  and accessible hover/focus/selection states. Raw JSON tuples and unformatted arrays must never appear in user-facing tooltips.
-- Any new scientific chart must include focused model tests plus at least one UI/render test or browser smoke when
-  interaction, canvas lifecycle, or tooltip/selection behavior changes.
+## 6. Ruch i animacje
 
-### 9.3 Frontend v2 rewrite doctrine
+Animacje są pożądane, gdy pokazują zmianę stanu, prowadzą wzrok albo nadają interfejsowi płynność. Dozwolone są m.in.: przejścia kolorów, cieni i transformacji; animowane rozwijanie sekcji do naturalnej wysokości (`interpolate-size`, `::details-content`, animacje Radix); wejście nowej treści przy zmianie zaznaczenia lub karty (przesunięcie i zanikanie); View Transitions przy zmianie celu Inspectora; przesuwany wskaźnik przełączników i kart; animacje overlayów; skeletony ładowania; puls stanu „live”; licznik i wskaźniki tykające na żywo.
 
-The target browser frontend is documented in:
+Granice:
 
-- `docs/adr/0013-frontend-v2-module-kernel.md`
-- `docs/specs/frontend-v2/README.md`
+- Animacja odpowiada na akcję użytkownika albo na nowy cel. Odświeżenie danych, unieważnienie zasobu i ACK tego samego celu nie odtwarzają animacji wejścia, nie remontują panelu i nie zmieniają przezroczystości trwałych kontrolek.
+- Czas: mikrointerakcje 100–200 ms, przejścia paneli i treści do ok. 320 ms; krzywe z tokenów ruchu. Bez animacji wymiarów siatki workspace, które wymuszają ciągły reflow, i bez pętli zmieniających rozmiar canvasu.
+- Animacje ciągłe tylko dla wskaźników stanu (live, running, postęp); żadnych dekoracyjnych pętli obok danych liczbowych.
+- `prefers-reduced-motion` wyłącza przesunięcia i zanikania; zmiana stanu jest natychmiastowa.
 
-During the frontend v2 migration:
+## 7. Szkło, rozmycie i wydajność
 
-- `apps/control-room` is the clean v2 target app root,
-- `apps/legacy_web` is legacy reference unless the user explicitly asks to modify it,
-- v2 code must not import from `apps/legacy_web`,
-- legacy code may be read for behavior, math, fixtures, and visual comparison, but not copied wholesale,
-- every v2 module must have a manifest and must communicate through the kernel API, event bus, command registry, resource hooks, or shared primitives,
-- menu, ribbon, toolbar, shortcuts, context menus, and command palette must render one command registry,
-- module enable/disable is done through manifest registration and capability gates, not hidden shell forks,
-- feature flags must have owners and removal criteria,
-- no v2 change may reintroduce direct component `fetch()`, bootstrap/poll normalization, preview-control quantity switching for already-published data, mutable singleton diagnostics, or always-on viewport rendering.
+- `backdrop-filter` (rozmycie i nasycenie z tokenów) stosuj na stałych warstwach: paski, listwy, panele, dok, overlaye, dialogi, menu. Nie na pojedynczych wierszach list, nie na elementach animowanych w pętli i nie na treści przewijanej wewnątrz panelu.
+- Warstwa nad viewportem nie może wymuszać ponownego layoutu ani zmiany rozmiaru canvasu. Zmiany paneli przekazują viewportowi wstawki (insets), a nie zmieniają jego DOM.
+- Każda zmiana szkła lub cieni przy viewportcie wymaga pomiaru w przeglądarce: stabilny FPS w spoczynku, brak idle redraw, kontekst WebGL żywy.
 
-Agents touching frontend v2 must load the relevant `.agents/skills/frontend-v2-*` skill before editing.
+## 8. Komponenty i prymitywy
 
-### 9.4 Zero-tolerance quality gate
+- Interaktywne prymitywy pochodzą z warstwy shadcn/ui w `src/shared/ui` (Radix): menu, menubar, ribbon, zakładki, przełączniki segmentowe, toggle group, dropdown, context menu, dialog, alert dialog, sheet, popover, hover card, tooltip, command palette, select, slider, switch, toast. Dostępność zapewnia prymityw; wygląd nadają tokeny i warianty CVA.
+- Własny widget jest dopuszczalny, gdy żaden prymityw nie pasuje; budujemy go na prymitywie Radix i dokumentujemy w manifeście modułu lub specyfikacji.
+- Klasy CSS w `apps/control-room` mają prefiks `fm-`; utility Tailwinda są dozwolone. `app/globals.css` zawiera tylko importy; style współdzielone są w `src/design/styles/*`.
+- Ikony z lucide, przekazywane jako komponenty; ikony w przyciskach z `data-icon`; każdy przycisk z samą ikoną ma etykietę dostępności i tooltip.
+- Fokus jest zawsze widoczny; menu, ribbon, drzewo, Inspector, dok i dialogi są osiągalne z klawiatury.
 
-Every change to `apps/control-room` must leave the codebase in a shippable state. There is no "fix later" for:
+## 9. Wykresy i telemetria
 
-- TypeScript errors (`pnpm --dir apps/control-room typecheck` must pass),
-- ESLint warnings (`pnpm --dir apps/control-room lint` must pass with `--max-warnings=0`),
-- test failures (`pnpm --dir apps/control-room test` must pass),
-- CSS class/token naming inconsistencies with `docs/specs/frontend-v2/09-css-design-system.md`,
-- dead imports, unused variables, commented-out code created by the change,
-- spec drift (implementation must match the spec; if the spec is wrong, update the spec first).
+- Wykres i telemetria to instrumenty naukowe: fizycznie sensowne osie, widoczne jednostki SI, legendy, sformatowane tooltipy, stany nieobsługiwane i zdegradowane.
+- Pokazuj tylko porównania, które mają fizyczny sens. Bez pasków udziału między wielkościami bez wspólnego odniesienia (np. składniki energii o różnych znakach i dowolnym zerze). Zamiast tego: wartości, ich przebieg w czasie, osie z jednostkami.
+- Bez mieszania jednostek na jednej osi y bez selektora, rozdzielonych paneli lub opisanej podwójnej osi.
+- Duże dane są ograniczane, decymowane lub stronicowane przed renderowaniem; bez rozkładania dużych tablic w `Math.min`/`Math.max` i bez dużych tablic typowanych w stanie React.
+- ECharts i podobne: jedna instancja na zamontowany wykres, aktualizacja z rewizji zasobu lub interakcji, resize przez observer, dispose przy odmontowaniu, bez pollingu i idle redraw.
+- Nowy wykres naukowy ma testy modelu i co najmniej jeden test renderowania lub smoke w przeglądarce, gdy zmienia interakcję, cykl canvasu albo tooltip.
 
-If a change introduces any of the above, the change is not done. Fix it before reporting completion.
+## 10. Stabilność Inspectora i stanu
 
-This rule applies equally to agents and human contributors.
+- Stan pending jest śledzony na poziomie pola lub transakcji, nie jako jedna flaga celu. Nie wygaszaj i nie wyłączaj niezwiązanych kontrolek.
+- Dla tego samego celu zachowuj ostatni poprawny panel. Odświeżenie danych nie remontuje Inspectora i nie resetuje przewijania, fokusu ani szkiców. Subskrypcje są per cel, z jednym właścicielem subskrypcji zasobu w drzewie panelu.
+- Szkice Inspectora to jawne transakcje; zasoby serwera zostają w resource hooks. Pochodne dane liczymy selektorami, nie kopiujemy przez `useEffect`.
+- Komponenty klienckie czytające magazyny zewnętrzne, localStorage lub cache API mają pierwszy render zgodny z SSR (`useSyncExternalStore` ze snapshotem serwera albo jawna bramka hydracji).
+- Każda zmiana mutacji Inspectora ma regresję w przeglądarce dla Object i Airbox (tam, gdzie dotyczy): stabilna tożsamość korzenia, brak niezwiązanych zmian disabled/przezroczystości, brak animacji wejścia przy odświeżeniu, ograniczona liczba renderów i żądań, zachowany fokus i przewijanie przez pending i ACK.
+- Encje sceny mają niezmienne `object_id`, nazwę `name`, prezentacyjny `type` i jawnie zadane moduły fizyki. Nazwa ani typ nie aktywują fizyki.
 
----
+## 11. Viewport i WebGL
 
-## 17. Field-store doctrine
+- Każda zmiana viewportu R3F/WebGL ma smoke w przeglądarce: canvas widoczny, kontekst WebGL nieutracony, niezerowy drawing buffer po załadowaniu. Sam TypeScript i testy nie wystarczą.
+- `THREE.WebGLRenderer: Context Lost` przy starcie traktuj jako błąd cyklu życia, dopóki `gl.isContextLost()` i wymiary bufora nie pokażą, że to tylko teardown.
+- StrictMode w dev pozostaje wyłączony, dopóki stos R3F/Three gubi kontekst przy remountach; włączenie wymaga smoke ze stabilnym canvasem.
+- Geometria jest autorowana w tym samym viewporcie 3D dla FDM i FEM; tryb Geometry to preset widoku.
+- Wireframe Airboxa nie jest tym samym kontraktem co wireframe siatki magnetycznej: pełny zasięg airboxa zawsze ma wewnętrzną nakładkę granic z semantyką ukrytych krawędzi; zasięg powierzchniowy może renderować tylko krawędzie powierzchni; przezroczystość powierzchni nie tłumi przezroczystości wireframe.
+- Kwalifikacja wektorów FDM Airbox zapisuje osobne klatki `wireframe on → wireframe off → vectors on`. Odrzuć klatkę z wireframe włączonym, zerem glifów, glifami subpikselowymi albo tak gęstymi, że zakrywają trajektorię. Domyślna długość glifu wynika z granic celu, liczby glifów i zakresu geometrii; ruch kamery jej nie zmienia.
+- Poprawki wydajności zachowują bieżącą jakość wizualizacji. Niższa jakość, mniej glifów, ukryte warstwy i uproszczona topologia to jawne tryby awaryjne, gdy optymalizacja bez straty jakości zawiedzie.
 
-The browser must treat already-computed quantities as data, not as preview commands.
+## 12. Dane pól
 
-### Required end-state
+- Już obliczone wielkości są danymi, nie poleceniami podglądu: runtime publikuje pola, API wystawia cienki status, katalog pól i bufory; przełączanie dostępnej wielkości jest lokalne i natychmiastowe, bez kolejkowania pracy podglądu.
+- Rewizja geometrii i topologii jest oddzielona od rewizji pola; statystyki dla legend i skal są w miarę możliwości liczone wcześniej.
+- Błędy dostępności wielkości naprawiaj w kanonicznym katalogu wielkości, fasadzie field store/API i ścieżce materializacji `compute_fields`, nie łatkami dla jednego ID pola.
 
-- solver/runtime publishes hot fields continuously,
-- API exposes a read-optimized thin status plus field catalog and field buffers,
-- warm quantity switching is local and near-instant,
-- geometry/topology revision is separate from field revision,
-- statistics needed for legends/scales should be precomputed where possible,
-- legacy bootstrap/poll/preview transports must not define the browser contract.
+## 13. Build i artefakty frontendu
 
-### Anti-regression rule
+- Build, cache i storage przeglądarki podlegają ADR 0030 oraz ADR 0076. W Docker DEV `node_modules` i cache frontendu są w `private/frontend` stabilnego `BuildControl.volume`; store pnpm jest współdzielony per projekt. Frontend nie dostaje rootu control ani danych backendu.
+- Poza Docker DEV duże wyjścia (pnpm store, cache npm/Playwright/Vite/TypeScript, duże wyniki testów) trafiają do zaakceptowanego `storage/cache`, `storage/builds/<worktree-id>/<profile-id>` albo `storage/runs/<task-id>/<run-id>`; bez zapisu do checkoutu, rootu dysku, profilu użytkownika ani niekwalifikowanego `TEMP`. Odmowa ścieżki kończy polecenie przed instalacją.
+- Launcher Control Room zatrzymuje tylko proces frontendu, który sam uruchomił; ponowne użycie serwera dev nie oznacza własności portu.
+- `apps/control-room` pozostaje na Next.js 16, dopóki użytkownik nie zatwierdzi zmiany wersji.
+- Makieta w `docs/design/inspector-redesign/` ma własne zależności npm i nie jest częścią workspace pnpm ani buildu aplikacji.
 
-Quantity switching for already available data must not enqueue preview-control work unless truly necessary.
+## 14. Bramka jakości
 
----
+Zmiana w `apps/control-room` jest gotowa dopiero wtedy, gdy:
 
-## Reguły z korekt projektu
+- przechodzi typecheck, lint (`--max-warnings=0`) i dotknięte testy;
+- nie zostawia martwych importów, nieużywanych zmiennych ani zakomentowanego kodu;
+- zgadza się ze specyfikacją (a jeśli specyfikacja była błędna, została najpierw poprawiona);
+- została obejrzana w przeglądarce w jasnym i ciemnym motywie oraz przy wąskim panelu, z porównaniem do makiety dla zmienionych elementów;
+- ma wymagane dowody z sekcji 10 i 11, gdy dotyka mutacji Inspectora lub viewportu.
 
-- Always use `fm-` prefix for all CSS class names in `apps/control-room`, including shell-level layout classes. No unprefixed classes.
-- The CSS design system is token-first: `--fm-*` custom properties are the source of truth. Tailwind provides the utility layer. shadcn/ui provides accessible pre-built components. All three coexist — tokens define the visual language, Tailwind provides utilities, shadcn provides components.
-- Keep `apps/control-room` on Next.js 16 unless the user explicitly approves a version change.
-- Keep `apps/control-room/app/globals.css` import-only; put real CSS in `src/design/styles/*`.
-- Color palette is Catppuccin: Mocha for dark theme, Latte for light theme. Raw Catppuccin hex values belong only in central token/theme files; components consume `--fm-*` tokens.
-- Build menus, ribbons, tabs, dropdowns, dialogs, command palette, context menus, tooltips, switches, and segmented controls from shadcn/ui-style shared primitives. Bespoke widgets need a documented exception.
-- Build Control Room charts as first-class scientific instruments: every interactive chart must be readable,
-  unit-aware, physically honest, keyboard/mouse inspectable, and performance-bounded; no ugly default chart
-  skins, raw tuple tooltips, mixed-unit axes without selectors/dual-axis handling, unbounded datasets,
-  leaking ECharts instances, or redraws while idle.
-- Every semantic Explorer tree node in `apps/control-room` must map to its own Inspector detail view; do not reuse one generic inspector view for distinct child nodes such as asset, load, and transform.
-- Interactive `apps/control-room` Inspectors must remain visually and structurally stable during optimistic updates, resource invalidation, and command acknowledgement: never use one target-wide `pending` flag to disable or dim unrelated controls; track pending state at field/transaction scope, preserve the last-good panel for the same target identity, subscribe through target-scoped selectors, and allow exactly one owner per server-resource subscription in a panel tree. Data refreshes must not remount the Inspector, reset scroll/focus/drafts, or replay entry animations; opacity animations are forbidden on persistent or conditionally rendered Inspector controls. Every Inspector mutation change must include a browser regression for Object and Airbox (where applicable) that checks stable root identity, zero unrelated disabled/opacity changes, no active opacity animations, bounded render/request counts, and preserved scroll/focus through pending and ACK.
-- Treat frontend file-size limits as review triggers, not automatic split commands; split only when it reduces real mixed responsibility, lifecycle risk, or comprehension cost.
-- Client components in `apps/control-room` that read external stores, browser state, local storage, runtime resources, or cached API data must make their first client render match SSR; use `useSyncExternalStore` server snapshots or another explicit hydration gate instead of rendering live client-only values immediately.
-- Every `apps/control-room` R3F/WebGL viewport change must run a browser smoke or Playwright check that asserts the canvas is visible, the WebGL context is not lost, and the drawing buffer is non-zero after load; passing TypeScript/tests alone is not enough for viewport work.
-- Treat `THREE.WebGLRenderer: Context Lost` during `apps/control-room` startup as a failing viewport lifecycle signal until proven to be teardown-only; verify with `gl.isContextLost()` and drawing-buffer dimensions before calling it harmless.
-- Keep `apps/control-room` development StrictMode disabled while the installed R3F/Three stack force-loses WebGL during React development remounts; do not re-enable `reactStrictMode` without a real browser smoke showing stable 3D canvas after load.
-- A Control Room launcher may stop only the frontend process it spawned; reuse of an existing dev server must never imply ownership or kill that port on drop/error.
-- Airbox wireframe is not the same contract as magnetic mesh wireframe: full airbox extent must always include an interior bounds/volume overlay with hidden-edge semantics even when mesh edge geometry exists; surface extent may render only boundary surface edges; airbox surface opacity must not attenuate airbox wireframe opacity.
-- FDM Airbox vector browser qualification must commit separate `wireframe on -> wireframe off -> vectors on` frames; never accept a vectors frame with wireframe enabled, zero glyphs, visually unreadable sub-pixel glyphs, or glyph heads/shafts that overlap densely enough to hide the field trajectory. Default glyph length must derive from target bounds, effective rendered glyph count, and geometry scope; camera motion must not change it.
-- Quantity availability bugs must be fixed through the canonical quantity catalog, field-store/API facade, and `compute_fields` materialization path globally; do not patch one-off field IDs such as `H_demag`.
-- Viewport performance fixes must preserve the currently enabled visualization quality by default; lower quality, lower glyph density, hidden layers, or simplified topology are explicit fallback modes only after quality-preserving optimization fails.
-- Model scene entities with separate immutable `object_id`, user-facing `name`, presentation `type`, and explicitly authored physics modules; never infer or activate solver physics from an object name or type alone.
+Rozmiar pliku jest sygnałem do review, nie automatycznym nakazem podziału; dziel, gdy zmniejsza to mieszanie odpowiedzialności, ryzyko cyklu życia lub koszt zrozumienia.

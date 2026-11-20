@@ -5,7 +5,7 @@
   height: 100vh;
   min-height: 0;
   overflow: hidden;
-  background: var(--fm-bg-app);
+  background: var(--fm-page-bg, var(--fm-bg-app));
   color: var(--fm-text-primary);
 }
 
@@ -22,7 +22,7 @@
   flex: 1 1 0%;
   min-height: 0;
   overflow: hidden;
-  background: var(--fm-bg-app);
+  background: transparent;
   color: var(--fm-text-primary);
   isolation: isolate;
 }
@@ -135,7 +135,7 @@
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
-  background: var(--fm-bg-app);
+  background: var(--fm-page-bg, var(--fm-bg-app));
 }
 
 /* Keep the mounted workspace children on their original tracks while the overlay spans them. */
@@ -194,6 +194,8 @@
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+  /* Docked panels float over the page backdrop (specs/frontend-v2/10 §1a). */
+  padding: var(--fm-space-1);
 }
 
 .fm-workspace-body > [data-panel-group],
@@ -219,7 +221,121 @@
   height: 100%;
   min-width: 0;
   min-height: 0;
-  background: var(--fm-bg-panel);
+  background: transparent;
+}
+
+/* Every docked window: one rounded panel with a hairline edge and soft lift. */
+.fm-workspace-body .fm-panel-frame:not([data-panel-mode="floating"]):not([data-panel-mode="maximized"]),
+.fm-workspace-body .fm-dock-column > .fm-slot {
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-section);
+  overflow: hidden;
+}
+
+.fm-workspace-body .fm-panel-frame > .fm-slot {
+  border: 0;
+  background: transparent;
+}
+
+/* Docked side panels are glass: the page glow reads through a frosted fill
+   (specs/frontend-v2/09 §1a). The viewport keeps its own opaque scene. */
+/* Every docked window, the viewport frame included, uses the same strong
+   glass so neighbouring panels do not pick up different glow tints. */
+.fm-workspace-body .fm-panel-frame:not([data-panel-mode="floating"]):not([data-panel-mode="maximized"]) {
+  border-color: var(--fm-glass-line);
+  background: var(--fm-glass-strong);
+  /* No outer shadow: attached panels and rails would darken their shared corners. */
+  box-shadow: inset 0 1px 0 var(--fm-glass-highlight);
+  -webkit-backdrop-filter: var(--fm-glass-backdrop);
+  backdrop-filter: var(--fm-glass-backdrop);
+}
+
+/* Side rails flank the dock (specs/frontend-v2/10 §1a). */
+/* Rails flank the upper dock row; the bottom dock spans beneath them. */
+.fm-workspace-main-row {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.fm-workspace-main-row > :not(.fm-side-rail) {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.fm-side-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--fm-space-1);
+  width: 48px;
+  min-height: 0;
+  padding: var(--fm-space-2) 0;
+  /* Rails never scroll; their items are few and fixed. */
+  overflow: hidden;
+  border: 1px solid var(--fm-glass-line);
+  border-radius: 20px;
+  background: var(--fm-glass-strong);
+  box-shadow: inset 0 1px 0 var(--fm-glass-highlight);
+  -webkit-backdrop-filter: var(--fm-glass-backdrop);
+  backdrop-filter: var(--fm-glass-backdrop);
+}
+
+.fm-side-rail__item {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: var(--fm-radius-field);
+  background: transparent;
+  color: var(--fm-text-muted);
+  cursor: pointer;
+  transition:
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    box-shadow var(--fm-duration-micro) var(--fm-ease-out-soft),
+    color var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-side-rail__item:hover {
+  background: color-mix(in srgb, var(--fm-text-primary) 7%, transparent);
+  color: var(--fm-text-primary);
+}
+
+.fm-side-rail__item:focus-visible {
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-side-rail__item[aria-pressed="true"] {
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm);
+  color: var(--fm-accent);
+}
+
+/* Indicator bar on the panel side of the active item. */
+.fm-side-rail__item::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-accent);
+  content: "";
+  scale: 1 0;
+  transition: scale var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-side-rail[data-side="left"] .fm-side-rail__item::before { right: -6px; }
+.fm-side-rail[data-side="right"] .fm-side-rail__item::before { left: -6px; }
+.fm-side-rail__item[aria-pressed="true"]::before { scale: 1 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-side-rail__item,
+  .fm-side-rail__item::before { transition: none; }
 }
 
 .fm-dock-column[data-dragging="true"] {
@@ -227,8 +343,10 @@
   z-index: 3;
 }
 
+/* Handles are the gutters between floating panels; they light up on use. */
 .fm-resize-handle {
-  background: var(--fm-border-subtle);
+  border-radius: var(--fm-radius-pill);
+  background: transparent;
   transition:
     background-color var(--fm-transition-fast),
     box-shadow var(--fm-transition-fast);
@@ -236,17 +354,16 @@
 
 .fm-resize-handle:hover,
 .fm-resize-handle[data-resize-handle-active] {
-  background: var(--fm-accent);
-  box-shadow: 0 0 0 1px var(--fm-accent-soft);
+  background: color-mix(in srgb, var(--fm-accent) 55%, transparent);
 }
 
 .fm-resize-handle--vertical {
-  width: var(--fm-space-1);
+  width: var(--fm-space-2);
   cursor: col-resize;
 }
 
 .fm-resize-handle--horizontal {
-  height: var(--fm-space-1);
+  height: var(--fm-space-2);
   cursor: row-resize;
 }
 
@@ -256,11 +373,45 @@
 .fm-panel-frame > .fm-slot { flex: 1; min-height: 0; }
 .fm-panel-frame[data-panel-mode="floating"], .fm-panel-frame[data-panel-mode="maximized"] { position: fixed; z-index: 60; border: 1px solid var(--fm-border-default); border-radius: var(--fm-radius-md); box-shadow: var(--fm-shadow-elevated); overflow: hidden; }
 .fm-panel-frame__resize { position: absolute; bottom: 0; right: 0; z-index: 2; cursor: nwse-resize; touch-action: none; }
-.fm-panel-chrome { display: flex; align-items: center; flex: none; min-width: 0; min-height: var(--fm-control-height-regular); gap: var(--fm-space-1); border-bottom: 1px solid var(--fm-border-subtle); background: var(--fm-bg-chrome); padding-inline: var(--fm-space-1); }
+.fm-panel-chrome { display: flex; align-items: center; flex: none; min-width: 0; min-height: calc(var(--fm-control-height-regular) + var(--fm-space-2)); gap: var(--fm-space-1); border-bottom: 1px solid var(--fm-border-muted); background: transparent; padding-inline: var(--fm-space-2); }
 .fm-panel-chrome > .fm-tabs-list { flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; border-bottom: 0; }
-.fm-panel-chrome__title { flex: 1; color: var(--fm-text-secondary); font-size: var(--fm-font-size-control); font-weight: 600; }
+.fm-panel-chrome__title { flex: 1; color: var(--fm-text-primary); font-size: var(--fm-font-size-control); font-weight: 600; padding-inline: var(--fm-space-1); }
 .fm-panel-chrome > button { flex: none; }
 .fm-panel-restore-bar { display: flex; gap: var(--fm-space-1); position: absolute; left: var(--fm-space-2); bottom: var(--fm-space-2); z-index: 61; }
 .fm-panel-move { cursor: grab; touch-action: none; }
 
 .fm-workspace-body { position: relative; }
+
+/* Explorer and Inspector are attached to their rails: one glass unit whose
+   outer corners stay rounded and whose shared edge is a hairline. */
+.fm-side-rail[data-side="left"][data-open="true"] {
+  border-right-color: var(--fm-border-muted);
+  border-radius: 20px 0 0 20px;
+}
+
+.fm-side-rail[data-side="right"][data-open="true"] {
+  border-left-color: var(--fm-border-muted);
+  border-radius: 0 20px 20px 0;
+}
+
+.fm-workspace-main-row:has(> .fm-side-rail[data-side="left"][data-open="true"]) .fm-panel-frame[data-panel-frame="panel-left"]:not([data-panel-mode="floating"]):not([data-panel-mode="maximized"]) {
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.fm-workspace-main-row:has(> .fm-side-rail[data-side="right"][data-open="true"]) .fm-panel-frame[data-panel-frame="panel-right"]:not([data-panel-mode="floating"]):not([data-panel-mode="maximized"]) {
+  border-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* A rail whose panel is collapsed keeps a gutter to the viewport. */
+.fm-side-rail[data-side="left"][data-open="false"] { margin-right: var(--fm-space-1); }
+.fm-side-rail[data-side="right"][data-open="false"] { margin-left: var(--fm-space-1); }
+
+/* Panel tab strips scroll sideways only, without a visible scrollbar. */
+.fm-panel-chrome > .fm-tabs-list {
+  overflow-y: hidden;
+  scrollbar-width: none;
+}

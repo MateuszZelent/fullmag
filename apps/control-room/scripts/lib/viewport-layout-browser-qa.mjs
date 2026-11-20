@@ -89,8 +89,18 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
             const srgb = value.match(/^color\(srgb ([^/]+?)(?:\s*\/\s*([\d.]+))?\)$/);
             if (srgb) return [...srgb[1].trim().split(/\s+/).map((channel) => Number(channel) * 255), Number(srgb[2] ?? 1)];
             const match = value.match(/^rgba?\(([^)]+)\)$/);
-            if (!match) throw new Error(`Unsupported computed color in footer QA: ${value}`);
-            return match[1].split(/[ ,/]+/).map(Number);
+            if (match) return match[1].split(/[ ,/]+/).map(Number);
+            // Other color spaces (oklab/oklch from color-mix) are converted to
+            // sRGB by painting one pixel and reading it back.
+            if (!/^(?:oklab|oklch|lab|lch|color|hsla?|hwb)\(/.test(value)) {
+              throw new Error(`Unsupported computed color in footer QA: ${value}`);
+            }
+            const context = new OffscreenCanvas(1, 1).getContext("2d", { colorSpace: "srgb" });
+            context.clearRect(0, 0, 1, 1);
+            context.fillStyle = value;
+            context.fillRect(0, 0, 1, 1);
+            const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+            return [r, g, b, a / 255];
           };
           const luminance = (color) => color.slice(0, 3).reduce((sum, channel, index) => {
             const c = channel / 255;

@@ -2,8 +2,9 @@ import { cva } from "class-variance-authority";
 
 export const controlVariants = cva(
   [
-    "inline-flex min-w-0 items-center rounded-fm-control border",
-    "border-fm-subtle bg-fm-canvas text-fm-primary",
+    // Recessed field surface (specs/frontend-v2/09 §1a).
+    "inline-flex min-w-0 items-center rounded-fm-field border",
+    "border-fm-subtle bg-fm-field text-fm-primary",
     "font-fm-ui text-fm-control outline-none",
     "transition-[background-color,border-color,color,box-shadow] duration-150",
     "hover:border-fm-border focus-visible:ring-2 focus-visible:ring-fm-accent",
