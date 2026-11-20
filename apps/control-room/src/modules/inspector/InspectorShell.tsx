@@ -21,6 +21,8 @@ import { Button } from "@/shared/ui/Button";
 import { DropdownMenuItem } from "@/shared/ui/DropdownMenu";
 import { ScrollArea } from "@/shared/ui/ScrollArea";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
+import { useExplorerNodePath } from "@/modules/explorer/explorerNodePath";
+import { selectionFromExplorerNode } from "@/modules/explorer/explorerSelection";
 import { InspectorFooter } from "./InspectorFooter";
 import type { InspectorDescriptor } from "./inspectorDescriptor";
 import { resetInspectorScroll } from "./inspectorScroll";
@@ -94,6 +96,18 @@ export function InspectorShell({
   const contentRef = useRef<HTMLDivElement>(null);
   const nodeId = descriptor.metadata.find((item) => item.label === "Node")?.value;
   const displayId = inspectorDisplayId(descriptor.metadata);
+  const treePath = useExplorerNodePath(nodeId);
+  // Prefer the full Explorer path (Universe › Airbox › Visualization); the
+  // descriptor's short path remains for selections outside the tree.
+  const breadcrumbs: InspectorDescriptor["breadcrumbs"] = treePath
+    ? treePath.nodes.map((node, index) => ({
+        id: node.id,
+        label: node.label,
+        selection: index < treePath.nodes.length - 1 && node.selectable !== false
+          ? selectionFromExplorerNode(node)
+          : undefined,
+      }))
+    : descriptor.breadcrumbs;
   const descriptorKey = `${nodeId ?? descriptor.title}:${descriptor.tabs.map((tab) => tab.id).join(",")}`;
   useLayoutEffect(() => {
     configureInspectorTabs(descriptorKey, descriptor.tabs.map((tab) => tab.id));
@@ -123,9 +137,9 @@ export function InspectorShell({
           </DropdownMenuItem>
         }
       >
-        {descriptor.breadcrumbs.length > 0 ? (
+        {breadcrumbs.length > 0 ? (
           <nav className="fm-inspector__breadcrumbs" aria-label="Selection path">
-            {descriptor.breadcrumbs.map((crumb, index) => (
+            {breadcrumbs.map((crumb, index) => (
               <span className="fm-inspector__breadcrumb-item" key={crumb.id}>
                 {index > 0 ? (
                   <ChevronRight aria-hidden="true" className="fm-inspector__breadcrumb-separator" size={12} />
