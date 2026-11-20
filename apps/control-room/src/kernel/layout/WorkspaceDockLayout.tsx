@@ -127,7 +127,6 @@ export function WorkspaceDockLayout() {
   const hasAuxViewportModule = !projectOnly && !playbackOnly && kernel.modules.forSlot("viewport-aux").length > 0;
   const [dockState, setDockState] = useState<WorkspaceDockState>({ layout: DEFAULT_WORKSPACE_LAYOUT, restored: false });
   const [dockedPanels, setDockedPanels] = useState<Record<string, boolean>>({});
-  const [windowWidth, setWindowWidth] = useState(1440);
   const panels = useRef<Record<string, PanelImperativeHandle | null>>({});
 
   useEffect(() => {
@@ -138,9 +137,7 @@ export function WorkspaceDockLayout() {
     };
     restore();
     window.addEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, restore);
-    const resize = () => setWindowWidth(window.innerWidth);
-    resize(); window.addEventListener("resize", resize);
-    return () => { window.removeEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, restore); window.removeEventListener("resize", resize); };
+    return () => { window.removeEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, restore); };
   }, []);
   useEffect(() => { if (dockState.restored) persistWorkspaceLayout(dockState.layout); }, [dockState]);
   const onDockChange = useCallback((id: string, docked: boolean) => {
@@ -164,7 +161,9 @@ export function WorkspaceDockLayout() {
   const visible = (id: string) => playbackOnly && id === "panel-right"
     ? true
     : id === "panel-left" ? panelVisible.left : id === "panel-right" ? panelVisible.right : true;
-  const isDrawer = (id: string) => (id === "panel-right" || id === "panel-left") && windowWidth < 760;
+  // Side panels never become drawers: they stay docked beside their rails and
+  // the columns scale with the window; a rail icon collapses a panel for room.
+  const isDrawer = (_id: string) => false;
   // Explorer and Inspector drawers open together only below 760px; they then split the width.
   const drawersShared = isDrawer("panel-left") && isDrawer("panel-right") && visible("panel-left") && visible("panel-right");
   const move = (id: string, direction: -1 | 1) => {

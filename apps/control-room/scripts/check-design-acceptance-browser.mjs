@@ -191,7 +191,7 @@ try {
     await page.screenshot({ path: resolve(output, `home-${theme}.png`) });
     await page.getByRole("button", { name: "Back to simulation", exact: true }).click();
 
-    // K6: narrow drawers open from their own edges.
+    // K6: narrow windows keep both side panels docked between their rails.
     await page.setViewportSize({ width: 700, height: 1000 });
     await page.waitForTimeout(300);
     const drawers = await page.evaluate(() => Object.fromEntries(["panel-left", "panel-right"].map((id) => {
@@ -199,9 +199,14 @@ try {
       const box = frame?.hidden ? null : frame?.getBoundingClientRect();
       return [id, box ? [box.left, box.right] : null];
     })));
-    if (drawers["panel-left"]) assert(drawers["panel-left"][0] <= 16, `${theme}: left drawer at left edge ${drawers["panel-left"]}`);
-    if (drawers["panel-right"]) assert(drawers["panel-right"][1] >= 700 - 16, `${theme}: right drawer at right edge ${drawers["panel-right"]}`);
-    if (drawers["panel-left"] && drawers["panel-right"]) assert(drawers["panel-left"][1] <= drawers["panel-right"][0] + 1, `${theme}: open drawers do not overlap ${JSON.stringify(drawers)}`);
+    const rails = await page.evaluate(() => [...document.querySelectorAll(".fm-side-rail")].map((rail) => {
+      const box = rail.getBoundingClientRect();
+      return [box.left, box.right];
+    }));
+    assert.equal(rails.length, 2, `${theme}: both side rails stay visible at 700 px`);
+    if (drawers["panel-left"]) assert(drawers["panel-left"][0] >= rails[0][1] - 1, `${theme}: Explorer docked right of its rail ${drawers["panel-left"]}`);
+    if (drawers["panel-right"]) assert(drawers["panel-right"][1] <= rails[1][0] + 1, `${theme}: Inspector docked left of its rail ${drawers["panel-right"]}`);
+    if (drawers["panel-left"] && drawers["panel-right"]) assert(drawers["panel-left"][1] <= drawers["panel-right"][0] + 1, `${theme}: docked side panels do not overlap ${JSON.stringify(drawers)}`);
 
     results.push({ theme, ribbon, labels: labels.length, workspaceHeader, inspectorMenu, viewportMenu, gl, followup, hostId, homeHeader, tileNames, drawers });
     await context.close();

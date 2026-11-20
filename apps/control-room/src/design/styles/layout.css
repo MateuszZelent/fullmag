@@ -333,10 +333,6 @@
 .fm-side-rail[data-side="right"] .fm-side-rail__item::before { left: -6px; }
 .fm-side-rail__item[aria-pressed="true"]::before { scale: 1 1; }
 
-@media (width < 760px) {
-  .fm-workspace-main-row > .fm-side-rail { display: none; }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .fm-side-rail__item,
   .fm-side-rail__item::before { transition: none; }
