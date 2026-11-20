@@ -60,8 +60,17 @@ fn parses_precedence() {
 }
 
 #[test]
+fn parses_precedence_with_double_star() {
+    let function = time_function(&[], &[], "2+3*4**2**0.5").unwrap();
+    let expected = 2.0 + 3.0 * 4.0_f64.powf(2.0_f64.powf(0.5));
+    assert_eq!(function.eval_time(0.0), expected);
+}
+
+#[test]
 fn unary_minus_binds_looser_than_power() {
     let function = time_function(&[], &[], "-2^2").unwrap();
+    assert_eq!(function.eval_time(0.0), -4.0);
+    let function = time_function(&[], &[], "-2**2").unwrap();
     assert_eq!(function.eval_time(0.0), -4.0);
 }
 

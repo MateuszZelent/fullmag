@@ -267,8 +267,14 @@ pub(crate) fn evaluate(node: &Node, variables: &[f64; 4], locals: &[f64]) -> f64
     }
 }
 
+/// A negative number (a folded parameter) is parenthesized: `(-2.0)**2.0` is 4,
+/// while `-2.0**2.0` would read as `-(2.0**2.0)`.
 fn format_number(value: f64) -> String {
-    format!("{value:?}")
+    if value.is_sign_negative() {
+        format!("({value:?})")
+    } else {
+        format!("{value:?}")
+    }
 }
 
 impl CompiledFunction {
@@ -330,8 +336,9 @@ impl CompiledFunction {
             .any(|output| depends_on_variable(output, &self.local_is_variable))
     }
 
-    /// Outputs with locals substituted, fully parenthesized. Two functions with
-    /// equal canonical outputs compute the same values.
+    /// Outputs with locals substituted, fully parenthesized, as Python
+    /// expressions (`**` for power). Two functions with equal canonical outputs
+    /// compute the same values.
     pub fn canonical_outputs(&self) -> Vec<String> {
         self.outputs
             .iter()
@@ -347,7 +354,7 @@ impl CompiledFunction {
             Node::Negate(operand) => format!("(-{})", self.canonical(operand)),
             Node::Binary(op, left, right) => {
                 let symbol = match op {
-                    BinaryOp::Pow => "^".to_string(),
+                    BinaryOp::Pow => "**".to_string(),
                     other => format!(" {} ", other.symbol()),
                 };
                 format!(
