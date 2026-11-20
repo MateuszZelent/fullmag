@@ -52,9 +52,16 @@ impl LiveFieldCadence {
         self.min_interval
     }
 
-    /// Whether an admitted heavy payload carries the full observation catalog.
+    /// Whether an admitted heavy payload carries the observation catalog
+    /// (`m` plus the demanded quantities, see `live_demand`).
+    ///
+    /// Every admitted heavy payload carries it. A stride above one only means
+    /// fewer payloads (large meshes); limiting the catalog to every-step
+    /// cadences left derived fields such as `H_demag` or `H_eff` unpublished
+    /// for the whole run whenever the worker chose a coarser stride. The
+    /// worker still drops any single field that exceeds its byte budget.
     pub(crate) fn publishes_full_catalog(&self) -> bool {
-        self.every_n == 1
+        self.every_n != u64::MAX
     }
 
     /// Step gate only. Used for decisions that must not depend on wall time,
@@ -156,6 +163,15 @@ mod tests {
         assert!(!cadence.heavy_payload_due(3));
         assert_eq!(cadence.take_deferred_step(), Some(3));
         assert_eq!(cadence.take_deferred_step(), None);
+    }
+
+    #[test]
+    fn coarse_strides_still_carry_the_demanded_catalog() {
+        // Regression: a stride above one used to publish m alone, so large
+        // meshes never exposed H_demag or H_eff during a run.
+        assert!(LiveFieldCadence::every_n_steps(1).publishes_full_catalog());
+        assert!(LiveFieldCadence::every_n_steps(100).publishes_full_catalog());
+        assert!(!LiveFieldCadence::every_n_steps(u64::MAX).publishes_full_catalog());
     }
 
     #[test]
