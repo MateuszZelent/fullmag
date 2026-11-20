@@ -472,12 +472,14 @@ mod tests {
         include_str!("../tests/fixtures/absorbing_boundary_formula_baseline.json");
 
     /// Equal, or adjacent binary64 values of the same sign.
-    fn within_one_ulp(a: f64, b: f64) -> bool {
-        a == b || (a.is_sign_negative() == b.is_sign_negative() && a.to_bits().abs_diff(b.to_bits()) <= 1)
+    /// The old values were recorded with one libm; another libm may differ in the
+    /// last bits of `log1p`, `exp` and friends, so allow a few units in the last place.
+    fn within_ulps(a: f64, b: f64) -> bool {
+        a == b || (a.is_sign_negative() == b.is_sign_negative() && a.to_bits().abs_diff(b.to_bits()) <= 4)
     }
 
     fn close(a: f64, b: f64) -> bool {
-        within_one_ulp(a, b) || (a - b).abs() <= 1e-14 * a.abs().max(b.abs())
+        within_ulps(a, b) || (a - b).abs() <= 1e-14 * a.abs().max(b.abs())
     }
 
     fn check_rejection(name: &str, case: &serde_json::Value, error: &FormulaError) {
@@ -523,7 +525,7 @@ mod tests {
                             let u = step as f64 / 256.0;
                             let value = profile.evaluate(u).unwrap();
                             let old = old.as_f64().unwrap();
-                            assert!(within_one_ulp(value, old), "{name} at u={u}: {value} != {old}");
+                            assert!(within_ulps(value, old), "{name} at u={u}: {value} != {old}");
                         }
                         compared += 1;
                     }
@@ -574,7 +576,7 @@ mod tests {
                         for (point, old) in points.iter().zip(old.as_array().unwrap()) {
                             let value = coordinate.evaluate(*point).unwrap();
                             let old = old.as_f64().unwrap();
-                            assert!(within_one_ulp(value, old), "{name} at {point:?}: {value} != {old}");
+                            assert!(within_ulps(value, old), "{name} at {point:?}: {value} != {old}");
                         }
                         compared += 1;
                     }
