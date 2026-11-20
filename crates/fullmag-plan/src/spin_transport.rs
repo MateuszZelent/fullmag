@@ -17,9 +17,9 @@ use fullmag_ir::{
 use fullmag_ir::{ChargePotentialGaugeIR, TransportCouplingIR};
 use sha2::{Digest, Sha256};
 
+use crate::PlanError;
 use crate::physics_graph::physics_module_execution_enabled;
 use crate::surface_selectors::resolve_fem_surface_selector;
-use crate::PlanError;
 
 const FEM_STAGE_OERSTED_CALLBACK_POLICY: &str = "fem_stage_oersted_callback.v1";
 const FEM_STAGE_TRANSPORT_CALLBACK_POLICY: &str = "fem_stage_transport_callback.v1";
@@ -4263,6 +4263,8 @@ fn internal_faces(grid: [u32; 3], axis: u8) -> Vec<StructuredInternalFaceIR> {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use super::*;
     use fullmag_ir::*;
 
@@ -5307,6 +5309,93 @@ mod tests {
             parent_id: None,
         };
         (mesh, vec![segment], vec![part])
+    }
+
+    #[test]
+    fn public_fem_m2_python_example_resolves_through_full_planner() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("repository root");
+        let mut python_paths = vec![repo_root.join("packages/fullmag-py/src")];
+        if let Some(existing) = std::env::var_os("PYTHONPATH") {
+            python_paths.extend(std::env::split_paths(&existing));
+        }
+        let python_path = std::env::join_paths(python_paths).expect("PYTHONPATH");
+        let output = Command::new("python3")
+            .args([
+                "-B",
+                "-m",
+                "fullmag.runtime.helper",
+                "export-run-config",
+                "--script",
+                "examples/fem_reciprocal_m2_public.py",
+                "--backend",
+                "fem",
+                "--mode",
+                "strict",
+                "--precision",
+                "double",
+                "--skip-geometry-assets",
+            ])
+            .current_dir(&repo_root)
+            .env("PYTHONPATH", python_path)
+            .output()
+            .expect("Python runtime is installed for spin-transport planner contracts");
+        assert!(
+            output.status.success(),
+            "public FEM M2 example export failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let exported: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("run-config JSON");
+        let stage_ir = exported["stages"][0]["ir"].clone();
+        let mut problem: ProblemIR =
+            serde_json::from_value(stage_ir).expect("public example ProblemIR");
+
+        // Use the small valid tetrahedral mesh already shared by planner
+        // contracts. The example's geometry, boundaries, materials, and
+        // solver policies still come directly from its Python-authored IR.
+        let (mut mesh, _, _) = fem_mesh_fixture();
+        mesh.mesh_name = "m2_body".into();
+        for node in &mut mesh.nodes {
+            node[0] = (node[0] - 0.5) * 30.0e-9;
+            node[1] = (node[1] - 0.5) * 20.0e-9;
+            node[2] = (node[2] - 0.5) * 4.0e-9;
+        }
+        problem.geometry_assets = Some(GeometryAssetsIR {
+            fem_domain_mesh_asset: Some(FemDomainMeshAssetIR {
+                mesh_source: None,
+                mesh: Some(mesh),
+                region_markers: vec![FemDomainRegionMarkerIR {
+                    geometry_name: "m2_body".into(),
+                    marker: 7,
+                }],
+                object_region_markers: Vec::new(),
+                build_report: None,
+            }),
+            ..GeometryAssetsIR::default()
+        });
+
+        let plan = crate::plan(&problem).unwrap_or_else(|error| {
+            panic!(
+                "public FEM M2 example did not plan: {}",
+                error.reasons.join("; ")
+            )
+        });
+        let BackendPlanIR::Fem(fem) = plan.backend_plan else {
+            panic!("public FEM M2 example did not resolve to a FEM plan");
+        };
+        let spin = fem
+            .spin_transport_plans
+            .iter()
+            .find(|candidate| candidate.module_id == "m2_spin")
+            .expect("public example spin transport plan");
+        assert_eq!(spin.resolved_coupling, TransportCouplingIR::Bidirectional);
+        assert_eq!(spin.resolved_discretization, BackendTarget::Fem);
+        assert_eq!(spin.resolved_device, ExecutionDevice::Cpu);
+        assert!(spin.fem_cpu_double.is_some());
     }
 
     fn cube_closed_current_view(mesh: &MeshIR) -> ResolvedFemConservativeCurrentViewIR {
