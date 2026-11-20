@@ -974,6 +974,7 @@ export type TableRowsResource = components["schemas"]["TableRowsResource"];
 export type TableColumnMeta = components["schemas"]["TableColumnMeta"];
 export type TableListResource = components["schemas"]["TableListResource"];
 export type TableResource = components["schemas"]["TableResource"];
+export type TableSeriesResponseMetadata = StudyResultSeriesIdentity | null | undefined;
 export interface TableRowsQuery {
   columns?: readonly string[];
   cursor?: number;

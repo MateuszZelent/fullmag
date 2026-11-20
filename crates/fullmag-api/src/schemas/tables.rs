@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::schemas::scalars::ScalarSeriesIdentity;
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct TableColumnMeta {
     pub column_id: String,
@@ -44,6 +46,9 @@ pub struct TableRowsResource {
     pub cursor_end: u64,
     pub total_rows: u64,
     pub returned_rows: u64,
+    /// Exact accepted worker series owning the live rows, when verified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<ScalarSeriesIdentity>,
     pub columns: Vec<TableColumnMeta>,
     pub rows: Vec<Vec<f64>>,
     pub decimation: Option<TableDecimationMeta>,

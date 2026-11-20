@@ -2944,6 +2944,26 @@ fn validate_accepted_worker_start_preconditions(
     Ok(())
 }
 
+fn has_inactive_time_dependent_slonczewski(
+    problem: &fullmag_ir::ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> bool {
+    // Use the immutable authored inventory and the planner's normalized
+    // activation. An omitted or unsupported module is not an inactive stage.
+    let [fullmag_ir::SpinTorqueModuleIR::Slonczewski {
+        id: Some(id),
+        time_expression: Some(_),
+        ..
+    }] = problem.spin_torque_modules.as_slice() else {
+        return false;
+    };
+    plan.provenance.physics_graph.as_ref().is_some_and(|graph| {
+        graph.modules.iter().any(|module| {
+            module.kind == "spin_torque" && module.module_id.as_str() == id.as_str() && module.status == "inactive"
+        })
+    })
+}
+
 /// Validate numeric execution before reserving an attempt. Field/state f64
 /// codecs do not require the CUDA integrator to use internal double storage.
 fn accepted_fdm_execution_precision(
@@ -2951,6 +2971,7 @@ fn accepted_fdm_execution_precision(
     problem_precision: fullmag_ir::ExecutionPrecision,
     single_grid: Option<&fullmag_ir::FdmPlanIR>,
     has_frozen_terminal_context: bool,
+    has_inactive_time_expression: bool,
 ) -> Result<fullmag_ir::ExecutionPrecision> {
     use fullmag_ir::ExecutionPrecision;
     let precision = match (request.device.as_str(), request.precision.as_str()) {
@@ -2965,16 +2986,24 @@ fn accepted_fdm_execution_precision(
         && precision == ExecutionPrecision::Double
         && !has_frozen_terminal_context
         && single_grid.is_some_and(|plan| {
-            plan.slonczewski_time_expression.is_some()
-                && plan.integrator == Some(fullmag_ir::IntegratorChoice::Rk45)
-                && plan.relaxation.is_none()
-                && plan.spin_transport_plans.is_empty()
+            plan.spin_transport_plans.is_empty()
+                && plan.fdm_gpu_charge_transports.is_empty()
+                && if has_time_expression {
+                    plan.integrator == Some(fullmag_ir::IntegratorChoice::Rk45)
+                        && plan.relaxation.is_none()
+                } else {
+                    has_inactive_time_expression
+                        && plan.current_density.is_none()
+                        && plan.stt_spin_polarization.is_none()
+                        && plan.sot_current_density.is_none()
+                        && plan.sot_drive.is_none()
+                }
         });
     if request.backend != "fdm"
         || (request.mode == "strict" && has_time_expression)
         || (request.mode != "strict" && !extended_time_expression)
     {
-        bail!("accepted FDM execution requires strict mode for constant current or the explicit extended FP64 FDM Slonczewski time-expression lane");
+        bail!("accepted FDM execution requires strict mode or the explicit extended FP64 FDM Slonczewski time-expression lane");
     }
     if problem_precision != precision {
         bail!("accepted FDM request precision differs from immutable ProblemIR precision");
@@ -3094,7 +3123,15 @@ fn execute_accepted_worker_start_with_snapshot(
     };
     accepted_fdm_execution_precision(request,
         accepted_step.problem.backend_policy.execution_precision,
-        single_grid, accepted_step.resolved_input.frozen_stage_context.is_some())?;
+        single_grid,
+        accepted_step.resolved_input.frozen_stage_context.is_some(),
+        request.mode == "extended"
+            && !single_grid.is_some_and(|plan| plan.slonczewski_time_expression.is_some())
+            && has_inactive_time_dependent_slonczewski(
+                &accepted_step.problem,
+                &accepted_step.execution_plan,
+            ),
+    )?;
     if !specification.seeds.is_empty()
         || !accepted_step.problem.problem_meta.seeds.is_empty()
     {
@@ -5201,7 +5238,8 @@ mod accepted_fdm_precision_tests {
                     &request(device, "double"),
                     Precision::Double,
                     Some(&double),
-                    false
+                    false,
+                    false,
                 )
                 .unwrap(),
                 Precision::Double
@@ -5211,7 +5249,8 @@ mod accepted_fdm_precision_tests {
                     &request(device, "double"),
                     Precision::Double,
                     None,
-                    false
+                    false,
+                    false,
                 )
                 .unwrap(),
                 Precision::Double
@@ -5223,7 +5262,8 @@ mod accepted_fdm_precision_tests {
                 &request("gpu", "single"),
                 Precision::Single,
                 Some(&single),
-                false
+                false,
+                false,
             )
             .unwrap(),
             Precision::Single
@@ -5243,7 +5283,8 @@ mod accepted_fdm_precision_tests {
                 &request(device, "single"),
                 Precision::Single,
                 grid,
-                frozen
+                frozen,
+                false,
             )
             .is_err());
         }
@@ -5253,7 +5294,8 @@ mod accepted_fdm_precision_tests {
             &extended,
             Precision::Single,
             Some(&single),
-            false
+            false,
+            false,
         )
         .is_err());
     }
@@ -5270,7 +5312,7 @@ mod accepted_fdm_precision_tests {
             let mut request = request(device, "double");
             request.mode = "extended".into();
             assert_eq!(
-                accepted_fdm_execution_precision(&request, Precision::Double, Some(&single), false).unwrap(),
+                accepted_fdm_execution_precision(&request, Precision::Double, Some(&single), false, false).unwrap(),
                 Precision::Double,
                 "device={device}",
             );
@@ -5278,11 +5320,37 @@ mod accepted_fdm_precision_tests {
 
         let mut strict_gpu = request("gpu", "double");
         strict_gpu.mode = "strict".into();
-        assert!(accepted_fdm_execution_precision(&strict_gpu, Precision::Double, Some(&single), false).is_err());
+        assert!(accepted_fdm_execution_precision(&strict_gpu, Precision::Double, Some(&single), false, false).is_err());
         single.integrator = Some(fullmag_ir::IntegratorChoice::Heun);
         let mut extended_cpu = request("cpu", "double");
         extended_cpu.mode = "extended".into();
-        assert!(accepted_fdm_execution_precision(&extended_cpu, Precision::Double, Some(&single), false).is_err());
+        assert!(accepted_fdm_execution_precision(&extended_cpu, Precision::Double, Some(&single), false, false).is_err());
+    }
+
+    #[test]
+    fn admits_inactive_time_expression_stages_without_enabling_constant_current() {
+        let mut request = request("gpu", "double");
+        request.mode = "extended".into();
+        let mut stage = plan(Precision::Double);
+        stage.integrator = Some(fullmag_ir::IntegratorChoice::Rk23);
+        assert_eq!(
+            accepted_fdm_execution_precision(&request, Precision::Double, Some(&stage), false, true)
+                .unwrap(),
+            Precision::Double,
+        );
+        assert!(
+            accepted_fdm_execution_precision(&request, Precision::Double, Some(&stage), false, false)
+                .is_err()
+        );
+        assert!(
+            accepted_fdm_execution_precision(&request, Precision::Double, Some(&stage), true, true)
+                .is_err()
+        );
+        stage.current_density = Some([1.0, 0.0, 0.0]);
+        assert!(
+            accepted_fdm_execution_precision(&request, Precision::Double, Some(&stage), false, true)
+                .is_err()
+        );
     }
 
     #[test]
@@ -5292,14 +5360,16 @@ mod accepted_fdm_precision_tests {
             &request("gpu", "single"),
             Precision::Double,
             Some(&single),
-            false
+            false,
+            false,
         )
         .is_err());
         assert!(accepted_fdm_execution_precision(
             &request("gpu", "single"),
             Precision::Single,
             Some(&plan(Precision::Double)),
-            false
+            false,
+            false,
         )
         .is_err());
         let mut bad_policy = single.clone();
@@ -5308,14 +5378,16 @@ mod accepted_fdm_precision_tests {
             &request("gpu", "single"),
             Precision::Single,
             Some(&bad_policy),
-            false
+            false,
+            false,
         )
         .is_err());
         assert!(accepted_fdm_execution_precision(
             &request("gpu", "double"),
             Precision::Double,
             Some(&single),
-            false
+            false,
+            false,
         )
         .is_err());
     }

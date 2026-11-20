@@ -172,39 +172,58 @@ class RuntimeFlagsExportTests(unittest.TestCase):
         self.assertEqual(flags, self._runtime_flags(full))
         self.assertEqual(flags, {"interactive_session_requested": "false", "wait_for_solve": 1})
 
-    def test_thin_export_does_not_repair_missing_or_nonobject_runtime_metadata(self) -> None:
-        cases = (
-            ("missing", {"problem_meta": {}}, None),
-            ("null", {"problem_meta": {"runtime_metadata": None}}, None),
-            ("nonobject", {"problem_meta": {"runtime_metadata": "invalid"}}, "invalid"),
+    def test_thin_export_reads_authoring_flags_without_ir_or_execution_identity(self) -> None:
+        loaded = SimpleNamespace(
+            pipeline_base_problem=lambda: SimpleNamespace(runtime_metadata={
+                "interactive_session_requested": "false", "wait_for_solve": 1,
+                "other": "not exported",
+            }),
         )
-        for name, ir, expected in cases:
-            with self.subTest(name=name):
-                loaded = SimpleNamespace(
-                    has_declared_execution_profile=lambda: False,
-                    problem=SimpleNamespace(geometry_asset_cache={}),
-                    source_path=Path("mocked-runtime-flags.py"),
-                    to_ir=lambda **_kwargs: ir,
-                )
-                stdout = StringIO()
-                stderr = StringIO()
-                with (
-                    patch("fullmag.runtime.helper._load_script", return_value=loaded),
-                    redirect_stdout(stdout),
-                    redirect_stderr(stderr),
-                ):
-                    status = main([
-                        "export-run-config",
-                        "--script",
-                        str(loaded.source_path),
-                        "--runtime-flags-only",
-                    ])
+        stdout = StringIO()
+        with (
+            patch("fullmag.runtime.helper._load_script", return_value=loaded),
+            patch("fullmag.runtime.helper._write_executed_problem_ir_identity") as identity,
+            redirect_stdout(stdout), redirect_stderr(StringIO()),
+        ):
+            status = main(["export-run-config", "--script", "unused.py", "--runtime-flags-only"])
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(stdout.getvalue()), {"ir": {"problem_meta": {
+            "runtime_metadata": {"interactive_session_requested": "false", "wait_for_solve": 1}
+        }}})
+        identity.assert_not_called()
 
-                self.assertEqual(status, 0)
-                runtime_metadata = json.loads(stdout.getvalue())["ir"]["problem_meta"]
-                runtime_metadata = runtime_metadata["runtime_metadata"]
-                self.assertEqual(runtime_metadata, expected)
-                self.assertNotIsInstance(runtime_metadata, dict)
+    def test_thin_export_preserves_malformed_authoring_metadata_for_rejection(self) -> None:
+        for problem, expected in ((SimpleNamespace(), None), (SimpleNamespace(runtime_metadata=None), None),
+                                  (SimpleNamespace(runtime_metadata="invalid"), "invalid")):
+            with self.subTest(problem=problem):
+                loaded = SimpleNamespace(pipeline_base_problem=lambda: problem)
+                stdout = StringIO()
+                with patch("fullmag.runtime.helper._load_script", return_value=loaded), redirect_stdout(stdout), redirect_stderr(StringIO()):
+                    self.assertEqual(main(["export-run-config", "--script", "unused.py", "--runtime-flags-only"]), 0)
+                self.assertEqual(json.loads(stdout.getvalue())["ir"]["problem_meta"]["runtime_metadata"], expected)
+
+    def test_stage_only_gpu_bb_exports_runtime_flags_before_base_ir_validation(self) -> None:
+        with TemporaryDirectory() as temporary:
+            source = Path(temporary) / "gpu_bb.py"
+            source.write_text("""import fullmag as fm
+study = fm.study('stage-only-bb')
+study.engine('fem')
+study.device('gpu', precision='double')
+study.fem_bb_preconditioner('exchange_mass')
+study.interactive(True)
+body = study.geometry(fm.Box(20e-9, 20e-9, 20e-9), name='body')
+body.Ms = 800e3
+body.Aex = 13e-12
+body.m = fm.init.UniformMagnetization((1, 0, 0))
+body.mesh(maximum_element_size=20e-9, order=1)
+study.relax(algorithm='projected_gradient_bb', max_steps=2, tolA=1e-6)
+study.wait_for_solve(True)
+""", encoding="utf-8")
+            status, raw, _ = self._export(source, runtime_flags_only=True)
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(raw)["ir"]["problem_meta"]["runtime_metadata"], {
+            "interactive_session_requested": True, "wait_for_solve": True,
+        })
 
     def test_large_initial_state_is_omitted_from_thin_output(self) -> None:
         vector_count = 18_528

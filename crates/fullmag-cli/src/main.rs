@@ -1544,6 +1544,7 @@ mod tests {
                 projection_policy: None,
             }),
             fem: Some(FemHintsIR {
+                gpu_bb_preconditioner: None,
                 order: 1,
                 hmax: 2e-9,
                 mesh: None,
@@ -1682,6 +1683,7 @@ mod tests {
             per_domain_quality: Default::default(),
         };
         let plan = BackendPlanIR::Fem(FemPlanIR {
+            gpu_bb_preconditioner: None,
             mesh_name: mesh.mesh_name.clone(),
             mesh_source: None,
             mesh: mesh.clone(),

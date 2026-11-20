@@ -478,6 +478,7 @@ class FEM:
     maximum_element_size: float
     mesh: str | None = None
     demag_solver_policy: FemLinearSolverPolicy | None = None
+    gpu_bb_preconditioner: str | None = None
 
     def __init__(
         self,
@@ -487,6 +488,7 @@ class FEM:
         hmax: float | None = None,
         mesh: str | None = None,
         demag_solver_policy: FemLinearSolverPolicy | None = None,
+        gpu_bb_preconditioner: str | None = None,
     ) -> None:
         resolved_maximum_element_size = (
             maximum_element_size if maximum_element_size is not None else hmax
@@ -504,6 +506,7 @@ class FEM:
         )
         object.__setattr__(self, "mesh", mesh)
         object.__setattr__(self, "demag_solver_policy", demag_solver_policy)
+        object.__setattr__(self, "gpu_bb_preconditioner", gpu_bb_preconditioner)
         self.__post_init__()
 
     @property
@@ -515,6 +518,8 @@ class FEM:
             raise ValueError("order must be an integer >= 1")
         object.__setattr__(self, "order", int(self.order))
         require_positive(self.maximum_element_size, "maximum_element_size")
+        if self.gpu_bb_preconditioner is not None and self.gpu_bb_preconditioner not in ("auto", "none", "exchange_mass"):
+            raise ValueError("gpu_bb_preconditioner must be auto, none, or exchange_mass")
         if self.mesh is not None and not self.mesh.strip():
             raise ValueError("mesh must not be empty when provided")
 
@@ -524,6 +529,8 @@ class FEM:
             "hmax": self.maximum_element_size,
             "mesh": self.mesh,
         }
+        if self.gpu_bb_preconditioner is not None:
+            ir["gpu_bb_preconditioner"] = self.gpu_bb_preconditioner
         if self.demag_solver_policy is not None:
             ir["demag_solver_policy"] = self.demag_solver_policy.to_ir()
         return ir

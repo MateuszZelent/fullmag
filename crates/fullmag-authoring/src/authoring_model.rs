@@ -540,6 +540,9 @@ fn discretization_payload(scene: &SceneDocument) -> Value {
     if let Some(reference) = scene.study.fem_domain_mesh.as_ref() {
         object.insert("fem_domain_mesh".to_string(), json!(reference));
     }
+    if let Some(policy) = scene.study.fem_bb_preconditioner {
+        object.insert("fem_bb_preconditioner".to_string(), json!(policy));
+    }
     if let Some(resources) = scene.study.compute_resources.as_ref() {
         object.insert(
             "compute_resources".to_string(),

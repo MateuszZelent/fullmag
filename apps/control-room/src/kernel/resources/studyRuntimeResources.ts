@@ -124,6 +124,7 @@ import type {
   TableColumnMeta,
   TableListResource,
   TableResource,
+  TableSeriesResponseMetadata,
   TableRowsQuery,
   TableRowsResource,
   HysteresisAdaptiveRefinementResource,
@@ -2785,6 +2786,7 @@ export function useTableRowsBinaryResource(
     decimation,
     enabled = true,
     pauseLoad = false,
+    seriesScope,
     fromRow,
     fromT,
     includeTail,
@@ -2792,21 +2794,25 @@ export function useTableRowsBinaryResource(
     targetPoints,
     toRow,
     toT,
-  }: TableRowsQuery & { enabled?: boolean; pauseLoad?: boolean } = {},
+  }: TableRowsQuery & { enabled?: boolean; pauseLoad?: boolean; seriesScope?: string } = {},
 ) {
   const { api } = useKernel();
-  const unscopedResourceKey = `${tableRowsResourceKey(tableId, {
-    columns,
-    cursor,
-    decimation,
-    fromRow,
-    fromT,
-    includeTail,
-    limit,
-    targetPoints,
-    toRow,
-    toT,
-  })}#binary`;
+  const unscopedResourceKey = tableRowsBinaryResourceKey(
+    tableId,
+    {
+      columns,
+      cursor,
+      decimation,
+      fromRow,
+      fromT,
+      includeTail,
+      limit,
+      targetPoints,
+      toRow,
+      toT,
+    },
+    seriesScope,
+  );
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
     unscopedResourceKey,
   );
@@ -2829,7 +2835,7 @@ export function useTableRowsBinaryResource(
           },
           { sessionScopeKey, signal },
         )
-        .catch(ignoreMissingResource<BinaryResourceResult<DecodedTableRows>>),
+        .catch(ignoreMissingResource<BinaryResourceResult<DecodedTableRows, TableSeriesResponseMetadata>>),
     [
       api,
       columns,
@@ -2846,7 +2852,7 @@ export function useTableRowsBinaryResource(
     ],
   );
 
-  return useResource<BinaryResourceResult<DecodedTableRows> | null>({
+  return useResource<BinaryResourceResult<DecodedTableRows, TableSeriesResponseMetadata> | null>({
     enabled: enabled && sessionIdentity !== null,
     load,
     minRefetchIntervalMs: tableRowsMinRefetchIntervalMs(),
@@ -3392,4 +3398,15 @@ function tableRowsResourceKey(
   const query = params.toString();
   const path = DATA_TABLE_ROWS_PATH.replace("{table_id}", tableId);
   return query ? `${path}?${query}` : path;
+}
+
+export function tableRowsBinaryResourceKey(
+  tableId: string,
+  query: TableRowsQuery,
+  seriesScope?: string,
+): string {
+  const baseResourceKey = `${tableRowsResourceKey(tableId, query)}#binary`;
+  return seriesScope === undefined
+    ? baseResourceKey
+    : `${baseResourceKey}#series:${encodeURIComponent(seriesScope)}`;
 }

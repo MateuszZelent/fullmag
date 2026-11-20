@@ -829,6 +829,7 @@ mod tests {
         let mut problem = ProblemIR::bootstrap_example();
         problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
             fem: Some(fullmag_ir::FemHintsIR {
+                gpu_bb_preconditioner: None,
                 order: 2,
                 hmax: 1.0,
                 mesh: None,
