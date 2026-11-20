@@ -1054,10 +1054,23 @@ std::vector<double> stage_transport_probe_rhs(
         ctx.base_plan.precession_enabled,
         rhs,
         max_rhs);
+    // The probe returns a raw Gilbert-form source T_G; the explicit RHS
+    // receives (T_G + alpha m x T_G) / (1 + alpha^2) (0970 §2.6.2a).
+    const double alpha = ctx.material_fields.material.damping;
     for (size_t index = 0; index < m.size(); index += 3u) {
-        rhs[index] += 0.63 + 0.31 * m[index + 2u] + 0.17 * time_s;
-        rhs[index + 1u] += -0.27 + 0.19 * m[index] - 0.11 * time_s;
-        rhs[index + 2u] += 0.14 - 0.23 * m[index + 1u] + 0.07 * time_s;
+        const double t[3] = {
+            0.63 + 0.31 * m[index + 2u] + 0.17 * time_s,
+            -0.27 + 0.19 * m[index] - 0.11 * time_s,
+            0.14 - 0.23 * m[index + 1u] + 0.07 * time_s,
+        };
+        const double m_cross_t[3] = {
+            m[index + 1u] * t[2] - m[index + 2u] * t[1],
+            m[index + 2u] * t[0] - m[index] * t[2],
+            m[index] * t[1] - m[index + 1u] * t[0],
+        };
+        for (size_t axis = 0; axis < 3u; ++axis) {
+            rhs[index + axis] += (t[axis] + alpha * m_cross_t[axis]) / (1.0 + alpha * alpha);
+        }
     }
     return rhs;
 }
@@ -1124,7 +1137,7 @@ void cpu_stage_transport_callback_samples_exact_stages_and_commits()
         ctx.state.m_xyz,
         expected,
         2e-13,
-        "stage transport callback must add the exact dynamic torque RHS");
+        "stage transport callback must add the Gilbert-converted dynamic torque RHS");
     check(probe.begin_count == 1u, "stage transport callback must begin one attempt");
     check(probe.commit_count == 1u, "stage transport callback must commit one attempt");
     check(probe.rollback_count == 0u, "accepted stage transport callback must not roll back");
