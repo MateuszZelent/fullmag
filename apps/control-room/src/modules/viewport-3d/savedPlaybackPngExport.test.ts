@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
-
 const { captureViewport3DImageMock } = vi.hoisted(() => ({
   captureViewport3DImageMock: vi.fn(),
 }));
@@ -22,10 +20,13 @@ describe("downloadSavedPlaybackPng", () => {
   afterEach(() => {
     viewport3dStore.resetForTest();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("applies the saved viewport PNG settings", async () => {
-    const dom = installSimulationPreparationTestDom();
+    const link = { href: "", download: "", click: vi.fn(), remove: vi.fn() };
+    const append = vi.fn();
+    vi.stubGlobal("document", { createElement: () => link, body: { append } });
     const canvas = {} as HTMLCanvasElement;
     const image = {} as Blob;
     captureViewport3DImageMock.mockResolvedValue(image);
@@ -37,16 +38,18 @@ describe("downloadSavedPlaybackPng", () => {
       exportScale: 4,
     });
 
-    try {
-      await downloadSavedPlaybackPng(canvas, "saved-study.png");
+    await downloadSavedPlaybackPng(canvas, "saved-study.png");
 
-      expect(captureViewport3DImageMock).toHaveBeenCalledWith(canvas, {
-        annotations: false,
-        background: "transparent",
-        scale: 4,
-      });
-    } finally {
-      dom.restore();
-    }
+    expect(captureViewport3DImageMock).toHaveBeenCalledWith(canvas, {
+      annotations: false,
+      background: "transparent",
+      scale: 4,
+    });
+    expect(append).toHaveBeenCalledWith(link);
+    expect(link.href).toBe("blob:saved-playback");
+    expect(link.download).toBe("saved-study.png");
+    expect(link.click).toHaveBeenCalledOnce();
+    expect(link.remove).toHaveBeenCalledOnce();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith(link.href);
   });
 });
