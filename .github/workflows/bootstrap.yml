@@ -358,7 +358,22 @@ jobs:
           cargo test --locked -p fullmag-engine --lib fdm::shared::exchange_operator::tests
           cargo test --locked -p fullmag-runner --lib cpu_snapshot_reuses_observation_fft_workspace_across_states
           cargo test --locked -p fullmag-engine --lib exchange_face_tests
-          cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::dmi_decoupled_
+          # Cargo returns success when a test-name filter matches nothing.
+          dmi_test_log="$(mktemp)"
+          trap 'rm -f "$dmi_test_log"' EXIT
+          set -o pipefail
+          cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::dmi_decoupled_ 2>&1 | tee "$dmi_test_log"
+          expected_dmi_tests=(
+            fdm::cpu::reference::tests::dmi_decoupled_exchange_connection_is_rejected_before_stepping
+            fdm::cpu::reference::tests::dmi_decoupled_exchange_connection_is_rejected_without_exchange_field
+            fdm::cpu::reference::tests::dmi_decoupled_exchange_gate_ignores_absent_or_zero_dmi
+          )
+          for test_name in "${expected_dmi_tests[@]}"; do
+            if ! grep -Fqx "test ${test_name} ... ok" "$dmi_test_log"; then
+              echo "::error::Expected DMI regression did not pass: ${test_name}" >&2
+              exit 1
+            fi
+          done
           cargo test --locked -p fullmag-plan --lib fdm_region_
           cargo test --locked -p fullmag-plan --lib fdm_cuda_region_material_fields
           cargo test --locked -p fullmag-plan --lib absorbing_boundary_
