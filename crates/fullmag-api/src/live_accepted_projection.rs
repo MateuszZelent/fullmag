@@ -2455,8 +2455,7 @@ pub(crate) async fn read_current_accepted_frequency_progress(
     let (run_id, step_id) = {
         let current = state.current_live_state.read().await;
         let Some(snapshot) = current.as_ref() else { return Ok(None); };
-        let Some(run) = snapshot.run.as_ref().filter(|run| run.run_id.starts_with("run-live-")
-            && run.artifact_dir.is_empty()) else { return Ok(None); };
+        let Some(run) = snapshot.run.as_ref().filter(|run| run.run_id.starts_with("run-live-")) else { return Ok(None); };
         let Some(stage) = snapshot.stage_execution.as_ref().and_then(|execution| execution.stages.iter()
             .find(|stage| stage.kind.as_deref() == Some("frequency_response"))) else { return Ok(None); };
         let Some(step_id) = stage.stage_id.clone() else { return Ok(None); };
@@ -4621,6 +4620,7 @@ mod tests {
             &["step:run", "step:run-2", "step:run-3"],
             false,
             serial_completion_chain,
+            "run-cancel",
         );
         let task = &mut catalog.tasks[0];
         task.lifecycle = fullmag_session::FmsTaskLifecycle::Failed;
@@ -4713,7 +4713,7 @@ mod tests {
     fn accepted_projection_fixture(
         authored: Option<&fullmag_authoring::SceneDocument>, step_ids: &[&str], cancel: bool,
     ) -> (tempfile::TempDir, fullmag_session::SessionStore, ProjectionContext, fullmag_session::FmsRunCatalog) {
-        accepted_projection_fixture_with_chain(authored, step_ids, cancel, false)
+        accepted_projection_fixture_with_chain(authored, step_ids, cancel, false, "run-cancel")
     }
 
     fn accepted_projection_fixture_with_chain(
@@ -4721,6 +4721,7 @@ mod tests {
         step_ids: &[&str],
         cancel: bool,
         serial_completion_chain: bool,
+        run_id: &str,
     ) -> (
         tempfile::TempDir,
         fullmag_session::SessionStore,
@@ -4791,7 +4792,7 @@ mod tests {
             StudyProblemCatalogEntry::from_step(step, problem)
         }).collect()).unwrap();
         let context = ProjectionContext {
-            session_id: "session-cancel".into(), run_id: "run-cancel".into(), session_epoch: 4,
+            session_id: "session-cancel".into(), run_id: run_id.into(), session_epoch: 4,
             scene_revision: authored.map_or(9, |scene| scene.revision),
             execution_input: authored.map(|scene| crate::live_execution_binding::input_identity(scene).unwrap()),
             api_instance_id: "api-cancel".into(),
@@ -5655,6 +5656,87 @@ mod tests {
             assert_eq!(execution.stages.len(), 2);
             assert_eq!(execution.stages[1].kind, None);
         }
+    }
+
+    #[tokio::test]
+    async fn accepted_frequency_progress_reads_current_attempt_with_bootstrap_artifact_dir() {
+        use crate::accepted_study_worker::frequency_response_lifecycle::PROGRESS_FILE;
+        use crate::types::StageLifecycleState;
+        use fullmag_session::FmsTaskLifecycle;
+
+        let step_id = "step-response";
+        let run_id = "run-live-response-progress";
+        let (_directory, store, context, mut catalog) =
+            accepted_projection_fixture_with_chain(None, &[step_id], false, false, run_id);
+        let task_id = catalog.tasks[0].task_id.clone();
+        catalog.tasks[0].attempt_id = Some("attempt-response".into());
+        catalog.tasks[0].ownership_epoch = Some(2);
+        let attempt_dir = store.root().join(format!(
+            "runs/{run_id}/worker-attempts/{task_id}/attempt-response/epoch-2"
+        ));
+        std::fs::create_dir_all(&attempt_dir).unwrap();
+        let frame_path = attempt_dir.join(PROGRESS_FILE);
+        let mut frame = json!({
+            "schema_version": "fullmag.accepted_frequency_response_progress.v1",
+            "run_id": run_id, "task_id": task_id, "step_id": step_id,
+            "attempt_id": "attempt-response", "ownership_epoch": 2,
+            "sequence": 1, "frequency_count": 64, "metrics": {
+                "completed_frequency_count": 5.0, "total_frequency_count": 64.0,
+                "frequency_index": 5.0, "frequency_hz": 2e9,
+                "iteration": 12.0, "relative_residual_l2_norm": 0.125
+            }
+        });
+        std::fs::write(&frame_path, serde_json::to_vec(&frame).unwrap()).unwrap();
+
+        let mut state = projection_workspace(&context).await;
+        Arc::get_mut(&mut state).unwrap().submit_store_root = Some(store.root().to_owned());
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            snapshot.run.as_mut().unwrap().artifact_dir =
+                "/opt/fullmag/runtime-control/local-live/current/runs/run-docker-startup-test"
+                    .into();
+            let stage = crate::session::accepted_stage_record(
+                step_id,
+                Some("frequency_response".into()),
+                StageLifecycleState::Running,
+            );
+            snapshot.stage_execution = Some(crate::session::accepted_stage_execution_state(
+                vec![stage],
+                crate::session::accepted_runtime_lifecycle_state("running"),
+            ));
+        }
+
+        for (lifecycle, expected) in [
+            (FmsTaskLifecycle::Running, "running"),
+            (FmsTaskLifecycle::Cancelled, "cancelled"),
+        ] {
+            catalog.tasks[0].lifecycle = lifecycle;
+            catalog.revision += 1;
+            store.commit_run_catalog(&catalog).unwrap();
+            let progress = read_current_accepted_frequency_progress(&state)
+                .await
+                .unwrap()
+                .expect("bootstrap artifact path must preserve accepted progress");
+            assert_eq!(progress.status, expected);
+            assert_eq!(progress.total_frequency_count, 64);
+            assert_eq!(progress.completed_frequency_count, 5);
+            assert_eq!(progress.current_frequency_hz, Some(2e9));
+        }
+
+        frame["attempt_id"] = json!("attempt-stale");
+        std::fs::write(&frame_path, serde_json::to_vec(&frame).unwrap()).unwrap();
+        assert!(read_current_accepted_frequency_progress(&state)
+            .await
+            .is_err());
+
+        catalog.tasks[0].lifecycle = FmsTaskLifecycle::Succeeded;
+        catalog.revision += 1;
+        store.commit_run_catalog(&catalog).unwrap();
+        assert!(read_current_accepted_frequency_progress(&state)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[test]
