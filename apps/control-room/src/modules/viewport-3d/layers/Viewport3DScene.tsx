@@ -1798,6 +1798,7 @@ function Viewport3DInteractionAndHudStack({
         onOrbitDebugAnglesChange={onOrbitDebugAnglesChange}
         tracker={tracker}
         interactionBlocked={moveGestureActive}
+        rotationMode={rotationMode}
       />
       {viewport3DOrientationHudEnabledFromBrowserConfig() ? (
         <OrientationHudLayer
