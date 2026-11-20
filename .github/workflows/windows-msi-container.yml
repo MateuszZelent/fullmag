@@ -16,6 +16,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
 jobs:
   build-windows-msi:
     name: Build with native Windows MSVC and WiX

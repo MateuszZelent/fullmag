@@ -9,6 +9,9 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   managed-fem-qualification:
     name: Qualify managed FEM CPU and GPU runtime
