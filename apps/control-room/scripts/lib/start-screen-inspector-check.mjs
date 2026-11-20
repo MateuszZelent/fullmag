@@ -18,17 +18,17 @@ const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 /** Renders the inspectors with Vite's SSR loader; returns markup builders and a closer. */
 export async function loadInspectorMarkup() {
   const { createServer } = await import("vite");
-  const server = await createServer({
-    configFile: false,
-    root: appRoot,
-    appType: "custom",
-    logLevel: "error",
-    resolve: { alias: { "@": `${appRoot}src` } },
-    server: { middlewareMode: true, hmr: false, watch: null },
-    optimizeDeps: { noDiscovery: true, include: [] },
-  });
-  // React stays a plain Node import, so the modules Vite loads share this instance.
-  const [react, { renderToStaticMarkup }] = await Promise.all([
+  // Keep React as a Node import so the Vite modules share its instance.
+  const [server, react, { renderToStaticMarkup }] = await Promise.all([
+    createServer({
+      configFile: false,
+      root: appRoot,
+      appType: "custom",
+      logLevel: "error",
+      resolve: { alias: { "@": `${appRoot}src` } },
+      server: { middlewareMode: true, hmr: false, watch: null },
+      optimizeDeps: { noDiscovery: true, include: [] },
+    }),
     import("react"),
     import("react-dom/server"),
   ]);
