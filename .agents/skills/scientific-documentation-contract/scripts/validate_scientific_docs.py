@@ -5,6 +5,7 @@ import argparse
 import ast
 import json
 import re
+from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
@@ -151,6 +152,76 @@ def _source_symbol_declarations(path: str, text: str, symbol: str) -> list[str]:
             re.MULTILINE,
         )
     return pattern.findall(text)
+
+
+class _RenderedRequirementParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.has_math = False
+        self.has_copy_control = False
+        self.has_copybutton_runtime = False
+        self.has_highlight_code = False
+        self.open_elements: list[tuple[str, set[str]]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        classes = set((attributes.get("class") or "").split())
+        self.has_math = self.has_math or any(
+            re.search(r"math|MathJax", class_name, re.IGNORECASE)
+            for class_name in classes
+        )
+        if tag == "button" and any(
+            re.search(r"copybtn|copybutton|copy-button|clipboard", class_name, re.IGNORECASE)
+            for class_name in classes
+        ):
+            self.has_copy_control = True
+        if tag == "script" and re.search(
+            r"(?:^|/)copybutton\.js(?:[?#]|$)",
+            attributes.get("src") or "",
+            re.IGNORECASE,
+        ):
+            self.has_copybutton_runtime = True
+        if tag == "pre" and any(
+            "highlight" in parent_classes
+            for _, parent_classes in self.open_elements
+        ):
+            self.has_highlight_code = True
+        if tag not in {
+            "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+            "meta", "param", "source", "track", "wbr",
+        }:
+            self.open_elements.append((tag, classes))
+
+    def handle_endtag(self, tag: str) -> None:
+        for index in range(len(self.open_elements) - 1, -1, -1):
+            if self.open_elements[index][0] == tag:
+                del self.open_elements[index:]
+                break
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+
+    @property
+    def has_copy_control_evidence(self) -> bool:
+        return self.has_copy_control or (
+            self.has_copybutton_runtime and self.has_highlight_code
+        )
+
+
+def validate_rendered_html(rendered_html: Path) -> list[str]:
+    if not rendered_html.is_file():
+        return [f"rendered HTML does not exist: {rendered_html}"]
+
+    html = rendered_html.read_text(encoding="utf-8", errors="replace")
+    parser = _RenderedRequirementParser()
+    parser.feed(html)
+    parser.close()
+    errors = []
+    if not parser.has_math:
+        errors.append("rendered HTML contains no MathJax math nodes")
+    if not parser.has_copy_control_evidence:
+        errors.append("rendered HTML contains no code-block copy control")
+    return errors
 
 
 def validate_page(
@@ -300,14 +371,7 @@ def validate_page(
                 errors.append(f"source-code index missing {source.get('id', 'source')}")
 
     if rendered_html is not None:
-        if not rendered_html.is_file():
-            errors.append(f"rendered HTML does not exist: {rendered_html}")
-        else:
-            html = rendered_html.read_text(encoding="utf-8", errors="replace")
-            if not re.search(r"class=[\"'][^\"']*(?:math|MathJax)", html, re.IGNORECASE):
-                errors.append("rendered HTML contains no MathJax math nodes")
-            if not re.search(r"copybutton|copy-button|clipboard", html, re.IGNORECASE):
-                errors.append("rendered HTML contains no code-block copy control")
+        errors.extend(validate_rendered_html(rendered_html))
     return errors
 
 

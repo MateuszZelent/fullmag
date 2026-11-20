@@ -1,4 +1,4 @@
-"""Focused contract checks for the pinned Next development route patch."""
+"""Focused checks for Next dev route discovery and the CSS HMR patch."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PATCH_PATH = REPO_ROOT / "patches" / "next@16.3.8.patch"
+PATCH_PATH = REPO_ROOT / "patches" / "next-16.4-css-hmr.patch"
 LOCK_PATH = REPO_ROOT / "pnpm-lock.yaml"
 FIXTURE_PATH = REPO_ROOT / "scripts" / "test_next_route_patch_fixture.mjs"
 PATCH_HASH_RE = re.compile(
-    r"next@16\.3\.8:\n\s+hash: ([0-9a-f]{64})\n\s+path: patches/next@16\.3\.8\.patch"
+    r"next@~16\.4\.6:\n\s+hash: ([0-9a-f]{64})\n\s+path: patches/next-16\.4-css-hmr\.patch"
 )
 
 
@@ -33,7 +33,7 @@ class NextRoutePatchTests(unittest.TestCase):
         self.assertEqual(match.group(1), patch_hash)
         self.assertIn(f"patch_hash={patch_hash}", self.lock)
 
-    def test_patched_next_route_fixture(self) -> None:
+    def test_next_dev_route_and_css_hmr_fixture(self) -> None:
         node = shutil.which("node")
         self.assertIsNotNone(node, "Node.js is required for the pinned Next fixture")
         completed = subprocess.run(
@@ -50,9 +50,9 @@ class NextRoutePatchTests(unittest.TestCase):
         self.assertEqual(
             completed.returncode,
             0,
-            f"patched Next fixture failed:\nstdout={completed.stdout}\nstderr={completed.stderr}",
+            f"Next dev fixture failed:\nstdout={completed.stdout}\nstderr={completed.stderr}",
         )
-        self.assertIn("metadata included", completed.stdout)
+        self.assertIn("Next dev route discovery contract PASS", completed.stdout)
         self.assertIn("CSS HMR fixture PASS", completed.stdout)
 
 

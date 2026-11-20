@@ -15,6 +15,7 @@ from validate_scientific_docs import (
     _safe_path,
     _source_symbol_declarations,
     validate_page,
+    validate_rendered_html,
 )
 
 
@@ -24,6 +25,7 @@ SCIENTIFIC_ROOTS = (
     "public_docs/site/physics",
     "public_docs/site/numerical-methods",
 )
+CHANGED_PATH_ROOTS = ("docs/physics", "docs/audits", "public_docs/site")
 NUMERICAL_METHODS_ROOT = "public_docs/site/numerical-methods"
 NUMERICAL_METHOD_REQUIRED_MARKERS = (
     "## Scope and purpose",
@@ -330,15 +332,27 @@ def is_registered_scaffold(path: Path, repo_root: Path) -> bool:
         return False
 
 
-def validate_changed(repo: Path, base: str, head: str) -> list[str]:
+def _rendered_path(root: Path, page: str) -> Path:
+    relative = PurePosixPath(page).relative_to("public_docs/site").with_suffix(".html")
+    return root.joinpath(*relative.parts)
+
+
+def validate_changed(
+    repo: Path,
+    base: str,
+    head: str,
+    *,
+    rendered_html_root: Path | None = None,
+) -> list[str]:
     diff = _git(
         repo,
         "diff",
         "--name-only",
         "-z",
+        "--no-renames",
         f"{base}...{head}",
         "--",
-        *SCIENTIFIC_ROOTS,
+        *CHANGED_PATH_ROOTS,
     )
     if diff.returncode != 0:
         detail = diff.stderr.decode(errors="replace").strip()
@@ -347,17 +361,18 @@ def validate_changed(repo: Path, base: str, head: str) -> list[str]:
     manifests: set[str] = set()
     errors: list[str] = []
 
-    for path in changed:
-        if path in EXEMPT_PATHS:
-            continue
-        if _is_scientific_page(path):
+    for path in sorted(changed):
+        requires_manifest = path not in EXEMPT_PATHS and _is_scientific_page(path)
+        public_page = path.startswith("public_docs/site/") and path.endswith(".md")
+        if public_page or requires_manifest:
             manifest = _manifest_for(path)
+            has_manifest = _exists(repo, head, manifest)
             if _exists(repo, head, path):
-                if _exists(repo, head, manifest):
+                if has_manifest:
                     manifests.add(manifest)
-                elif not is_registered_scaffold(repo / path, repo):
+                elif requires_manifest and not is_registered_scaffold(repo / path, repo):
                     errors.append(f"changed scientific page requires sidecar manifest: {manifest}")
-            elif _exists(repo, head, manifest):
+            elif has_manifest:
                 errors.append(f"deleted scientific page left an orphan sidecar manifest: {manifest}")
         elif path.endswith(".source-map.json"):
             page = _page_for(path)
@@ -390,6 +405,11 @@ def validate_changed(repo: Path, base: str, head: str) -> list[str]:
                 else validate_page(repo, manifest, read_file=lambda path: _read(repo, head, path))
             )
         )
+        if rendered_html_root is not None and expected_page.startswith("public_docs/site/"):
+            html_errors = validate_rendered_html(
+                _rendered_path(rendered_html_root, expected_page)
+            )
+            errors.extend(f"{manifest_path}: {error}" for error in html_errors)
     return errors
 
 
@@ -400,8 +420,16 @@ def main() -> int:
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
+    parser.add_argument("--rendered-html-root", type=Path)
     args = parser.parse_args()
-    errors = validate_changed(args.repo_root.resolve(), args.base, args.head)
+    errors = validate_changed(
+        args.repo_root.resolve(),
+        args.base,
+        args.head,
+        rendered_html_root=args.rendered_html_root.resolve()
+        if args.rendered_html_root is not None
+        else None,
+    )
     for error in errors:
         print(f"ERROR: {error}")
     return 1 if errors else 0

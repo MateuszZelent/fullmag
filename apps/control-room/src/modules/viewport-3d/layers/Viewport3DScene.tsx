@@ -1787,6 +1787,7 @@ function Viewport3DInteractionAndHudStack({
         orbitDebugStore={orbitDebugStore}
         tracker={tracker}
         interactionBlocked={moveGestureActive}
+        rotationMode={rotationMode}
       />
       {viewport3DOrientationHudEnabledFromBrowserConfig() ? (
         <OrientationHudLayer

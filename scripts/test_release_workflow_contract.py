@@ -1,6 +1,11 @@
 from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 
 
@@ -18,6 +23,48 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", content)
         self.assertNotIn("push:", content)
         self.assertNotIn("pull_request:", content)
+
+    def test_tag_binding_accepts_same_commit_and_rejects_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            remote = root / "origin.git"
+            repo = root / "checkout"
+            subprocess.run(["git", "init", "--bare", "--quiet", remote], check=True)
+            subprocess.run(["git", "init", "--quiet", repo], check=True)
+
+            def git(*args):
+                return subprocess.check_output(["git", *args], cwd=repo, text=True).strip()
+
+            git("config", "user.email", "ci@example.invalid")
+            git("config", "user.name", "CI")
+            git("remote", "add", "origin", str(remote))
+            git("commit", "--allow-empty", "-qm", "build source")
+            first = git("rev-parse", "HEAD")
+            bind = ["bash", str(ROOT / "scripts/ci/bind_release_tag.sh"), "v1.0.0"]
+            subprocess.run([*bind, first], cwd=repo, check=True)
+            subprocess.run([*bind, first], cwd=repo, check=True)
+            git("commit", "--allow-empty", "-qm", "different build")
+            result = subprocess.run([*bind, git("rev-parse", "HEAD")], cwd=repo)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(git("ls-remote", "origin", "refs/tags/v1.0.0").split()[0], first)
+
+    def test_extracted_archive_rejects_file_or_identity_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "fullmag"
+            binary.write_bytes(b"binary")
+            manifest = {
+                "tag": "v1", "git_sha": "sha", "source_identity": {"head_commit_full": "sha"},
+                "platform": "linux-x86_64", "files_sha256": {"fullmag": hashlib.sha256(b"binary").hexdigest()},
+            }
+            (root / "release-manifest.json").write_text(json.dumps(manifest))
+            command = [sys.executable, str(ROOT / "scripts/ci/verify_release_bundle.py"), str(root), "v1", "sha"]
+            subprocess.run([*command, "linux-x86_64"], check=True, capture_output=True)
+            self.assertNotEqual(subprocess.run([*command, "windows-x86_64"], capture_output=True).returncode, 0)
+            binary.write_bytes(b"modified")
+            self.assertNotEqual(subprocess.run([*command, "linux-x86_64"], capture_output=True).returncode, 0)
+            binary.unlink()
+            self.assertNotEqual(subprocess.run([*command, "linux-x86_64"], capture_output=True).returncode, 0)
 
     def test_workflow_defines_required_inputs(self) -> None:
         content = RELEASE_WORKFLOW.read_text(encoding="utf-8")
@@ -106,13 +153,13 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             portable,
         ))
         self.assertEqual(len(required), 9)
-        installed = set(re.findall(r'cargo_target_dir\}/release/(fullmag-api-[\w-]+)', makefile))
+        installed = set(re.findall(r'cargo_target_profile_dir/(fullmag-api-[\w-]+)', makefile))
         runpath = set(re.findall(
-            r"patchelf --set-rpath '[^']+' \.fullmag/local/bin/(fullmag-api-[\w-]+)",
+            r"patchelf --set-rpath '[^']+' \"\$\(FULLMAG_INTERNAL_INSTALL_ROOT\)/bin/(fullmag-api-[\w-]+)",
             makefile,
         ))
         for names, body in re.findall(r'for binary in ([^;]+); do \\\n(.*?)\n\t*done', makefile, re.S):
-            if 'release/$$binary' in body and 'cp ' in body:
+            if '$$cargo_target_profile_dir/$$binary' in body and 'cp ' in body and 'mv -f' in body:
                 installed.update(names.split())
             if 'patchelf --set-rpath' in body and 'bin/$$binary' in body:
                 runpath.update(names.split())

@@ -67,10 +67,29 @@ describe("CameraControls", () => {
     );
 
     expect(source).not.toContain("useSmoothViewport3DWheelZoom");
-    expect(source).not.toContain('addEventListener("wheel"');
-    expect(source).not.toContain("stopImmediatePropagation");
     expect(orbitControlsBlock).toContain("enableZoom={options.enableZoom}");
     expect(orbitControlsBlock).toContain("enableDamping={options.enableDamping}");
+  });
+
+  it("takes over the wheel only for fly steps and leaves every other zoom to OrbitControls", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const listener = source.slice(
+      source.indexOf("const onWheel = (event: WheelEvent) => {"),
+      source.indexOf('element.addEventListener("wheel", onWheel'),
+    );
+
+    // One capture-phase listener; it stops the event only after
+    // resolveViewport3DFlyStep returned a step (free camera, or orbit right
+    // at its target), and reuses the controls' own gesture callbacks.
+    expect(source.match(/addEventListener\("wheel"/g)).toHaveLength(1);
+    expect(source).toContain('element.addEventListener("wheel", onWheel, { capture: true, passive: false });');
+    expect(listener.indexOf("if (!step) return;")).toBeGreaterThan(-1);
+    expect(listener.indexOf("if (!step) return;")).toBeLessThan(listener.indexOf("event.stopImmediatePropagation();"));
+    expect(listener).toContain("handleTransitionStart();");
+    expect(listener).toContain("handleEnd();");
   });
 
   it("registers the camera controls diagnostic global only outside production", () => {
