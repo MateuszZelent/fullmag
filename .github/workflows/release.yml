@@ -133,8 +133,7 @@ jobs:
       - name: Run release binary smoke tests
         run: |
           cargo test --locked -p fullmag-build-info -p fullmag-cli --lib
-          target/release/fullmag --help >/dev/null
-          target/release/fullmag-api --help >/dev/null
+          python scripts/ci/smoke_release_binaries.py target/release "$GITHUB_SHA"
 
       - name: Build Python wheel package
         env:
@@ -206,8 +205,7 @@ jobs:
           tar -xzf "${bundle}.tar.gz" -C "$RUNNER_TEMP"
           cd "$RUNNER_TEMP/$bundle"
           python "$GITHUB_WORKSPACE/scripts/ci/verify_release_bundle.py" . "$TAG" "$GITHUB_SHA" linux-x86_64
-          bin/fullmag --help >/dev/null
-          bin/fullmag-api --help >/dev/null
+          python "$GITHUB_WORKSPACE/scripts/ci/smoke_release_binaries.py" bin "$GITHUB_SHA"
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v7
@@ -269,8 +267,8 @@ jobs:
         shell: pwsh
         run: |
           cargo test --locked -p fullmag-build-info -p fullmag-cli --lib
-          .\target\release\fullmag.exe --help | Out-Null
-          .\target\release\fullmag-api.exe --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Rust release tests failed" }
+          python scripts/ci/smoke_release_binaries.py target/release $env:GITHUB_SHA
 
       - name: Build Control Room Web App
         shell: pwsh
@@ -371,10 +369,7 @@ jobs:
           Set-Location "$env:RUNNER_TEMP/$bundle"
           python "$env:GITHUB_WORKSPACE/scripts/ci/verify_release_bundle.py" . $env:TAG $env:GITHUB_SHA windows-x86_64
           if ($LASTEXITCODE -ne 0) { throw "Windows archive verification failed" }
-          foreach ($binary in 'fullmag.exe', 'fullmag-api.exe') {
-            & "./bin/$binary" --help | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "Packaged $binary smoke failed" }
-          }
+          python "$env:GITHUB_WORKSPACE/scripts/ci/smoke_release_binaries.py" bin $env:GITHUB_SHA
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v7
