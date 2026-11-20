@@ -1940,6 +1940,28 @@ must expose both records in its descriptor and provenance. No resolver may
 silently substitute M1, FDM, or a different device when the requested
 combination is unsupported.
 
+Every executable FDM CPU transport module publishes one
+`transport_modules[]` provenance record, independent of its constitutive
+model. The resolved execution mode is copied from the plan, never assumed.
+Runtime identity per realization:
+
+| Realization | `runtime_id` | `stage_coupling` | Coupled engine (§8.1 registry) |
+|---|---|---|---|
+| M1 steady one-way, Rust reference | `fdm_cpu_rust_transport_reference_v1` | `one_way_stage_refresh` | charge and spin engines of the descriptor |
+| M2 steady reciprocal, Rust reference | `fdm_cpu_rust_coupled_transport_reference_v1` | `bidirectional_stage_refresh` | `fdm_charge_spin_block_gmres_v1` |
+| M3 transient, Rust reference | `fdm_cpu_rust_transient_transport_reference_v1` | the descriptor's `integrator_version` (`coupled_imex_ark2.v1`) | charge and spin engines of the steady operator |
+
+`stage_coupling` names the time coupling of the transport solve to the LLG
+stages. It is a §8.1 operator identifier only for M3, where the transient
+integrator is itself the registered operator.
+
+When no authored spin boundary claims an active external FDM face, the
+planner inserts `SpinInsulating` on every face only for
+`default_external_boundary="spin_insulating"` and then records
+`all_unassigned_external_surfaces` in `inserted_default_boundaries`;
+`reject_unassigned` fails closed instead. Physics-graph activation filters
+spin transport and transport-torque modules identically on FDM and FEM.
+
 Validation errors are fail-closed and identify the owning field and the
 physical reason. Examples are a missing reciprocal conductivity, a nonpositive
 Schur complement, a mixed charge tensor outside the bounded FEM scope, an
