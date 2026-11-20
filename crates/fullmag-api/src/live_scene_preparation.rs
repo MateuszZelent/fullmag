@@ -819,16 +819,19 @@ fn prepare_accepted_step_output_initial_state(
         return Err(pending());
     }
 
-    let claim = fullmag_runtime_control::load_current_task_claim(store, run_id, task_id)
+    let start = {
+        let transaction = fullmag_runtime_control::acquire_store_read_transaction(
+            store, std::time::Duration::from_secs(4),
+        )
+        .map_err(|error| accepted_step_output_store_read_error(
+            "accepted StepOutput read fence failed", step_id, error,
+        ))?;
+        let claim = fullmag_runtime_control::load_current_task_claim_readonly(
+            store, run_id, task_id, &transaction,
+        )
         .map_err(|error| accepted_step_output_store_read_error(
             "accepted StepOutput current claim is invalid", step_id, error,
         ))?;
-    let start = {
-        let transaction = store
-            .read_transaction()
-            .map_err(|error| accepted_step_output_store_read_error(
-                "accepted StepOutput read fence failed", step_id, error,
-            ))?;
         let recovered = fullmag_runtime_control::recover_coordinator_readonly(
             store,
             &claim,
@@ -855,11 +858,11 @@ fn prepare_accepted_step_output_initial_state(
             }
         }
     };
-    let project_id = accepted.run.specification.snapshot.project_id.clone();
-    let accepted_worker_step = fullmag_runtime_control::load_accepted_worker_step_for_start(
+    let accepted_worker_step = fullmag_runtime_control::load_accepted_worker_step_for_observation(
         store,
-        &project_id,
+        accepted,
         &start,
+        std::time::Duration::from_secs(4),
     )
     .map_err(|error| accepted_step_output_store_read_error(
         "accepted StepOutput worker Start is invalid", step_id, error,
@@ -1221,10 +1224,11 @@ fn hold_current_accepted_attempt_fence(
         {
             return Err(task_attempt_changed());
         }
-        let current_claim = fullmag_runtime_control::load_current_task_claim(
+        let current_claim = fullmag_runtime_control::load_current_task_claim_readonly(
             store,
             &expected_claim.run_id,
             expected_claim.task_id.as_str(),
+            &transaction,
         )
         .map_err(|error| accepted_step_output_store_read_error(
             "accepted attempt final claim read failed",
