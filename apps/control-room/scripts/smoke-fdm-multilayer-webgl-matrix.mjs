@@ -803,9 +803,9 @@ function explorerTreeItem(page, nodeId) {
 }
 
 async function selectAirboxVisualizationDebug(page) {
-  const modelTab = page.getByRole("tab", { name: "Model", exact: true });
+  const modelTab = page.locator('.fm-side-rail[data-side="left"] [data-rail-item="model"]');
   await modelTab.waitFor({ state: "visible", timeout: timeoutMs });
-  if (await modelTab.getAttribute("aria-selected") !== "true") {
+  if (await modelTab.getAttribute("aria-pressed") !== "true") {
     await modelTab.click({ timeout: timeoutMs });
   }
   for (const nodeId of [

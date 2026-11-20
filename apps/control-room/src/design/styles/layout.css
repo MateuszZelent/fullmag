@@ -235,6 +235,109 @@
 
 .fm-workspace-body .fm-panel-frame > .fm-slot {
   border: 0;
+  background: transparent;
+}
+
+/* Docked side panels are glass: the page glow reads through a frosted fill
+   (specs/frontend-v2/09 §1a). The viewport keeps its own opaque scene. */
+.fm-workspace-body .fm-panel-frame:not([data-panel-frame="viewport-main"]):not([data-panel-mode="floating"]):not([data-panel-mode="maximized"]) {
+  border-color: var(--fm-glass-line);
+  background: var(--fm-glass-bg);
+  box-shadow: var(--fm-elevation-md), inset 0 1px 0 var(--fm-glass-highlight);
+  -webkit-backdrop-filter: var(--fm-glass-backdrop);
+  backdrop-filter: var(--fm-glass-backdrop);
+}
+
+/* Side rails flank the dock (specs/frontend-v2/10 §1a). */
+/* Rails flank the upper dock row; the bottom dock spans beneath them. */
+.fm-workspace-main-row {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.fm-workspace-main-row > :not(.fm-side-rail) {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.fm-side-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--fm-space-1);
+  width: 48px;
+  min-height: 0;
+  padding: var(--fm-space-2) 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  border: 1px solid var(--fm-glass-line);
+  border-radius: 20px;
+  background: var(--fm-glass-bg);
+  box-shadow: var(--fm-elevation-md), inset 0 1px 0 var(--fm-glass-highlight);
+  -webkit-backdrop-filter: var(--fm-glass-backdrop);
+  backdrop-filter: var(--fm-glass-backdrop);
+}
+
+.fm-side-rail__item {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: var(--fm-radius-field);
+  background: transparent;
+  color: var(--fm-text-muted);
+  cursor: pointer;
+  transition:
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    box-shadow var(--fm-duration-micro) var(--fm-ease-out-soft),
+    color var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-side-rail__item:hover {
+  background: color-mix(in srgb, var(--fm-text-primary) 7%, transparent);
+  color: var(--fm-text-primary);
+}
+
+.fm-side-rail__item:focus-visible {
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-side-rail__item[aria-pressed="true"] {
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm);
+  color: var(--fm-accent);
+}
+
+/* Indicator bar on the panel side of the active item. */
+.fm-side-rail__item::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-accent);
+  content: "";
+  scale: 1 0;
+  transition: scale var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-side-rail[data-side="left"] .fm-side-rail__item::before { left: -7px; }
+.fm-side-rail[data-side="right"] .fm-side-rail__item::before { right: -7px; }
+.fm-side-rail__item[aria-pressed="true"]::before { scale: 1 1; }
+
+@media (width < 760px) {
+  .fm-workspace-main-row > .fm-side-rail { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-side-rail__item,
+  .fm-side-rail__item::before { transition: none; }
 }
 
 .fm-dock-column[data-dragging="true"] {
@@ -280,3 +383,27 @@
 .fm-panel-move { cursor: grab; touch-action: none; }
 
 .fm-workspace-body { position: relative; }
+
+/* Explorer and Inspector are attached to their rails: one glass unit whose
+   outer corners stay rounded and whose shared edge is a hairline. */
+.fm-side-rail[data-side="left"][data-open="true"] {
+  border-right-color: var(--fm-border-muted);
+  border-radius: 20px 0 0 20px;
+}
+
+.fm-side-rail[data-side="right"][data-open="true"] {
+  border-left-color: var(--fm-border-muted);
+  border-radius: 0 20px 20px 0;
+}
+
+.fm-workspace-main-row:has(> .fm-side-rail[data-side="left"][data-open="true"]) .fm-panel-frame[data-panel-frame="panel-left"]:not([data-panel-mode="floating"]):not([data-panel-mode="maximized"]) {
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.fm-workspace-main-row:has(> .fm-side-rail[data-side="right"][data-open="true"]) .fm-panel-frame[data-panel-frame="panel-right"]:not([data-panel-mode="floating"]):not([data-panel-mode="maximized"]) {
+  border-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}

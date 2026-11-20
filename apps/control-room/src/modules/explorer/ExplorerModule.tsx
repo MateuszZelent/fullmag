@@ -1109,10 +1109,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   return (
     <WorkspaceRenderProfiler id="ExplorerModule">
       <section className="fm-explorer" aria-label="Explorer">
-        <ExplorerTabBar
-          activeTab={activeTab}
-          onTabChange={setExplorerActiveTab}
-        />
+        <ExplorerTabBar activeTab={activeTab} />
         {activeTab === "results" ? (
           <>
             <ResultContextSelector

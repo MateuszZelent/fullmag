@@ -17,6 +17,7 @@ import {
 } from "./layoutModel";
 import { SlotHost } from "./SlotHost";
 import { ViewportTabHost } from "./ViewportTabHost";
+import { WorkspaceSideRail } from "./WorkspaceSideRail";
 import { useWorkspaceContentScope } from "./WorkspaceContentScope";
 import { useKernel } from "../KernelContext";
 import type { SavedResultsPlaybackSelection } from "../saved-results/SavedResultsPlaybackController";
@@ -179,6 +180,8 @@ export function WorkspaceDockLayout() {
   return <div className="fm-workspace-body" id="fm-main-content" tabIndex={-1}>
     <ResizablePanelGroup autoSaveId="fullmag-workspace-main:retained-v1" direction="vertical" panelCount={projectOnly || playbackOnly ? 1 : 2}>
       <ResizablePanel defaultSize="78%" id="workspace-main" minSize="160px">
+        <div className="fm-workspace-main-row">
+        {!projectOnly && !playbackOnly ? <WorkspaceSideRail side="left" /> : null}
         <SortableList id="workspace-dock-columns" items={columns.map(column => column.slotId)} onMove={(activeId, overId) => setDockState(current => ({ ...current, layout: moveWorkspaceColumn(current.layout, activeId, overId) }))}>
           <ResizablePanelGroup autoSaveId={`fullmag-workspace-columns:retained-v1:${columns.map(column => column.slotId).join("|")}`} direction="horizontal" panelCount={columns.length}>
             {columns.map((column, index) => <Fragment key={column.slotId}>
@@ -189,6 +192,8 @@ export function WorkspaceDockLayout() {
             </Fragment>)}
           </ResizablePanelGroup>
         </SortableList>
+        {!projectOnly && !playbackOnly ? <WorkspaceSideRail side="right" /> : null}
+        </div>
       </ResizablePanel>
       {!projectOnly && !playbackOnly ? <>
         <ResizableHandle className="fm-resize-handle--horizontal" aria-label="Resize bottom diagnostics" style={dockedPanels["panel-bottom"] === false ? { display: "none" } : undefined} />

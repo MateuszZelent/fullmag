@@ -138,9 +138,9 @@ try {
       const statusState = document.querySelector(".fm-status-bar__item--state")?.getBoundingClientRect();
       const engineBoxes = [...document.querySelectorAll(".fm-status-bar__engine")].map((el) => el.getBoundingClientRect());
       const explorer = document.querySelector('[data-panel-frame="panel-left"]').getBoundingClientRect();
-      const tabs = [...document.querySelectorAll('[aria-label="Explorer resource families"] [role="tab"]')].map((tab) => {
+      const tabs = [...document.querySelectorAll('.fm-side-rail[data-side="left"] .fm-side-rail__item')].map((tab) => {
         const box = tab.getBoundingClientRect();
-        return { name: tab.getAttribute("aria-label"), inside: box.left >= explorer.left - 1 && box.right <= explorer.right + 1 && box.width > 0 };
+        return { name: tab.getAttribute("aria-label"), inside: box.right <= explorer.left + 1 && box.width > 0 };
       });
       const filterRow = document.querySelector(".fm-explorer-filter-row");
       const inspectorText = document.querySelector('[data-panel-frame="panel-right"]').innerText;
@@ -160,7 +160,7 @@ try {
     if (followup.statusDotGap !== null) assert(followup.statusDotGap >= 3, `${theme}: status dot separated from state label (${followup.statusDotGap}px)`);
     if (followup.engineGap !== null) assert(followup.engineGap >= 3, `${theme}: adjacent status bar engine pills separated (${followup.engineGap}px)`);
     assert.equal(followup.tabs.length, 5, `${theme}: five Explorer tabs`);
-    for (const tab of followup.tabs) assert(tab.inside, `${theme}: Explorer tab ${tab.name} fully visible`);
+    for (const tab of followup.tabs) assert(tab.inside, `${theme}: Explorer rail item ${tab.name} visible beside the Explorer`);
     assert.equal(followup.treeActions, 3, `${theme}: tree actions in the filter row`);
     assert.equal(followup.footerToolbar, 0, `${theme}: no Explorer footer row`);
     assert.equal(followup.rawCssInInspector, false, `${theme}: Inspector shows no raw var(--fm-…)`);

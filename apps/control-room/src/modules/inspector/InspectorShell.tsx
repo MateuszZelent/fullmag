@@ -25,6 +25,7 @@ import type { InspectorDescriptor } from "./inspectorDescriptor";
 import { resetInspectorScroll } from "./inspectorScroll";
 import {
   configureInspectorTabs,
+  publishInspectorTabs,
   setInspectorActiveTab,
   useInspectorActiveTab,
 } from "./InspectorTabState";
@@ -95,7 +96,9 @@ export function InspectorShell({
   const descriptorKey = `${nodeId ?? descriptor.title}:${descriptor.tabs.map((tab) => tab.id).join(",")}`;
   useLayoutEffect(() => {
     configureInspectorTabs(descriptorKey, descriptor.tabs.map((tab) => tab.id));
+    publishInspectorTabs(descriptor.tabs);
   }, [descriptor.tabs, descriptorKey]);
+  useLayoutEffect(() => () => publishInspectorTabs([]), []);
   useLayoutEffect(() => {
     resetInspectorScroll(contentRef.current);
   }, [descriptorKey]);
