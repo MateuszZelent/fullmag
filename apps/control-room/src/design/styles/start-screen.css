@@ -6,7 +6,8 @@
 .fm-slot[data-slot-id="start-screen"] {
   height: 100%;
   border: 0;
-  background: var(--fm-bg-app);
+  /* Home sits on the page backdrop so its glow shows through. */
+  background: transparent;
 }
 
 .fm-start {
@@ -15,7 +16,7 @@
   grid-template-rows: minmax(0, 1fr) auto;
   height: 100%;
   min-height: 0;
-  background: var(--fm-bg-app);
+  background: transparent;
   color: var(--fm-text-primary);
   font-family: var(--fm-font-ui);
   font-size: var(--fm-font-size-md);

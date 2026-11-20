@@ -146,8 +146,8 @@
   --fm-viewport-glow-b: rgb(137 180 250 / 0.12);
   /* Page backdrop behind the floating panels: the base with a soft glow. */
   --fm-page-bg:
-    radial-gradient(1200px 600px at 10% -10%, rgb(137 180 250 / 0.1), transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, rgb(203 166 247 / 0.09), transparent 60%),
+    radial-gradient(1100px 700px at 18% 12%, rgb(137 180 250 / 0.13), transparent 62%),
+    radial-gradient(900px 600px at 92% 30%, rgb(203 166 247 / 0.11), transparent 62%),
     var(--fm-bg-app);
   --fm-hue-geometry: var(--fm-accent);
   --fm-hue-material: var(--fm-chart-mauve);
@@ -303,8 +303,8 @@
   --fm-viewport-glow-a: rgb(136 57 239 / 0.16);
   --fm-viewport-glow-b: rgb(4 165 229 / 0.18);
   --fm-page-bg:
-    radial-gradient(1200px 600px at 10% -10%, rgb(30 102 245 / 0.1), transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, rgb(136 57 239 / 0.1), transparent 60%),
+    radial-gradient(1100px 700px at 18% 12%, rgb(30 102 245 / 0.12), transparent 62%),
+    radial-gradient(900px 600px at 92% 30%, rgb(136 57 239 / 0.11), transparent 62%),
     var(--fm-bg-app);
   --fm-hue-geometry: var(--fm-accent);
   --fm-hue-material: var(--fm-chart-mauve);

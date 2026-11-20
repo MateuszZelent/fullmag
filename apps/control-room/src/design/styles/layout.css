@@ -135,7 +135,7 @@
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
-  background: var(--fm-bg-app);
+  background: var(--fm-page-bg, var(--fm-bg-app));
 }
 
 /* Keep the mounted workspace children on their original tracks while the overlay spans them. */
