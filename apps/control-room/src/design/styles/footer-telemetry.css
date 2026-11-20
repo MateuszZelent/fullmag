@@ -661,3 +661,44 @@
   flex: 1;
   min-height: 48px;
 }
+
+.fm-footer-telemetry__spark-frame {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 48px;
+  margin-top: var(--fm-space-1);
+  border-radius: var(--fm-radius-field);
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--fm-metric-color) 7%, transparent), transparent);
+}
+
+.fm-footer-telemetry__spark-frame .fm-footer-telemetry__spark {
+  height: auto;
+  min-height: 48px;
+  margin: 0;
+}
+
+.fm-footer-telemetry__spark-grid {
+  fill: none;
+  stroke: color-mix(in srgb, var(--fm-text-primary) 7%, transparent);
+  stroke-width: 1;
+}
+
+.fm-footer-telemetry__spark-baseline {
+  fill: none;
+  stroke: color-mix(in srgb, var(--fm-metric-color) 45%, transparent);
+  stroke-dasharray: 4 4;
+  stroke-width: 1.4;
+}
+
+.fm-footer-telemetry__spark-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+}
+
+.fm-footer-telemetry__stage-badge[data-idle="true"] { color: var(--fm-text-muted); }
+.fm-footer-telemetry__stage-progress[data-idle="true"] .fm-footer-telemetry__stage-label { font-style: italic; }

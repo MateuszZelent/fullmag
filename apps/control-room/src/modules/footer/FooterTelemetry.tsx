@@ -1978,17 +1978,31 @@ function useTelemetryHistory(
 
 function TelemetrySparkline({ label, log = false, values }: { label: string; log?: boolean; values: readonly number[] }) {
   const points = log ? values.filter((value) => value > 0).map((value) => Math.log10(value)) : values;
-  if (points.length < 2) return null;
+  if (points.length < 2) {
+    // The chart keeps its frame before the run publishes samples; no data is invented.
+    return (
+      <span className="fm-footer-telemetry__spark-frame" data-empty="true">
+        <svg aria-hidden="true" className="fm-footer-telemetry__spark" preserveAspectRatio="none" viewBox="0 0 100 30">
+          <path className="fm-footer-telemetry__spark-grid" d="M0,8 L100,8 M0,16 L100,16 M0,24 L100,24" vectorEffect="non-scaling-stroke" />
+          <path className="fm-footer-telemetry__spark-baseline" d="M0,28 L100,28" vectorEffect="non-scaling-stroke" />
+        </svg>
+        <span className="fm-footer-telemetry__spark-empty">{label}: no samples yet</span>
+      </span>
+    );
+  }
   const min = Math.min(...points);
   const span = Math.max(...points) - min || 1;
   const path = points
     .map((value, index) => `${index ? "L" : "M"}${((index / (points.length - 1)) * 100).toFixed(2)},${(28 - ((value - min) / span) * 26).toFixed(2)}`)
     .join(" ");
   return (
-    <svg aria-label={label} className="fm-footer-telemetry__spark" preserveAspectRatio="none" role="img" viewBox="0 0 100 30">
-      <path className="fm-footer-telemetry__spark-area" d={`${path} L100,30 L0,30 Z`} />
-      <path className="fm-footer-telemetry__spark-line" d={path} vectorEffect="non-scaling-stroke" />
-    </svg>
+    <span className="fm-footer-telemetry__spark-frame">
+      <svg aria-label={label} className="fm-footer-telemetry__spark" preserveAspectRatio="none" role="img" viewBox="0 0 100 30">
+        <path className="fm-footer-telemetry__spark-grid" d="M0,8 L100,8 M0,16 L100,16 M0,24 L100,24" vectorEffect="non-scaling-stroke" />
+        <path className="fm-footer-telemetry__spark-area" d={`${path} L100,30 L0,30 Z`} />
+        <path className="fm-footer-telemetry__spark-line" d={path} vectorEffect="non-scaling-stroke" />
+      </svg>
+    </span>
   );
 }
 
@@ -2066,8 +2080,10 @@ function TelemetryBoard({
           >
             <header className="fm-footer-telemetry__group-head">
               <h3 className="fm-footer-telemetry__group-title">{card.title}</h3>
-              {card.id === "run" && stage ? (
-                <span className="fm-footer-telemetry__stage-badge">Stage {stage.index}/{stage.total}</span>
+              {card.id === "run" ? (
+                <span className="fm-footer-telemetry__stage-badge" data-idle={stage ? undefined : "true"}>
+                  {stage ? `Stage ${stage.index}/${stage.total}` : "No active run"}
+                </span>
               ) : null}
               {card.id === "magnetization" ? <span className="fm-footer-telemetry__group-aside">mean over magnets</span> : null}
               {card.id === "energy" ? <span className="fm-footer-telemetry__group-aside">total, J</span> : null}
@@ -2083,15 +2099,19 @@ function TelemetryBoard({
                 <span className="fm-footer-telemetry__hero-unit">{time.unit ? `${time.unit} ` : ""}{time.label.toLowerCase()}</span>
               </div>
             ) : null}
-            {card.id === "run" && stage && stage.percent !== null ? (
-              <div className="fm-footer-telemetry__stage-progress">
+            {card.id === "run" ? (
+              <div className="fm-footer-telemetry__stage-progress" data-idle={stage?.percent == null ? "true" : undefined}>
                 <Progress
-                  aria-label={`Stage ${stage.index} of ${stage.total} progress`}
+                  aria-label={stage ? `Stage ${stage.index} of ${stage.total} progress` : "Stage progress"}
                   className="fm-footer-telemetry__stage-bar"
-                  value={stage.percent}
+                  value={stage?.percent ?? 0}
                 />
                 <span className="fm-footer-telemetry__stage-label">
-                  {stage.label ? `${stage.label} · ` : ""}{Math.round(stage.percent)}%
+                  {stage?.percent != null
+                    ? `${stage.label ? `${stage.label} · ` : ""}${Math.round(stage.percent)}%`
+                    : stage
+                      ? `${stage.label ?? "Active stage"} · progress not published`
+                      : "Starts when Compute runs"}
                 </span>
               </div>
             ) : null}
@@ -2100,13 +2120,13 @@ function TelemetryBoard({
                 <div className="fm-footer-telemetry__rows">{rows.map((metric) => row(metric, card.group))}</div>
                 <div className="fm-footer-telemetry__energy-total">
                   <span className="fm-footer-telemetry__energy-value" title={total?.detail}>{total?.value ?? "—"}</span>
-                  <TelemetrySparkline label="Total energy observed in this run" values={history.energy} />
+                  <TelemetrySparkline label="Total energy" values={history.energy} />
                   <span className="fm-footer-telemetry__caption">E<sub>total</sub>(t), this run</span>
                 </div>
               </div>
             ) : card.id === "convergence" ? (
               <>
-                <TelemetrySparkline label="Max torque observed in this run, log scale" log values={history.torque} />
+                <TelemetrySparkline label="Max torque" log values={history.torque} />
                 <span className="fm-footer-telemetry__caption fm-footer-telemetry__caption--split">
                   <span>max |m × H<sub>eff</sub>|</span>
                   <span>log scale, this run</span>
