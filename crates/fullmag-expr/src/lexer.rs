@@ -10,8 +10,10 @@ pub(crate) enum TokenKind {
     Minus,
     Star,
     Slash,
-    /// `**`, or the legacy spelling `^`; both mean the same operator.
+    /// `**`.
     Power,
+    /// `^`, the legacy spelling of `**` in mask and time equations.
+    Caret,
     LeftParen,
     RightParen,
     Comma,
@@ -50,7 +52,7 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, ExprError> {
             }
             b'*' => TokenKind::Star,
             b'/' => TokenKind::Slash,
-            b'^' => TokenKind::Power,
+            b'^' => TokenKind::Caret,
             b'(' => TokenKind::LeftParen,
             b')' => TokenKind::RightParen,
             b',' => TokenKind::Comma,
@@ -58,6 +60,16 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, ExprError> {
                 let end = number_end(bytes, index)
                     .ok_or_else(|| ExprError::new("expr_syntax", position, "malformed number"))?;
                 let text = &source[index..end];
+                if has_leading_zero(text) {
+                    return Err(ExprError::new(
+                        "expr_syntax",
+                        position,
+                        format!(
+                            "integer literal '{text}' has a leading zero; \
+                             write it without the zero, as in Python"
+                        ),
+                    ));
+                }
                 let value: f64 = text.parse().map_err(|_| {
                     ExprError::new(
                         "expr_syntax",
@@ -111,6 +123,16 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, ExprError> {
         position: bytes.len(),
     });
     Ok(tokens)
+}
+
+/// `true` for a decimal integer literal (digits only) that starts with `0` and
+/// has a nonzero digit, such as `01`: Python rejects it. `0`, `00`, `01.5` and
+/// `01e3` are numbers.
+fn has_leading_zero(text: &str) -> bool {
+    text.len() > 1
+        && text.starts_with('0')
+        && text.bytes().all(|byte| byte.is_ascii_digit())
+        && text.bytes().any(|byte| byte != b'0')
 }
 
 /// End offset of the number that starts at `start`:

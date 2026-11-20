@@ -10,12 +10,17 @@ pub(crate) const MAX_EQUATION_CHARACTERS: usize = 4096;
 pub(crate) const MAX_EQUATION_NODES: usize = 512;
 const MAX_NESTING_DEPTH: usize = 128;
 
+/// Number of variable slots of an evaluation: `x`, `y`, `z`, `t`, `u`.
+pub(crate) const VARIABLE_SLOTS: usize = 5;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Variable {
     X,
     Y,
     Z,
     T,
+    /// The ramp coordinate of a profile; an ordinary name in the other kinds.
+    U,
 }
 
 impl Variable {
@@ -25,6 +30,7 @@ impl Variable {
             Self::Y => 1,
             Self::Z => 2,
             Self::T => 3,
+            Self::U => 4,
         }
     }
 
@@ -34,6 +40,18 @@ impl Variable {
             Self::Y => "y",
             Self::Z => "z",
             Self::T => "t",
+            Self::U => "u",
+        }
+    }
+
+    /// Whether a function of `kind` may read this variable.
+    fn is_read_by(self, kind: FunctionKind) -> bool {
+        match kind {
+            FunctionKind::Mask | FunctionKind::Distance => {
+                matches!(self, Self::X | Self::Y | Self::Z)
+            }
+            FunctionKind::Time => self == Self::T,
+            FunctionKind::Profile => self == Self::U,
         }
     }
 }
@@ -63,6 +81,7 @@ pub(crate) enum Func1 {
     Sqrt,
     Abs,
     Heaviside,
+    Log1p,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +108,18 @@ impl Func1 {
             Self::Sqrt => "sqrt",
             Self::Abs => "abs",
             Self::Heaviside => "heaviside",
+            Self::Log1p => "log1p",
+        }
+    }
+
+    /// `log1p` has no time opcode and serves the absorbing-boundary formulas;
+    /// `heaviside` serves time expressions (`docs/specs/mask-function-v1.md`,
+    /// section 3).
+    pub(crate) fn is_available_in(self, kind: FunctionKind) -> bool {
+        match self {
+            Self::Log1p => matches!(kind, FunctionKind::Profile | FunctionKind::Distance),
+            Self::Heaviside => matches!(kind, FunctionKind::Mask | FunctionKind::Time),
+            _ => true,
         }
     }
 
@@ -108,6 +139,7 @@ impl Func1 {
             Self::Sqrt => value.sqrt(),
             Self::Abs => value.abs(),
             Self::Heaviside => heaviside(value),
+            Self::Log1p => value.ln_1p(),
         }
     }
 }
@@ -193,6 +225,7 @@ pub(crate) fn function1(name: &str) -> Option<Func1> {
         "sqrt" => Func1::Sqrt,
         "abs" => Func1::Abs,
         "heaviside" => Func1::Heaviside,
+        "log1p" => Func1::Log1p,
         _ => return None,
     })
 }
@@ -214,6 +247,15 @@ pub(crate) fn variable(name: &str) -> Option<Variable> {
         "t" => Variable::T,
         _ => return None,
     })
+}
+
+/// The variable that `name` denotes in a function of `kind`, allowed or not:
+/// `x`, `y`, `z` and `t` always, `u` only in a profile.
+fn variable_of(kind: FunctionKind, name: &str) -> Option<Variable> {
+    if name == "u" {
+        return (kind == FunctionKind::Profile).then_some(Variable::U);
+    }
+    variable(name)
 }
 
 /// A name that a parameter or a local may not use.
@@ -369,15 +411,29 @@ impl Parser<'_> {
         }
     }
 
-    /// `atom ("**" unary)?`, with `^` as a legacy spelling of `**`. As in
-    /// Python, the exponent is a `unary`, so `**` is right-associative, binds
-    /// tighter than a unary minus on its left (`-x**2 == -(x**2)`) and accepts
-    /// one on its right (`2**-x**2 == 2**(-(x**2))`).
+    /// `atom ("**" unary)?`, with `^` as a legacy spelling of `**` in mask and
+    /// time equations. As in Python, the exponent is a `unary`, so `**` is
+    /// right-associative, binds tighter than a unary minus on its left
+    /// (`-x**2 == -(x**2)`) and accepts one on its right
+    /// (`2**-x**2 == 2**(-(x**2))`).
     fn power(&mut self) -> Result<Node, ExprError> {
         let base = self.atom()?;
         let token = self.peek().clone();
-        if token.kind != TokenKind::Power {
-            return Ok(base);
+        match token.kind {
+            TokenKind::Power => {}
+            TokenKind::Caret
+                if matches!(self.scope.kind, FunctionKind::Mask | FunctionKind::Time) => {}
+            TokenKind::Caret => {
+                return Err(ExprError::new(
+                    "expr_syntax",
+                    token.position,
+                    format!(
+                        "write the power as '**'; a {} function does not accept '^'",
+                        self.scope.kind.label()
+                    ),
+                ));
+            }
+            _ => return Ok(base),
         }
         self.advance();
         self.enter(token.position)?;
@@ -443,22 +499,15 @@ impl Parser<'_> {
         if name == "pi" {
             return Ok(Node::Number(std::f64::consts::PI));
         }
-        if let Some(variable) = variable(name) {
-            let allowed = match self.scope.kind {
-                FunctionKind::Mask => variable != Variable::T,
-                FunctionKind::Time => variable == Variable::T,
-            };
-            if !allowed {
-                let message = match self.scope.kind {
-                    FunctionKind::Mask => "a mask function may not use 't'".to_string(),
-                    FunctionKind::Time => {
-                        format!("a time function may not use '{name}'")
-                    }
-                };
+        if let Some(variable) = variable_of(self.scope.kind, name) {
+            if !variable.is_read_by(self.scope.kind) {
                 return Err(ExprError::new(
                     "mask_function_wrong_variable",
                     position,
-                    message,
+                    format!(
+                        "a {} function may not use '{name}'",
+                        self.scope.kind.label()
+                    ),
                 ));
             }
             return Ok(Node::Variable(variable));
@@ -491,6 +540,16 @@ impl Parser<'_> {
                 "expr_unknown_name",
                 position,
                 format!("unknown function '{name}'"),
+            ));
+        }
+        if one.is_some_and(|function| !function.is_available_in(self.scope.kind)) {
+            return Err(ExprError::new(
+                "expr_unknown_name",
+                position,
+                format!(
+                    "function '{name}' is not available in a {} function",
+                    self.scope.kind.label()
+                ),
             ));
         }
         self.advance(); // "("

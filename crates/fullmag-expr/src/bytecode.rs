@@ -5,7 +5,7 @@
 //! `native/include/fullmag_time_expression.h`.
 
 use crate::function::{depends_on_variable, evaluate, CompiledFunction};
-use crate::parser::{heaviside, BinaryOp, Func1, Func2, Node, Variable};
+use crate::parser::{heaviside, BinaryOp, Func1, Func2, Node, Variable, VARIABLE_SLOTS};
 use crate::ExprError;
 
 /// Version of the opcode table; must equal `FULLMAG_TIME_EXPRESSION_VERSION`.
@@ -91,6 +91,8 @@ fn func1_opcode(function: Func1) -> u32 {
         Func1::Sqrt => OP_SQRT,
         Func1::Abs => OP_ABS,
         Func1::Heaviside => OP_HEAVISIDE,
+        // The parser rejects `log1p` in a time function.
+        Func1::Log1p => unreachable!("log1p has no time opcode"),
     }
 }
 
@@ -127,7 +129,7 @@ impl Emitter<'_> {
         }
         // A subtree without `t` becomes one literal, evaluated in tree order.
         if !depends_on_variable(node, self.function.local_is_variable()) {
-            let value = evaluate(node, &[0.0; 4], &self.constant_locals);
+            let value = evaluate(node, &[0.0; VARIABLE_SLOTS], &self.constant_locals);
             self.code.push(f64::from(OP_PUSH));
             self.code.push(value);
             self.push_depth();
@@ -176,7 +178,7 @@ pub(crate) fn compile_time_program(function: &CompiledFunction) -> Result<TimePr
         let value = if function.local_is_variable()[index] {
             f64::NAN
         } else {
-            evaluate(node, &[0.0; 4], &constant_locals)
+            evaluate(node, &[0.0; VARIABLE_SLOTS], &constant_locals)
         };
         constant_locals.push(value);
     }

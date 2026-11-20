@@ -1,9 +1,9 @@
-//! Compilation and evaluation of one mask or time function.
+//! Compilation and evaluation of one function of any `FunctionKind`.
 
 use std::collections::BTreeMap;
 
 use crate::bytecode::{compile_time_program, TimeProgram};
-use crate::parser::{is_reserved_name, parse_equation, BinaryOp, Node, Scope};
+use crate::parser::{is_reserved_name, parse_equation, BinaryOp, Node, Scope, VARIABLE_SLOTS};
 use crate::{ExprError, FunctionError, FunctionKind, FunctionSource};
 
 /// Limits of one function (`docs/specs/mask-function-v1.md`, section 3).
@@ -133,10 +133,7 @@ pub fn compile_function(
             message: format!("more than {MAX_FUNCTION_LOCALS} locals"),
         });
     }
-    let expected_outputs = match kind {
-        FunctionKind::Mask => 3,
-        FunctionKind::Time => 1,
-    };
+    let expected_outputs = kind.output_count();
     if source.outputs.len() != expected_outputs {
         return Err(FunctionError {
             code: "expr_arity",
@@ -153,6 +150,7 @@ pub fn compile_function(
     for (index, (name, value)) in source.parameters.iter().enumerate() {
         let path = format!("parameters[{index}]");
         validate_name(name).map_err(|error| function_error(path.clone(), error))?;
+        check_not_profile_variable(&path, name, kind)?;
         if parameters.insert(name.as_str(), *value).is_some() {
             return Err(FunctionError {
                 code: "expr_name_invalid",
@@ -168,6 +166,7 @@ pub fn compile_function(
     for (index, (name, expression)) in source.locals.iter().enumerate() {
         let path = format!("locals[{index}]");
         validate_name(name).map_err(|error| function_error(path.clone(), error))?;
+        check_not_profile_variable(&path, name, kind)?;
         if parameters.contains_key(name.as_str()) || local_indices.contains_key(name.as_str()) {
             return Err(FunctionError {
                 code: "expr_name_invalid",
@@ -233,7 +232,24 @@ pub fn compile_function(
     Ok(function)
 }
 
-/// `true` when the tree reads `x`, `y`, `z` or `t`, directly or through a local.
+/// `u` is an ordinary name except in a profile, where it is the variable.
+fn check_not_profile_variable(
+    path: &str,
+    name: &str,
+    kind: FunctionKind,
+) -> Result<(), FunctionError> {
+    if kind == FunctionKind::Profile && name == "u" {
+        return Err(FunctionError {
+            code: "expr_name_invalid",
+            path: path.to_string(),
+            position: 0,
+            message: "'u' is the variable of a profile".to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// `true` when the tree reads a variable, directly or through a local.
 pub(crate) fn depends_on_variable(node: &Node, local_is_variable: &[bool]) -> bool {
     match node {
         Node::Number(_) => false,
@@ -249,7 +265,7 @@ pub(crate) fn depends_on_variable(node: &Node, local_is_variable: &[bool]) -> bo
     }
 }
 
-pub(crate) fn evaluate(node: &Node, variables: &[f64; 4], locals: &[f64]) -> f64 {
+pub(crate) fn evaluate(node: &Node, variables: &[f64; VARIABLE_SLOTS], locals: &[f64]) -> f64 {
     match node {
         Node::Number(value) => *value,
         Node::Variable(variable) => variables[variable.index()],
@@ -294,7 +310,7 @@ impl CompiledFunction {
         &self.local_is_variable
     }
 
-    fn evaluate_locals(&self, variables: &[f64; 4]) -> Vec<f64> {
+    fn evaluate_locals(&self, variables: &[f64; VARIABLE_SLOTS]) -> Vec<f64> {
         let mut values = Vec::with_capacity(self.locals.len());
         for node in &self.locals {
             let value = evaluate(node, variables, &values);
@@ -303,13 +319,14 @@ impl CompiledFunction {
         values
     }
 
-    /// Value of a mask function at a point (metres). Panics for a time function.
+    /// Value of a mask function at a point (metres). Panics for another kind.
     pub fn eval_mask(&self, point_m: [f64; 3]) -> [f64; 3] {
         assert!(
             self.kind == FunctionKind::Mask,
-            "eval_mask called on a time function"
+            "eval_mask called on a {} function",
+            self.kind.label()
         );
-        let variables = [point_m[0], point_m[1], point_m[2], 0.0];
+        let variables = [point_m[0], point_m[1], point_m[2], 0.0, 0.0];
         let locals = self.evaluate_locals(&variables);
         [
             evaluate(&self.outputs[0], &variables, &locals),
@@ -318,13 +335,40 @@ impl CompiledFunction {
         ]
     }
 
-    /// Value of a time function at a time (seconds). Panics for a mask function.
+    /// Value of a time function at a time (seconds). Panics for another kind.
     pub fn eval_time(&self, t_s: f64) -> f64 {
         assert!(
             self.kind == FunctionKind::Time,
-            "eval_time called on a mask function"
+            "eval_time called on a {} function",
+            self.kind.label()
         );
-        let variables = [0.0, 0.0, 0.0, t_s];
+        let variables = [0.0, 0.0, 0.0, t_s, 0.0];
+        let locals = self.evaluate_locals(&variables);
+        evaluate(&self.outputs[0], &variables, &locals)
+    }
+
+    /// Value of a profile at the ramp coordinate `u`. Panics for another kind.
+    /// The value is not checked: it may be NaN or infinite.
+    pub fn eval_profile(&self, u: f64) -> f64 {
+        assert!(
+            self.kind == FunctionKind::Profile,
+            "eval_profile called on a {} function",
+            self.kind.label()
+        );
+        let variables = [0.0, 0.0, 0.0, 0.0, u];
+        let locals = self.evaluate_locals(&variables);
+        evaluate(&self.outputs[0], &variables, &locals)
+    }
+
+    /// Value of a distance at a point (metres). Panics for another kind. The
+    /// value is not checked: it may be NaN or infinite.
+    pub fn eval_distance(&self, point_m: [f64; 3]) -> f64 {
+        assert!(
+            self.kind == FunctionKind::Distance,
+            "eval_distance called on a {} function",
+            self.kind.label()
+        );
+        let variables = [point_m[0], point_m[1], point_m[2], 0.0, 0.0];
         let locals = self.evaluate_locals(&variables);
         evaluate(&self.outputs[0], &variables, &locals)
     }
@@ -375,10 +419,10 @@ impl CompiledFunction {
         }
     }
 
-    /// Bytecode of a time function. Panics for a mask function.
+    /// Bytecode of a time function. Panics for another kind.
     pub fn time_program(&self) -> &TimeProgram {
         self.time_program
             .as_ref()
-            .expect("time_program called on a mask function")
+            .expect("time_program called on a function that is not a time function")
     }
 }
