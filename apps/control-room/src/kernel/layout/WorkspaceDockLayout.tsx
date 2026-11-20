@@ -128,6 +128,29 @@ export function WorkspaceDockLayout() {
   const [dockState, setDockState] = useState<WorkspaceDockState>({ layout: DEFAULT_WORKSPACE_LAYOUT, restored: false });
   const [dockedPanels, setDockedPanels] = useState<Record<string, boolean>>({});
   const panels = useRef<Record<string, PanelImperativeHandle | null>>({});
+  // Narrow windows give the content the width: side panels collapse to their
+  // rails below 760 px and come back as they were when the window widens.
+  // A rail icon still opens a panel docked in a narrow window.
+  const narrowRestore = useRef<{ left: boolean; right: boolean } | null>(null);
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 759px)");
+    const apply = () => {
+      const visibleNow = kernel.layout.get().panelVisible;
+      if (query.matches && narrowRestore.current === null) {
+        narrowRestore.current = { left: visibleNow.left, right: visibleNow.right };
+        kernel.layout.setPanelVisible("left", false);
+        kernel.layout.setPanelVisible("right", false);
+      } else if (!query.matches && narrowRestore.current !== null) {
+        const previous = narrowRestore.current;
+        narrowRestore.current = null;
+        kernel.layout.setPanelVisible("left", previous.left);
+        kernel.layout.setPanelVisible("right", previous.right);
+      }
+    };
+    apply();
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
+  }, [kernel]);
 
   useEffect(() => {
     const restore = () => {
