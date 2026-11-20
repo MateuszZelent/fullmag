@@ -1990,6 +1990,237 @@ mod accepted_start_tests {
         .unwrap()
     }
 
+    fn admit_with_genesis(
+        fixture: &Fixture,
+        host: &crate::host_runtime::HostRuntimeAdmission,
+    ) -> fullmag_application::CoordinatorCheckpoint {
+        fixture
+            .store
+            .release_accepted_run_start(
+                fixture.run_id.as_str(),
+                &fixture.specification_sha256,
+                "compute-release",
+            )
+            .unwrap();
+        let accepted = crate::load_accepted_study_snapshot(
+            &fixture.store,
+            &fixture.run_id,
+            &fixture.project_id,
+        )
+        .unwrap();
+        let queued = crate::queue_accepted_study_task(
+            &fixture.store,
+            &fixture.project_id,
+            &fixture.run_id,
+            "step:run",
+            Default::default(),
+        )
+        .unwrap();
+        let mut task = queued.task;
+        let offer = fullmag_application::ResourceLease::new(
+            "compute.cpu",
+            ResourceKind::Cpu,
+            ResourceBudget {
+                cpu_millis: 1000,
+                memory_bytes: 1024,
+                gpu_memory_bytes: 0,
+                storage_bytes: 1024,
+            },
+        )
+        .unwrap();
+        let claim = task.claim(offer).unwrap();
+        let frozen = crate::frozen_stage_lifecycle::prepare_admission_binding(
+            &fixture.store,
+            &accepted,
+            &accepted.study.steps[0],
+            &queued.resolved_inputs,
+        )
+        .unwrap();
+        let placement = host.solver_placement(&claim.lease.resource_id).unwrap();
+        let request = crate::host_allocation::host_request_for_task_claim(
+            &fixture.store,
+            host.ledger(),
+            &claim,
+            placement,
+            host.expected_runtime_generation_sha256(),
+        )
+        .unwrap();
+        assert!(
+            crate::claim::try_commit_claimed_task_admission_with_host_and_frozen_context(
+                &fixture.store,
+                &task,
+                &claim,
+                host.ledger(),
+                &request,
+                &queued.resolved_inputs,
+                frozen.as_ref(),
+                &accepted,
+            )
+            .unwrap()
+            .is_some()
+        );
+        let coordinator = fullmag_application::WorkerCoordinator::new(task, claim).unwrap();
+        let checkpoint = coordinator.checkpoint();
+        assert_eq!(checkpoint.task.observation, None);
+        crate::commit_coordinator_genesis(&fixture.store, &checkpoint).unwrap();
+        checkpoint
+    }
+
+    #[test]
+    fn accepted_resume_publishes_the_first_prepare_from_immutable_genesis() {
+        crate::host_runtime::with_admission_fixture(|host| {
+            let fixture = fixture(true);
+            let checkpoint = admit_with_genesis(&fixture, host);
+            let claim = &checkpoint.claim;
+            let current_task = || {
+                fixture
+                    .store
+                    .read_run_catalog(fixture.run_id.as_str())
+                    .unwrap()
+                    .unwrap()
+                    .tasks
+                    .into_iter()
+                    .next()
+                    .unwrap()
+            };
+            let before = current_task();
+            let genesis = before.coordinator_genesis.unwrap();
+            let watermark = before.coordinator_watermark.unwrap();
+            assert_eq!(
+                (watermark.command_sequence, watermark.event_sequence),
+                (0, 0)
+            );
+            assert!(fixture
+                .store
+                .read_coordinator_journal(fixture.run_id.as_str())
+                .unwrap()
+                .is_empty());
+            assert!(host
+                .solver_claim_has_pending_launch(&fixture.store, claim)
+                .unwrap());
+
+            let scheduled = super::resume_next_admitted_accepted_task_with_host(
+                &fixture.store,
+                &fixture.run_id,
+                &claim.lease.resource_id,
+                host,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(&scheduled.claim, claim);
+            assert_eq!(scheduled.prepare.sequence, 1);
+            assert!(matches!(
+                &scheduled.prepare.command,
+                fullmag_application::WorkerCommand::Prepare { .. }
+            ));
+            assert_eq!(scheduled.start.sequence, 2);
+            assert_eq!(
+                scheduled.start.command,
+                fullmag_application::WorkerCommand::Start
+            );
+            let recovered = crate::recover_coordinator(&fixture.store, claim).unwrap();
+            assert_eq!(
+                recovered.commands,
+                vec![scheduled.prepare.clone(), scheduled.start.clone()]
+            );
+            assert_eq!(recovered.events.len(), 1);
+            assert_eq!(
+                recovered.events[0].event,
+                fullmag_application::WorkerEvent::Prepared
+            );
+            let after = current_task();
+            assert_eq!(after.coordinator_genesis.as_ref(), Some(&genesis));
+            let watermark = after.coordinator_watermark.unwrap();
+            assert_eq!(
+                (watermark.command_sequence, watermark.event_sequence),
+                (2, 1)
+            );
+            assert!(host
+                .solver_claim_has_pending_launch(&fixture.store, claim)
+                .unwrap());
+
+            let replay = super::resume_next_admitted_accepted_task_with_host(
+                &fixture.store,
+                &fixture.run_id,
+                &claim.lease.resource_id,
+                host,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(replay.prepare, scheduled.prepare);
+            assert_eq!(replay.start, scheduled.start);
+            assert_eq!(current_task().coordinator_genesis.as_ref(), Some(&genesis));
+        });
+    }
+
+    #[test]
+    fn accepted_prepare_genesis_rejects_divergent_checkpoints_and_stale_lease() {
+        crate::host_runtime::with_admission_fixture(|host| {
+            let fixture = fixture(true);
+            let original = admit_with_genesis(&fixture, host);
+            let claim = &original.claim;
+            let catalog = || {
+                fixture
+                    .store
+                    .read_run_catalog(fixture.run_id.as_str())
+                    .unwrap()
+                    .unwrap()
+            };
+            let before = catalog();
+            let restored = crate::recover_coordinator(&fixture.store, claim)
+                .unwrap()
+                .coordinator
+                .checkpoint();
+            assert_eq!(
+                restored.task.observation,
+                Some(fullmag_application::ObservationState::Reconciling)
+            );
+            crate::study::ensure_accepted_prepare_genesis(&fixture.store, &original).unwrap();
+            crate::study::ensure_accepted_prepare_genesis(&fixture.store, &restored).unwrap();
+
+            let mut changed_observation = restored.clone();
+            changed_observation.task.observation =
+                Some(fullmag_application::ObservationState::Live);
+            let mut changed_input = restored.clone();
+            changed_input.task.input_fingerprint = "f".repeat(64);
+            let mut changed_claim = restored.clone();
+            changed_claim.claim.lease.budget.cpu_millis += 1;
+            changed_claim.task.claim = Some(changed_claim.claim.clone());
+            for changed in [changed_observation, changed_input, changed_claim] {
+                assert!(
+                    crate::study::ensure_accepted_prepare_genesis(&fixture.store, &changed)
+                        .is_err()
+                );
+            }
+
+            let mut lease = fixture
+                .store
+                .read_active_resource_lease_for_task(
+                    fixture.run_id.as_str(),
+                    claim.task_id.as_str(),
+                )
+                .unwrap()
+                .unwrap();
+            lease.heartbeat_sequence += 1;
+            lease.heartbeat_at = chrono::Utc::now();
+            fixture.store.heartbeat_resource_lease(&lease).unwrap();
+            let error = crate::study::ensure_accepted_prepare_genesis(&fixture.store, &restored)
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("active resource lease fence rejected"),
+                "{error:#}"
+            );
+            assert_eq!(catalog(), before);
+            assert!(fixture
+                .store
+                .read_coordinator_journal(fixture.run_id.as_str())
+                .unwrap()
+                .is_empty());
+        });
+    }
+
     fn scalar_output_payload(bytes: Vec<u8>) -> crate::study::StudyOutputPayload {
         crate::study::StudyOutputPayload {
             port_id: "final_scalar".into(),
