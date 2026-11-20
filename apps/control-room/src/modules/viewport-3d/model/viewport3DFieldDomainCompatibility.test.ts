@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  refreshViewport3DLiveFemDomainResources,
   resolveTrustedViewport3DResponseDomainGenerationId,
   resolveViewport3DFieldDomainCompatibility,
   retryViewport3DFieldDomainMismatch,
@@ -477,5 +478,27 @@ describe("retryViewport3DFieldDomainMismatch", () => {
       () => requests.push("mesh"),
     );
     expect(requests).toEqual(["field"]);
+  });
+});
+
+describe("refreshViewport3DLiveFemDomainResources", () => {
+  it("refreshes every live FEM resource that contributes a field buffer", () => {
+    const refreshed: string[] = [];
+    refreshViewport3DLiveFemDomainResources({
+      airboxFieldVectors: () => refreshed.push("airbox field vectors"),
+      domainManifest: () => refreshed.push("domain manifest"),
+      domainMeta: () => refreshed.push("domain meta"),
+      magneticPartFields: () => refreshed.push("magnetic part fields"),
+      targetQuantityFields: () => refreshed.push("target quantity fields"),
+      topology: () => refreshed.push("topology"),
+    });
+    expect(refreshed).toEqual([
+      "domain meta",
+      "domain manifest",
+      "topology",
+      "magnetic part fields",
+      "target quantity fields",
+      "airbox field vectors",
+    ]);
   });
 });

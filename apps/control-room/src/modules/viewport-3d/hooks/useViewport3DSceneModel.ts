@@ -224,6 +224,7 @@ import {
   liveFemDampingLocationMismatch,
   resolveViewport3DFieldDomainCompatibility,
   resolveViewport3DFieldVectorForDomain,
+  refreshViewport3DLiveFemDomainResources,
   retryViewport3DFieldDomainMismatch,
   safeViewport3DDomainGenerationId,
 } from "../model/viewport3DFieldDomainCompatibility";
@@ -7758,14 +7759,19 @@ export function useViewport3DSceneModel({
   const { refetch: refreshDomainTopology } = topology;
   const { refetch: refreshMagneticPartFields } = magneticPartFieldVectors;
   const { refetch: refreshTargetQuantityFields } = targetQuantityFieldVectors;
+  const { refetch: refreshAirboxFieldVectors } = airboxFieldVectors;
   const { refetch: refreshPrimaryField } = fieldVector;
   const refreshLiveFemDomain = useCallback(() => {
-    refreshDomainMeta();
-    refreshDomainManifest();
-    refreshDomainTopology();
-    refreshMagneticPartFields();
-    refreshTargetQuantityFields();
+    refreshViewport3DLiveFemDomainResources({
+      airboxFieldVectors: refreshAirboxFieldVectors,
+      domainManifest: refreshDomainManifest,
+      domainMeta: refreshDomainMeta,
+      magneticPartFields: refreshMagneticPartFields,
+      targetQuantityFields: refreshTargetQuantityFields,
+      topology: refreshDomainTopology,
+    });
   }, [
+    refreshAirboxFieldVectors,
     refreshDomainManifest,
     refreshDomainMeta,
     refreshDomainTopology,
