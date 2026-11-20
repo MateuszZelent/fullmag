@@ -16,23 +16,64 @@
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+/* Identity header and pill section track, as in the Inspector template. */
+.fm-viewport-3d-settings__header {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-3);
+  flex: none;
+  border-bottom: 1px solid var(--fm-border-muted);
+  padding: var(--fm-space-3) var(--fm-space-3) var(--fm-space-3);
+}
+
+.fm-viewport-3d-settings__header-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--fm-radius-field);
+  background: color-mix(in srgb, var(--fm-hue-visualization) 14%, transparent);
+  color: var(--fm-hue-visualization);
+}
+
+.fm-viewport-3d-settings__header-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.fm-viewport-3d-settings__title {
+  margin: 0;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-lg);
+  font-weight: var(--fm-font-weight-semibold);
+  line-height: 1.2;
+}
+
+.fm-viewport-3d-settings__subtitle {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}
+
 .fm-viewport-3d-settings__tab-list {
   display: grid;
   width: 100%;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.2rem;
-  padding: 0.2rem;
+  gap: 2px;
+  padding: 3px;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-panel-raised);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-field-bg);
 }
 
 .fm-viewport-3d-settings__tab {
   min-width: 0;
   min-height: 2rem;
-  padding-inline: 0.25rem;
+  padding-inline: var(--fm-space-1);
   overflow: hidden;
-  font-size: 0.72rem;
+  border-radius: var(--fm-radius-pill);
+  font-size: var(--fm-font-size-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -48,7 +89,11 @@
 .fm-viewport-3d-settings__field-list {
   display: grid;
   min-width: 0;
-  gap: 0.65rem;
+  gap: var(--fm-space-2);
+}
+
+.fm-viewport-3d-settings__tabs > .fm-viewport-3d-settings__field-list {
+  padding: var(--fm-space-3) var(--fm-space-3) 0;
 }
 
 .fm-viewport-3d-settings__panels {
@@ -61,7 +106,8 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 0.75rem;
+  scrollbar-width: thin;
+  padding: var(--fm-space-3);
   align-content: start;
 }
 
@@ -69,21 +115,32 @@
   min-width: 0;
 }
 
+/* Settings sections are Inspector section cards; the legend is the card
+   heading inside the card instead of a caption cut into its border. */
 .fm-viewport-3d-settings__group {
+  display: grid;
   min-width: 0;
+  gap: var(--fm-space-2);
   margin: 0;
-  padding: 0.65rem;
+  padding: var(--fm-space-3);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-panel);
+  border-radius: var(--fm-radius-section);
+  background: var(--fm-section-bg);
 }
 
 .fm-viewport-3d-settings__legend {
+  float: left;
+  width: 100%;
   max-width: 100%;
-  padding-inline: 0.25rem;
+  margin-bottom: var(--fm-space-1);
+  padding: 0;
   color: var(--fm-text-primary);
-  font-size: 0.78rem;
-  font-weight: 650;
+  font-size: var(--fm-font-size-sm);
+  font-weight: var(--fm-font-weight-semibold);
+}
+
+.fm-viewport-3d-settings__legend + * {
+  clear: both;
 }
 
 .fm-viewport-3d-settings__field {
@@ -218,4 +275,10 @@
 
 .fm-viewport-3d-settings__panel[hidden] {
   display: none;
+}
+
+.fm-viewport-3d-settings__tab[data-state="active"] {
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm);
+  color: var(--fm-text-primary);
 }

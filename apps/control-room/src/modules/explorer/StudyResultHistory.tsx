@@ -93,7 +93,7 @@ function StudyResultScalarHistory({ result }: { result: StudyStageResult }) {
               <table aria-label="Archived scalar values">
                 <thead><tr>{window.columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead>
                 <tbody>{window.rows.map((row, index) => (
-                  <tr key={index}>{row.map((value, column) => <td key={column}>{value.toPrecision(7)}</td>)}</tr>
+                  <tr key={index}>{row.map((value, column) => <td className="tabular-nums" key={column}>{value.toPrecision(7)}</td>)}</tr>
                 ))}</tbody>
               </table>
             </div>

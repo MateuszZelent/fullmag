@@ -129,7 +129,7 @@ function SavedProjectResults({
             <li className="grid min-w-0" key={run.run_id}>
             <Button
               aria-current={selectedRunId === run.run_id ? "true" : undefined}
-              className="h-auto min-w-0 justify-start px-2 py-2 text-left"
+              className="h-auto min-w-0 justify-start p-2 text-left"
               size="sm"
               title={run.run_id}
               variant={selectedRunId === run.run_id ? "primary" : "ghost"}
@@ -323,7 +323,7 @@ function SolutionSetDiscoveryList({
           <li className="grid min-w-0" key={`${item.solution_set_id}:${item.revision}`}>
           <Button
             aria-current={isSelected ? "true" : undefined}
-            className="h-auto min-w-0 justify-start px-2 py-2 text-left"
+            className="h-auto min-w-0 justify-start p-2 text-left"
             size="sm"
             title={item.manifest_digest}
             variant={isSelected ? "primary" : "ghost"}
@@ -466,7 +466,7 @@ function MemberList({
         <li className="grid min-w-0" key={member.member_id}>
         <Button
           aria-current={selectedMemberId === member.member_id ? "true" : undefined}
-          className="h-auto min-w-0 justify-start px-2 py-2 text-left"
+          className="h-auto min-w-0 justify-start p-2 text-left"
           size="sm"
           title={member.task_id}
           variant={selectedMemberId === member.member_id ? "primary" : "ghost"}
@@ -687,7 +687,7 @@ function ArtifactButton({
   return (
     <Button
       aria-current={selected ? "true" : undefined}
-      className="h-auto min-w-0 justify-start px-2 py-2 text-left"
+      className="h-auto min-w-0 justify-start p-2 text-left"
       size="sm"
       title={artifact.object_ref}
       variant={selected ? "primary" : "ghost"}

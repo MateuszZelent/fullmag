@@ -648,7 +648,7 @@ export function FrequencyDomainModeDisplayControls({
         }
       />
       <p className="fm-mode-visualization__presentation-note">
-        Visualization only — these controls do not change the computed mode.
+        These controls adjust how the computed mode is displayed.
       </p>
     </>
   );

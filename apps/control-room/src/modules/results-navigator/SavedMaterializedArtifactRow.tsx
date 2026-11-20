@@ -81,7 +81,7 @@ export function SavedMaterializedArtifactRow({
     <>
       <Button
         aria-current={selected ? "true" : undefined}
-        className="h-auto min-w-0 flex-col items-start gap-1 px-2 py-2 text-left"
+        className="h-auto min-w-0 flex-col items-start gap-1 p-2 text-left"
         size="sm"
         title={artifact.artifact_id + " · " + artifact.object_ref}
         variant={selected ? "primary" : "ghost"}

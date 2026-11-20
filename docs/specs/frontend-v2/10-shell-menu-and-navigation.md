@@ -1,26 +1,55 @@
 # Frontend v2 - Shell, Main Menu, and Navigation
 
-**Status:** Proposed architecture
+**Status:** Proposed architecture, layout revised 2026-11-20
 **Date:** 2026-05-11
 
 ## 1. Shell Layout
 
-The shell is fixed and module-driven:
+The shell is module-driven. Reference: `docs/design/inspector-redesign/` (the
+"Full app" mockup). The viewport fills the window behind every layer; the
+bars, rails, panels and dock are glass layers above it.
 
 ```text
-+----------------------------------------------+
-| Main menu                                    |
-+----------------------------------------------+
-| Ribbon / contextual toolbar                  |
-+--------------+----------------+--------------+
-| Explorer     | Viewport        | Inspector    |
-|              |                 |              |
-+--------------+----------------+--------------+
-| Bottom dock: charts / console / jobs / diag  |
-+----------------------------------------------+
-| Status bar                                   |
-+----------------------------------------------+
++------------------------------------------------------------------+
+| Instance tabs: Home · session tabs · new session                 |
++------------------------------------------------------------------+
+| App bar: logo · main menu · save/undo/redo · search (Ctrl+K)     |
+|          · API state · Compute/Pause/Stop/Skip · theme · problems|
++------------------------------------------------------------------+
+| Ribbon: context tabs + command groups (collapsible)              |
++---+---------------+------------------------------+-----------+---+
+| L | Left panel    |   viewport toolbar (top)     | Right     | R |
+| e | (Model,       |                              | panel     | i |
+| f | Results,      |        live viewport         | (Inspector| g |
+| t | Charts,       |                              | 3D View,  | h |
+|   | Library, …)   |                              | History,  | t |
+| r +---------------+------------------------------+ Python, …)| r |
+| a | Bottom dock (full width between rails):      |           | a |
+| i | Telemetry · Problems · Logs · Operations · … |           | i |
+| l |                                              |           | l |
++---+----------------------------------------------+-----------+---+
+| Status bar: state · session · version · mesh rev · problems · …  |
++------------------------------------------------------------------+
 ```
+
+The dock spans the full width between the two rails and sits below the left
+panel, the viewport and the right panel. Rails run the full height of the work
+area.
+
+### 1a. Activity rails (2026-11-20)
+
+- The left rail switches the model-builder panels (Explorer tabs: Model,
+  Results, Live charts, Library and further tabs from `11-explorer-view.md`).
+  The right rail switches the Inspector cards (Selection Inspector, 3D View
+  settings, History, Python script and further cards).
+- Each rail item is an icon button with an accessible name, a tooltip, an
+  active indicator and an optional count badge. Clicking the active item
+  collapses its panel and the viewport takes the space. The right panel width is
+  adjustable with a pointer and keyboard handle.
+- Panels report their extent to the viewport as insets; the canvas is not
+  resized by panel changes.
+- The viewport toolbar floats at the top centre of the viewport and hides its
+  less important groups when the viewport is narrow (container queries).
 
 The shell does not know which scientific workflow is active. It hosts slots and renders command/menu/ribbon contributions.
 

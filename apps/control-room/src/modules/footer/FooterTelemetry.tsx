@@ -58,7 +58,6 @@ import {
 } from "./antennaFieldEta";
 
 import { resolveFooterPerformanceStep } from "./footerPerformanceProgress";
-import { useBalancedMetricRows } from "./useBalancedMetricRows";
 
 // UI display locale only. Scientific values and exports keep their existing
 // invariant serialization and are not routed through this formatter.
@@ -101,6 +100,8 @@ const FOOTER_RELAXATION_ALGORITHMS = new Set<FooterRelaxationAlgorithm>([
 ]);
 
 const FOOTER_SCALAR_COLUMNS = ["step", "time", "mx", "my", "mz", "e_total"] as const;
+const FOOTER_HISTORY_COLUMNS = ["step", "e_total", "max_torque_T"] as const;
+const HISTORY_LIMIT = 120;
 
 export function FooterTelemetry({
   bus,
@@ -137,6 +138,18 @@ export function FooterTelemetry({
     enabled: generalTelemetryEnabled && Boolean(status?.run?.run_id),
   });
   const liveSample = useFooterLiveScalarSample(bus);
+  const runId = status?.run?.run_id ?? null;
+  const sessionEpoch = status?.sessionEpoch ?? null;
+  const historyWindow = useScalarWindowResource({
+    columns: FOOTER_HISTORY_COLUMNS,
+    enabled: generalTelemetryEnabled && runId !== null,
+    limit: HISTORY_LIMIT,
+    tail: true,
+  });
+  const acceptedHistory = useMemo(
+    () => resolveAcceptedFooterHistory(historyWindow.data, runId, sessionEpoch),
+    [historyWindow.data, runId, sessionEpoch],
+  );
   const scalarWindow = useScalarWindowResource({
     columns: FOOTER_SCALAR_COLUMNS,
     enabled: generalTelemetryEnabled,
@@ -198,16 +211,14 @@ export function FooterTelemetry({
       userSolvePhase,
     },
   );
-  const metricGroups = telemetry.metrics.reduce<
-    { id: FooterTelemetryGroup; metrics: [FooterTelemetryMetric, ...FooterTelemetryMetric[]] }[]
-  >((groups, metric) => {
-    const id = metricGroup(metric.id);
-    const current = groups.at(-1);
-    if (current?.id === id) current.metrics.push(metric);
-    else groups.push({ id, metrics: [metric] });
-    return groups;
-  }, []);
-  const metricsGridRef = useBalancedMetricRows(telemetry.metrics.length);
+  const stageProgress = resolveFooterStageProgress(stageExecution.data);
+  const legacyHistory = useTelemetryHistory(
+    acceptedHistory ? null : runId,
+    acceptedHistory ? null : telemetry.metrics.find((metric) => metric.id === "time")?.numeric ?? null,
+    telemetry.metrics.find((metric) => metric.id === "energy-total")?.numeric ?? null,
+    telemetry.metrics.find((metric) => metric.id === "max-torque")?.numeric ?? null,
+  );
+  const history = acceptedHistory ?? legacyHistory;
 
   if (view === "antenna" && !antennaStage) {
     return (
@@ -261,28 +272,8 @@ export function FooterTelemetry({
 
       <TooltipProvider delayDuration={250} skipDelayDuration={120}>
         <div className="fm-footer-telemetry__metrics">
-          <div ref={metricsGridRef} role="group" className="fm-footer-telemetry__metrics-grid" aria-label="Simulation metrics">
-            {metricGroups.map(({ id, metrics }) => (
-              <div
-                className="fm-footer-telemetry__group"
-                data-group={id}
-                key={`${id}-${metrics[0].id}`}
-                role="group"
-                aria-label={`${FOOTER_TELEMETRY_GROUP_LABELS[id]} metrics`}
-              >
-                {metrics.map((metric) => (
-                  <TelemetryMetric
-                    key={metric.id}
-                    detail={metric.detail}
-                    group={id}
-                    label={metric.label}
-                    subdetail={metric.subdetail}
-                    unit={metric.unit}
-                    value={metric.value}
-                  />
-                ))}
-              </div>
-            ))}
+          <div role="group" className="fm-footer-telemetry__metrics-grid" aria-label="Simulation metrics">
+            <TelemetryBoard history={history} metrics={telemetry.metrics} stage={stageProgress} />
           </div>
         </div>
       </TooltipProvider>
@@ -344,6 +335,8 @@ type FooterTelemetryMetric = {
   subdetail: string;
   unit?: string;
   value: string;
+  /** Finite reading behind `value`, for bars and history sparklines. */
+  numeric?: number | null;
 };
 
 export type FooterTelemetryStatus = {
@@ -677,6 +670,7 @@ export function buildFooterTelemetryModel(
       detail, icon: <Zap size={14} aria-hidden="true" />, id: `energy-${key}`, label,
       subdetail: sample?.[1] ?? "No energy sample", unit: "J",
       value: formatScientific(sample?.[0], "—"),
+      numeric: finiteOrNull(sample?.[0]),
     };
   };
   const timeSource = completedRun
@@ -736,6 +730,7 @@ export function buildFooterTelemetryModel(
           : timeSource,
         unit: directMinimizerWithoutPseudoTime ? undefined : "s",
         value: formatScientific(primaryTimeSeconds, "—"),
+        numeric: finiteOrNull(primaryTimeSeconds),
       },
       ...(usesPseudoTime
         ? [
@@ -747,6 +742,7 @@ export function buildFooterTelemetryModel(
               subdetail: timeSource,
               unit: "s",
               value: formatScientific(simTimeSeconds, "—"),
+              numeric: finiteOrNull(simTimeSeconds),
             },
           ]
         : []),
@@ -851,6 +847,7 @@ export function buildFooterTelemetryModel(
         label: "Max Torque",
         subdetail: `Converged: ${formatBoolean(converged)}`,
         value: formatTorqueTelemetry(maxTorqueT),
+        numeric: finiteOrNull(maxTorqueT),
       },
       {
         detail: "Average magnetization",
@@ -859,6 +856,7 @@ export function buildFooterTelemetryModel(
         label: "avg mx",
         subdetail: magnetizationSource,
         value: formatFixed(magnetization?.mx, 6, "—"),
+        numeric: finiteOrNull(magnetization?.mx),
       },
       {
         detail: "Average magnetization",
@@ -867,6 +865,7 @@ export function buildFooterTelemetryModel(
         label: "avg my",
         subdetail: magnetizationSource,
         value: formatFixed(magnetization?.my, 6, "—"),
+        numeric: finiteOrNull(magnetization?.my),
       },
       {
         detail: "Average magnetization",
@@ -875,6 +874,7 @@ export function buildFooterTelemetryModel(
         label: "avg mz",
         subdetail: magnetizationSource,
         value: formatFixed(magnetization?.mz, 6, "—"),
+        numeric: finiteOrNull(magnetization?.mz),
       },
       {
         detail: "Average magnetization",
@@ -1760,6 +1760,7 @@ export function resolvePrimaryTelemetryObjectId(
 
 type FooterTelemetryGroup = "runtime" | "solver" | "magnetization" | "energy";
 
+
 const FOOTER_TELEMETRY_GROUP_LABELS: Record<FooterTelemetryGroup, string> = {
   runtime: "Runtime",
   solver: "Solver",
@@ -1780,19 +1781,25 @@ function metricGroup(id: string): FooterTelemetryGroup {
  * rows tall instead of growing with expandable descriptions.
  */
 function TelemetryMetric({
+  ariaLabel,
   detail,
   group,
   label,
   subdetail,
   unit,
   value,
+  visual,
 }: {
   detail: string;
   group: FooterTelemetryGroup;
-  label: string;
+  label: ReactNode;
+  /** Plain-text label for assistive technology when `label` is a symbol. */
+  ariaLabel?: string;
   subdetail: string;
   unit?: string;
   value: string;
+  /** Optional inline visual (a diverging bar) between label and value. */
+  visual?: ReactNode;
 }) {
   const reading = `${value}${unit ? ` ${unit}` : ""}`;
   return (
@@ -1803,9 +1810,10 @@ function TelemetryMetric({
           data-group={group}
           role="group"
           tabIndex={0}
-          aria-label={`${label}: ${reading}`}
+          aria-label={`${ariaLabel ?? String(label)}: ${reading}`}
         >
           <span className="fm-footer-telemetry__metric-label">{label}</span>
+          {visual}
           <span className="fm-footer-telemetry__metric-value">
             <span className="fm-footer-telemetry__metric-number">{value}</span>
             {unit ? <span className="fm-footer-telemetry__metric-unit">{unit}</span> : null}
@@ -1828,6 +1836,10 @@ function TelemetryMetric({
       </TooltipContent>
     </Tooltip>
   );
+}
+
+function finiteOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function scalarSampleNumber(
@@ -1920,4 +1932,257 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/* -- Telemetry board (mockup dock) --
+ * Run: simulated time as the hero reading with the active stage and its
+ * runtime-reported progress. Magnetization: diverging bars for <m>.
+ * Solver and Energy: readouts with sparklines of samples observed in this
+ * run. Nothing is illustrative: absent data leaves the visual out. */
+
+type FooterStageProgress = {
+  index: number;
+  label: string | null;
+  percent: number | null;
+  total: number;
+};
+
+function resolveFooterStageProgress(
+  stageExecution: StageExecutionResource | null | undefined,
+): FooterStageProgress | null {
+  const record = activeStageRecord(stageExecution);
+  if (!stageExecution || !record || !(stageExecution.total_stages > 0)) return null;
+  const percent = typeof record.progress_percent === "number" && Number.isFinite(record.progress_percent)
+    ? Math.min(100, Math.max(0, record.progress_percent))
+    : null;
+  return {
+    index: record.index + 1,
+    label: record.progress_label ?? record.label ?? record.kind ?? null,
+    percent,
+    total: stageExecution.total_stages,
+  };
+}
+
+type TelemetryHistory = { energy: readonly number[]; torque: readonly number[] };
+const EMPTY_HISTORY: TelemetryHistory = { energy: [], torque: [] };
+
+function resolveAcceptedFooterHistory(
+  window: ScalarWindowResource | null | undefined,
+  runId: string | null,
+  sessionEpoch: string | null,
+): TelemetryHistory | null {
+  if (!runId || !sessionEpoch || window?.series?.run_id !== runId) return null;
+
+  const stepColumn = window.columns.indexOf("step");
+  const energyColumn = window.columns.indexOf("e_total");
+  const torqueColumn = window.columns.indexOf("max_torque_T");
+  if (stepColumn < 0 || window.rows.length !== window.observation_frames.length) return EMPTY_HISTORY;
+
+  const energy: number[] = [];
+  const torque: number[] = [];
+  for (const [index, row] of window.rows.entries()) {
+    const frame = window.observation_frames[index];
+    const step = row[stepColumn];
+    if (frame.session_epoch !== sessionEpoch || frame.source_step !== step || !Number.isSafeInteger(step) || step < 0) {
+      continue;
+    }
+    const total = row[energyColumn];
+    const maxTorque = row[torqueColumn];
+    if (Number.isFinite(total)) energy.push(total);
+    if (Number.isFinite(maxTorque)) torque.push(maxTorque);
+  }
+  return { energy, torque };
+}
+
+/** Keeps the readings observed in the current run, one point per new sim time. */
+function useTelemetryHistory(
+  runId: string | null,
+  simTime: number | null,
+  energy: number | null,
+  torque: number | null,
+): TelemetryHistory {
+  const [state, setState] = useState<{ runId: string | null; time: number | null; history: TelemetryHistory }>(
+    { runId: null, time: null, history: EMPTY_HISTORY },
+  );
+  // Derived during render: a new run resets the series, a new sim time appends.
+  const base = state.runId === runId ? state : { runId, time: null, history: EMPTY_HISTORY };
+  if (base !== state || (simTime !== null && simTime !== base.time)) {
+    const push = (series: readonly number[], value: number | null) =>
+      value === null ? series : [...series, value].slice(-HISTORY_LIMIT);
+    setState(simTime === null || simTime === base.time ? base : {
+      runId,
+      time: simTime,
+      history: { energy: push(base.history.energy, energy), torque: push(base.history.torque, torque) },
+    });
+  }
+  return state.runId === runId ? state.history : EMPTY_HISTORY;
+}
+
+function TelemetrySparkline({ label, log = false, values }: { label: string; log?: boolean; values: readonly number[] }) {
+  const points = log ? values.filter((value) => value > 0).map((value) => Math.log10(value)) : values;
+  if (points.length < 2) {
+    // The chart keeps its frame before the run publishes samples; no data is invented.
+    return (
+      <span className="fm-footer-telemetry__spark-frame" data-empty="true">
+        <svg aria-hidden="true" className="fm-footer-telemetry__spark" preserveAspectRatio="none" viewBox="0 0 100 30">
+          <path className="fm-footer-telemetry__spark-grid" d="M0,8 L100,8 M0,16 L100,16 M0,24 L100,24" vectorEffect="non-scaling-stroke" />
+          <path className="fm-footer-telemetry__spark-baseline" d="M0,28 L100,28" vectorEffect="non-scaling-stroke" />
+        </svg>
+        <span className="fm-footer-telemetry__spark-empty">{label}: no samples yet</span>
+      </span>
+    );
+  }
+  const min = Math.min(...points);
+  const span = Math.max(...points) - min || 1;
+  const path = points
+    .map((value, index) => `${index ? "L" : "M"}${((index / (points.length - 1)) * 100).toFixed(2)},${(28 - ((value - min) / span) * 26).toFixed(2)}`)
+    .join(" ");
+  return (
+    <span className="fm-footer-telemetry__spark-frame">
+      <svg aria-label={label} className="fm-footer-telemetry__spark" preserveAspectRatio="none" role="img" viewBox="0 0 100 30">
+        <path className="fm-footer-telemetry__spark-grid" d="M0,8 L100,8 M0,16 L100,16 M0,24 L100,24" vectorEffect="non-scaling-stroke" />
+        <path className="fm-footer-telemetry__spark-area" d={`${path} L100,30 L0,30 Z`} />
+        <path className="fm-footer-telemetry__spark-line" d={path} vectorEffect="non-scaling-stroke" />
+      </svg>
+    </span>
+  );
+}
+
+function DivergingBar({ value }: { value: number | null | undefined }) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return <span className="fm-footer-telemetry__diverge" aria-hidden="true" />;
+  }
+  const width = Math.min(1, Math.abs(value)) * 50;
+  return (
+    <span className="fm-footer-telemetry__diverge" aria-hidden="true">
+      <span
+        className="fm-footer-telemetry__diverge-fill"
+        style={{ left: value >= 0 ? "50%" : `${50 - width}%`, width: `${width}%` }}
+      />
+    </span>
+  );
+}
+
+type BoardCard = "run" | "magnetization" | "energy" | "convergence";
+
+/** Mockup cards and the metrics each one shows, in reading order. */
+const BOARD_CARDS: ReadonlyArray<{ id: BoardCard; title: string; group: FooterTelemetryGroup; metricIds: readonly string[] }> = [
+  { id: "run", title: "Run", group: "runtime", metricIds: ["solver-progress", "step", "dt", "rate", "active-solver", "sim-time", "active-runtime"] },
+  { id: "magnetization", title: "Magnetization", group: "magnetization", metricIds: ["avg-mx", "avg-my", "avg-mz", "avg-m"] },
+  { id: "energy", title: "Energy", group: "energy", metricIds: ["energy-exchange", "energy-demag", "energy-zeeman", "energy-anisotropy", "energy-dmi"] },
+  { id: "convergence", title: "Convergence", group: "solver", metricIds: ["solver-error", "solver-max-error"] },
+];
+
+const AXIS_SYMBOLS: Record<string, ReactNode> = {
+  "avg-mx": <>⟨m<sub>x</sub>⟩</>,
+  "avg-my": <>⟨m<sub>y</sub>⟩</>,
+  "avg-mz": <>⟨m<sub>z</sub>⟩</>,
+};
+
+function TelemetryBoard({
+  history,
+  metrics,
+  stage,
+}: {
+  history: TelemetryHistory;
+  metrics: readonly FooterTelemetryMetric[];
+  stage: FooterStageProgress | null;
+}) {
+  const byId = new Map(metrics.map((metric) => [metric.id, metric]));
+  const time = byId.get("time");
+  const total = byId.get("energy-total");
+  const torque = byId.get("max-torque");
+  const row = (metric: FooterTelemetryMetric, group: FooterTelemetryGroup) => (
+    <TelemetryMetric
+      key={metric.id}
+      detail={metric.detail}
+      group={group}
+      label={AXIS_SYMBOLS[metric.id] ? <span className="fm-footer-telemetry__symbol">{AXIS_SYMBOLS[metric.id]}</span> : metric.label}
+      ariaLabel={metric.label}
+      subdetail={metric.subdetail}
+      unit={metric.unit}
+      value={metric.value}
+      visual={AXIS_SYMBOLS[metric.id] ? <DivergingBar value={metric.numeric} /> : undefined}
+    />
+  );
+  return (
+    <>
+      {BOARD_CARDS.map((card) => {
+        const rows = card.metricIds.flatMap((id) => {
+          const metric = byId.get(id);
+          return metric ? [metric] : [];
+        });
+        return (
+          <section
+            aria-label={`${card.title} metrics`}
+            className="fm-footer-telemetry__group"
+            data-card={card.id}
+            data-group={card.group}
+            key={card.id}
+          >
+            <header className="fm-footer-telemetry__group-head">
+              <h3 className="fm-footer-telemetry__group-title">{card.title}</h3>
+              {card.id === "run" ? (
+                <span className="fm-footer-telemetry__stage-badge" data-idle={stage ? undefined : "true"}>
+                  {stage ? `Stage ${stage.index}/${stage.total}` : "No active run"}
+                </span>
+              ) : null}
+              {card.id === "magnetization" ? <span className="fm-footer-telemetry__group-aside">mean over magnets</span> : null}
+              {card.id === "energy" ? <span className="fm-footer-telemetry__group-aside">total, J</span> : null}
+              {card.id === "convergence" && torque ? (
+                <span className="fm-footer-telemetry__group-aside fm-footer-telemetry__group-aside--value" title={torque.detail}>
+                  {torque.value}{torque.unit ? ` ${torque.unit}` : ""}
+                </span>
+              ) : null}
+            </header>
+            {card.id === "run" && time ? (
+              <div className="fm-footer-telemetry__hero" title={time.detail}>
+                <span className="fm-footer-telemetry__hero-value">{time.value}</span>
+                <span className="fm-footer-telemetry__hero-unit">{time.unit ? `${time.unit} ` : ""}{time.label.toLowerCase()}</span>
+              </div>
+            ) : null}
+            {card.id === "run" ? (
+              <div className="fm-footer-telemetry__stage-progress" data-idle={stage?.percent == null ? "true" : undefined}>
+                <Progress
+                  aria-label={stage ? `Stage ${stage.index} of ${stage.total} progress` : "Stage progress"}
+                  className="fm-footer-telemetry__stage-bar"
+                  value={stage?.percent ?? 0}
+                />
+                <span className="fm-footer-telemetry__stage-label">
+                  {stage?.percent != null
+                    ? `${stage.label ? `${stage.label} · ` : ""}${Math.round(stage.percent)}%`
+                    : stage
+                      ? `${stage.label ?? "Active stage"} · progress not published`
+                      : "Starts when Compute runs"}
+                </span>
+              </div>
+            ) : null}
+            {card.id === "energy" ? (
+              <div className="fm-footer-telemetry__energy">
+                <div className="fm-footer-telemetry__rows">{rows.map((metric) => row(metric, card.group))}</div>
+                <div className="fm-footer-telemetry__energy-total">
+                  <span className="fm-footer-telemetry__energy-value" title={total?.detail}>{total?.value ?? "—"}</span>
+                  <TelemetrySparkline label="Total energy" values={history.energy} />
+                  <span className="fm-footer-telemetry__caption">E<sub>total</sub>, this run</span>
+                </div>
+              </div>
+            ) : card.id === "convergence" ? (
+              <>
+                <TelemetrySparkline label="Max torque" log values={history.torque} />
+                <span className="fm-footer-telemetry__caption fm-footer-telemetry__caption--split">
+                  <span>max |m × H<sub>eff</sub>|</span>
+                  <span>log scale, this run</span>
+                </span>
+                {rows.length > 0 ? <div className="fm-footer-telemetry__rows">{rows.map((metric) => row(metric, card.group))}</div> : null}
+              </>
+            ) : (
+              <div className="fm-footer-telemetry__rows" data-columns={card.id === "run" ? 2 : 1}>
+                {rows.map((metric) => row(metric, card.group))}
+              </div>
+            )}
+          </section>
+        );
+      })}
+    </>
+  );
 }

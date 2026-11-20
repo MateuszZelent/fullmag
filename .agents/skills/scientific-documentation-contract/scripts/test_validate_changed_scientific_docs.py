@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import subprocess
 import json
 import test_validate_scientific_docs as contract_fixture
@@ -107,17 +108,22 @@ This page reserves the public documentation location for FDM CPU exchange.
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def _write_complete_publication(self) -> tuple[Path, Path]:
+    def _write_complete_publication(
+        self, page_path: str | None = None
+    ) -> tuple[Path, Path]:
         fixture = contract_fixture.ScientificDocumentationContractTests()
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
-        page = self.repo / fixture.page_path.relative_to(fixture.repo)
+        page_path = page_path or fixture.page_path.relative_to(fixture.repo).as_posix()
+        page = self.repo / page_path
         source = self.repo / fixture.source_path.relative_to(fixture.repo)
         page.parent.mkdir(parents=True, exist_ok=True)
         source.parent.mkdir(parents=True, exist_ok=True)
         page.write_bytes(fixture.page_path.read_bytes())
         source.write_bytes(fixture.source_path.read_bytes())
-        page.with_suffix(".source-map.json").write_text(json.dumps(fixture.manifest), encoding="utf-8")
+        manifest = copy.deepcopy(fixture.manifest)
+        manifest["document"]["path"] = page_path
+        page.with_suffix(".source-map.json").write_text(json.dumps(manifest), encoding="utf-8")
         return page, source
 
     def test_revision_validation_ignores_dirty_page_and_source(self) -> None:
@@ -264,6 +270,57 @@ This page reserves the public documentation location for FDM CPU exchange.
             errors,
         )
 
+    def test_diff_selection_handles_multiple_nul_separated_paths(self) -> None:
+        page_paths = (
+            "public_docs/site/physics/exchange.md",
+            "public_docs/site/physics/thermal-noise.md",
+        )
+        for page_path in page_paths:
+            page = self.repo / page_path
+            page.parent.mkdir(parents=True, exist_ok=True)
+            page.write_text("# Scientific page\\n", encoding="utf-8")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add two unmapped scientific pages")
+
+        errors = validate_changed(self.repo, self.base, "HEAD")
+
+        for page_path in page_paths:
+            self.assertIn(
+                "changed scientific page requires sidecar manifest: "
+                + page_path.removesuffix(".md")
+                + ".source-map.json",
+                errors,
+            )
+
+    def test_unmapped_python_api_page_does_not_require_source_map(self) -> None:
+        page = self.repo / "public_docs/site/python-api/runtime/overview.md"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text("# Runtime overview\\n", encoding="utf-8")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add unmapped Python API category page")
+
+        self.assertEqual([], validate_changed(self.repo, self.base, "HEAD"))
+
+    def test_existing_public_page_pair_outside_science_is_validated(self) -> None:
+        page_path = "public_docs/site/getting-started/example.md"
+        page, _ = self._write_complete_publication(page_path)
+        manifest = page.with_suffix(".source-map.json")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add mapped getting-started page")
+        base = _git(self.repo, "rev-parse", "HEAD")
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        payload["backend_matrix"] = []
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+        _git(self.repo, "add", str(manifest.relative_to(self.repo)))
+        _git(self.repo, "commit", "-qm", "break mapped getting-started page")
+
+        errors = validate_changed(self.repo, base, "HEAD")
+
+        self.assertTrue(
+            any("backend_matrix must cover all four backend lanes" in error for error in errors),
+            errors,
+        )
+
     def test_index_page_is_exempt(self) -> None:
         index = self.repo / "public_docs/site/physics/index.md"
         index.write_text("# Updated physics\n", encoding="utf-8")
@@ -347,6 +404,7 @@ Invalid mesh requests fail closed.
         )
         _git(self.repo, "add", ".")
         _git(self.repo, "commit", "-qm", "map numerical method source")
+        manifest_base = _git(self.repo, "rev-parse", "HEAD")
 
         self.assertEqual(validate_changed(self.repo, self.base, "HEAD"), [])
 
@@ -358,7 +416,7 @@ Invalid mesh requests fail closed.
         )
         _git(self.repo, "add", ".")
         _git(self.repo, "commit", "-qm", "reject malformed backend lane")
-        errors = validate_changed(self.repo, self.base, "HEAD")
+        errors = validate_changed(self.repo, manifest_base, "HEAD")
 
         self.assertTrue(
             any("backend_matrix lane solver/device must be strings" in error for error in errors),
@@ -460,6 +518,156 @@ build_mesh()
             "deleted scientific page left an orphan sidecar manifest: "
             "public_docs/site/physics/exchange.source-map.json",
             errors,
+        )
+
+    def test_deleting_page_and_sidecar_together_is_allowed(self) -> None:
+        page = self.repo / "public_docs/site/physics/exchange.md"
+        manifest = self.repo / "public_docs/site/physics/exchange.source-map.json"
+        page.write_text("# Exchange\n", encoding="utf-8")
+        manifest.write_text('{}\n', encoding="utf-8")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add mapped page")
+        base = _git(self.repo, "rev-parse", "HEAD")
+        page.unlink()
+        manifest.unlink()
+        _git(self.repo, "add", "-u")
+        _git(self.repo, "commit", "-qm", "delete mapped page")
+
+        self.assertEqual([], validate_changed(self.repo, base, "HEAD"))
+
+    def test_renaming_page_and_sidecar_validates_the_new_pair(self) -> None:
+        page, _ = self._write_complete_publication()
+        manifest = page.with_suffix(".source-map.json")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add mapped scientific page")
+        base = _git(self.repo, "rev-parse", "HEAD")
+
+        new_page_path = "public_docs/site/physics/interactions/exchange-renamed.md"
+        new_page = self.repo / new_page_path
+        new_page.parent.mkdir(parents=True, exist_ok=True)
+        page.rename(new_page)
+        new_manifest = new_page.with_suffix(".source-map.json")
+        manifest.rename(new_manifest)
+        payload = json.loads(new_manifest.read_text(encoding="utf-8"))
+        payload["document"]["path"] = new_page_path
+        new_manifest.write_text(json.dumps(payload), encoding="utf-8")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-qm", "rename mapped scientific page")
+
+        self.assertEqual([], validate_changed(self.repo, base, "HEAD"))
+
+        payload["backend_matrix"] = []
+        new_manifest.write_text(json.dumps(payload), encoding="utf-8")
+        _git(self.repo, "add", str(new_manifest.relative_to(self.repo)))
+        _git(self.repo, "commit", "-qm", "break renamed page backend matrix")
+        errors = validate_changed(self.repo, base, "HEAD")
+        self.assertTrue(
+            any("backend_matrix must cover all four backend lanes" in error for error in errors),
+            errors,
+        )
+
+    def test_changed_markdown_page_selects_manifest_for_render_validation(self) -> None:
+        page, _ = self._write_complete_publication()
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add mapped scientific page")
+        base = _git(self.repo, "rev-parse", "HEAD")
+        page.write_text(page.read_text(encoding="utf-8") + "\nUpdated description.\n", encoding="utf-8")
+        _git(self.repo, "add", str(page.relative_to(self.repo)))
+        _git(self.repo, "commit", "-qm", "edit scientific page only")
+
+        rendered_root = self.repo / "rendered"
+        errors = validate_changed(
+            self.repo, base, "HEAD", rendered_html_root=rendered_root
+        )
+        self.assertTrue(
+            any("rendered HTML does not exist" in error for error in errors),
+            errors,
+        )
+        rendered_page = rendered_root / "physics/exchange.html"
+        rendered_page.parent.mkdir(parents=True)
+        rendered_page.write_text(
+            '<html><body><span class="math notranslate nohighlight">\\(A\\)</span>'
+            '<button class="copybutton">Copy</button></body></html>',
+            encoding="utf-8",
+        )
+
+        self.assertEqual(
+            [],
+            validate_changed(
+                self.repo, base, "HEAD", rendered_html_root=rendered_root
+            ),
+        )
+
+    def test_changed_sidecar_selects_manifest_for_render_validation(self) -> None:
+        page, _ = self._write_complete_publication()
+        manifest = page.with_suffix(".source-map.json")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add mapped scientific page")
+        base = _git(self.repo, "rev-parse", "HEAD")
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        payload["sources"][0]["responsibility"] += " Re-reviewed."
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+        _git(self.repo, "add", str(manifest.relative_to(self.repo)))
+        _git(self.repo, "commit", "-qm", "edit source map only")
+
+        rendered_root = self.repo / "rendered"
+        errors = validate_changed(
+            self.repo, base, "HEAD", rendered_html_root=rendered_root
+        )
+        self.assertTrue(
+            any("rendered HTML does not exist" in error for error in errors),
+            errors,
+        )
+        rendered_page = rendered_root / "physics/exchange.html"
+        rendered_page.parent.mkdir(parents=True)
+        rendered_page.write_text(
+            '<html><body><span class="math notranslate nohighlight">\\(A\\)</span>'
+            '<button class="copybutton">Copy</button></body></html>',
+            encoding="utf-8",
+        )
+
+        self.assertEqual(
+            [],
+            validate_changed(
+                self.repo, base, "HEAD", rendered_html_root=rendered_root
+            ),
+        )
+
+    def test_changed_python_api_sidecar_is_validated(self) -> None:
+        page_path = "public_docs/site/python-api/runtime/example.md"
+        page, _ = self._write_complete_publication(page_path)
+        manifest = page.with_suffix(".source-map.json")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add Python API page and source map")
+        base = _git(self.repo, "rev-parse", "HEAD")
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        payload["backend_matrix"] = []
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+        _git(self.repo, "add", str(manifest.relative_to(self.repo)))
+        _git(self.repo, "commit", "-qm", "break Python API backend matrix")
+
+        errors = validate_changed(self.repo, base, "HEAD")
+
+        self.assertTrue(
+            any("backend_matrix must cover all four backend lanes" in error for error in errors),
+            errors,
+        )
+
+    def test_git_diff_error_is_reported(self) -> None:
+        errors = validate_changed(self.repo, "missing-base-revision", "HEAD")
+
+        self.assertTrue(any("cannot compare missing-base-revision...HEAD" in error for error in errors))
+
+
+    def test_documentation_workflow_runs_for_validator_changes(self) -> None:
+        repo_root = Path(__file__).resolve().parents[4]
+        workflow = (repo_root / ".github/workflows/documentation.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertGreaterEqual(
+            workflow.count('".agents/skills/scientific-documentation-contract/**"'),
+            1,
         )
 
 

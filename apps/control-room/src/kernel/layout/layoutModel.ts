@@ -52,7 +52,7 @@ export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = {
       resizeBehavior: "preserve-pixel-size",
     },
   ],
-  bottomDockDefaultSize: 22,
+  bottomDockDefaultSize: 30,
   bottomDockMinSize: 12,
 };
 

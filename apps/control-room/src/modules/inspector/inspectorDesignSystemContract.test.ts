@@ -42,9 +42,9 @@ describe("Inspector design-system reference contract", () => {
     const inspector = read("src/design/styles/inspector.css");
     const footer = read("src/modules/inspector/InspectorFooter.tsx");
 
-    expect(inspector).toMatch(/\.fm-inspector__action-bar\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
+    expect(inspector).toMatch(/\.fm-inspector__action-bar\s*\{[^}]*display: flex;[^}]*flex-wrap: wrap;/);
     expect(inspector).toMatch(/\.fm-inspector__action-controls\s*\{[^}]*display: flex;[^}]*flex-wrap: wrap;/);
-    expect(inspector).toMatch(/\.fm-inspector__action-controls > button\s*\{[^}]*flex: 1 1 auto;/);
+    expect(inspector).toMatch(/@container \(max-width: 390px\)\s*\{[^@]*\.fm-inspector__action-controls > button \{ flex: 1 1 auto; \}/);
     expect(inspector).toMatch(/@container \(max-width: 560px\)[\s\S]*?\.fm-inspector__action-bar\s*\{[^}]*padding-inline: var\(--fm-space-2\)/);
     expect(footer).toContain('className="fm-inspector__action-controls"');
     expect(footer).toContain('className="fm-inspector__action-reason"');

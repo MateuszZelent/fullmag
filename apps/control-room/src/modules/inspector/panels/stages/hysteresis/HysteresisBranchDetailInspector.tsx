@@ -86,7 +86,7 @@ function BranchDetail({ branch }: { branch: HysteresisBranchSchema }) {
       )}
       {branch.points.length > 0 ? (
         <div className="fm-hysteresis-inspector-table-wrap">
-          <table className="fm-hysteresis-inspector-table">
+          <table className="fm-hysteresis-inspector-table tabular-nums">
             <thead>
               <tr>
                 <th>Point</th>
