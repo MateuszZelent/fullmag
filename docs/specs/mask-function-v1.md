@@ -82,7 +82,7 @@ exponent := ("e" | "E") ["+" | "-"] digits
 name   := [A-Za-z_][A-Za-z0-9_]*
 ```
 
-- A number written as `digits` alone (no `.`, no exponent) must not start with
+- For a profile or distance, a number written as `digits` alone (no `.`, no exponent) must not start with
   `0` unless all its digits are `0`: `01` is an `expr_syntax` error, as in
   Python; `0`, `00`, `0.5`, `01.5` and `01e3` are numbers.
 
@@ -105,7 +105,7 @@ name   := [A-Za-z_][A-Za-z0-9_]*
 - Variables: `x`, `y`, `z` in a mask function; `t` in a time function; `u`
   in a profile; `x`, `y`, `z` in a distance (section 8). `u` is a variable
   of a profile only: in the other kinds it is an ordinary name.
-- Reserved names: `x y z t pi` and the function names (`log1p` included).
+- Reserved names: `x y z t pi` and the original function names. Profiles and distances also reserve `log1p`.
   A parameter or a local may not use a reserved name or a Python keyword
   (`lambda`, `class`, …), since an exported script writes these names as
   Python names; in a profile it may not be named `u` either. Parameter and
@@ -142,20 +142,12 @@ name   := [A-Za-z_][A-Za-z0-9_]*
   expression with `**`; a negative folded parameter is parenthesized
   (`((-2.0)**2.0)`).
 
-Version. The text stays `field_expr.v1` after the additions of 2026-11-20
-(profile and distance kinds, `log1p`, the leading-zero rule). The kinds and
-`log1p` add texts and change the value of none: the formulas of an absorbing
-boundary layer are stored in their own `ProblemIR` fields, which carry no
-expression version and keep their shape. The leading-zero rule makes one
-previously accepted text invalid: an integer literal such as `01`, read as 1
-before, is now an `expr_syntax` error, as it is in Python. No writer emits one:
-the transpiler copies Python source, in which `01` is a syntax error, and
-writes other numbers with `repr`; the old formula parsers of the absorbing
-boundary layer rejected `01` already. A hand-written mask or time equation
-with `01` now fails validation instead of loading. Reserving `log1p` likewise
-rejects a parameter or local of that name. Since no accepted text changes its
-value ([compatibility policy](problem-ir-compatibility-v1.md), section 4),
-the version is kept.
+Version. Mask and time functions retain their existing `field_expr.v1`
+read contract. Archived antenna equations can contain a decimal integer with
+leading zeros, such as `007`, and can use `log1p` as a parameter or local.
+Calling `log1p(...)` in those kinds remains invalid. For the absorbing
+boundary, profile and distance equations occupy their existing `ProblemIR`
+fields and retain the Python integer syntax accepted by the previous ABL readers.
 
 Error codes (`FunctionError.code`):
 

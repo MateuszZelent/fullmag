@@ -1,6 +1,6 @@
 //! Tokens of `field_expr.v1`.
 
-use crate::ExprError;
+use crate::{ExprError, FunctionKind};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum TokenKind {
@@ -27,7 +27,7 @@ pub(crate) struct Token {
     pub position: usize,
 }
 
-pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, ExprError> {
+pub(crate) fn tokenize(source: &str, kind: FunctionKind) -> Result<Vec<Token>, ExprError> {
     let bytes = source.as_bytes();
     let mut tokens = Vec::new();
     let mut index = 0;
@@ -60,7 +60,7 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, ExprError> {
                 let end = number_end(bytes, index)
                     .ok_or_else(|| ExprError::new("expr_syntax", position, "malformed number"))?;
                 let text = &source[index..end];
-                if has_leading_zero(text) {
+                if !matches!(kind, FunctionKind::Mask | FunctionKind::Time) && has_leading_zero(text) {
                     return Err(ExprError::new(
                         "expr_syntax",
                         position,

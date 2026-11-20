@@ -48,9 +48,10 @@ function has to be made twice and nothing checks that they agree.
    because `fullmag_time_expr.v1` has no opcode for it; `heaviside` stays with
    mask and time functions. `^` is accepted only as the legacy power of mask
    and time equations.
-5. **Integer literals follow Python.** `01` is rejected in every kind, as the
-   old ABL parsers and Python already did. The version stays `field_expr.v1`
-   (reasoning in the data contract, section 3).
+5. **Preserve existing readers.** Profile and distance expressions keep the
+   ABL rule that rejects decimal integers such as `01`. Existing mask and
+   time expressions still read that spelling as one and may bind a parameter
+   or local named `log1p`. Their version remains `field_expr.v1`.
 6. **One case table.** `crates/fullmag-ir/tests/fixtures/absorbing_boundary_formula_cases.json`
    lists accepted formulas with values and rejected formulas with an error
    category; the Rust and Python tests read it. The values of the removed

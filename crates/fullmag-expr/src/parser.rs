@@ -262,7 +262,7 @@ fn variable_of(kind: FunctionKind, name: &str) -> Option<Variable> {
 pub(crate) fn is_reserved_name(name: &str) -> bool {
     name == "pi"
         || variable(name).is_some()
-        || function1(name).is_some()
+        || function1(name).is_some_and(|function| function != Func1::Log1p)
         || function2(name).is_some()
 }
 
@@ -292,7 +292,7 @@ pub(crate) fn parse_equation(source: &str, scope: &Scope<'_>) -> Result<Node, Ex
             "an equation is one line; it contains a line break".to_string(),
         ));
     }
-    let tokens = tokenize(source)?;
+    let tokens = tokenize(source, scope.kind)?;
     let mut parser = Parser {
         tokens: &tokens,
         cursor: 0,

@@ -65,7 +65,7 @@ _VARIABLES = {
     "profile": ("u",),
     "distance": ("x", "y", "z"),
 }
-_RESERVED = frozenset({"x", "y", "z", "t", "pi"}) | _FORMULA_FUNCTIONS_1 | _FUNCTIONS_2
+_RESERVED = frozenset({"x", "y", "z", "t", "pi"}) | _FUNCTIONS_1 | _FUNCTIONS_2
 _AUGMENTED_OPERATORS = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.Pow: "**"}
 
 

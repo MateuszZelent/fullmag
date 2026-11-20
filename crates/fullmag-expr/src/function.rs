@@ -150,7 +150,7 @@ pub fn compile_function(
     for (index, (name, value)) in source.parameters.iter().enumerate() {
         let path = format!("parameters[{index}]");
         validate_name(name).map_err(|error| function_error(path.clone(), error))?;
-        check_not_profile_variable(&path, name, kind)?;
+        check_kind_name(&path, name, kind)?;
         if parameters.insert(name.as_str(), *value).is_some() {
             return Err(FunctionError {
                 code: "expr_name_invalid",
@@ -166,7 +166,7 @@ pub fn compile_function(
     for (index, (name, expression)) in source.locals.iter().enumerate() {
         let path = format!("locals[{index}]");
         validate_name(name).map_err(|error| function_error(path.clone(), error))?;
-        check_not_profile_variable(&path, name, kind)?;
+        check_kind_name(&path, name, kind)?;
         if parameters.contains_key(name.as_str()) || local_indices.contains_key(name.as_str()) {
             return Err(FunctionError {
                 code: "expr_name_invalid",
@@ -232,18 +232,20 @@ pub fn compile_function(
     Ok(function)
 }
 
-/// `u` is an ordinary name except in a profile, where it is the variable.
-fn check_not_profile_variable(
+/// Keep historical antenna identifiers available outside the new formula kinds.
+fn check_kind_name(
     path: &str,
     name: &str,
     kind: FunctionKind,
 ) -> Result<(), FunctionError> {
-    if kind == FunctionKind::Profile && name == "u" {
+    if (kind == FunctionKind::Profile && name == "u")
+        || (matches!(kind, FunctionKind::Profile | FunctionKind::Distance) && name == "log1p")
+    {
         return Err(FunctionError {
             code: "expr_name_invalid",
             path: path.to_string(),
             position: 0,
-            message: "'u' is the variable of a profile".to_string(),
+            message: format!("'{name}' is reserved in a {} function", kind.label()),
         });
     }
     Ok(())
