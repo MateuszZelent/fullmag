@@ -459,7 +459,7 @@ describe("resolveTrustedViewport3DResponseDomainGenerationId", () => {
 
 
 describe("retryViewport3DFieldDomainMismatch", () => {
-  it("revalidates the live mesh before retrying a field from another generation", () => {
+  it("retries both the live mesh and the field on a generation mismatch", () => {
     const requests: string[] = [];
     retryViewport3DFieldDomainMismatch(
       "domain-generation-mismatch",

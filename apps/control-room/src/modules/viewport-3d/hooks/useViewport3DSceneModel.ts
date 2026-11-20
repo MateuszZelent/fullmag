@@ -7753,18 +7753,24 @@ export function useViewport3DSceneModel({
     materializationState: primaryMagnitudeFieldMeta.data?.state ?? null,
     status: fieldVector.status,
   });
+  const { refetch: refreshDomainMeta } = domainMeta;
+  const { refetch: refreshDomainManifest } = sharedDomainManifest;
+  const { refetch: refreshDomainTopology } = topology;
+  const { refetch: refreshMagneticPartFields } = magneticPartFieldVectors;
+  const { refetch: refreshTargetQuantityFields } = targetQuantityFieldVectors;
+  const { refetch: refreshPrimaryField } = fieldVector;
   const refreshLiveFemDomain = useCallback(() => {
-    domainMeta.refetch();
-    sharedDomainManifest.refetch();
-    topology.refetch();
-    magneticPartFieldVectors.refetch();
-    targetQuantityFieldVectors.refetch();
+    refreshDomainMeta();
+    refreshDomainManifest();
+    refreshDomainTopology();
+    refreshMagneticPartFields();
+    refreshTargetQuantityFields();
   }, [
-    domainMeta.refetch,
-    magneticPartFieldVectors.refetch,
-    sharedDomainManifest.refetch,
-    targetQuantityFieldVectors.refetch,
-    topology.refetch,
+    refreshDomainManifest,
+    refreshDomainMeta,
+    refreshDomainTopology,
+    refreshMagneticPartFields,
+    refreshTargetQuantityFields,
   ]);
   const fieldDomainIssue = useMemo<Viewport3DFieldDataIssue | null>(() => {
     let reason: Parameters<typeof describeViewport3DFieldDomainMismatch>[0] | null = null;
@@ -7790,7 +7796,7 @@ export function useViewport3DSceneModel({
       resourceKey: fieldVectorResourceKey,
       retry: () => retryViewport3DFieldDomainMismatch(
         mismatch,
-        fieldVector.refetch,
+        refreshPrimaryField,
         liveFemDomainRefresh,
       ),
     };
@@ -7800,10 +7806,10 @@ export function useViewport3DSceneModel({
     fdmLaneActive,
     femLaneActive,
     femPartTargetFieldBuffers,
-    fieldVector.refetch,
     fieldVectorResourceKey,
     primaryFieldQuantityId,
     refreshLiveFemDomain,
+    refreshPrimaryField,
   ]);
   // The issue banner is the foreground surface for these failures; the HUD
   // status pill must not repeat them. The FDM mismatch wording differs from the
