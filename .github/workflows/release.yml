@@ -315,7 +315,7 @@ jobs:
             $files[$relative] = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           }
           @{ product = "fullmag"; tag = $TAG; version_prefix = $env:VERSION_PREFIX; git_sha = $env:GIT_SHA; platform = "windows-x86_64"; source_identity = $identity; files_sha256 = $files } |
-            ConvertTo-Json -Compress | Set-Content "$DIST\release-manifest.json" -Encoding UTF8
+            ConvertTo-Json -Depth 30 -Compress | Set-Content "$DIST\release-manifest.json" -Encoding UTF8
 
           $required = @(
             "$DIST\bin\fullmag.exe",
@@ -409,7 +409,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ci/bind_release_tag.sh" "$RELEASE_TAG" "$GITHUB_SHA"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           tag_name: ${{ needs.prepare-release.outputs.tag_name }}
           target_commitish: ${{ github.sha }}
