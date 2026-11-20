@@ -52,7 +52,7 @@ fn record_commit_failure_stage(stage: &'static str) {
     if std::env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1") {
         return;
     }
-    let sequence = COMMIT_FAILURE_DIAGNOSTIC_COUNT.fetch_update(
+    let sequence = COMMIT_FAILURE_DIAGNOSTIC_COUNT.try_update(
         Ordering::Relaxed,
         Ordering::Relaxed,
         |count| (count < MAX_COMMIT_FAILURE_DIAGNOSTICS).then_some(count + 1),

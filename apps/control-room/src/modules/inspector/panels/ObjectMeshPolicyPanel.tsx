@@ -1074,7 +1074,9 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
       });
     });
     if (objectId && policy.status === "ready") kernel.bus.emit("mesh:build-history-editor-ready", { target: `object:${objectId}` });
-    return offRestore;
+    return () => {
+      offRestore();
+    };
   }, [baseDraft, draftKey, draftIdentityKey, effectiveTarget, kernel.bus, objectId, policy.status, resource, setFeedback]);
 
   const buildHistoryEntries = useMemo(() => {

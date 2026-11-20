@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KernelContext } from "@/kernel/KernelContext";
@@ -63,7 +63,10 @@ const draftSelection: Selection = {
 function SessionCapture({ capture }: {
   capture: (session: InspectorEditSession | null) => void;
 }) {
-  capture(useInspectorEditSession());
+  const session = useInspectorEditSession();
+  useEffect(() => {
+    capture(session);
+  });
   return null;
 }
 

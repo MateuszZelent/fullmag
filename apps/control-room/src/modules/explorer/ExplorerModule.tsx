@@ -1151,7 +1151,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
               aria-label="Filter explorer"
               value={filterText}
               onChange={(event) => setExplorerFilterText(event.target.value)}
-              placeholder="Filter nodes..."
+              placeholder="Filter nodes…"
               type="search"
             />
           </label>

@@ -1,5 +1,9 @@
-import { renderToStaticMarkup } from "react-dom/server";
+import { act } from "react";
+import { hydrateRoot } from "react-dom/client";
+import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import type { WorkspaceItemsController } from "../model/useWorkspaceItems";
 import type { WorkspaceRootsController } from "../model/useWorkspaceRoots";
@@ -77,6 +81,29 @@ describe("IndexedLocations", () => {
     expect(html).toContain("Add folder");
     // There is no native picker without the desktop host.
     expect(html).not.toContain("Browse…");
+  });
+
+  it("adds the desktop picker after hydration without a markup mismatch", async () => {
+    const view = <IndexedLocations workspace={workspace()} />;
+    const serverMarkup = renderToString(view);
+    expect(serverMarkup).not.toContain("Browse…");
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div") as unknown as HTMLElement;
+    container.innerHTML = serverMarkup;
+    const onRecoverableError = vi.fn();
+    let root: ReturnType<typeof hydrateRoot> | undefined;
+    try {
+      Object.assign(window, { __TAURI__: { core: { invoke: vi.fn() } } });
+      await act(async () => {
+        root = hydrateRoot(container, view, { onRecoverableError });
+      });
+      expect(onRecoverableError).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("Browse…");
+    } finally {
+      await act(async () => root?.unmount());
+      dom.restore();
+    }
   });
 
   it("starts with Save disabled (nothing changed) and Scan now enabled", () => {

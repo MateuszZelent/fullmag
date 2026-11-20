@@ -134,11 +134,11 @@ export function useComputeProbe(): ComputeProbeController {
 
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: number | undefined;
     const tick = async () => {
       if (cancelled) return;
       if (document.hidden) {
-        timer = setTimeout(() => void tick(), COMPUTE_POLL_MS);
+        timer = window.setTimeout(() => void tick(), COMPUTE_POLL_MS);
         return;
       }
       setDesktopRefreshing(true);
@@ -147,7 +147,7 @@ export function useComputeProbe(): ComputeProbeController {
         if (cancelled) return;
         setDesktop((previous) => next ? { ...next, sampledAt: Date.now() } : previous ?? null);
         setDesktopFailed(!next);
-        if (next) timer = setTimeout(() => void tick(), COMPUTE_POLL_MS);
+        if (next) timer = window.setTimeout(() => void tick(), COMPUTE_POLL_MS);
       } finally {
         if (!cancelled) setDesktopRefreshing(false);
       }
@@ -156,7 +156,7 @@ export function useComputeProbe(): ComputeProbeController {
 
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
+      window.clearTimeout(timer);
     };
   }, [needsDesktop, desktopRefreshId]);
 

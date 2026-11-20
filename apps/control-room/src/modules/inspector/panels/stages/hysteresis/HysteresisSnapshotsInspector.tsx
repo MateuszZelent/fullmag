@@ -188,7 +188,7 @@ function HysteresisSnapshotRow({
     point.snapshot_storage_reason,
   );
   return (
-    <tr data-active={active ? "true" : undefined} data-status={point.status}>
+    <tr className="tabular-nums" data-active={active ? "true" : undefined} data-status={point.status}>
       <td>{point.point_id}</td>
       <td>{point.field_value_mT.toFixed(2)}</td>
       <td>{point.snapshot_id}</td>
