@@ -349,7 +349,8 @@ pub async fn get_run_performance(
             state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
         (snapshot.run.as_ref().map(|run| run.run_id.clone()),
             snapshot.stage_execution.as_ref().map(|execution| execution.stages.iter()
-                .filter_map(|stage| stage.stage_id.clone()).collect::<Vec<_>>()).unwrap_or_default())
+                .enumerate().filter_map(|(index, stage)| Some((u32::try_from(index).ok()?, stage.stage_id.clone()?)))
+                .collect::<Vec<_>>()).unwrap_or_default())
     };
     let body = match (state.submit_store_root.clone(), run_id.clone()) {
         (Some(root), Some(run_id)) => tokio::task::spawn_blocking(move ||

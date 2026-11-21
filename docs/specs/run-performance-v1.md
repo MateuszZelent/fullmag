@@ -88,3 +88,20 @@ wewnętrzna obwoluta rejestratora pozostają prywatne. Chwilowe zajęcie store
 zwraca `409 performance_observation_busy`: invalidator odracza odczyt,
 a cache UI zachowuje ostatnie poprawne dane z oznaczeniem odświeżania.
 Rzeczywista niezgodność próby odcina poprzednie dane.
+
+`RunPerformanceResource.step_id` jest dokładnym ID etapu z
+`StageExecutionRecord`, a `stage_index` jest jego zerowym indeksem, zgodnym z
+`LiveStatus.run.stage_index`. Opcjonalny `solver_clock` zawiera `step_index`,
+`time_s` i `dt_s` z tego samego callbacku; jego indeks musi być równy
+top-level `step_index`. Wartość `dt_s = 0` pozostaje odróżnialnym pomiarem od
+braku wartości. Stare migawki bez tych pól pozostają poprawne i projektują
+`null`.
+
+`progress_fraction` jest publikowany tylko dla etapu z dodatnim, skończonym
+`until_seconds` w dokładnym, niezmiennym StudyPlan przypiętym do zaakceptowanego
+runu oraz gdy rejestrator zaobserwował fizyczny czas kroku 0. Obliczenie używa
+`(time_s - stage_start_time_s) / until_seconds`, gdzie początek pochodzi z
+pierwszego zaobserwowanego callbacku kroku 0, a wynik jest ograniczony do
+`[0, 1]`. Dzięki temu wznowienie etapu od niezerowego czasu nie zakłada początku
+na `0 s`. Brak planu, horyzontu, początku lub spójnego zegara daje `null`; API
+nie wyprowadza postępu z czasu ściennego ani indeksu kroku.

@@ -6,11 +6,14 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::json;
 use fullmag_session::{FmsTaskLifecycle, SessionStore};
-use crate::schemas::diagnostics::{RunPerformancePointResource, RunPerformanceResource};
+use crate::schemas::diagnostics::{
+    RunPerformancePointResource, RunPerformanceResource, RunPerformanceSolverClockResource,
+};
 
 const MAX_LIVE_BYTES: usize = 128 * 1024;
 const MAX_RECEIPT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_POINTS: usize = 120;
+const OBSERVATION_BUSY_RETRY_BUDGET: std::time::Duration = std::time::Duration::from_millis(100);
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,6 +37,10 @@ struct LiveRecord {
     elapsed_monotonic_ns: u64,
     first_step_index: Option<u64>,
     step_index: Option<u64>,
+    #[serde(default)]
+    solver_clock: Option<RunPerformanceSolverClockResource>,
+    #[serde(default)]
+    stage_start_time_s: Option<f64>,
     unique_step_callback_records: u64,
     rows_dropped: u64,
     collection_overhead_ns: Option<u64>,
@@ -53,6 +60,12 @@ fn validate(record: &LiveRecord, expected: &AcceptedIdentity) -> Result<()> {
         || !matches!(record.state.as_str(), "running" | "completed" | "cancelled" | "error")
         || record.gpu_unavailable_reason.as_ref().is_some_and(|reason| reason.len() > 512)
         || record.first_step_index.zip(record.step_index).is_some_and(|(first, last)| first > last)
+        || record.solver_clock.is_some_and(|clock| {
+            !clock.time_s.is_finite() || clock.time_s < 0.0
+                || !clock.dt_s.is_finite() || clock.dt_s < 0.0
+                || record.step_index != Some(clock.step_index)
+        })
+        || record.stage_start_time_s.is_some_and(|time_s| !time_s.is_finite() || time_s < 0.0)
     { bail!("invalid performance record identity or bounds"); }
     let nonnegative = |value: Option<f64>| value.is_none_or(|value| value.is_finite() && value >= 0.0);
     let mut previous = 0;
@@ -73,7 +86,9 @@ pub(crate) fn unavailable(run_id: Option<String>, reason: &str) -> RunPerformanc
         revision: fullmag_session::canonical_json_sha256(&json!([run_id, reason])),
         state: "unavailable".into(), reason: Some(reason.into()), run_id,
         task_id: None, step_id: None, attempt_id: None, ownership_epoch: None,
+        stage_index: None,
         sample_sequence: 0, elapsed_monotonic_ns: 0, first_step_index: None, step_index: None,
+        solver_clock: None, progress_fraction: None,
         unique_step_callback_records: 0, rows_dropped: 0, collection_overhead_ns: None,
         latest_step_wall_ns: None, latest_rejected_attempts: None, latest_evaluate_host_wall_ns: None,
         gpu_scope: "whole_device".into(), gpu_unavailable_reason: None, points: vec![],
@@ -88,21 +103,39 @@ fn is_observation_busy(error: &anyhow::Error) -> bool {
             .is_some_and(|error| error.kind() == std::io::ErrorKind::WouldBlock))
 }
 
-pub(crate) fn load(root: &Path, run_id: &str, stage_ids: &[String]) -> Result<RunPerformanceResource> {
+pub(crate) fn load(root: &Path, run_id: &str, stages: &[(u32, String)]) -> Result<RunPerformanceResource> {
     let _elapsed = crate::live_accepted_projection::ProjectionPhaseTimer::new("performance_load");
-    match load_verified(root, run_id, stage_ids) {
-        Ok(resource) => Ok(resource),
-        // A busy read observed no new authority. Let resource-hook error
-        // semantics retain the previous sample instead of publishing N/A.
-        Err(error) if is_observation_busy(&error) => Err(error),
-        Err(error) => {
-            tracing::debug!(error = %format!("{error:#}"), "automatic performance unavailable for the pinned attempt");
-            Ok(unavailable(Some(run_id.into()), "No verified performance snapshot for the current attempt"))
+    let deadline = std::time::Instant::now() + OBSERVATION_BUSY_RETRY_BUDGET;
+    let mut busy_retries = 0_u32;
+    loop {
+        match load_verified(root, run_id, stages) {
+            Ok(resource) => return Ok(resource),
+            // Heartbeat acknowledgements and other short publications briefly
+            // hold the exclusive store lease. Retry the complete fenced read
+            // for a bounded interval so a transient collision does not hide
+            // live telemetry; never read around the fence or reuse an
+            // unverified partial observation.
+            Err(error) if is_observation_busy(&error)
+                && std::time::Instant::now() < deadline =>
+            {
+                let delay_ms = (5_u64 << busy_retries.min(2)).min(20);
+                busy_retries = busy_retries.saturating_add(1);
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms)
+                    .min(deadline.saturating_duration_since(std::time::Instant::now())));
+            }
+            // A busy read observed no new authority. Once the short retry
+            // budget expires, resource-hook error semantics retain the
+            // previous same-identity sample rather than publishing N/A.
+            Err(error) if is_observation_busy(&error) => return Err(error),
+            Err(error) => {
+                tracing::debug!(error = %format!("{error:#}"), "automatic performance unavailable for the pinned attempt");
+                return Ok(unavailable(Some(run_id.into()), "No verified performance snapshot for the current attempt"));
+            }
         }
     }
 }
 
-fn load_verified(root: &Path, run_id: &str, stage_ids: &[String]) -> Result<RunPerformanceResource> {
+fn load_verified(root: &Path, run_id: &str, stages: &[(u32, String)]) -> Result<RunPerformanceResource> {
     fullmag_session::repository_path::validate_store_id(run_id)?;
     let store = SessionStore::open_existing(root)?;
     // Fence task selection and receipt/lease checks against an epoch transition.
@@ -112,18 +145,18 @@ fn load_verified(root: &Path, run_id: &str, stage_ids: &[String]) -> Result<RunP
     };
     let catalog = store.read_run_catalog(run_id)?.context("performance run catalog missing")?;
     let mut candidates = Vec::new();
-    for (order, step_id) in stage_ids.iter().enumerate() {
+    for (stage_index, step_id) in stages {
         let task_id = fullmag_session::task_id_for_study_step(run_id, step_id)?;
         if let Some(task) = catalog.tasks.iter().find(|task| task.task_id == task_id) {
             if task.attempt_id.is_some() && task.ownership_epoch.is_some() {
-                candidates.push((order, step_id, task));
+                candidates.push((*stage_index, step_id, task));
             }
         }
     }
     let running = candidates.iter().filter(|(_, _, task)| matches!(task.lifecycle,
         FmsTaskLifecycle::Running | FmsTaskLifecycle::Stopping)).copied().collect::<Vec<_>>();
-    let (_, step_id, task) = if running.len() == 1 { *running.first().unwrap() }
-        else if running.is_empty() { candidates.into_iter().max_by_key(|(order, _, _)| *order)
+    let (stage_index, step_id, task) = if running.len() == 1 { *running.first().unwrap() }
+        else if running.is_empty() { candidates.into_iter().max_by_key(|(index, _, _)| *index)
             .context("no verified performance task")? }
         else { bail!("parallel performance attempt selection is ambiguous"); };
     let expected = AcceptedIdentity {
@@ -200,6 +233,11 @@ fn load_verified(root: &Path, run_id: &str, stage_ids: &[String]) -> Result<RunP
     let finalizing = matches!(task.lifecycle, FmsTaskLifecycle::Running | FmsTaskLifecycle::Stopping)
         && record.state != "running";
     let public_state = if finalizing { "finalizing".to_owned() } else { record.state.clone() };
+    let progress_fraction = record.solver_clock.and_then(|clock| {
+        let duration = accepted_stage_duration_seconds(&store, run_id, &expected.step_id)?;
+        let start = record.stage_start_time_s?;
+        fraction_from_clock(clock.time_s, start, duration)
+    });
     Ok(RunPerformanceResource {
         revision: fullmag_session::canonical_json_sha256(&json!([
             expected.run_id, expected.task_id, expected.step_id, expected.attempt_id,
@@ -207,9 +245,11 @@ fn load_verified(root: &Path, run_id: &str, stage_ids: &[String]) -> Result<RunP
         state: public_state,
         reason: finalizing.then(|| "Runner telemetry is final; accepted task publication is pending".into()),
         run_id: Some(expected.run_id), task_id: Some(expected.task_id),
-        step_id: Some(expected.step_id), attempt_id: Some(expected.attempt_id), ownership_epoch: Some(expected.ownership_epoch),
+        step_id: Some(expected.step_id), stage_index: Some(stage_index),
+        attempt_id: Some(expected.attempt_id), ownership_epoch: Some(expected.ownership_epoch),
         sample_sequence: record.sample_sequence, elapsed_monotonic_ns: record.elapsed_monotonic_ns,
         first_step_index: record.first_step_index, step_index: record.step_index,
+        solver_clock: record.solver_clock, progress_fraction,
         unique_step_callback_records: record.unique_step_callback_records, rows_dropped: record.rows_dropped,
         collection_overhead_ns: record.collection_overhead_ns, latest_step_wall_ns: record.latest_step_wall_ns,
         latest_rejected_attempts: record.latest_rejected_attempts,
@@ -221,6 +261,46 @@ fn load_verified(root: &Path, run_id: &str, stage_ids: &[String]) -> Result<RunP
             } else { "gpu_telemetry_unavailable".into() }),
         points: record.points,
     })
+}
+
+fn accepted_stage_duration_seconds(store: &SessionStore, run_id: &str, step_id: &str) -> Option<f64> {
+    let intent = store.read_run_intent(run_id).ok()??;
+    let specification: fullmag_application::RunSpecification =
+        serde_json::from_value(intent.specification).ok()?;
+    if specification.validate().is_err() || specification.run_id.as_str() != run_id {
+        return None;
+    }
+    let study_ref = &specification.study;
+    if intent.study_object_ref.as_deref() != Some(study_ref.plan_sha256.as_str()) {
+        return None;
+    }
+    let bytes = store.cas().get_bounded(
+        &study_ref.plan_sha256,
+        fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES,
+    ).ok()??;
+    let study: fullmag_authoring::StudyPlan = serde_json::from_slice(&bytes).ok()?;
+    if study.validate().is_err()
+        || study.study_id != study_ref.study_id.as_str()
+        || study.schema_version != study_ref.plan_version
+        || study.canonical_sha256().ok()?.as_str() != study_ref.plan_sha256
+    {
+        return None;
+    }
+    study.steps.iter()
+        .find(|step| step.step_id == step_id)
+        .and_then(|step| step.until_seconds)
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+}
+
+fn fraction_from_clock(time_s: f64, start_time_s: f64, duration_s: f64) -> Option<f64> {
+    if !time_s.is_finite() || time_s < 0.0
+        || !start_time_s.is_finite() || start_time_s < 0.0
+        || !duration_s.is_finite() || duration_s <= 0.0
+        || time_s < start_time_s
+    {
+        return None;
+    }
+    Some(((time_s - start_time_s) / duration_s).clamp(0.0, 1.0))
 }
 
 /// Caller retains the native shared transaction covering both task and lease.
@@ -274,6 +354,8 @@ mod tests {
             identity: RecorderIdentity { accepted_identity: identity.clone() },
             sample_sequence: 1, state: "running".into(), elapsed_monotonic_ns: 10,
             first_step_index: Some(0), step_index: Some(2), unique_step_callback_records: 3,
+            solver_clock: Some(RunPerformanceSolverClockResource { step_index: 2, time_s: 2.0e-9, dt_s: 0.0 }),
+            stage_start_time_s: Some(0.0),
             rows_dropped: 0, collection_overhead_ns: None, latest_step_wall_ns: Some(5),
             latest_rejected_attempts: None, latest_evaluate_host_wall_ns: None,
             gpu_scope: "whole_device".into(), gpu_unavailable_reason: None,
@@ -299,7 +381,7 @@ mod tests {
             }
             assert!(validate(&record, &foreign).is_err());
         }
-        for change in 0..8 {
+        for change in 0..11 {
             let (mut record, expected) = fixture();
             match change {
                 0 => record.points[0].cpu_percent = Some(f64::NAN),
@@ -311,10 +393,88 @@ mod tests {
                 6 => record.points.push(RunPerformancePointResource {
                     elapsed_monotonic_ns: 5, ..record.points[0].clone()
                 }),
-                _ => record.identity.accepted_identity.step_id = "other".into(),
+                7 => record.identity.accepted_identity.step_id = "other".into(),
+                8 => record.solver_clock.as_mut().unwrap().step_index += 1,
+                9 => record.solver_clock.as_mut().unwrap().time_s = f64::NAN,
+                _ => record.solver_clock.as_mut().unwrap().dt_s = -1.0,
             }
             assert!(validate(&record, &expected).is_err());
         }
+    }
+
+    #[test]
+    fn bounded_solver_clock_preserves_zero_dt_and_uses_nonzero_stage_origin() {
+        let (record, expected) = fixture();
+        assert!(validate(&record, &expected).is_ok());
+        assert_eq!(record.solver_clock.unwrap().dt_s, 0.0);
+        let fraction = fraction_from_clock(27.488e-9, 20e-9, 20e-9).unwrap();
+        assert!((fraction - 0.3744).abs() < 1e-12);
+        assert_eq!(fraction_from_clock(50e-9, 20e-9, 20e-9), Some(1.0));
+        assert_eq!(fraction_from_clock(19e-9, 20e-9, 20e-9), None);
+        assert_eq!(fraction_from_clock(1e-9, 0.0, 0.0), None);
+    }
+
+    #[test]
+    fn stage_duration_is_read_from_the_exact_accepted_immutable_plan() {
+        use fullmag_application::{
+            ProjectId, ProjectSnapshot, RequestedExecution, RequestedResourceBudget,
+            RunSpecification, StudyId, StudyReference,
+        };
+        use fullmag_authoring::{StudyPlan, STUDY_PLAN_SCHEMA_VERSION_V2};
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let study: StudyPlan = serde_json::from_value(json!({
+            "schema_version": STUDY_PLAN_SCHEMA_VERSION_V2,
+            "study_id": "study-progress",
+            "revision": 1,
+            "steps": [{
+                "step_id": "stage-run",
+                "label": "Run",
+                "kind": { "kind": "primitive", "stage_kind": "run" },
+                "model": { "model_id": "model-one", "version": "v1" },
+                "solver_config": { "preset_id": "solver-default", "version": "v1" },
+                "discretization": { "recipe_id": "mesh-default", "version": "v1" },
+                "execution_profile": { "profile_id": "exec-auto", "version": "v1" },
+                "until_seconds": 20e-9,
+                "acceptance": { "kind": "any" },
+                "acquisition": "exclusive"
+            }]
+        })).unwrap();
+        study.validate().unwrap();
+        let plan_sha256 = study.canonical_sha256().unwrap();
+        let specification = RunSpecification::new(
+            ProjectSnapshot {
+                project_id: ProjectId::parse("project-progress").unwrap(),
+                definition_revision: 1,
+                definition_sha256: "a".repeat(64),
+            },
+            StudyReference {
+                study_id: StudyId::parse("study-progress").unwrap(),
+                plan_version: study.schema_version.clone(),
+                plan_sha256: plan_sha256.clone(),
+            },
+            "b".repeat(64),
+            json!({}),
+            RequestedExecution {
+                backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
+                mode: "strict".into(), minimum_resources: Some(RequestedResourceBudget {
+                    cpu_millis: 100, memory_bytes: 1024, gpu_memory_bytes: 0, storage_bytes: 1024,
+                }),
+            },
+        );
+        specification.validate().unwrap();
+        let run_id = specification.run_id.as_str().to_owned();
+        let study_bytes = study.canonical_json_bytes().unwrap();
+        assert_eq!(store.cas().put(&study_bytes).unwrap(), plan_sha256);
+        let mut intent = fullmag_session::FmsRunIntent::new(
+            run_id.clone(), "performance-progress-intent", serde_json::to_value(specification).unwrap(),
+        );
+        intent.study_object_ref = Some(plan_sha256.clone());
+        store.commit_run_intent(&intent).unwrap();
+
+        assert_eq!(accepted_stage_duration_seconds(&store, &run_id, "stage-run"), Some(20e-9));
+        assert_eq!(accepted_stage_duration_seconds(&store, &run_id, "foreign-stage"), None);
     }
 
     #[test]
@@ -349,6 +509,27 @@ mod tests {
         assert!(is_observation_busy(&error));
         drop(writer);
         assert_eq!(load(store.root(), "run", &[]).unwrap().state, "unavailable");
+    }
+
+    #[test]
+    fn performance_read_retries_a_short_store_writer_lease_without_dropping_the_fence() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let root = store.root().to_path_buf();
+        let writer_root = root.clone();
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let writer_store = SessionStore::open_existing(&writer_root).unwrap();
+            let lease = writer_store.write_transaction().unwrap();
+            held_tx.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(35));
+            drop(lease);
+        });
+        held_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+
+        let resource = load(&root, "run", &[]).unwrap();
+        assert_eq!(resource.state, "unavailable");
+        writer.join().unwrap();
     }
 
     #[test]
@@ -405,9 +586,12 @@ mod tests {
         })).unwrap()).unwrap();
         let reader = store.read_transaction().unwrap();
         assert!(store.write_transaction().is_err(), "the shared fence must still exclude writers");
-        let resource = load_verified(store.root(), "run", &["stage".into()]).unwrap();
+        let resource = load_verified(store.root(), "run", &[(0, "stage".into())]).unwrap();
         assert_eq!(resource.state, "running");
         assert_eq!(resource.attempt_id.as_deref(), Some("attempt"));
+        assert_eq!(resource.stage_index, Some(0));
+        assert!(resource.solver_clock.is_none());
+        assert_eq!(resource.progress_fraction, None);
         let observed = store.read_resource_lease("run", &claim.lease.resource_id,
             claim.lease.lease_token.as_str()).unwrap().unwrap();
         assert!(validate_active_lease(&task, &claim, &observed).is_ok());
@@ -430,6 +614,8 @@ mod tests {
         let resource = unavailable(Some("run".into()), "No verified attempt");
         assert_eq!(resource.state, "unavailable");
         assert!(resource.points.is_empty() && resource.task_id.is_none());
+        assert!(resource.stage_index.is_none() && resource.solver_clock.is_none());
+        assert!(resource.progress_fraction.is_none());
         assert!(resource.collection_overhead_ns.is_none() && resource.latest_step_wall_ns.is_none());
     }
 }
@@ -455,7 +641,8 @@ pub(crate) async fn publish_if_changed(
             state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
         let Some(run_id) = snapshot.run.as_ref().map(|run| run.run_id.clone()) else { return Ok(()); };
         let stages = snapshot.stage_execution.as_ref().map(|execution| execution.stages.iter()
-            .filter_map(|stage| stage.stage_id.clone()).collect::<Vec<_>>()).unwrap_or_default();
+            .enumerate().filter_map(|(index, stage)| Some((u32::try_from(index).ok()?, stage.stage_id.clone()?)))
+            .collect::<Vec<_>>()).unwrap_or_default();
         (run_id, stages)
     };
     let load_run = run_id.clone();
