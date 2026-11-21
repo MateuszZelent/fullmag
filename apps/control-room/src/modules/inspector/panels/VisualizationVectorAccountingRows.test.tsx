@@ -1,6 +1,27 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@/kernel/visualization/useVisualizationDebug", () => ({
+  useVisualizationDebugSnapshots: () => [],
+}));
+
+vi.mock("@/modules/viewport-3d/public", () => ({
+  useViewport3DRenderedVectorAdoption: () => ({
+    carrierId: "object:film",
+    fieldBufferId: "field-buffer:current",
+    itemCount: 2_130,
+    requestScopeEpoch: "scope-4",
+    resourceKey: "field-resource:current",
+    sessionEpoch: "session-2",
+    sessionId: "session-1",
+    targetId: "object:film",
+    vectorBuildKey: "fdm-vector:current-generation",
+  }),
+}));
+
+import { VisualizationVectorAccountingRows } from "./VisualizationVectorAccountingRows";
 
 const source = readFileSync(
   join(process.cwd(), "src/modules/inspector/panels/VisualizationVectorAccountingRows.tsx"),
@@ -29,5 +50,28 @@ describe("VisualizationVectorAccountingRows performance contract", () => {
   it("passes the expected visualization revision into identity matching", () => {
     expect(source).toContain("expectedVisualizationRevision?:");
     expect(source).toContain("expectedVisualizationRevision: props.expectedVisualizationRevision");
+  });
+
+  it("shows the current renderer-adopted arrow count without debug field scans", () => {
+    const markup = renderToStaticMarkup(
+      <VisualizationVectorAccountingRows
+        availableAnchorCount={131_071}
+        capacity={null}
+        exact
+        effectiveAllocation={2_130}
+        requestedBudget={2_130}
+        sceneCap={16_384}
+        targetId="object:film"
+        targetKind="object"
+      />,
+    );
+
+    expect(markup).toContain("Adopted arrows");
+    expect(markup).toContain("2,130");
+    expect(markup).toContain("Decoded field samples");
+    expect(markup).toContain("not reported");
+    expect(markup).not.toContain(
+      "Vector accounting is not reported for this target.",
+    );
   });
 });

@@ -1459,18 +1459,23 @@ fn build_stage_execution(
     for step in &accepted.lowered.steps {
         let task_id = fullmag_session::task_id_for_study_step(accepted.run.specification.run_id.as_str(), &step.step_id)
             .map_err(|error| ApiError::conflict(format!("accepted stage identity is invalid: {error}")))?;
-        let task = tasks_by_id.get(task_id.as_str()).copied();
-        let lifecycle = task.map(|task| task.lifecycle);
-        let stage_status = match lifecycle {
-            Some(fullmag_session::FmsTaskLifecycle::Running | fullmag_session::FmsTaskLifecycle::Stopping) => {
+        // Only durable task entries represent executable accepted stages.
+        // Authored setup operations can be present in the lowered plan while
+        // intentionally producing no worker task; exposing them as Pending
+        // inflates the public stage count after the executable run completes.
+        let Some(task) = tasks_by_id.get(task_id.as_str()).copied() else {
+            continue;
+        };
+        let stage_status = match task.lifecycle {
+            fullmag_session::FmsTaskLifecycle::Running | fullmag_session::FmsTaskLifecycle::Stopping => {
                 crate::types::StageLifecycleState::Running
             }
-            Some(fullmag_session::FmsTaskLifecycle::Succeeded) => crate::types::StageLifecycleState::Completed,
-            Some(fullmag_session::FmsTaskLifecycle::Failed | fullmag_session::FmsTaskLifecycle::Interrupted) => {
+            fullmag_session::FmsTaskLifecycle::Succeeded => crate::types::StageLifecycleState::Completed,
+            fullmag_session::FmsTaskLifecycle::Failed | fullmag_session::FmsTaskLifecycle::Interrupted => {
                 crate::types::StageLifecycleState::Failed
             }
-            Some(fullmag_session::FmsTaskLifecycle::Cancelled) => crate::types::StageLifecycleState::Cancelled,
-            Some(fullmag_session::FmsTaskLifecycle::Accepted | fullmag_session::FmsTaskLifecycle::Queued | fullmag_session::FmsTaskLifecycle::Preparing) | None => {
+            fullmag_session::FmsTaskLifecycle::Cancelled => crate::types::StageLifecycleState::Cancelled,
+            fullmag_session::FmsTaskLifecycle::Accepted | fullmag_session::FmsTaskLifecycle::Queued | fullmag_session::FmsTaskLifecycle::Preparing => {
                 crate::types::StageLifecycleState::Pending
             }
         };
@@ -1498,8 +1503,8 @@ fn build_stage_execution(
             }),
             _ => None,
         };
-        if let Some(cached) = task.and_then(|task| journal_details.get(&task.task_id)
-            .filter(|cached| cached.matches(accepted.run.specification.run_id.as_str(), task)))
+        if let Some(cached) = journal_details.get(&task.task_id)
+            .filter(|cached| cached.matches(accepted.run.specification.run_id.as_str(), task))
         {
             record.state_transition_reason = cached.details.reason.clone();
             record.started_at_unix_ms = cached.details.started_at_unix_ms;
@@ -5735,6 +5740,39 @@ mod tests {
         let result = load_durable_projection_with_journal(store.root(), &context, None, &mut None,
             &mut |_, _, _| panic!("optional reader cannot run without the mandatory core fence"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepted_stage_projection_counts_only_catalog_backed_execution_tasks() {
+        let (_directory, store, context, mut catalog) =
+            accepted_projection_fixture(None, &["step:run", "step:run-2"], false);
+        let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+            &store,
+            &fullmag_application::RunId::parse(context.run_id.clone()).unwrap(),
+            &fullmag_application::ProjectId::parse("project-cancel").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(accepted.lowered.steps.len(), 2);
+        let step_id = accepted.lowered.steps[0].step_id.clone();
+        let task_id = fullmag_session::task_id_for_study_step(&context.run_id, &step_id).unwrap();
+        catalog.tasks.retain(|task| task.task_id == task_id);
+        assert_eq!(catalog.tasks.len(), 1);
+        catalog.tasks[0].lifecycle = fullmag_session::FmsTaskLifecycle::Running;
+
+        let execution = build_stage_execution(
+            &accepted,
+            &catalog.tasks,
+            None,
+            &[],
+            &StageJournalDetailsCache::new(),
+            "running",
+        )
+        .unwrap();
+
+        assert_eq!(execution.total_stages, 1);
+        assert_eq!(execution.active_stage_index, Some(0));
+        assert_eq!(execution.stages.len(), 1);
+        assert_eq!(execution.stages[0].stage_id.as_deref(), Some(step_id.as_str()));
     }
 
     #[test]

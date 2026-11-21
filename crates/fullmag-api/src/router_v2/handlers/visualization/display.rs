@@ -3087,6 +3087,9 @@ fn visualization_target_render_mode(
     if settings.surface_visible {
         return VisualizationTargetRenderMode::Surface;
     }
+    if settings.wireframe_visible {
+        return VisualizationTargetRenderMode::Wireframe;
+    }
     VisualizationTargetRenderMode::Off
 }
 
@@ -3162,6 +3165,22 @@ mod camera_patch_tests {
 #[cfg(test)]
 mod visualization_override_migration_tests {
     use super::*;
+
+    #[test]
+    fn object_render_mode_preserves_wireframe_when_surface_is_toggled() {
+        let mut layers = default_visualization_layers(&DisplayPresentationState::default(), 32);
+        let style = default_vector_style_visualization();
+        layers.wireframe.visible = true;
+        for (surface_visible, expected) in [
+            (true, VisualizationTargetRenderMode::SurfaceEdges),
+            (false, VisualizationTargetRenderMode::Wireframe),
+        ] {
+            layers.surface.visible = surface_visible;
+            let target = object_target_settings("m", "viridis", &layers, &style);
+            assert_eq!(target.render_mode, expected);
+            assert!(target.wireframe_visible);
+        }
+    }
 
     #[test]
     fn scalar_quantities_use_colormap_while_vector_quantities_keep_vector_mode() {

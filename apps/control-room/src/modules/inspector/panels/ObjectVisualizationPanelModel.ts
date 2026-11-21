@@ -1,4 +1,5 @@
 import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
+import type { DecodedFdmRegionMembership } from "@/kernel/api/codecs";
 import type {
   DomainMetaResource,
   FieldAvailabilityResource,
@@ -1816,7 +1817,7 @@ export function resolveVisualizationVectorCapacityForTarget({
   fdmMembership,
   fdmNativeActiveMask,
   fdmNativeLayer,
-  fdmRealizedRegionIds,
+  fdmRealizedMembership,
   femManifest,
   multilayerAirbox,
   target,
@@ -1833,7 +1834,7 @@ export function resolveVisualizationVectorCapacityForTarget({
     revision: string | number | null;
     shape: readonly [number, number, number];
   } | null;
-  fdmRealizedRegionIds?: ArrayLike<number> | null;
+  fdmRealizedMembership?: DecodedFdmRegionMembership | null;
   femManifest?: MeshSharedDomainManifestResource | null;
   multilayerAirbox?: {
     carrierFingerprint: string | null;
@@ -1867,7 +1868,7 @@ export function resolveVisualizationVectorCapacityForTarget({
     const source = fdmVisualizationVectorCapacitySource({
       domain,
       membership: fdmMembership,
-      realizedRegionIds: fdmRealizedRegionIds,
+      realizedMembership: fdmRealizedMembership,
       revision: fdmMembership
         ? `${fdmMembership.mesh_revision}:${fdmMembership.region_membership_revision}`
         : null,

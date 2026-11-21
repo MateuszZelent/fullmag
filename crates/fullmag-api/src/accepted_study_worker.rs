@@ -130,10 +130,10 @@ pub(crate) struct AcceptedLiveMagnetizationRef {
     /// Exact study layout of the pinned execution plan.
     pub(crate) layout: serde_json::Value,
     pub(crate) space_fingerprint: String,
-    /// Large FEM P1 support is stored in an immutable sidecar; readers hydrate
+    /// Large FDM cell or FEM P1 node support is stored in an immutable sidecar; readers hydrate
     /// it before returning the canonical layout to projection consumers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) active_support_mask: Option<accepted_live_layout_mask::FemSupportMaskRef>,
+    pub(crate) active_support_mask: Option<accepted_live_layout_mask::LiveSupportMaskRef>,
     /// Present only for native FEM local-node AoS payloads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) fem_local_node_map: Option<fullmag_runner::LiveFemLocalNodeMapIdentity>,

@@ -20,7 +20,9 @@ export {
   useViewport3DRenderedScalarRange,
   type Viewport3DRenderedScalarRange,
   type Viewport3DRenderedScalarRangeQuery,
+  useViewport3DRenderedVectorAdoption,
 } from "./viewport3dStore";
+export type { Viewport3DTargetVectorAdoptionPresentation } from "./model/viewport3DVectorAdoptionPresentation";
 export {
   useViewport3DAppearance,
   useViewport3DAppearanceDiagnostics,

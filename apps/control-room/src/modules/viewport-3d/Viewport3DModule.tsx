@@ -77,6 +77,10 @@ import {
 } from "./hooks/useViewport3DSceneModel";
 import { createViewport3DVisualizationDebugCandidateBuilder, useViewport3DVisualizationDebugPublisher, type Viewport3DVisualizationDebugSource } from "./hooks/useViewport3DVisualizationDebugPublisher";
 import { createViewport3DRenderAdoptionRegistry } from "./model/viewport3DRenderAdoptionRegistry";
+import {
+  resolveCurrentViewport3DVectorAdoption,
+  type Viewport3DTargetVectorAdoptionPresentation,
+} from "./model/viewport3DVectorAdoptionPresentation";
 import { VIEWPORT_3D_WORLD_UP } from "./layers/CameraControls";
 import { resolveViewport3DCameraFit, normalizeViewport3DOrbitDebugAngles, type Viewport3DCameraChange, type Viewport3DOrbitDebugAngles, VIEWPORT_3D_ORBIT_DEBUG_LIMITS } from "./layers/CameraControls.model";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
@@ -1308,6 +1312,16 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     }
     return mapping;
   }, [visualizationDebugSource]);
+  const currentVectorTargets = useMemo(
+    () =>
+      visualizationDebugSource.targets.map(({ carrierIds, renderPass, target }) => ({
+        buildReference: renderPass?.vectors.buildReference ?? null,
+        carrierIds,
+        segments: renderPass?.vectors.segments ?? null,
+        targetId: target.id,
+      })),
+    [visualizationDebugSource.targets],
+  );
   const visualizationDebugPublisher = useViewport3DVisualizationDebugPublisher({
     adoptionRegistry: visualizationDebugAdoptionRegistry,
     buildCandidate: visualizationDebugCandidateBuilder,
@@ -1320,6 +1334,49 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     targetIds: visualizationDebugTargetIds,
     viewportId: slotId,
   });
+  useEffect(() => {
+    let disposed = false;
+    let updateQueued = false;
+    const publishCurrentAdoptions = () => {
+      const adoptions = new Map<
+        string,
+        Viewport3DTargetVectorAdoptionPresentation
+      >();
+      for (const target of currentVectorTargets) {
+        const adoption = resolveCurrentViewport3DVectorAdoption({
+          receipts: visualizationDebugAdoptionRegistry.activeSnapshot(
+            target.targetId,
+          ),
+          sessionIdentity: sessionIdentity ?? null,
+          target,
+        });
+        if (adoption) adoptions.set(target.targetId, adoption);
+      }
+      viewport3dStore.setRenderedVectorAdoptions(slotId, adoptions);
+    };
+    const scheduleUpdate = () => {
+      if (disposed || updateQueued) return;
+      updateQueued = true;
+      queueMicrotask(() => {
+        updateQueued = false;
+        if (!disposed) publishCurrentAdoptions();
+      });
+    };
+
+    publishCurrentAdoptions();
+    const unsubscribe =
+      visualizationDebugAdoptionRegistry.subscribeActive(scheduleUpdate);
+    return () => {
+      disposed = true;
+      unsubscribe();
+      viewport3dStore.clearRenderedVectorAdoptions(slotId);
+    };
+  }, [
+    currentVectorTargets,
+    sessionIdentity,
+    slotId,
+    visualizationDebugAdoptionRegistry,
+  ]);
   const initialCameraFit = resolveViewport3DCameraFit(null);
   const canvasCamera = useMemo(
     () => ({

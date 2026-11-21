@@ -13,6 +13,17 @@ use crate::schemas::diagnostics::SolverProfileResource;
 use crate::schemas::logs::EngineLogResource;
 use crate::types::{AppState, CpuTelemetryResponse, GpuTelemetryResponse};
 
+fn run_performance_request_scope(
+    snapshot: &crate::types::SessionStateResponse,
+) -> (Option<String>, Vec<(u32, String)>, Option<String>) {
+    let run_id = snapshot.run.as_ref().map(|run| run.run_id.clone());
+    let run_status = snapshot.run.as_ref().map(|run| run.status.clone());
+    let stage_ids = snapshot.stage_execution.as_ref().map(|execution| execution.stages.iter()
+        .enumerate().filter_map(|(index, stage)| Some((u32::try_from(index).ok()?, stage.stage_id.clone()?)))
+        .collect::<Vec<_>>()).unwrap_or_default();
+    (run_id, stage_ids, run_status)
+}
+
 #[utoipa::path(
     get,
     path = "/v2/platform/health",
@@ -342,31 +353,70 @@ pub async fn get_run_performance(
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
     let context = crate::capture_current_live_read_context(&state).await?;
-    let (run_id, stage_ids) = {
+    let (run_id, stage_ids, run_status) = {
         let guard = state.current_live_state.read().await;
         let snapshot = guard.as_ref().ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
         crate::ensure_current_live_request_context(snapshot, &context,
             state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
-        (snapshot.run.as_ref().map(|run| run.run_id.clone()),
-            snapshot.stage_execution.as_ref().map(|execution| execution.stages.iter()
-                .filter_map(|stage| stage.stage_id.clone()).collect::<Vec<_>>()).unwrap_or_default())
+        run_performance_request_scope(snapshot)
     };
+    let allow_terminal_fallback = run_status.as_deref()
+        .is_some_and(crate::accepted_run_performance::is_terminal_run_status);
+    let mut accepted_fence = None;
     let body = match (state.submit_store_root.clone(), run_id.clone()) {
-        (Some(root), Some(run_id)) => tokio::task::spawn_blocking(move ||
-            crate::accepted_run_performance::load(&root, &run_id, &stage_ids))
-            .await.map_err(|error| ApiError::internal(format!("read automatic performance: {error}")))?
-            .map_err(|_| ApiError::conflict_with_code("performance_observation_busy",
-                "Performance store has an active writer; retry this read after publication"))?,
+        (Some(root), Some(run_id)) => {
+            let load_root = root.clone();
+            let load_run_id = run_id.clone();
+            let load_stages = stage_ids.clone();
+            let body = tokio::task::spawn_blocking(move || crate::accepted_run_performance::load(
+                &load_root, &load_run_id, &load_stages, allow_terminal_fallback))
+                .await.map_err(|error| ApiError::internal(format!("read automatic performance: {error}")))?
+                .map_err(|_| ApiError::conflict_with_code("performance_observation_busy",
+                    "Performance store has an active writer; retry this read after publication"))?;
+
+            let revalidation_root = root;
+            let revalidation_run_id = run_id.clone();
+            let revalidation_stages = stage_ids.clone();
+            let observed_body = body.clone();
+            let revalidation = tokio::task::spawn_blocking(move ||
+                crate::accepted_run_performance::revalidate_attempt(
+                    &revalidation_root, &revalidation_run_id, &revalidation_stages,
+                    allow_terminal_fallback, &observed_body))
+                .await.map_err(|error| ApiError::internal(format!("revalidate automatic performance: {error}")))?;
+            accepted_fence = Some(match revalidation {
+                Ok(crate::accepted_run_performance::AttemptRevalidation::Current(fence)) => fence,
+                Ok(crate::accepted_run_performance::AttemptRevalidation::Changed) => {
+                    return Err(ApiError::conflict_with_code("performance_attempt_changed",
+                        "The accepted performance attempt changed during this read; retry"));
+                }
+                Err(error) if crate::accepted_run_performance::is_observation_busy(&error) => {
+                    return Err(ApiError::conflict_with_code("performance_observation_busy",
+                        "Performance store has an active writer; retry this read after publication"));
+                }
+                Err(error) => return Err(ApiError::internal(
+                    format!("revalidate automatic performance: {error}"))),
+            });
+            body
+        }
         _ => crate::accepted_run_performance::unavailable(run_id.clone(), "No current accepted run"),
     };
-    let guard = state.current_live_state.read().await;
+    // The accepted-store fence is held at this point. Avoid waiting on the
+    // async state lock while holding it: a state publisher may acquire these
+    // resources in the opposite order. If the current snapshot is being
+    // published, return a retryable conflict and let the next read observe it.
+    let guard = state.current_live_state.try_read().map_err(|_|
+        ApiError::conflict_with_code("performance_observation_busy",
+            "The current run state is being updated; retry this read"))?;
     let snapshot = guard.as_ref().ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
     crate::ensure_current_live_request_context(snapshot, &context,
         state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
-    if snapshot.run.as_ref().map(|run| &run.run_id) != run_id.as_ref() {
-        return Err(ApiError::conflict("current performance run changed during read"));
+    if run_performance_request_scope(snapshot) != (run_id.clone(), stage_ids.clone(), run_status.clone()) {
+        return Err(ApiError::conflict_with_code("performance_attempt_changed",
+            "The current run or stage changed during this read; retry"));
     }
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
         "run-performance:{}:{}:{}", context.session_id, context.session_epoch, body.revision));
-    Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
+    let response = crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body);
+    let _accepted_fence = accepted_fence;
+    Ok(response)
 }

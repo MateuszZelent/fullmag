@@ -14400,6 +14400,11 @@ export interface components {
             /** Format: int64 */
             ownership_epoch?: number | null;
             points: components["schemas"]["RunPerformancePointResource"][];
+            /**
+             * Format: double
+             * @description Fraction of the accepted bounded stage duration, clamped to [0, 1].
+             */
+            progress_fraction?: number | null;
             reason?: string | null;
             revision: string;
             /** Format: int64 */
@@ -14407,6 +14412,12 @@ export interface components {
             run_id?: string | null;
             /** Format: int64 */
             sample_sequence: number;
+            solver_clock?: null | components["schemas"]["RunPerformanceSolverClockResource"];
+            /**
+             * Format: int32
+             * @description Zero-based position in the accepted StudyPlan stage order.
+             */
+            stage_index?: number | null;
             state: string;
             step_id?: string | null;
             /** Format: int64 */
@@ -14414,6 +14425,18 @@ export interface components {
             task_id?: string | null;
             /** Format: int64 */
             unique_step_callback_records: number;
+        };
+        /** @description Physical clock from the same accepted solver callback as `step_index`. */
+        RunPerformanceSolverClockResource: {
+            /**
+             * Format: double
+             * @description Accepted solver timestep; zero is preserved as a measured value.
+             */
+            dt_s: number;
+            /** Format: int64 */
+            step_index: number;
+            /** Format: double */
+            time_s: number;
         };
         /** @description What produced the results. */
         RunSource: {
