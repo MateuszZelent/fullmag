@@ -1,9 +1,10 @@
-import { act } from "react";
+import { act, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   installSimulationPreparationTestDom,
   TestElement,
+  TestEvent,
   TestNode,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
@@ -324,6 +325,37 @@ describe("ObjectRegionMagneticParametersPanel session fence", () => {
       dom.restore();
     }
   });
+  it("keeps focus on the selected override while changing its parameter", async () => {
+    const props = panelProps();
+    function Fixture() {
+      const [materialOverrides, setOverrides] = useState<RegionSubPanelProps["draft"]["materialOverrides"]>([{
+        parameter: "ms", value: 800e3, unit: "A/m", priority: 0, conflictPolicy: "error",
+      }]);
+      return <ObjectRegionMagneticParametersPanel {...props} draft={{ ...props.draft, materialOverrides }}
+        updateMaterialOverride={(index, patch) => setOverrides(rows => rows.map((row, i) => i === index ? { ...row, ...patch } : row))} />;
+    }
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<Fixture />));
+      const select = () => container.querySelectorAll("select").find(node => node.getAttribute("aria-label") === "Override 1");
+      const control = select()!;
+      control.focus();
+      await act(async () => {
+        control.value = "alpha";
+        control.dispatchEvent(new TestEvent("change", { bubbles: true }));
+      });
+      expect(select() === control).toBe(true);
+      expect(control.value).toBe("alpha");
+      expect(dom.document.activeElement === control).toBe(true);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("shows a retained spatial override without editable scalar controls", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");

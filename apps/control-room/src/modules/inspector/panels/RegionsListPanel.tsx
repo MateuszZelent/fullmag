@@ -304,11 +304,11 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
             <div className="fm-region-list__empty">No authored regions.</div>
           </div>
         ) : (
-          <div className="fm-region-list" role="list">
+          <ul className="fm-region-list">
             {model.items.map((item) => {
               const diagnostics = diagnosticSummary(item);
               return (
-                <div key={item.regionId} className="fm-region-list__item" role="listitem">
+                <li key={item.regionId} className="fm-region-list__item">
                 <button
                   className="fm-region-card"
                   type="button"
@@ -338,10 +338,10 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
                     ) : null}
                   </span>
                 </button>
-                </div>
+                </li>
               );
             })}
-          </div>
+          </ul>
         )}
       </InspectorGroup>
 

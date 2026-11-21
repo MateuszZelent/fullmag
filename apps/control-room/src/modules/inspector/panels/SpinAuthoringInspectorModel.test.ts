@@ -46,7 +46,10 @@ describe("spin authoring opaque compatibility records", () => {
       nested: { coefficients: [1, 2, 3] },
     };
     expect(isUnsupportedSpinAuthoringResource("spin_torque", future)).toBe(true);
-    expect(JSON.parse(JSON.stringify(future))).toEqual(future);
+    const copied = structuredClone(future);
+    expect(copied).toEqual(future);
+    expect(copied).not.toBe(future);
+    expect(copied.nested).not.toBe(future.nested);
   });
 
   it("keeps canonical variants writable", () => {

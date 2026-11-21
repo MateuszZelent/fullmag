@@ -422,7 +422,7 @@ fn validate_adaptive_attempt_batch(
     Ok((records.len() as u32 - 1, last.normalized_error))
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(test)]
 fn validate_multilayer_stage_telemetry(
     layer_count: u64,
     refresh_count: u64,
@@ -3270,17 +3270,6 @@ impl NativeFdmBackend {
         )
     }
 
-    pub fn copy_torque(&self, cell_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
-        let magnetization = self.copy_m(cell_count)?;
-        let effective_field = self.copy_h_eff(cell_count)?;
-        Ok(compute_torque_field(
-            &magnetization,
-            &effective_field,
-            self.damping,
-            self.precession_enabled,
-        ))
-    }
-
     #[allow(dead_code)]
     pub fn copy_m_f32(&self, cell_count: usize) -> Result<Vec<[f32; 3]>, RunError> {
         self.copy_field_f32(
@@ -3386,18 +3375,6 @@ impl NativeFdmBackend {
         self.copy_layer_field_f32(
             layer_index,
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DMI,
-            cell_count,
-        )
-    }
-
-    pub fn copy_layer_h_rotated_dmi_f32(
-        &self,
-        layer_index: u32,
-        cell_count: usize,
-    ) -> Result<Vec<[f32; 3]>, RunError> {
-        self.copy_layer_field_f32(
-            layer_index,
-            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI,
             cell_count,
         )
     }

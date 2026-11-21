@@ -395,9 +395,6 @@ pub(crate) fn capability(field: &ResolvedSpatialField<'_>) -> Result<fullmag_run
     })
 }
 
-pub(crate) async fn catalog_fields(state:&Arc<crate::types::AppState>) -> Result<Vec<Arc<ResolvedSpatialField<'static>>>,ApiError> {
-    all_fields(state,false).await
-}
 pub(crate) async fn geometry_field(state:&Arc<crate::types::AppState>, carrier_id:&str, stage:Option<&str>)
     -> Result<Arc<ResolvedSpatialField<'static>>,ApiError> {
     let fields=if let Some(stage)=stage {

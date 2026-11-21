@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { createViewport3DRenderErrorRecord } from "./Viewport3DErrorBoundary";
+import { createViewport3DRenderErrorRecord } from "./Viewport3DErrorBoundary.model";
 
 describe("Viewport3DErrorBoundary", () => {
   it("creates a bounded pre-canvas forensic record with the component stack", () => {

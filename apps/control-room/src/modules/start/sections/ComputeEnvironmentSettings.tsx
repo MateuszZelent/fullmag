@@ -447,14 +447,8 @@ function PercentMeter({ label, value }: { readonly label: string; readonly value
   const percent = clampPercent(value);
   return (
     <div className="fm-start-compute-settings__meter-wrap">
-      <div
-        aria-label={label}
-        aria-valuemax={100}
-        aria-valuemin={0}
-        aria-valuenow={percent}
-        className="fm-start-compute-settings__meter"
-        role="meter"
-      >
+      <meter aria-label={label} className="sr-only" max={100} value={percent} />
+      <div aria-hidden="true" className="fm-start-compute-settings__meter">
         <div className="fm-start-compute-settings__meter-fill" style={{ width: `${percent}%` }} />
       </div>
       <span>{numberFormat.format(value)}%</span>

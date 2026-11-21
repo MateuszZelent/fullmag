@@ -968,7 +968,7 @@ export interface MeshHistogramBinElementsParams {
 }
 
 export interface HysteresisExecutionTreeQuery {
-  window?: "active" | string;
+  "window"?: "active" | string;
   before?: number;
   after?: number;
   include_bookmarks?: boolean;

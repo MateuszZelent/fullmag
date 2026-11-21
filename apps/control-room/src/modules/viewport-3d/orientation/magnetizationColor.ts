@@ -1,27 +1,7 @@
 import { srgbToLinearRgb } from "../viewport3dColorSpace";
 import {
-  DIRECTION_HSL_NEUTRAL_RGB,
-  DIRECTION_HSL_SATURATION,
-  DIRECTION_HSL_ZERO_NORM,
   directionHslSrgb,
 } from "@/shared/visualization/directionColor";
-
-/**
- * Saturation of the HSL sphere.
- *
- * Deliberately a constant. This is a *direction* colormap: the polar angle is
- * already carried by the lightness, and |m| carries the field's units, not its
- * orientation. Vectors with no meaningful direction are handled by the
- * near-zero guard and by `isLowConfidenceOrientationVector` in
- * viewport3dFieldMapping.ts.
- */
-export const MAGNETIZATION_HSL_SATURATION = DIRECTION_HSL_SATURATION;
-
-/** Below this norm a vector has no direction to speak of. */
-export const MAGNETIZATION_HSL_ZERO_NORM = DIRECTION_HSL_ZERO_NORM;
-
-/** Colour used where the vector carries no usable direction. */
-export const MAGNETIZATION_HSL_NEUTRAL_RGB = DIRECTION_HSL_NEUTRAL_RGB;
 
 /**
  * mumax3-style HSL sphere for a magnetisation direction; the 2D field map uses

@@ -1,7 +1,3 @@
-"use client";
-
-import { useSyncExternalStore } from "react";
-
 export interface ChartViewportHandoff {
   commandId: string;
   fieldRef: { fieldId: string; resourceKey: string };
@@ -11,7 +7,6 @@ export interface ChartViewportHandoff {
     semanticTarget?: string;
   };
 }
-
 export interface ChartViewportHandoffSnapshot {
   handoff: ChartViewportHandoff | null;
   message: string | null;
@@ -75,10 +70,4 @@ export class ChartViewportHandoffController {
     this.snapshot = snapshot;
     for (const listener of this.listeners) listener();
   }
-}
-
-export function useChartViewportHandoff(
-  controller: ChartViewportHandoffController,
-): ChartViewportHandoffSnapshot {
-  return useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
 }

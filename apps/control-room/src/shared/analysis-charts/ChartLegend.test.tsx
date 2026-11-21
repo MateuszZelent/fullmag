@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { ChartLegend, chartColorNameForIndex, type ChartLegendItem } from "./ChartLegend";
+import { ChartLegend, type ChartLegendItem } from "./ChartLegend";
+import { chartColorNameForIndex } from "./ChartLegend.model";
 
 describe("ChartLegend", () => {
   const dummyItems: ChartLegendItem[] = [

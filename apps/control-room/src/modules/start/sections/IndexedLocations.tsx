@@ -74,12 +74,17 @@ export function IndexedLocations({ workspace }: IndexedLocationsProps) {
   const save = async () => {
     if (!draft) return;
     setSaving(true);
-    const failure = await roots.save(draft);
-    setSaving(false);
-    setProblem(failure);
-    if (!failure) {
-      setDraft(null);
-      setSaved(true);
+    try {
+      const failure = await roots.save(draft);
+      setProblem(failure);
+      if (!failure) {
+        setDraft(null);
+        setSaved(true);
+      }
+    } catch (error) {
+      setProblem(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
     }
   };
 

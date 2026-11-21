@@ -143,6 +143,7 @@ vi.mock("../ObjectMagneticTexturePanel", () => ({
 }));
 
 import { ObjectRegionTexturePanel } from "./ObjectRegionTexturePanel";
+import { createInspectorChildDraftRegistry } from "../../inspectorChildDraftRegistry";
 import type { RegionAuxiliaryDraftSession, RegionSubPanelProps } from "./shared";
 
 describe("ObjectRegionTexturePanel session fence", () => {
@@ -202,14 +203,8 @@ describe("ObjectRegionTexturePanel session fence", () => {
   });
 
   it("applies the reported click-time texture draft and keeps edits made while the parent waits", async () => {
-    const reportedSession: { current: RegionAuxiliaryDraftSession | null } = {
-      current: null,
-    };
-    const reportAuxiliaryDraftSession: NonNullable<
-      RegionSubPanelProps["reportAuxiliaryDraftSession"]
-    > = (_ownerKey, session) => {
-      if (session) reportedSession.current = session;
-    };
+    const ownerKey = "object.region.texture:identity-a";
+    const auxiliaryDraftRegistry = createInspectorChildDraftRegistry<RegionAuxiliaryDraftSession>();
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const { createRoot } = await import("react-dom/client");
@@ -218,19 +213,19 @@ describe("ObjectRegionTexturePanel session fence", () => {
       await act(async () => root.render(
         <ObjectRegionTexturePanel
           {...panelProps({
-            auxiliaryDraftOwnerKey: "object.region.texture:identity-a",
-            reportAuxiliaryDraftSession,
+            auxiliaryDraftOwnerKey: ownerKey,
+            auxiliaryDraftRegistry,
           })}
         />,
       ));
       await act(async () => findButton(container, "Set click-time texture").click());
-      const clickTimeSession = reportedSession.current;
+      const clickTimeSession = auxiliaryDraftRegistry.getSession(ownerKey);
       expect(clickTimeSession?.dirty).toBe(true);
 
       await act(async () =>
         findButton(container, "Edit texture after Apply starts").click(),
       );
-      expect(reportedSession.current).not.toBe(clickTimeSession);
+      expect(auxiliaryDraftRegistry.getSession(ownerKey)).not.toBe(clickTimeSession);
 
       await act(async () => {
         expect(await clickTimeSession?.apply()).toBe(true);
@@ -243,7 +238,7 @@ describe("ObjectRegionTexturePanel session fence", () => {
         },
         { baseRevision: 10, sessionScopeKey: sessionAScopeKey },
       );
-      expect(reportedSession.current?.dirty).toBe(true);
+      expect(auxiliaryDraftRegistry.getSession(ownerKey)?.dirty).toBe(true);
     } finally {
       await act(async () => root.unmount());
       dom.restore();

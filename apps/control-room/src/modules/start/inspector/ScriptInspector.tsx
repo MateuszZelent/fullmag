@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, FolderSearch, Play, Terminal, Trash2 } from "lucide-react";
+import { Play } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
 import { Button } from "@/shared/ui/Button";
@@ -9,14 +9,7 @@ import { selectScriptBanner } from "../model/bannerModel";
 import { formatBytes, formatOpened } from "../model/recentIndex";
 import { RUN_NEEDS_DESKTOP, isRunBusy } from "../model/scriptRun";
 import { ACTOR_LABEL, scriptHistoryRows, scriptRunRows } from "../model/scriptEvents";
-import {
-  copyText,
-  displayPath,
-  formatDuration,
-  formatLines,
-  launchCommand,
-  runChip,
-} from "../model/scriptRowModel";
+import { copyText, displayPath, formatDuration, launchCommand, runChip } from "../model/scriptRowModel";
 import type { WorkspaceItemDetailState } from "../model/useWorkspaceItems";
 import type { ExecutionAvailability } from "../model/executionAvailability";
 import { NEEDS_DESKTOP } from "../model/workspaceSource";
@@ -29,16 +22,12 @@ import { ProjectThumb } from "../ui/ProjectThumb";
 import { StatusPill } from "../ui/StatusPill";
 
 import { ContextBanner } from "./ContextBanner";
-import { KvGroup, chipList, kvRow, kvRowOrUnavailable, type KvRow } from "./KeyValueGroup";
-import {
-  InspectorActionBar,
-  InspectorHeader,
-  InspectorPanel,
-  InspectorTabs,
-  RunsTable,
-  type MenuAction,
-} from "./InspectorParts";
+import { KvGroup } from "./KeyValueGroup";
+import { kvRow } from "./KeyValueGroup.model";
+import { InspectorActionBar, InspectorHeader, InspectorPanel, InspectorTabs, RunsTable } from "./InspectorParts";
 import { ScriptRunPanel } from "./ScriptRunPanel";
+import { scriptFacts } from "./ScriptInspector.model";
+import { scriptMenus, READ_ONLY_REASON, scriptChecks } from "./ScriptInspector.presentation";
 
 export type ScriptTab = "overview" | "history" | "runs";
 
@@ -58,8 +47,6 @@ const DESKTOP_EVENT_LABEL: Readonly<Record<WorkspaceEvent["kind"], string>> = {
   unpin: "Unpinned",
   forget: "Removed from recent",
 };
-
-export const READ_ONLY_REASON = "The workspace database is read-only";
 
 export interface ScriptInspectorProps {
   readonly item: WorkspaceItem;
@@ -141,128 +128,6 @@ function detailNote(detail: WorkspaceItemDetailState): string | null {
   }
 }
 
-/** Facts from the list row plus, when the backend read the file, its own. */
-export function scriptFacts(item: WorkspaceItem, script: ScriptDetail | undefined): KvRow[] {
-  const rows: KvRow[] = [];
-  const lines = formatLines(item);
-  if (lines) rows.push({ label: "Lines", value: lines });
-  const size = item.sizeBytes ?? script?.bytes;
-  if (size !== undefined) rows.push({ label: "Size", value: formatBytes(size) });
-  if (item.modifiedAt) rows.push({ label: "Modified", value: formatOpened(item.modifiedAt) });
-  if (item.firstSeenAt) rows.push({ label: "First seen", value: formatOpened(item.firstSeenAt) });
-  rows.push({
-    label: "Used",
-    value: item.useCount === 1 ? "1 time" : `${item.useCount.toLocaleString("en-US")} times`,
-  });
-  const usesFullmag = item.meta.usesFullmag ?? script?.usesFullmag;
-  rows.push({
-    label: "Uses fullmag",
-    value: usesFullmag === undefined ? "Unknown" : usesFullmag ? "Yes" : "No",
-  });
-  if (script) {
-    rows.push(...kvRowOrUnavailable("Encoding", script.encoding));
-    rows.push(...kvRowOrUnavailable("SHA-256", script.sha256 ? script.sha256.slice(0, 12) : undefined));
-  }
-  return rows;
-}
-
-/** The checks the backend ran on the file: parse, imports, environment. */
-export function scriptChecks(script: ScriptDetail): KvRow[] {
-  const notChecked = script.syntax === undefined && script.syntaxChecked === false;
-  const syntax = notChecked
-    ? "not checked"
-    : script.syntax
-    ? script.syntax.ok
-      ? "No syntax errors"
-      : `Error${script.syntax.line !== undefined ? ` at line ${script.syntax.line}` : ""}${script.syntax.message ? `: ${script.syntax.message}` : ""}`
-    : undefined;
-  // "Not found" is relative to the interpreter the backend chose: a run may use another.
-  const imports = script.unresolvedImports
-    ? script.unresolvedImports.length === 0
-      ? "All found by the interpreter"
-      : chipList(script.unresolvedImports)
-    : script.imports
-      ? script.imports.length === 0
-        ? "None"
-        : chipList(script.imports)
-      : undefined;
-  const env = script.envReads
-    ? script.envReads.length === 0
-      ? "None"
-      : chipList(script.envReads)
-    : undefined;
-  return [
-    ...kvRowOrUnavailable("Syntax", syntax),
-    ...kvRowOrUnavailable(
-      script.unresolvedImports ? "Imports not found" : script.syntaxChecked ? "Imports" : "Imports (line scan)",
-      imports,
-    ),
-    ...kvRowOrUnavailable("Environment reads", env),
-    ...(script.degraded && script.degradedReason
-      ? [{ label: "Checked by", value: <span title={script.degradedReason}>line scan only</span> }]
-      : []),
-  ];
-}
-
-export interface ScriptMenus {
-  readonly more: readonly MenuAction[];
-  readonly split: readonly MenuAction[];
-}
-
-/** The two menus of the inspector, as data so their reasons are testable. */
-export function scriptMenus(input: {
-  readonly item: WorkspaceItem;
-  readonly readOnly: boolean;
-  readonly busy: boolean;
-  /** Why the desktop-only actions are unavailable (no desktop host); null when they work. */
-  readonly desktopReason: string | null;
-  readonly onCopyPath: () => void;
-  readonly onReveal: () => void;
-  readonly onCopyScript: () => void;
-  readonly onCopyCommand: () => void;
-  readonly onForget: () => void;
-}): ScriptMenus {
-  const missing = input.item.status === "missing";
-  const fileGone = missing ? "The file is missing." : null;
-  return {
-    more: [
-      { id: "copy-path", label: "Copy path", icon: <Copy aria-hidden="true" size={14} />, onSelect: input.onCopyPath },
-      {
-        id: "reveal-script",
-        label: "Reveal in folder",
-        icon: <FolderSearch aria-hidden="true" size={14} />,
-        onSelect: input.onReveal,
-        disabledReason:
-          fileGone ?? input.desktopReason ?? (input.busy ? "Another action is running" : null),
-      },
-      {
-        id: "forget-script",
-        label: "Remove from recent",
-        icon: <Trash2 aria-hidden="true" size={14} />,
-        onSelect: input.onForget,
-        disabledReason: input.readOnly ? READ_ONLY_REASON : null,
-        separatorBefore: true,
-      },
-    ],
-    split: [
-      {
-        id: "copy-script",
-        label: "Copy script",
-        icon: <Copy aria-hidden="true" size={14} />,
-        onSelect: input.onCopyScript,
-        disabledReason:
-          fileGone ?? input.desktopReason ?? (input.busy ? "Another action is running" : null),
-      },
-      {
-        id: "copy-command",
-        label: "Copy launch command",
-        icon: <Terminal aria-hidden="true" size={14} />,
-        onSelect: input.onCopyCommand,
-      },
-    ],
-  };
-}
-
 /**
  * What the start screen knows about a script, and what it can do with it.
  * Open script records the open. Run in new window reads the file's static
@@ -319,11 +184,16 @@ export function ScriptInspector({
 
   const run = async (action: () => Promise<string | null>, done?: string) => {
     setBusy(true);
-    const failure = await action();
-    setBusy(false);
-    if (failure) setNotice({ tone: "error", text: failure });
-    else if (done) flash(done);
-    else setNotice(null);
+    try {
+      const failure = await action();
+      if (failure) setNotice({ tone: "error", text: failure });
+      else if (done) flash(done);
+      else setNotice(null);
+    } catch (error) {
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const copy = async (text: string, label: string) => {

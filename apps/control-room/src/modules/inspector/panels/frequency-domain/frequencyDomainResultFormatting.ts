@@ -2,7 +2,7 @@
 
 import type { FmrModalDrivenComparisonPoint, FmrPeakPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { formatFrequencyHz, formatFrequencyRangeHz } from "@/shared/domain/analysis/frequencyUnits";
-import { ANALYSIS_FIELD_VIEW_OPTIONS, normalizeAnalysisFieldView } from "../FrequencyDomainModeDisplayControls";
+import { ANALYSIS_FIELD_VIEW_OPTIONS, normalizeAnalysisFieldView } from "../FrequencyDomainModeDisplayControls.model";
 
 export function missingValueSummary(
   values: readonly [label: string, value: number | null | undefined][],

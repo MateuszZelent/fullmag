@@ -157,12 +157,6 @@ export function resolveSessionTopologyDiscretization(
   return discretization;
 }
 
-export function selectSessionDiscretization(status: {
-  data: SessionDiscretizationStatus | null;
-}): SessionDiscretization | null {
-  return resolveSessionDiscretization(status.data);
-}
-
 
 export interface SessionAuthoringMethodDescription {
   method: SessionDiscretization | null;

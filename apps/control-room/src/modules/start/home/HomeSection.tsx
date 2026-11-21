@@ -69,6 +69,9 @@ export interface HomeSectionProps {
   readonly onOpenInstance?: (port: number) => void;
 }
 
+const EMPTY_ACTIVE_SESSIONS: NonNullable<HomeSectionProps["activeSessions"]> = [];
+const EMPTY_OTHER_INSTANCES: NonNullable<HomeSectionProps["otherInstances"]> = [];
+
 export function HomeSection({
   browseDisabledReason,
   disabledReasons,
@@ -87,9 +90,9 @@ export function HomeSection({
   onResumeContinue,
   onDiscardContinue,
   onRunCommand,
-  activeSessions = [],
+  activeSessions = EMPTY_ACTIVE_SESSIONS,
   onOpenActiveSession,
-  otherInstances = [],
+  otherInstances = EMPTY_OTHER_INSTANCES,
   onOpenInstance,
 }: HomeSectionProps) {
   const today = useToday();
@@ -121,8 +124,13 @@ export function HomeSection({
   const run = async (action: () => Promise<string | null>) => {
     setContinueBusy(true);
     setContinueError(null);
-    setContinueError(await action());
-    setContinueBusy(false);
+    try {
+      setContinueError(await action());
+    } catch (error) {
+      setContinueError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setContinueBusy(false);
+    }
   };
 
   return (

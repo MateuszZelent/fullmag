@@ -9,21 +9,10 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/shared/u
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
 import { useKernel } from "../KernelContext";
-import type { ModuleManifest } from "../types";
 
 import { MountedModule } from "./SlotHost";
 import { useLayoutActions, useLayoutSelector } from "./useLayout";
-
-function selectActiveViewportModule(
-  modules: ModuleManifest[],
-  activeModuleId: string,
-): ModuleManifest | null {
-  return (
-    modules.find((module) => module.id === activeModuleId) ??
-    modules[0] ??
-    null
-  );
-}
+import { selectActiveViewportModule } from "./ViewportTabHost.model";
 
 export function ViewportTabHost() {
   const kernel = useKernel();
@@ -136,7 +125,3 @@ export function ViewportTabHost() {
     </section>
   );
 }
-
-export const __viewportTabHostTestUtils = {
-  selectActiveViewportModule,
-};

@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  buildHysteresisReplayGlyphLayerModel,
-} from "./HysteresisReplayGlyphLayer";
+import { buildHysteresisReplayGlyphLayerModel } from "./HysteresisReplayGlyphLayer.model";
 
 describe("buildHysteresisReplayGlyphLayerModel", () => {
   it("builds field and measurement-axis glyph segments from the domain-neutral replay model", () => {

@@ -17,10 +17,6 @@ export const PLANAR_RANGE_MODE_ITEMS = [
   { label: "Symmetric", value: "symmetric" },
 ] as const satisfies ReadonlyArray<{ label: string; value: PlanarRange["mode"] }>;
 
-export const PLANAR_VECTOR_GLYPH_ITEMS = [
-  { label: "Quiver", value: "quiver" },
-] as const;
-
 export const PLANAR_VECTOR_LENGTH_MODE_ITEMS = [
   { label: "Uniform", value: "uniform" },
   { label: "Magnitude", value: "magnitude" },

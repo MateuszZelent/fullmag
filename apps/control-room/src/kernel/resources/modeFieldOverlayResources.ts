@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import type { FrequencyDomainFieldResource } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
@@ -21,7 +21,6 @@ import {
 import { sessionRequestScopeKey } from "./sessionResourceIdentity";
 import { useSessionResourceIdentity } from "./useSessionStatus";
 
-import { useFrequencyDomainEigenModeFieldMetaResource } from "./studyRuntimeResources";
 
 export interface ModeFieldOverlayResource {
   readonly binaryResourceKey: string | null;
@@ -139,27 +138,6 @@ export function resolveModeFieldOverlayResource(
     metadataStatus: resource.status,
     status: "ready",
   };
-}
-
-/**
- * Temporary index bridge over the generated metadata facade. The caller owns
- * only the stable intent; the legacy sample/mode indices never leave this
- * resource-hook boundary and cannot become overlay/cache identity.
- */
-export function useModeFieldOverlayResource(
-  intent: ModeFieldOverlayIntent | null | undefined,
-  { enabled = true }: { enabled?: boolean } = {},
-): ModeFieldOverlayResource {
-  const sessionIdentity = useSessionResourceIdentity();
-  const metadataResource = useFrequencyDomainEigenModeFieldMetaResource(
-    intent?.sampleIndex,
-    intent?.modeIndex,
-    { enabled: enabled && Boolean(intent) && sessionIdentity !== null },
-  );
-  return useMemo(
-    () => resolveModeFieldOverlayResource(intent, metadataResource),
-    [intent, metadataResource],
-  );
 }
 
 export type ModeFieldOverlayMetadataResource = ResourceResult<

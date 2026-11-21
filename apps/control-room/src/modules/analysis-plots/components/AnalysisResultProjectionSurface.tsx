@@ -27,7 +27,8 @@ import {
 
 import type { AnalysisResultProjectionChartModel } from "@/shared/domain/analysis/results";
 
-import { EChartsSurface, tableSeriesRenderModel } from "./EChartsSurface";
+import { EChartsSurface } from "./EChartsSurface";
+import { tableSeriesRenderModel } from "./EChartsSurface.model";
 
 export interface AnalysisResultProjectionSurfaceProps {
   kernel: KernelApi;

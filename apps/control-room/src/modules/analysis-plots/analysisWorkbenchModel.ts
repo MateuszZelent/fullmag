@@ -1,11 +1,7 @@
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
-import type { AnalysisSurface } from "@/kernel/workspace/analysisViewPreferences";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { chartTableWindowValue, type ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
-import {
-  descriptorForFrequencyTable,
-  descriptorForSurface,
-} from "@/shared/domain/analysis/analysisSurfaceDescriptor";
+import { descriptorForFrequencyTable } from "@/shared/domain/analysis/analysisSurfaceDescriptor";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import {
   chartValueExtrema,
@@ -13,11 +9,6 @@ import {
 } from "@/shared/analysis-charts/chartScalePolicy";
 
 import type { ChartSeries, ChartValueRange, TableRowsLike } from "./chartTableModel";
-
-export function surfaceTitle(surface: AnalysisSurface): string {
-  return descriptorForSurface(surface).title;
-}
-
 
 export function tableRowsLike(table: ChartTableWindow | null): TableRowsLike | null {
   if (!table) return null;
@@ -30,12 +21,7 @@ export function tableRowsLike(table: ChartTableWindow | null): TableRowsLike | n
 
 export function tableWindowRowCount(table: ChartTableWindow | null): number { return table?.rowCount ?? 0; }
 export function tableWindowTotalRows(table: ChartTableWindow): number { return table.totalRows; }
-export function tableWindowCursorEnd(table: ChartTableWindow): number { return table.cursorEnd; }
 export function tableWindowTableId(table: ChartTableWindow | null): string { return table?.tableId ?? "default"; }
-
-export function formatTableSummary(table: ChartTableWindow | null, status: string): string {
-  return table ? `${table.totalRows} rows / ${table.columns.length} columns` : status;
-}
 
 export function formatRange(range: ChartValueRange): string {
   return `${formatRangeValue(range.fromValue)}-${formatRangeValue(range.toValue)}`;
@@ -47,18 +33,6 @@ export function formatRangeValue(value: number): string {
 }
 
 export function formatSeriesCount(count: number): string { return `${count} series`; }
-export function formatCursorPoint(point: AnalysisChartCursorPoint): string { return `${point.label} ${formatLatestValue(point.point.y)}`; }
-
-export function buildSeriesLegend(chartSeries: readonly ChartSeries[]) {
-  return chartSeries.map((series) => ({
-    columnId: series.id,
-    label: series.label || series.quantity,
-    latest: formatLatestValue(series.points.at(-1)?.y),
-    series,
-    source: series.source.resourceKey,
-    unit: series.unit || "1",
-  }));
-}
 
 export function formatXAxisLabel(chartSeries: readonly ChartSeries[], xAxisId: string): string {
   // The renderer owns unit formatting and SI scaling. Keeping this semantic
@@ -217,11 +191,4 @@ function* iterateSeriesValues(
   for (const entry of series) {
     for (const point of entry.points) yield point[coordinate];
   }
-}
-
-export function formatLatestValue(value: number | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "-";
-  if (Math.abs(value) >= 1e4 || (value !== 0 && Math.abs(value) < 1e-3)) return value.toExponential(3);
-  const precise = value.toPrecision(5);
-  return precise.includes("e") ? precise : String(Number(precise));
 }

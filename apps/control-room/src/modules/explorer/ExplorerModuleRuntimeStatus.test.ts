@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { explorerModelRuntimeStatusEquals, resolveExplorerModelDiscretization } from "./ExplorerModule";
+import { explorerModelRuntimeStatusEquals, resolveExplorerModelDiscretization } from "./ExplorerModule.model";
 
 describe("resolveExplorerModelDiscretization", () => {
   it("prefers the resolved active lane over the legacy domain field", () => {
@@ -30,7 +30,6 @@ describe("resolveExplorerModelDiscretization", () => {
     ).toBeNull();
   });
 });
-
 
 it("invalidates Explorer authoring method when legacy identity becomes explicitly missing", () => {
   const legacy = { capabilities: { explicit_topology: true, active_lane: { resolved: { discretization: "fem" } } }, domain: { discretization: "fem" }, resources: { mesh_revision: 0, mesh_build_revision: 0, stages_revision: 0 } };

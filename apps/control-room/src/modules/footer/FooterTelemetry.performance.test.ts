@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { RunPerformanceResource } from "@/kernel/api/apiTypes";
 
-import { buildFooterTelemetryModel, type FooterTelemetryStatus } from "./FooterTelemetry";
+import { buildFooterTelemetryModel } from "./FooterTelemetry.presentation";
+import { type FooterTelemetryStatus } from "./FooterTelemetry.model";
 
 const status: FooterTelemetryStatus = {
   energies: null,

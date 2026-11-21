@@ -128,10 +128,10 @@ function laneAvailability(
 }
 
 function laneReason(lanes: readonly ComputeRuntimeLane[]): string {
-  const reasons = [...new Set(lanes
-    .filter((lane) => lane.availability !== "available")
-    .map((lane) => lane.reason?.trim())
-    .filter((reason): reason is string => Boolean(reason)))];
+  const reasons = [...new Set(lanes.flatMap((lane) => {
+    const reason = lane.availability !== "available" ? lane.reason?.trim() : undefined;
+    return reason ? [reason] : [];
+  }))];
   return reasons.join("; ") || "No advertised runtime lane is available for this backend.";
 }
 

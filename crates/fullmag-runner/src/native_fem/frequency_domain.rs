@@ -483,6 +483,7 @@ impl NativeModalCertificateV6FfiBinding {
     }
 }
 
+#[cfg(any(feature = "fem-native", test))]
 #[derive(Debug, Clone, PartialEq)]
 struct NativeModalSharedDomainFfiEnvelopeContract {
     descriptor_required: bool,
@@ -505,6 +506,7 @@ struct NativeModalSharedDomainFfiEnvelopeContract {
 }
 
 impl<'a> NativeModalEigenSharedDomainProblem<'a> {
+    #[cfg(any(feature = "fem-native", test))]
     fn ffi_envelope_contract(&self) -> Result<NativeModalSharedDomainFfiEnvelopeContract, String> {
         const TERM_EXCHANGE: u32 = 1 << 0;
         const TERM_FIELD: u32 = 1 << 1;
@@ -710,6 +712,7 @@ impl<'a> NativeModalEigenSharedDomainProblem<'a> {
         })
     }
 
+    #[cfg(any(feature = "fem-native", test))]
     fn ffi_envelope_contract_for_target(
         &self,
         execution_target: NativeModalExecutionTarget,
@@ -1064,6 +1067,7 @@ pub(crate) fn solve_native_modal_eigen(
     solve_native_modal_eigen_impl(request)
 }
 
+#[cfg(test)]
 fn validate_native_modal_request_payload_ownership(
     execution_target: NativeModalExecutionTarget,
     production_shared_domain_required: bool,
@@ -2905,18 +2909,31 @@ struct NativeFrequencyDomainContractFfiResult {
     inner: ffi::FullmagFemFrequencyDomainResult,
 }
 
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_MEASUREMENT_MEASURED: u32 = 1;
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_MEASUREMENT_UNAVAILABLE: u32 = 2;
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_MEASUREMENT_FAILED: u32 = 3;
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_FALLBACK_NONE: u32 = 1;
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_OPERATOR_MATRIX_FREE_SCHUR_CUDA: u32 = 1;
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_HYPRE_MEMORY_DEVICE: u32 = 2;
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_HYPRE_EXECUTION_DEVICE: u32 = 2;
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_COVERAGE_SETUP: u64 = 1;
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_COVERAGE_FULLMAG_HOT_LOOP: u64 = 2;
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_COVERAGE_OBJECT_GRAPH: u64 = 4;
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_COVERAGE_SCALAR_TELEMETRY: u64 = 8;
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_COVERAGE_EXPORT: u64 = 16;
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_REQUIRED_COVERAGE: u64 = MODAL_GPU_COVERAGE_SETUP
     | MODAL_GPU_COVERAGE_FULLMAG_HOT_LOOP
     | MODAL_GPU_COVERAGE_OBJECT_GRAPH
@@ -2924,26 +2941,31 @@ const MODAL_GPU_REQUIRED_COVERAGE: u64 = MODAL_GPU_COVERAGE_SETUP
     | MODAL_GPU_COVERAGE_EXPORT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM constructs this state while validating GPU attestation"))]
 pub(crate) enum NativeModalGpuMeasurementState {
     Measured,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM constructs this state while validating GPU attestation"))]
 pub(crate) enum NativeModalGpuFallbackState {
     None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM constructs this state while validating GPU attestation"))]
 pub(crate) enum NativeModalGpuOperatorKind {
     MatrixFreeSchurCuda,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM constructs this state while validating GPU attestation"))]
 pub(crate) enum NativeModalGpuHypreMemoryLocation {
     Device,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM constructs this state while validating GPU attestation"))]
 pub(crate) enum NativeModalGpuHypreExecutionPolicy {
     Device,
 }
@@ -3027,6 +3049,7 @@ pub(crate) struct NativeModalGpuAttestation {
     pub(crate) invalidation_flags: u64,
 }
 
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM decodes this stable GPU attestation ABI snapshot"))]
 #[derive(Debug, Clone)]
 struct NativeModalGpuAttestationSnapshot {
     measurement_state: u32,
@@ -3106,6 +3129,7 @@ struct NativeModalGpuAttestationSnapshot {
     invalidation_flags: u64,
 }
 
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM uses this check when validating GPU attestation digests"))]
 fn digest_is_missing(digest: &[u8; 32]) -> bool {
     digest.iter().all(|byte| *byte == 0)
 }
@@ -3300,6 +3324,7 @@ pub(crate) fn measured_modal_gpu_attestation_fixture() -> NativeModalGpuAttestat
     }
 }
 
+#[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM calls this parser for GPU attestation ABI results"))]
 fn parse_modal_gpu_attestation_snapshot(
     snapshot: NativeModalGpuAttestationSnapshot,
 ) -> Result<NativeModalGpuAttestation, String> {

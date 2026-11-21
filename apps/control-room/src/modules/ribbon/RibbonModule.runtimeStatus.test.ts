@@ -7,7 +7,7 @@ import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import { buildRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
 import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
 
-import { __ribbonModuleTestUtils } from "./RibbonModule";
+import { __ribbonModuleTestUtils } from "./RibbonModule.model";
 
 const baseResources: LiveStatusResource["resources"] = {
   artifact_revision: 0,

@@ -176,20 +176,28 @@ describe("Viewport3DScene scale helpers", () => {
     );
 
     expect(adoptionFrameHook).toContain("adoptionRegistry.subscribeActive");
-    expect(adoptionFrameHook).toContain('scheduleFrame("render-adoption")');
+    expect(adoptionFrameHook).toContain('markFrameDirty("render-adoption")');
     expect(adoptionFrameHook).toContain("tracker.recordDirtyFrame(reason)");
     expect(adoptionFrameHook).toContain("const frameIdRef = useRef<number | null>(null)");
-    expect(adoptionFrameHook).toContain("const commitLatestFrame = useEffectEvent");
-    const scheduleStart = adoptionFrameHook.indexOf("const scheduleFrame");
-    expect(adoptionFrameHook.indexOf("invalidate();", scheduleStart)).toBeLessThan(
-      adoptionFrameHook.indexOf("window.requestAnimationFrame", scheduleStart),
+    expect(adoptionFrameHook).toContain("const pendingFrameCommitRef = useRef(false)");
+    expect(adoptionFrameHook).toContain("const frameCommitGenerationRef = useRef(0)");
+    expect(adoptionFrameHook).toContain("useFrame(() => {");
+    const frameHookStart = adoptionFrameHook.indexOf("useFrame(() => {");
+    expect(adoptionFrameHook.indexOf("pendingFrameCommitRef.current = false", frameHookStart)).toBeLessThan(
+      adoptionFrameHook.indexOf("frameCommitQueue?.enqueue({", frameHookStart),
     );
-    expect(adoptionFrameHook).toContain("onVisualizationFrameCommitted(");
+    expect(adoptionFrameHook).toContain("window.requestAnimationFrame(() => {");
+    expect(adoptionFrameHook).toContain("const frameState = airboxFrameState");
+    expect(adoptionFrameHook).toContain("const revision = visualizationRevision");
+    expect(adoptionFrameHook).toContain("frameCommitGeneration !== frameCommitGenerationRef.current");
+    expect(adoptionFrameHook).toContain("frameCommitQueue?.enqueue({ frameState, revision }");
     const resourceUpdateEffect = adoptionFrameHook.slice(
-      adoptionFrameHook.indexOf('scheduleFrame("resources-updated")') - 40,
-      adoptionFrameHook.indexOf('scheduleFrame("resources-updated")') + 160,
+      adoptionFrameHook.indexOf('markFrameDirty("resources-updated")') - 140,
+      adoptionFrameHook.indexOf('markFrameDirty("resources-updated")') + 180,
     );
-    expect(resourceUpdateEffect).not.toContain("cancelAnimationFrame");
+    expect(resourceUpdateEffect).toContain('markFrameDirty("resources-updated")');
+    expect(resourceUpdateEffect).not.toContain("frameState");
+    expect(resourceUpdateEffect).not.toContain("frameCommitQueue?.enqueue");
   });
 
   it("binds Airbox frame state to the staged multilayer render passes", () => {
@@ -350,10 +358,10 @@ describe("Viewport3DScene scale helpers", () => {
       source.indexOf("export function Viewport3DScene"),
     );
 
-    expect(adoptionFrameHook).toContain("const commitLatestFrame = useEffectEvent");
-    expect(adoptionFrameHook).toContain("onVisualizationFrameCommitted(");
-    expect(adoptionFrameHook).toContain("visualizationRevision,");
-    expect(adoptionFrameHook).toContain("airboxFrameState,");
+    expect(adoptionFrameHook).toContain("pendingFrameCommitRef.current = true");
+    expect(adoptionFrameHook).toContain("frameCommitQueue?.enqueue({");
+    expect(adoptionFrameHook).toContain("const frameState = airboxFrameState");
+    expect(adoptionFrameHook).toContain("const revision = visualizationRevision");
   });
 
   it("places the shared glyph-cache provider above the model stack that mounts VectorFieldLayer consumers", () => {
@@ -378,32 +386,43 @@ describe("Viewport3DScene scale helpers", () => {
   });
 
   it("passes the exact session identity through every adoption-producing layer", () => {
-    const layerSources = [
+    const readLayerSources = (componentPath: string, modelPath?: string) => ({
+      component: readFileSync(new URL(componentPath, import.meta.url), "utf8"),
+      model: modelPath
+        ? readFileSync(new URL(modelPath, import.meta.url), "utf8")
+        : "",
+    });
+    const meshPart = readLayerSources(
       "./MeshPartLayer.tsx",
-      "./VectorFieldLayer.tsx",
-      "./FdmCuboidLayer.tsx",
-      "./BoundsLayers.tsx",
-      "./TopologyMeshLayer.tsx",
-      "./FallbackTopologyMeshLayer.tsx",
-    ].map((path) =>
-      readFileSync(new URL(path, import.meta.url), "utf8"),
+      "./MeshPartLayer.model.ts",
     );
+    const vectorField = readLayerSources(
+      "./VectorFieldLayer.tsx",
+      "./VectorFieldLayer.model.ts",
+    );
+    const fdmCuboid = readLayerSources(
+      "./FdmCuboidLayer.tsx",
+      "./FdmCuboidLayer.model.ts",
+    );
+    const bounds = readLayerSources("./BoundsLayers.tsx");
+    const topology = readLayerSources("./TopologyMeshLayer.tsx");
+    const fallback = readLayerSources("./FallbackTopologyMeshLayer.tsx");
 
-    expect(layerSources[0]).toContain("sessionIdentity={sessionIdentity}");
-    expect(layerSources[0]).toMatch(
+    expect(meshPart.component).toContain("sessionIdentity={sessionIdentity}");
+    expect(meshPart.model).toMatch(
       /registry\.recordSurfaceAdoption\(\{[\s\S]*sessionIdentity,/,
     );
-    expect(layerSources[1]).toContain("sessionIdentity,");
-    expect(layerSources[1]).toMatch(
+    expect(vectorField.component).toContain("sessionIdentity,");
+    expect(vectorField.model).toMatch(
       /registry\.recordVectorAdoption\(\{[\s\S]*sessionIdentity,/,
     );
-    expect(layerSources[2]).toContain("sessionIdentity={sessionIdentity}");
-    expect(layerSources[2]).toMatch(
+    expect(fdmCuboid.component).toContain("sessionIdentity={sessionIdentity}");
+    expect(fdmCuboid.model).toMatch(
       /registry\.recordSurfaceAdoption\(\{[\s\S]*sessionIdentity,/,
     );
-    expect(layerSources[3]).toContain("sessionIdentity={sessionIdentity}");
-    expect(layerSources[4]).toContain("sessionIdentity={sessionIdentity}");
-    expect(layerSources[5]).toContain("sessionIdentity={sessionIdentity}");
+    expect(bounds.component).toContain("sessionIdentity={sessionIdentity}");
+    expect(topology.component).toContain("sessionIdentity={sessionIdentity}");
+    expect(fallback.component).toContain("sessionIdentity={sessionIdentity}");
   });
 
   it("uses the demand-rendered dimension frame layer instead of Three helper grids", () => {

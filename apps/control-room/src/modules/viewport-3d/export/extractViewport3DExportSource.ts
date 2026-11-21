@@ -368,6 +368,7 @@ function findModeCompositionFieldForTarget(
       ? objectId
       : `object:${objectId}`
     : null;
+  const candidateTargetIdSet = new Set(candidateTargetIds);
 
   let matchedSnapshot = null;
   for (const key of candidateTargetIds) {
@@ -386,7 +387,7 @@ function findModeCompositionFieldForTarget(
       if (!snap.field || !snap.layer) continue;
       if (
         (snap.layer.target_id &&
-          candidateTargetIds.includes(snap.layer.target_id)) ||
+          candidateTargetIdSet.has(snap.layer.target_id)) ||
         (objectId && snap.layer.object_id === objectId)
       ) {
         matchedSnapshot = snap;
@@ -596,9 +597,10 @@ function extractFdmTargets(
         continue;
       }
       if (domain.activeCellCount === 0) continue;
+      const targetId = layerView.target.id;
       const modeField = findModeCompositionFieldForTarget(
         input,
-        [layerView.target.id, domain.layerId, FULL_VIEWPORT_3D_TARGET_ID],
+        [targetId, domain.layerId, FULL_VIEWPORT_3D_TARGET_ID],
         domain.objectId,
         nativeViews.length === 1,
       );
@@ -607,7 +609,7 @@ function extractFdmTargets(
       if (!modeField && input.analysisComplexField) {
         const cf = input.analysisComplexField;
         const matchesLayer =
-          (cf.scopeId && (cf.scopeId === domain.layerId || cf.scopeId === layerView.target.id)) ||
+          (cf.scopeId && (cf.scopeId === domain.layerId || cf.scopeId === targetId)) ||
           (nativeViews.length === 1 &&
             (cf.pointCount === totalCells || cf.pointCount === domain.activeCellCount));
         if (matchesLayer) {
@@ -1248,6 +1250,7 @@ function extractFemTargets(
 
   if (topologyModel && (input.includeHiddenAirbox || input.airboxSettings?.visible)) {
     for (const airPm of topologyModel.airboxParts) {
+      const partId = airPm.part.id;
       const partSettings = input.getPartSettings?.(airPm.part);
       if (!input.includeHiddenAirbox && partSettings?.visible === false) continue;
       const airMask = new Uint8Array(nodeCount);
@@ -1260,14 +1263,14 @@ function extractFemTargets(
         }
       }
       const airField =
-        input.fieldModel?.targetPasses?.get(airPm.part.id)?.fieldBuffer
+        input.fieldModel?.targetPasses?.get(partId)?.fieldBuffer
           ?.decodedFieldVector ?? null;
       const field = airField ? convertRealFieldToExportInput(airField) : null;
       const airLabel =
         (airPm.part as { readonly label?: string | null }).label ||
-        airPm.part.id;
+        partId;
       const built = buildFemTargetFromSelection({
-        id: airPm.part.id,
+        id: partId,
         name: airLabel,
         positionsM,
         nodeCount,
