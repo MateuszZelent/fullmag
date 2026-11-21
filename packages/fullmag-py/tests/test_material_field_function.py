@@ -143,6 +143,7 @@ class FieldFunctionValidationTests(unittest.TestCase):
 
     def test_parameter_names_and_values_are_checked(self):
         self.assert_error("parameter 'max': the name is reserved", "x", max=1.0)
+        self.assert_error("parameter '__debug__': the name is reserved", "__debug__*x", **{"__debug__": 1})
         self.assert_error("parameter 'y': the name is reserved", "x", y=1.0)
         self.assert_error("parameter 'heaviside': the name is reserved", "x", heaviside=1.0)
         self.assert_error("parameter 'lambda': a Python keyword", "x", **{"lambda": 1.0})
@@ -186,6 +187,25 @@ class FieldFunctionValidationTests(unittest.TestCase):
             return unit * x
 
         self.assert_error("unit is a keyword of fm.fields.function", keyword_parameter)
+
+    def test_def_rejects_names_that_cannot_enter_field_ir(self):
+        def max(x, y, z):
+            return x
+
+        def λ(x, y, z):
+            return x
+
+        def damping(x, y, z, α=0.1):
+            return α * x
+
+        def local_damping(x, y, z):
+            α = x
+            return α
+
+        self.assert_error("function name 'max' is reserved", max)
+        self.assert_error("function name 'λ' must be ASCII", λ)
+        self.assert_error("parameter name 'α' must be ASCII", damping)
+        self.assert_error("local name 'α' must be ASCII", local_damping)
 
     def test_vector_parameter_is_rejected(self):
         study = fm.study("vector-function-field")

@@ -526,6 +526,18 @@ class _Transpiler(_ExpressionChecker):
                 raise self.fail(returned, f"a {self.kind} function must return one number")
             outputs = (self.expression(returned),)
 
+        if self.kind == "field":
+            if definition.name in _RESERVED:
+                raise self.fail(definition, f"function name {definition.name!r} is reserved")
+            for role, identifiers in (
+                ("function", (definition.name,)),
+                ("parameter", (*self.parameters, *self.captured)),
+                ("local", (name for name, _ in self.locals)),
+            ):
+                for name in identifiers:
+                    if not name.isascii():
+                        raise self.fail(definition, f"{role} name {name!r} must be ASCII")
+
         return _TranspiledFunction(
             kind=self.kind,
             name=definition.name,

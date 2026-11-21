@@ -150,6 +150,17 @@ fn function_field_rejects_bad_versions_values_and_names() {
         assert!(message.contains("function.parameters[0]") && message.contains(option), "{message}");
     }
 
+    for (member, value) in [
+        ("name", json!("__debug__")),
+        ("parameters", json!([{"name": "__debug__", "value": 0.01}])),
+        ("locals", json!([{"name": "__debug__", "expression": "x"}])),
+    ] {
+        let mut field = alpha_ramp_json();
+        field["function"][member] = value;
+        let message = errors(Parameter::Alpha, field);
+        assert!(message.contains("cannot bind '__debug__'"), "{member}: {message}");
+    }
+
     // JSON has no infinity: the value reaches the check through the typed IR.
     let mut problem = problem_with(Parameter::Alpha, alpha_ramp_json());
     let MaterialParameterFieldIR::Function { function, .. } =

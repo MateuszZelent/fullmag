@@ -149,7 +149,7 @@ def _check_parameter_name(name: str) -> None:
         raise FieldFunctionError(f"parameter {name!r}: not a valid name")
     if keyword.iskeyword(name):
         raise FieldFunctionError(f"parameter {name!r}: a Python keyword cannot be a parameter")
-    if name in _RESERVED:
+    if name == "__debug__" or name in _RESERVED:
         raise FieldFunctionError(f"parameter {name!r}: the name is reserved")
     if name in _CALL_KEYWORDS:
         raise FieldFunctionError(

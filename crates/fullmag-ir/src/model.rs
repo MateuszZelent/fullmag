@@ -414,6 +414,13 @@ fn compile_field_function(
             "material_field_function_invalid: function.expression_version must be '{FIELD_EXPR_VERSION}'"
         ));
     }
+    // Python forbids binding __debug__ in a def, an assignment, or a call keyword.
+    if function.name.as_deref() == Some("__debug__")
+        || function.parameters.iter().any(|p| p.name == "__debug__")
+        || function.locals.iter().any(|local| local.name == "__debug__")
+    {
+        return Err("material_field_function_invalid: function cannot bind '__debug__' in an exported Python script".into());
+    }
     if let Some(name) = &function.name {
         validate_name(name).map_err(|error| {
             format!(

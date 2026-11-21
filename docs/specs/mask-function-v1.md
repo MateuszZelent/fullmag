@@ -355,6 +355,8 @@ section 3.3) stores a scalar material parameter as a function of the field kind:
   scalar parameter only (`material_field_function_invalid` for
   `anisotropy_axis`), `expression_version` `field_expr.v1`, finite parameter
   values, a `name` that `validate_name` accepts (not reserved, not a keyword).
+  Function, parameter and local names use ASCII identifiers. Python reserves
+  `__debug__` against binding in all three positions.
   Engine errors keep their code with the path `function.outputs[0]`,
   `function.locals[i]` or `function.parameters[i]`.
 - The planner compiles the function once per resolution and evaluates it at
