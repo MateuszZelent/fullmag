@@ -583,6 +583,15 @@ term. `assemble_poisson_airbox_shared_domain_payload` imports this descriptor
 and `assemble_poisson_airbox_shared_domain` owns the complete shared-domain
 block assembly.
 
+Dla rzeczywistych modów P1 przy $k=0$ oba bloki mieszane używają tego samego
+interpolowanego pola stycznego z węzłów. Sprzężenie zwrotne potencjału jest
+transpozycją źródła Poissona z czynnikiem $-\mu_0$. Zależność
+$A_{q\phi}=-\mu_0 A_{\phi q}^{\mathsf T}$ obowiązuje też dla niejednorodnej
+równowagi. Ponowny rzut bazy w punktach kwadratury zmienia dyskretne pole
+testowe, gdy magnetyzacja zmienia się wewnątrz elementu.
+Test natywny sprawdza wzajemność bloków dla niejednorodnego stanu P1
+z warunkiem brzegowym Robina.
+
 Geometry part markers remain authoritative in `MeshIR` and the periodic mesh
 certificate. At the native operator boundary, the runner derives a separate
 role map with `1=magnetic` and `0=airbox`. This allows one physical magnetic

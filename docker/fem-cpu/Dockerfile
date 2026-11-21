@@ -238,6 +238,11 @@ RUN corepack enable && corepack prepare pnpm@10.8.1 --activate
 
 COPY --from=deps /opt/fullmag-deps /opt/fullmag-deps
 
+# The native FEM sources use Boost, GMP and MPFR for exact surface arithmetic.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libboost-dev libgmp-dev libmpfr-dev && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /workspace
 RUN git config --global --add safe.directory /workspace
 
