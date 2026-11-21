@@ -2242,6 +2242,8 @@ fn initial_magnetization_for_object(
                 _ => fullmag_ir::TextureProjectionMode::ObjectLocal,
             },
             clamp_mode: asset.mapping.clamp_mode.clone(),
+            tile_period: asset.mapping.tile_period,
+            background_vector: asset.mapping.background_vector,
         };
 
         let texture_transform = fullmag_ir::TextureTransform3DIR {
@@ -2249,6 +2251,7 @@ fn initial_magnetization_for_object(
             rotation_quat: asset.texture_transform.rotation_quat,
             scale: asset.texture_transform.scale,
             pivot: asset.texture_transform.pivot,
+            rotate_vectors: asset.texture_transform.rotate_vectors,
         };
 
         return InitialMagnetizationIR::PresetTexture {

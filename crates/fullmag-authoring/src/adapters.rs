@@ -2493,6 +2493,8 @@ impl From<crate::SceneTextureMapping> for fullmag_ir::TextureMappingIR {
             space: m.space,
             projection,
             clamp_mode: m.clamp_mode,
+            tile_period: m.tile_period,
+            background_vector: m.background_vector,
         }
     }
 }
@@ -2504,6 +2506,7 @@ impl From<crate::SceneTextureTransform3D> for fullmag_ir::TextureTransform3DIR {
             rotation_quat: t.rotation_quat,
             scale: t.scale,
             pivot: t.pivot,
+            rotate_vectors: t.rotate_vectors,
         }
     }
 }

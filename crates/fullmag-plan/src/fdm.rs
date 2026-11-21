@@ -423,6 +423,7 @@ fn grid_sample_points(
                 points.push(TextureSamplePoint {
                     position_world: world,
                     position_object: object,
+                    position_region: None,
                     active: active_mask.map(|mask| mask[idx]).unwrap_or(true),
                 });
             }

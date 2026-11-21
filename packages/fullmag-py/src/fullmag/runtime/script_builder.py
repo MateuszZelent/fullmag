@@ -13645,6 +13645,7 @@ _DEFAULT_TEXTURE_TRANSFORM = {
     "rotation_quat": [0.0, 0.0, 0.0, 1.0],
     "scale": [1.0, 1.0, 1.0],
     "pivot": [0.0, 0.0, 0.0],
+    "rotate_vectors": True,
 }
 
 _DEFAULT_TEXTURE_PREVIEW_PROXY = {
@@ -13653,13 +13654,22 @@ _DEFAULT_TEXTURE_PREVIEW_PROXY = {
     "random_seeded": "none",
     "vortex": "disc",
     "antivortex": "disc",
+    "vortex_wall": "box",
     "bloch_skyrmion": "disc",
     "neel_skyrmion": "disc",
+    "antiskyrmion": "disc",
+    "skyrmionium": "disc",
     "bimeron": "disc",
+    "hopfion": "sphere",
+    "hopfion_compact_support": "torus",
     "domain_wall": "box",
     "two_domain": "box",
     "helical": "box",
     "conical": "box",
+    "skyrmion_lattice": "disc",
+    "spiral": "box",
+    "bloch_point": "sphere",
+    "artificial_spin_ice": "box",
 }
 
 
@@ -13788,7 +13798,163 @@ def _render_texture_factory_call(
         if params.get("phase_rad") not in {None, 0.0}:
             kwargs.append(f"phase_rad={_py_number(float(params['phase_rad']))}")
         return f"fm.texture.conical({', '.join(kwargs)})"
+    if preset_kind == "antiskyrmion":
+        radius = params.get("radius")
+        wall_width = params.get("wall_width")
+        if radius is None or wall_width is None:
+            return None
+        kwargs = [
+            f"radius={_py_number(float(radius))}",
+            f"wall_width={_py_number(float(wall_width))}",
+            f"chirality={int(str(params.get('chirality', 1)))}",
+            f"core_polarity={int(str(params.get('core_polarity', -1)))}",
+        ]
+        if params.get("plane") not in {None, "xy"}:
+            kwargs.append(f"plane={_py_repr(str(params['plane']))}")
+        return f"fm.texture.antiskyrmion({', '.join(kwargs)})"
+    if preset_kind == "skyrmionium":
+        inner_radius = params.get("inner_radius")
+        outer_radius = params.get("outer_radius")
+        wall_width = params.get("wall_width")
+        if inner_radius is None or outer_radius is None or wall_width is None:
+            return None
+        kwargs = [
+            f"inner_radius={_py_number(float(inner_radius))}",
+            f"outer_radius={_py_number(float(outer_radius))}",
+            f"wall_width={_py_number(float(wall_width))}",
+            f"kind={_py_repr(str(params.get('kind', 'neel')))}",
+            f"chirality={int(str(params.get('chirality', 1)))}",
+            f"background_sign={int(str(params.get('background_sign', 1)))}",
+        ]
+        if params.get("plane") not in {None, "xy"}:
+            kwargs.append(f"plane={_py_repr(str(params['plane']))}")
+        return f"fm.texture.skyrmionium({', '.join(kwargs)})"
+    if preset_kind == "vortex_wall":
+        wall_half_width = params.get("wall_half_width")
+        if wall_half_width is None:
+            return None
+        kwargs = [
+            f"wall_half_width={_py_number(float(wall_half_width))}",
+            f"left_mx={_py_number(float(params.get('left_mx', 1.0)))}",
+            f"right_mx={_py_number(float(params.get('right_mx', -1.0)))}",
+        ]
+        if params.get("circulation") is not None:
+            kwargs.append(f"circulation={int(str(params['circulation']))}")
+        kwargs.append(f"core_polarity={int(str(params.get('core_polarity', 1)))}")
+        kwargs.append(f"core_radius={_py_number(float(params.get('core_radius', 1.0e-9)))}")
+        if params.get("plane") not in {None, "xy"}:
+            kwargs.append(f"plane={_py_repr(str(params['plane']))}")
+        return f"fm.texture.vortex_wall({', '.join(kwargs)})"
+    if preset_kind == "hopfion":
+        radius = params.get("radius")
+        if radius is None:
+            return None
+        kwargs = [
+            f"radius={_py_number(float(radius))}",
+            f"hopf_charge={int(str(params.get('hopf_charge', 1)))}",
+            f"background_sign={int(str(params.get('background_sign', 1)))}",
+            f"axial_scale={_py_number(float(params.get('axial_scale', 1.0)))}",
+            f"phase_rad={_py_number(float(params.get('phase_rad', 0.0)))}",
+        ]
+        return f"fm.texture.hopfion({', '.join(kwargs)})"
+    if preset_kind == "hopfion_compact_support":
+        major_radius = params.get("major_radius")
+        minor_radius = params.get("minor_radius")
+        if major_radius is None or minor_radius is None:
+            return None
+        kwargs = [
+            f"major_radius={_py_number(float(major_radius))}",
+            f"minor_radius={_py_number(float(minor_radius))}",
+        ]
+        return f"fm.texture.hopfion_compact_support({', '.join(kwargs)})"
+    if preset_kind == "skyrmion_lattice":
+        lattice_constant = params.get("lattice_constant")
+        radius = params.get("radius")
+        wall_width = params.get("wall_width")
+        if lattice_constant is None or radius is None or wall_width is None:
+            return None
+        kwargs = [
+            f"lattice_constant={_py_number(float(lattice_constant))}",
+            f"radius={_py_number(float(radius))}",
+            f"wall_width={_py_number(float(wall_width))}",
+            f"lattice={_py_repr(str(params.get('lattice', 'hexagonal')))}",
+            f"kind={_py_repr(str(params.get('kind', 'bloch')))}",
+            f"chirality={int(str(params.get('chirality', 1)))}",
+            f"core_polarity={int(str(params.get('core_polarity', -1)))}",
+        ]
+        if params.get("plane") not in {None, "xy"}:
+            kwargs.append(f"plane={_py_repr(str(params['plane']))}")
+        return f"fm.texture.skyrmion_lattice({', '.join(kwargs)})"
+    if preset_kind == "spiral":
+        wavelength = params.get("wavelength")
+        if wavelength is None:
+            return None
+        kwargs = [
+            f"wavelength={_py_number(float(wavelength))}",
+            f"spiral_kind={_py_repr(str(params.get('spiral_kind', 'cycloidal')))}",
+        ]
+        propagation_axis = params.get("propagation_axis")
+        if isinstance(propagation_axis, list) and len(propagation_axis) == 3:
+            kwargs.append(f"propagation_axis={_render_vector_literal(propagation_axis)}")
+        spin_plane_normal = params.get("spin_plane_normal")
+        if isinstance(spin_plane_normal, list) and len(spin_plane_normal) == 3:
+            kwargs.append(f"spin_plane_normal={_render_vector_literal(spin_plane_normal)}")
+        kwargs.append(f"chirality={int(str(params.get('chirality', 1)))}")
+        if params.get("phase_rad") not in {None, 0.0}:
+            kwargs.append(f"phase_rad={_py_number(float(params['phase_rad']))}")
+        return f"fm.texture.spiral({', '.join(kwargs)})"
+    if preset_kind == "bloch_point":
+        kwargs = [
+            f"bp_kind={_py_repr(str(params.get('bp_kind', 'circulating')))}",
+            f"polarity={int(str(params.get('polarity', 1)))}",
+            f"twist_rad={_py_number(float(params.get('twist_rad', math.pi / 2.0)))}",
+            f"core_radius={_py_number(float(params.get('core_radius', 1.0e-9)))}",
+        ]
+        return f"fm.texture.bloch_point({', '.join(kwargs)})"
+    if preset_kind == "artificial_spin_ice":
+        pitch = params.get("pitch")
+        if pitch is None:
+            return None
+        kwargs = [
+            f"pitch={_py_number(float(pitch))}",
+            f"lattice={_py_repr(str(params.get('lattice', 'square')))}",
+            f"vertex_state={_py_repr(str(params.get('vertex_state', 'type_i_ground')))}",
+        ]
+        if params.get("plane") not in {None, "xy"}:
+            kwargs.append(f"plane={_py_repr(str(params['plane']))}")
+        return f"fm.texture.artificial_spin_ice({', '.join(kwargs)})"
     return None
+
+
+def _quat_to_euler_xyz_deg_exact(quat: Sequence[object]) -> tuple[float, float, float] | None:
+    if len(quat) != 4:
+        return None
+    qx, qy, qz, qw = (float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3]))
+    norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+    if not math.isfinite(norm) or norm <= 1e-14:
+        return None
+    qx, qy, qz, qw = qx / norm, qy / norm, qz / norm, qw / norm
+    sinp = 2.0 * (qw * qy - qz * qx)
+    sinp_clamped = max(-1.0, min(1.0, sinp))
+    ry = math.asin(sinp_clamped)
+    if abs(abs(sinp_clamped) - 1.0) < 1e-9:
+        rx = 0.0
+        rz = math.atan2(-2.0 * (qx * qy - qw * qz), 1.0 - 2.0 * (qx * qx + qz * qz))
+    else:
+        rx = math.atan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx * qx + qy * qy))
+        rz = math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+    # Verify exact roundtrip under extrinsic XYZ (q = qz * qy * qx)
+    cx, sx = math.cos(0.5 * rx), math.sin(0.5 * rx)
+    cy, sy = math.cos(0.5 * ry), math.sin(0.5 * ry)
+    cz, sz = math.cos(0.5 * rz), math.sin(0.5 * rz)
+    rqx = sx * cy * cz - cx * sy * sz
+    rqy = cx * sy * cz + sx * cy * sz
+    rqz = cx * cy * sz - sx * sy * cz
+    rqw = cx * cy * cz + sx * sy * sz
+    dot_q = abs(qx * rqx + qy * rqy + qz * rqz + qw * rqw)
+    if dot_q < 1.0 - 1e-11:
+        return None
+    return (math.degrees(rx), math.degrees(ry), math.degrees(rz))
 
 
 def _render_preset_texture_expr(
@@ -13801,32 +13967,93 @@ def _render_preset_texture_expr(
     ui_label: str | None = None,
     preview_proxy: str | None = None,
 ) -> str:
-    normalized_mapping = dict(mapping or _DEFAULT_TEXTURE_MAPPING)
-    normalized_transform = dict(transform or _DEFAULT_TEXTURE_TRANSFORM)
+    normalized_mapping = {
+        "space": str((mapping or {}).get("space", "object")),
+        "projection": str((mapping or {}).get("projection", "object_local")),
+        "clamp_mode": str((mapping or {}).get("clamp_mode", "none")),
+    }
+    if mapping and mapping.get("tile_period") is not None:
+        normalized_mapping["tile_period"] = [float(v) for v in mapping["tile_period"]]
+    if mapping and mapping.get("background_vector") is not None:
+        normalized_mapping["background_vector"] = [float(v) for v in mapping["background_vector"]]
+
+    normalized_transform = {
+        "translation": [float(v) for v in (transform or {}).get("translation", (0.0, 0.0, 0.0))],
+        "rotation_quat": [float(v) for v in (transform or {}).get("rotation_quat", (0.0, 0.0, 0.0, 1.0))],
+        "scale": [float(v) for v in (transform or {}).get("scale", (1.0, 1.0, 1.0))],
+        "pivot": [float(v) for v in (transform or {}).get("pivot", (0.0, 0.0, 0.0))],
+        "rotate_vectors": bool((transform or {}).get("rotate_vectors", True)),
+    }
     factory_expr = _render_texture_factory_call(preset_kind, params)
     if (
         factory_expr is not None
-        and normalized_mapping == _DEFAULT_TEXTURE_MAPPING
         and preset_version == 2
-        and normalized_transform == _DEFAULT_TEXTURE_TRANSFORM
         and ui_label is None
+        and normalized_transform["rotate_vectors"] is True
         and preview_proxy in {None, _DEFAULT_TEXTURE_PREVIEW_PROXY.get(preset_kind)}
     ):
-        return factory_expr
+        euler_deg = _quat_to_euler_xyz_deg_exact(normalized_transform["rotation_quat"])
+        if euler_deg is not None:
+            expr = factory_expr
+            tx, ty, tz = normalized_transform["translation"]
+            if any(abs(v) > 1e-18 for v in (tx, ty, tz)):
+                expr += f".translate({_py_number(tx)}, {_py_number(ty)}, {_py_number(tz)})"
+            rx_deg, ry_deg, rz_deg = euler_deg
+            if abs(rx_deg) > 1e-9:
+                expr += f".rotate_x_deg({_py_number(rx_deg)})"
+            if abs(ry_deg) > 1e-9:
+                expr += f".rotate_y_deg({_py_number(ry_deg)})"
+            if abs(rz_deg) > 1e-9:
+                expr += f".rotate_z_deg({_py_number(rz_deg)})"
+            sx, sy, sz = normalized_transform["scale"]
+            if any(abs(v - 1.0) > 1e-12 for v in (sx, sy, sz)):
+                expr += f".scale({_py_number(sx)}, {_py_number(sy)}, {_py_number(sz)})"
+            px, py, pz = normalized_transform["pivot"]
+            if any(abs(v) > 1e-18 for v in (px, py, pz)):
+                expr += f".with_pivot({_render_vector_literal((px, py, pz))})"
+            mapping_kwargs: list[str] = []
+            if normalized_mapping["space"] != "object":
+                mapping_kwargs.append(f"space={_py_repr(normalized_mapping['space'])}")
+            if normalized_mapping["projection"] != "object_local":
+                mapping_kwargs.append(f"projection={_py_repr(normalized_mapping['projection'])}")
+            if normalized_mapping["clamp_mode"] != "none":
+                mapping_kwargs.append(f"clamp_mode={_py_repr(normalized_mapping['clamp_mode'])}")
+            if "tile_period" in normalized_mapping:
+                mapping_kwargs.append(
+                    f"tile_period={_render_vector_literal(normalized_mapping['tile_period'])}"
+                )
+            if "background_vector" in normalized_mapping:
+                mapping_kwargs.append(
+                    f"background_vector={_render_vector_literal(normalized_mapping['background_vector'])}"
+                )
+            if mapping_kwargs:
+                expr += f".with_mapping({', '.join(mapping_kwargs)})"
+            return expr
 
-    mapping_expr = (
-        "fm.TextureMapping("
-        f"space={_py_repr(str(normalized_mapping.get('space', 'object')))}, "
-        f"projection={_py_repr(str(normalized_mapping.get('projection', 'object_local')))}, "
-        f"clamp_mode={_py_repr(str(normalized_mapping.get('clamp_mode', 'none')))})"
-    )
-    transform_expr = (
-        "fm.TextureTransform3D("
-        f"translation={_py_literal(tuple(normalized_transform.get('translation', (0.0, 0.0, 0.0))))}, "
-        f"rotation_quat={_py_literal(tuple(normalized_transform.get('rotation_quat', (0.0, 0.0, 0.0, 1.0))))}, "
-        f"scale={_py_literal(tuple(normalized_transform.get('scale', (1.0, 1.0, 1.0))))}, "
-        f"pivot={_py_literal(tuple(normalized_transform.get('pivot', (0.0, 0.0, 0.0))))})"
-    )
+    mapping_parts = [
+        f"space={_py_repr(normalized_mapping['space'])}",
+        f"projection={_py_repr(normalized_mapping['projection'])}",
+        f"clamp_mode={_py_repr(normalized_mapping['clamp_mode'])}",
+    ]
+    if "tile_period" in normalized_mapping:
+        mapping_parts.append(
+            f"tile_period={_render_vector_literal(normalized_mapping['tile_period'])}"
+        )
+    if "background_vector" in normalized_mapping:
+        mapping_parts.append(
+            f"background_vector={_render_vector_literal(normalized_mapping['background_vector'])}"
+        )
+    mapping_expr = f"fm.TextureMapping({', '.join(mapping_parts)})"
+
+    transform_parts = [
+        f"translation={_py_literal(tuple(normalized_transform['translation']))}",
+        f"rotation_quat={_py_literal(tuple(normalized_transform['rotation_quat']))}",
+        f"scale={_py_literal(tuple(normalized_transform['scale']))}",
+        f"pivot={_py_literal(tuple(normalized_transform['pivot']))}",
+    ]
+    if normalized_transform["rotate_vectors"] is False:
+        transform_parts.append("rotate_vectors=False")
+    transform_expr = f"fm.TextureTransform3D({', '.join(transform_parts)})"
     return (
         "fm.PresetTexture("
         f"preset_version={preset_version}, "

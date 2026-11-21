@@ -79,7 +79,7 @@ def _mapping_projection(mapping_ir: dict[str, object]) -> str:
 
 def _mapping_clamp_mode(mapping_ir: dict[str, object]) -> str:
     raw = mapping_ir.get("clamp_mode")
-    return str(raw).strip().lower() if isinstance(raw, str) and raw.strip() else "clamp"
+    return str(raw).strip().lower() if isinstance(raw, str) and raw.strip() else "none"
 
 
 def _validate_v2_texture_transform(transform: dict[str, object]) -> None:
@@ -104,6 +104,8 @@ def _validate_v2_texture_transform(transform: dict[str, object]) -> None:
         raise ValueError("texture_transform.scale components must be nonzero")
     if float(np.linalg.norm(arrays["rotation_quat"])) <= 1e-30:
         raise ValueError("texture_transform.rotation_quat must be nonzero")
+    if "rotate_vectors" in transform and not isinstance(transform["rotate_vectors"], bool):
+        raise ValueError("texture_transform.rotate_vectors must be a boolean")
 
 
 def _map_points_into_mapping_space(
@@ -111,7 +113,20 @@ def _map_points_into_mapping_space(
     *,
     space: str,
     object_transform: dict[str, object] | None,
+    region_center: Sequence[float] | None = None,
 ) -> np.ndarray:
+    if space == "region":
+        object_pts = _apply_inverse_transform(
+            points,
+            object_transform if isinstance(object_transform, dict) else {},
+        )
+        if region_center is not None:
+            center = np.asarray(region_center, dtype=np.float64).reshape(1, 3)
+        elif object_pts.shape[0] > 0:
+            center = 0.5 * (object_pts.min(axis=0, keepdims=True) + object_pts.max(axis=0, keepdims=True))
+        else:
+            center = np.zeros((1, 3), dtype=np.float64)
+        return object_pts - center
     if space == "object":
         return _apply_inverse_transform(points, object_transform if isinstance(object_transform, dict) else {})
     # "world" and unknown spaces are interpreted as world-space coordinates.
@@ -162,6 +177,7 @@ def prepare_initial_magnetization(
     sample_points: Sequence[Sequence[float]] | np.ndarray,
     *,
     object_transform: dict[str, object] | None = None,
+    region_center: Sequence[float] | None = None,
 ) -> np.ndarray:
     """Sample an initial magnetization spec at the given points.
 
@@ -236,6 +252,7 @@ def prepare_initial_magnetization(
             pts,
             space=_mapping_space(mapping_ir),
             object_transform=object_transform,
+            region_center=region_center,
         )
         if preset_version == 2:
             if not isinstance(transform_ir, dict):
@@ -249,36 +266,48 @@ def prepare_initial_magnetization(
             )
 
         # Apply inverse texture transform to get texture-local coordinates
-        if isinstance(transform_ir, dict) and any(transform_ir.values()):
+        if isinstance(transform_ir, dict) and any(
+            transform_ir.get(k) is not None for k in ("translation", "rotation_quat", "scale", "pivot")
+        ):
             local_pts = _apply_inverse_transform(mapped_pts, transform_ir)
         else:
             local_pts = mapped_pts
 
-        # For analytic presets operating in metric space, skip unit-box clamping.
-        # Clamp/repeat/mirror is only meaningful for image-based or normalized
-        # texture mappings, not for preset evaluators using physical coordinates.
         preset_kind = str(spec["preset_kind"])
-        _METRIC_ANALYTIC_PRESETS = frozenset({
-            "vortex", "antivortex", "bloch_skyrmion", "neel_skyrmion", "bimeron", "domain_wall",
-            "helical", "conical", "two_domain", "vortex_wall", "antiskyrmion", "skyrmionium",
-            "hopfion", "hopfion_compact_support",
-        })
         clamp_mode = _mapping_clamp_mode(mapping_ir)
-        if clamp_mode != "none" and preset_kind not in _METRIC_ANALYTIC_PRESETS:
-            local_pts = _apply_clamp_mode(local_pts, clamp_mode=clamp_mode)
-
         params = dict(spec.get("preset_params") or spec.get("params") or {})
 
         if preset_version == 1:
+            _METRIC_ANALYTIC_PRESETS = frozenset({
+                "vortex", "antivortex", "bloch_skyrmion", "neel_skyrmion", "bimeron", "domain_wall",
+                "helical", "conical", "two_domain", "vortex_wall", "antiskyrmion", "skyrmionium",
+                "hopfion", "hopfion_compact_support", "skyrmion_lattice", "spiral", "bloch_point",
+                "artificial_spin_ice",
+            })
+            if clamp_mode != "none" and preset_kind not in _METRIC_ANALYTIC_PRESETS:
+                local_pts = _apply_clamp_mode(local_pts, clamp_mode=clamp_mode)
             result = evaluate_preset_texture(preset_kind, params, local_pts.tolist())
         elif preset_version == 2:
             rotation_quat = transform_ir.get("rotation_quat") if isinstance(transform_ir, dict) else None
+            rotate_vectors = (
+                bool(transform_ir["rotate_vectors"])
+                if isinstance(transform_ir, dict) and "rotate_vectors" in transform_ir
+                else True
+            )
+            raw_pivot = transform_ir.get("pivot", (0.0, 0.0, 0.0)) if isinstance(transform_ir, dict) else (0.0, 0.0, 0.0)
+            tile_period = mapping_ir.get("tile_period")
+            background_vector = mapping_ir.get("background_vector")
             result = evaluate_preset_texture_v2(
                 preset_kind,
                 params,
                 local_pts.tolist(),
                 projection=_mapping_projection(mapping_ir),
                 rotation_quat=rotation_quat,
+                rotate_vectors=rotate_vectors,
+                clamp_mode=clamp_mode,
+                tile_period=tile_period if isinstance(tile_period, (list, tuple)) else None,
+                background_vector=background_vector if isinstance(background_vector, (list, tuple)) else None,
+                pivot=raw_pivot if isinstance(raw_pivot, (list, tuple)) else (0.0, 0.0, 0.0),
             )
         else:
             raise ValueError(f"unsupported preset texture version {preset_version}")

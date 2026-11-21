@@ -248,12 +248,35 @@ pub(crate) fn sample_region_initial_on_mask(
         return Ok(vec![[0.0, 0.0, 0.0]; points.len()]);
     }
 
+    let mut min_obj = [f64::INFINITY; 3];
+    let mut max_obj = [f64::NEG_INFINITY; 3];
+    for (point, active) in points.iter().zip(&active_selection) {
+        if *active {
+            for axis in 0..3 {
+                min_obj[axis] = min_obj[axis].min(point.position_object[axis]);
+                max_obj[axis] = max_obj[axis].max(point.position_object[axis]);
+            }
+        }
+    }
+    let region_center_object = [
+        0.5 * (min_obj[0] + max_obj[0]),
+        0.5 * (min_obj[1] + max_obj[1]),
+        0.5 * (min_obj[2] + max_obj[2]),
+    ];
+
     let masked_points = points
         .iter()
         .zip(&active_selection)
         .map(|(point, active)| TextureSamplePoint {
             position_world: point.position_world,
             position_object: point.position_object,
+            position_region: point.position_region.or_else(|| {
+                Some([
+                    point.position_object[0] - region_center_object[0],
+                    point.position_object[1] - region_center_object[1],
+                    point.position_object[2] - region_center_object[2],
+                ])
+            }),
             active: *active,
         })
         .collect::<Vec<_>>();
@@ -382,11 +405,13 @@ mod tests {
             TextureSamplePoint {
                 position_world: [1.0, 0.0, 0.0],
                 position_object: [1.0, 0.0, 0.0],
+                position_region: None,
                 active: true,
             },
             TextureSamplePoint {
                 position_world: [2.0, 0.0, 0.0],
                 position_object: [2.0, 0.0, 0.0],
+                position_region: None,
                 active: true,
             },
         ];

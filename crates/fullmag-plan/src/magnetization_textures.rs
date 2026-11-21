@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 pub struct TextureSamplePoint {
     pub position_world: [f64; 3],
     pub position_object: [f64; 3],
+    pub position_region: Option<[f64; 3]>,
     pub active: bool,
 }
 
@@ -220,7 +221,9 @@ fn map_point_into_texture_space(
     mapping: &TextureMappingIR,
     transform: &TextureTransform3DIR,
 ) -> [f64; 3] {
-    let mut mapped = if mapping.space.eq_ignore_ascii_case("object") {
+    let mut mapped = if mapping.space.eq_ignore_ascii_case("region") {
+        point.position_region.unwrap_or(point.position_object)
+    } else if mapping.space.eq_ignore_ascii_case("object") {
         point.position_object
     } else {
         point.position_world
@@ -504,6 +507,7 @@ mod tests {
             rotation_quat: [0.0, 0.0, 0.0, 1.0],
             scale: [2.0, 1.0, 1.0],
             pivot: [1.0, 0.0, 0.0],
+            rotate_vectors: true,
         };
 
         let local = apply_inverse_transform([3.0, 0.0, 0.0], &transform);
@@ -520,6 +524,7 @@ mod tests {
             rotation_quat: [0.0, 0.0, 0.0, 1.0],
             scale: [1.0, 1.0, 1.0],
             pivot: [0.0, 0.0, 0.0],
+            rotate_vectors: true,
         };
         let mut params = BTreeMap::new();
         params.insert("circulation".to_string(), Value::from(1));
@@ -535,6 +540,7 @@ mod tests {
             &[TextureSamplePoint {
                 position_world: [50e-9, 0.0, 0.0],
                 position_object: [0.0, 0.0, 0.0],
+                position_region: None,
                 active: true,
             }],
         )
@@ -551,6 +557,7 @@ mod tests {
             rotation_quat: [0.0, 0.0, 0.0, 1.0],
             scale: [1.0, 1.0, 1.0],
             pivot: [0.0, 0.0, 0.0],
+            rotate_vectors: true,
         };
         let mut params = BTreeMap::new();
         params.insert("seed".to_string(), Value::from(7));
@@ -564,16 +571,19 @@ mod tests {
                 TextureSamplePoint {
                     position_world: [0.0, 0.0, 0.0],
                     position_object: [0.0, 0.0, 0.0],
+                    position_region: None,
                     active: true,
                 },
                 TextureSamplePoint {
                     position_world: [50e-9, 0.0, 0.0],
                     position_object: [50e-9, 0.0, 0.0],
+                    position_region: None,
                     active: true,
                 },
                 TextureSamplePoint {
                     position_world: [100e-9, 25e-9, 0.0],
                     position_object: [100e-9, 25e-9, 0.0],
+                    position_region: None,
                     active: true,
                 },
             ],
@@ -612,11 +622,13 @@ mod tests {
                 TextureSamplePoint {
                     position_world: [10e-9, 0.0, 0.0],
                     position_object: [10e-9, 0.0, 0.0],
+                    position_region: None,
                     active: true,
                 },
                 TextureSamplePoint {
                     position_world: [0.0, 10e-9, 0.0],
                     position_object: [0.0, 10e-9, 0.0],
+                    position_region: None,
                     active: true,
                 },
             ],
@@ -647,11 +659,13 @@ mod tests {
                 TextureSamplePoint {
                     position_world: [10e-9, 0.0, 0.0],
                     position_object: [10e-9, 0.0, 0.0],
+                    position_region: None,
                     active: true,
                 },
                 TextureSamplePoint {
                     position_world: [0.0, 10e-9, 0.0],
                     position_object: [0.0, 10e-9, 0.0],
+                    position_region: None,
                     active: true,
                 },
             ],

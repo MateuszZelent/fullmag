@@ -37,6 +37,7 @@ fn point(position: [f64; 3]) -> TextureSamplePoint {
     TextureSamplePoint {
         position_world: position,
         position_object: position,
+        position_region: None,
         active: true,
     }
 }
@@ -53,6 +54,8 @@ fn mapping(projection: &str) -> TextureMappingIR {
         space: "object".to_string(),
         projection,
         clamp_mode: "none".to_string(),
+        tile_period: None,
+        background_vector: None,
     }
 }
 

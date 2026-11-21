@@ -376,7 +376,7 @@ pub struct MagnetizationAsset {
     pub ui_label: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct MagnetizationMapping {
     #[serde(default = "default_mapping_space")]
     pub space: String,
@@ -384,6 +384,10 @@ pub struct MagnetizationMapping {
     pub projection: String,
     #[serde(default = "default_mapping_clamp_mode")]
     pub clamp_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile_period: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_vector: Option<[f64; 3]>,
 }
 
 impl Default for MagnetizationMapping {
@@ -392,6 +396,8 @@ impl Default for MagnetizationMapping {
             space: default_mapping_space(),
             projection: default_mapping_projection(),
             clamp_mode: default_mapping_clamp_mode(),
+            tile_period: None,
+            background_vector: None,
         }
     }
 }
@@ -406,6 +412,8 @@ pub struct TextureTransform3D {
     pub scale: [f64; 3],
     #[serde(default = "zero_vec3")]
     pub pivot: [f64; 3],
+    #[serde(default = "default_true")]
+    pub rotate_vectors: bool,
 }
 
 impl Default for TextureTransform3D {
@@ -415,6 +423,7 @@ impl Default for TextureTransform3D {
             rotation_quat: [0.0, 0.0, 0.0, 1.0],
             scale: [1.0, 1.0, 1.0],
             pivot: [0.0, 0.0, 0.0],
+            rotate_vectors: default_true(),
         }
     }
 }
@@ -1739,7 +1748,7 @@ pub enum SceneInitialMagnetization {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct SceneTextureMapping {
     #[serde(default = "default_mapping_space")]
     pub space: String,
@@ -1747,6 +1756,10 @@ pub struct SceneTextureMapping {
     pub projection: String,
     #[serde(default = "default_mapping_clamp_mode")]
     pub clamp_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile_period: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_vector: Option<[f64; 3]>,
 }
 
 impl Default for SceneTextureMapping {
@@ -1755,6 +1768,8 @@ impl Default for SceneTextureMapping {
             space: default_mapping_space(),
             projection: default_mapping_projection(),
             clamp_mode: default_mapping_clamp_mode(),
+            tile_period: None,
+            background_vector: None,
         }
     }
 }
@@ -1769,6 +1784,8 @@ pub struct SceneTextureTransform3D {
     pub scale: [f64; 3],
     #[serde(default = "zero_vec3")]
     pub pivot: [f64; 3],
+    #[serde(default = "default_true")]
+    pub rotate_vectors: bool,
 }
 
 impl Default for SceneTextureTransform3D {
@@ -1778,6 +1795,7 @@ impl Default for SceneTextureTransform3D {
             rotation_quat: [0.0, 0.0, 0.0, 1.0],
             scale: [1.0, 1.0, 1.0],
             pivot: [0.0, 0.0, 0.0],
+            rotate_vectors: default_true(),
         }
     }
 }

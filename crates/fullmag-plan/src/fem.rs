@@ -502,6 +502,7 @@ fn apply_fem_region_texture_overrides(
                 |((world, object), owner)| crate::magnetization_textures::TextureSamplePoint {
                     position_world: *world,
                     position_object: *object,
+                    position_region: None,
                     active: *owner,
                 },
             )

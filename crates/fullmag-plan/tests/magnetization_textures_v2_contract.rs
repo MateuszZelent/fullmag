@@ -16,6 +16,7 @@ fn point(x: f64, y: f64, z: f64) -> TextureSamplePoint {
     TextureSamplePoint {
         position_world: [x, y, z],
         position_object: [x, y, z],
+        position_region: None,
         active: true,
     }
 }
@@ -175,6 +176,7 @@ fn v2_validates_parameters_before_empty_or_inactive_sampling() {
     let inactive = TextureSamplePoint {
         position_world: [0.0, 0.0, 0.0],
         position_object: [0.0, 0.0, 0.0],
+        position_region: None,
         active: false,
     };
     assert!(sample_preset_texture_versioned(

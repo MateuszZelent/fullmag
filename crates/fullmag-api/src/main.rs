@@ -6226,12 +6226,15 @@ fn apply_live_scene_magnetization_asset(
                 space: asset.mapping.space.clone(),
                 projection: parse_texture_projection_mode(&asset.mapping.projection),
                 clamp_mode: asset.mapping.clamp_mode.clone(),
+                tile_period: asset.mapping.tile_period,
+                background_vector: asset.mapping.background_vector,
             };
             let texture_transform = TextureTransform3DIR {
                 translation: asset.texture_transform.translation,
                 rotation_quat: asset.texture_transform.rotation_quat,
                 scale: asset.texture_transform.scale,
                 pivot: asset.texture_transform.pivot,
+                rotate_vectors: asset.texture_transform.rotate_vectors,
             };
             let sample_points = node_indices
                 .iter()
@@ -6240,6 +6243,7 @@ fn apply_live_scene_magnetization_asset(
                     TextureSamplePoint {
                         position_world: world,
                         position_object: apply_inverse_object_transform(world, &object.transform),
+                        position_region: None,
                         active: true,
                     }
                 })

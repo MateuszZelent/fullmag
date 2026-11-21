@@ -50,7 +50,7 @@ fn preset_texture_sample_log_key(
     texture_transform: &fullmag_ir::TextureTransform3DIR,
 ) -> String {
     format!(
-        "{}|{}|{}|{}|{:?}|{}/{}/{}|T:{}|R:{}|S:{}|P:{}",
+        "{}|{}|{}|{}|{:?}|{}/{}/{}/{:?}/{:?}|T:{}|R:{}|S:{}|P:{}|RV:{}",
         magnet_name,
         mesh_name,
         n_nodes,
@@ -59,10 +59,13 @@ fn preset_texture_sample_log_key(
         mapping.space,
         mapping.projection,
         mapping.clamp_mode,
+        mapping.tile_period,
+        mapping.background_vector,
         texture_vector_log_key(&texture_transform.translation),
         texture_vector_log_key(&texture_transform.rotation_quat),
         texture_vector_log_key(&texture_transform.scale),
-        texture_vector_log_key(&texture_transform.pivot)
+        texture_vector_log_key(&texture_transform.pivot),
+        texture_transform.rotate_vectors,
     )
 }
 
@@ -407,6 +410,7 @@ pub(crate) fn initial_vectors_for_magnet(
                 .map(|(w, o)| TextureSamplePoint {
                     position_world: *w,
                     position_object: *o,
+                    position_region: None,
                     active: true,
                 })
                 .collect::<Vec<_>>();
@@ -3002,6 +3006,8 @@ mod texture_object_space_tests {
                 space: "object".to_string(),
                 projection: TextureProjectionMode::ObjectLocal,
                 clamp_mode: "none".to_string(),
+                tile_period: None,
+                background_vector: None,
             },
             texture_transform: TextureTransform3DIR::default(),
         };

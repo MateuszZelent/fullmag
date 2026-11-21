@@ -235,6 +235,7 @@ def _default_texture_transform() -> dict[str, object]:
         "rotation_quat": _identity_quat(),
         "scale": _one_vec3(),
         "pivot": _zero_vec3(),
+        "rotate_vectors": True,
     }
 
 
