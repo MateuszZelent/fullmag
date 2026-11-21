@@ -162,6 +162,33 @@ describe("export3dGltfBuilder & export3DModel glTF/GLB", () => {
     expect(posAccessor.max[0]).toBeCloseTo(1, 5);
   });
 
+  it("preserves the number, extents, and colors of captured Airbox arrows", async () => {
+    const result = await export3DModel({
+      targets: [{
+        id: "airbox",
+        kind: "fem_mesh",
+        role: "airbox",
+        positionsM: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]),
+        surfaceIndices: new Uint32Array([0, 1, 2, 0, 1, 3]),
+        appearance: { includeVectors: true },
+        renderedVectors: {
+          segmentsM: new Float32Array([0, 0, 0, 2, 0, 0, 1, 0, 0, 0, 0, 3, 0, 1]),
+          colors: new Float32Array([0, 1, 0, 0, 0, 1]),
+          opacity: 0.7,
+        },
+      }],
+      options: { format: "glb", coordinateScale: "si_m", maxVectors: 1 },
+    });
+
+    const glb = parseGlbBytes(result.bytes);
+    const node = glb.json.nodes.find((entry) => entry.name === "airbox_vectors");
+    expect(result.stats.arrowCount).toBe(2);
+    expect(node?.mesh).toBeTypeOf("number");
+    const attributes = glb.json.meshes[node!.mesh!].primitives[0].attributes;
+    expect(glb.json.accessors[attributes.POSITION].max.slice(0, 2)).toEqual([2, 3]);
+    expect(glb.json.accessors[attributes.COLOR_0].max).toEqual([0, 1, 1]);
+  });
+
   it("exports valid .gltf JSON and supports PBR transparent materials", async () => {
     const res = await export3DModel({
       targets: [

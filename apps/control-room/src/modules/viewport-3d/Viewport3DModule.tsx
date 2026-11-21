@@ -24,6 +24,7 @@ import { isScalarSpatialQuantityId, quantityDisplayName } from "@/kernel/api/qua
 import {
   viewport3DAuditRenderErrorInjectionEnabledFromBrowserConfig,
   viewport3DOrbitDebugEnabledFromBrowserConfig,
+  viewport3DVectorLayersEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { useInstanceTabHidden } from "@/kernel/layout/instanceTabVisibility";
@@ -890,6 +891,8 @@ function LiveViewport3DModule({
           primitiveModel: primitiveModelWithPlacementDraft ?? null,
           airboxSettings: sceneModel.savedViewportActive ? null : sceneModel.airboxSettings,
           includeHiddenAirbox: !sceneModel.savedViewportActive,
+          vectorFallbackColor: colors ? String(colors.field) : undefined,
+          vectorLayersEnabled: viewport3DVectorLayersEnabledFromBrowserConfig(),
         });
       }}
       clientReady={clientReady}

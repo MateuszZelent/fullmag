@@ -9,6 +9,7 @@ import {
 } from "@/shared/export-3d";
 
 import { convertRealFieldToExportInput, extractViewport3DExportSource } from "./extractViewport3DExportSource";
+import { defaultIncludeAirboxForSource, defaultIncludeVectorsForSource, executeViewportModelExport } from "./viewportModelExportAction";
 
 describe("extractViewport3DExportSource", () => {
   useNodeBlobFileReader();
@@ -478,7 +479,7 @@ describe("extractViewport3DExportSource", () => {
     }
   });
 
-  it("extracts FEM mesh targets skipping hidden airbox and safely filtering/mapping volumeCells", () => {
+  it("extracts FEM mesh targets skipping hidden airbox and safely filtering/mapping volumeCells", async () => {
     // Nodes 0..3: magnetic tet [0..10nm]; Nodes 4..7: far-field airbox tet [0..1000nm]
     const positions = new Float32Array([
       0, 0, 0,
@@ -509,7 +510,7 @@ describe("extractViewport3DExportSource", () => {
       0, 0, 1,
     ]);
 
-    const source = extractViewport3DExportSource({
+    const input = {
       sessionDiscretization: "fem",
       domainId: "fem-disk",
       topology,
@@ -607,7 +608,8 @@ describe("extractViewport3DExportSource", () => {
         ]),
       },
       airboxSettings: { visible: false },
-    });
+    } as Parameters<typeof extractViewport3DExportSource>[0];
+    const source = extractViewport3DExportSource(input);
 
     expect(source.targets).toHaveLength(1);
     const femTarget = source.targets[0];
@@ -625,6 +627,39 @@ describe("extractViewport3DExportSource", () => {
     expect(caps.hasFemTargets).toBe(true);
     expect(caps.supportsVolumetricVtu).toBe(true);
     expect(caps.boundsM?.max[0]).toBeCloseTo(10e-9);
+
+    const segments = Float32Array.of(1e-6, 0, 0, 1.2e-6, 0, 0, 1);
+    const colors = Float32Array.of(0.1, 0.7, 0.4);
+    const fieldModel = input.fieldModel!;
+    const visibleAirbox = extractViewport3DExportSource({
+      ...input,
+      airboxSettings: { visible: true, vectorsVisible: true, vectorAlphaPercent: 65 },
+      vectorLayersEnabled: true,
+      fieldModel: {
+        ...fieldModel,
+        targetPasses: new Map([
+          ...fieldModel.targetPasses,
+          ["part-airbox", {
+            fieldBuffer: null,
+            fieldBufferState: "missing",
+            surface: { passId: "airbox-surface", scalarColorMode: null, scalarColors: null, degradation: null },
+            vectors: { passId: "airbox-vectors", buildReference: null, segments, glyphColors: colors, degradation: null },
+          }],
+        ]),
+      },
+    });
+    expect(visibleAirbox.targets.find(({ role }) => role === "airbox")?.renderedVectors)
+      .toMatchObject({ segmentsM: segments, colors, opacity: 0.65 });
+    const exported = await executeViewportModelExport({
+      source: visibleAirbox,
+      format: "glb",
+      filename: "airbox-vectors",
+      includeAirbox: defaultIncludeAirboxForSource(visibleAirbox),
+      includeVectors: defaultIncludeVectorsForSource(visibleAirbox),
+      animate: false,
+      signal: new AbortController().signal,
+    });
+    expect(exported.stats.arrowCount).toBe(1);
   });
 
   it("falls back to authored primitive objects with world coordinates and magnetization previews", async () => {

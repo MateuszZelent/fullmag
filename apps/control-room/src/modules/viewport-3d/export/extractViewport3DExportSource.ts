@@ -1,3 +1,5 @@
+import { Color } from "three";
+
 import type {
   DecodedComplexFieldVector,
   DecodedFdmRegionMembership,
@@ -25,6 +27,7 @@ import {
   type Export3DFieldInput,
   type Export3DNumericArray,
   type Export3DRealFieldInput,
+  type Export3DRenderedVectors,
   type Export3DRgbTuple,
   type Export3DScalarPalette,
   type Export3DSurfaceGeometryTargetInput,
@@ -40,6 +43,8 @@ import { resolveModeColorPalette, resolveModeCompositionExportRange } from "../m
 import { buildFdmMultilayerAirboxRegionIds } from "../model/viewport3DFdmMultilayerAirbox";
 import type { Viewport3DFdmTargetDefinition, Viewport3DFdmTargetRenderView } from "../model/viewport3DFdmTargetViews";
 import { createPrimitiveObjectGeometry } from "../layers/PrimitiveObjectLayerModel";
+import { resolveVectorFieldLayerStyle } from "../layers/VectorFieldLayer.model";
+import { buildVectorGlyphColors } from "../layers/vectorGlyphGeometry";
 import type {
   FdmGridRenderDomain,
   FdmMultilayerAirboxRenderDomain,
@@ -66,7 +71,16 @@ import {
   topologyCellCsr,
 } from "../viewport3dTopologyCells";
 
-export interface Viewport3DExportFdmSettings {
+interface ViewportExportVectorSettings {
+  readonly vectorAlphaPercent?: number | null;
+  readonly vectorMonoColor?: string | null;
+  readonly vectorThickness?: number | null;
+  readonly vectorColorMode?: string | null;
+  readonly vectorsVisible?: boolean;
+  readonly visible?: boolean;
+}
+
+export interface Viewport3DExportFdmSettings extends ViewportExportVectorSettings {
   readonly activeQuantityId?: string | null;
   readonly opacity?: number | null;
   readonly scalarColorPalette?: string | null;
@@ -75,13 +89,10 @@ export interface Viewport3DExportFdmSettings {
   readonly shaderVisible?: boolean;
   readonly surfaceColorSource?: string | null;
   readonly surfaceOpacityPercent?: number | null;
-  readonly vectorColorMode?: string | null;
-  readonly vectorsVisible?: boolean;
-  readonly visible?: boolean;
   readonly wireframeVisible?: boolean;
 }
 
-export interface Viewport3DExportAirboxSettings {
+export interface Viewport3DExportAirboxSettings extends ViewportExportVectorSettings {
   readonly activeQuantityId?: string | null;
   readonly opacity?: number | null;
   readonly scalarColorPalette?: string | null;
@@ -89,9 +100,6 @@ export interface Viewport3DExportAirboxSettings {
   readonly shaderVisible?: boolean;
   readonly surfaceColorSource?: string | null;
   readonly surfaceOpacityPercent?: number | null;
-  readonly vectorColorMode?: string | null;
-  readonly vectorsVisible?: boolean;
-  readonly visible?: boolean;
   readonly wireframeVisible?: boolean;
 }
 
@@ -104,6 +112,12 @@ export interface Viewport3DExportSourceInput {
   readonly domainId?: string | null;
   readonly domainSummary?: string | null;
   readonly fdmAirboxFieldVector?: DecodedFieldVector | null;
+  readonly fdmAirboxVectorGlyphColors?: { readonly colors: Float32Array } | null;
+  readonly fdmAirboxVectorSegments?: Float32Array | null;
+  readonly fdmVectorGlyphColors?: { readonly colors: Float32Array } | null;
+  readonly fdmVectorSegments?: Float32Array | null;
+  readonly vectorFallbackColor?: string;
+  readonly vectorLayersEnabled?: boolean;
   readonly fdmDomain?: FdmGridRenderDomain | null;
   readonly fdmExportMembership?: {
     readonly regionIds: Uint32Array;
@@ -490,6 +504,34 @@ function resolveTargetAppearance(
   };
 }
 
+function captureRenderedVectors(
+  input: Viewport3DExportSourceInput,
+  settings: ViewportExportVectorSettings | null | undefined,
+  segments: Float32Array | null | undefined,
+  colors: Float32Array | null | undefined,
+): Export3DRenderedVectors | null | undefined {
+  if (input.vectorLayersEnabled === false || !settings?.vectorsVisible ||
+      settings.visible === false || !segments?.length || segments.length % 7 !== 0) {
+    return input.vectorLayersEnabled === undefined ? undefined : null;
+  }
+  const colorMode = settings.vectorColorMode ?? input.vectorColorMode ?? "orientation";
+  const style = resolveVectorFieldLayerStyle({
+    colorMode,
+    fallbackColor: input.vectorFallbackColor ?? "#ffffff",
+    opacity: (settings.vectorAlphaPercent ?? 100) / 100,
+    style: { monoColor: settings.vectorMonoColor, thickness: settings.vectorThickness },
+  });
+  const mono = new Color(style.materialColor).convertLinearToSRGB();
+  return {
+    segmentsM: segments,
+    colors: colors ?? buildVectorGlyphColors(segments, colorMode),
+    monochromeColor: [mono.r, mono.g, mono.b],
+    opacity: style.materialOpacity,
+    headRadiusRatio: style.headRadiusRatio,
+    shaftRadiusRatio: style.shaftRadiusRatio,
+  };
+}
+
 function buildActiveMaskFromRegionIds(
   regionIds: Uint32Array,
 ): { readonly activeMask: Uint8Array | null; readonly hasInactive: boolean } {
@@ -566,6 +608,7 @@ function extractSingleGridTargetViews(
       originM: domain.origin,
       activeMask,
       field,
+      renderedVectors: captureRenderedVectors(input, view.settings, view.vectorSegments, view.vectorGlyphColors?.colors),
       appearance: {
         colorRange: view.surfaceColors?.range,
         ...resolveTargetAppearance(view.settings, field, defaultPalette, scopedComplex ? input.analysisOverlay?.appearance : null),
@@ -632,6 +675,7 @@ function extractFdmTargets(
         originM: domain.origin,
         ...(activeMask ? { activeMask } : {}),
         field,
+        renderedVectors: captureRenderedVectors(input, layerView.settings, layerView.vectorSegments, layerView.vectorGlyphColors?.colors),
         appearance: resolveTargetAppearance(
           layerView.settings,
           field,
@@ -665,6 +709,7 @@ function extractFdmTargets(
             originM: airDomain.origin,
             activeMask,
             field,
+            renderedVectors: captureRenderedVectors(input, settings, airView?.vectorSegments, airView?.vectorGlyphColors?.colors),
             appearance: {
               ...resolveTargetAppearance(settings, field, defaultPalette),
               opacity: resolveSettingsOpacity(settings) ?? 0.2,
@@ -731,6 +776,7 @@ function extractFdmTargets(
           ...(activeMask ? { activeMask } : {}),
           ...(regionIds ? { regionIds } : {}),
           field,
+          renderedVectors: captureRenderedVectors(input, input.fdmSettings, input.fdmVectorSegments, input.fdmVectorGlyphColors?.colors),
           appearance: resolveTargetAppearance(input.fdmSettings, field, defaultPalette, input.analysisOverlay?.appearance),
         });
       }
@@ -758,6 +804,7 @@ function extractFdmTargets(
           originM: domain.origin,
           activeMask: airActiveMask,
           field: airField,
+          renderedVectors: captureRenderedVectors(input, input.airboxSettings, input.fdmAirboxVectorSegments, input.fdmAirboxVectorGlyphColors?.colors),
           appearance: {
             colorMode: airField ? "magnitude" : "monochrome",
             colorPalette: defaultPalette,
@@ -1193,7 +1240,16 @@ function extractFemTargets(
       field,
       appearance: resolveTargetAppearance(partSettings, field, defaultPalette, input.analysisOverlay?.appearance),
     });
-    if (built) targets.push(built);
+    const vectors = input.fieldModel?.targetPasses.get(pm.part.id)?.vectors;
+    if (built) targets.push({
+      ...built,
+      renderedVectors: vectors?.complexGlyphs ? undefined : captureRenderedVectors(
+        input,
+        partSettings,
+        vectors?.segments ?? input.fieldModel?.partVectorSegments.get(pm.part.id),
+        vectors?.glyphColors,
+      ),
+    });
   }
 
   if (
@@ -1253,6 +1309,7 @@ function extractFemTargets(
       const partId = airPm.part.id;
       const partSettings = input.getPartSettings?.(airPm.part);
       if (!input.includeHiddenAirbox && partSettings?.visible === false) continue;
+      const airboxSettings = input.airboxSettings ?? partSettings;
       const airMask = new Uint8Array(nodeCount);
       const { surfaceIndices } = airPm;
       markNodeSelection(airPm.fullNodeSelection, airMask, nodeCount);
@@ -1288,7 +1345,17 @@ function extractFemTargets(
             0.2,
         },
       });
-      if (built) targets.push({ ...built, role: "airbox" });
+      const vectors = input.fieldModel?.targetPasses.get(partId)?.vectors;
+      if (built) targets.push({
+        ...built,
+        role: "airbox",
+        renderedVectors: vectors?.complexGlyphs ? undefined : captureRenderedVectors(
+          input,
+          airboxSettings,
+          vectors?.segments ?? input.fieldModel?.partVectorSegments.get(partId),
+          vectors?.glyphColors,
+        ),
+      });
     }
   }
 

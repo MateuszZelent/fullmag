@@ -16,6 +16,7 @@ import type { Export3DFormat } from "@/shared/export-3d/export3dTypes";
 import { viewport3dStore } from "../viewport3dStore";
 import {
   computeViewportModelExportCapabilities,
+  defaultIncludeAirboxForSource,
   defaultIncludeVectorsForSource,
   downloadExport3DModel,
   executeViewportModelExport,
@@ -46,7 +47,8 @@ export default function Viewport3DExportDialog({ getSource }: { getSource: () =>
     });
     return () => { active = false; };
   }, [snapshot]);
-  const [includeAirbox, setIncludeAirbox] = useState(false);
+  const [includeAirboxOverride, setIncludeAirbox] = useState<boolean | null>(null);
+  const includeAirbox = includeAirboxOverride ?? defaultIncludeAirboxForSource(source);
   const [animate, setAnimate] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
